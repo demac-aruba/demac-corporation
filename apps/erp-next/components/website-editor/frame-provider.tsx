@@ -3,7 +3,7 @@
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/auth-provider';
-import { EDITOR_PATH, EDITOR_PROTOCOL, isEditorEnabled, isOwner, sameMessage, type EditorialChange, type EditorialField } from '@/lib/website-editor/contract';
+import { EDITOR_PATH, EDITOR_PROTOCOL, isEditorEnabled, isOwner, isPublicWebsiteRoute, sameMessage, type EditorialChange, type EditorialField } from '@/lib/website-editor/contract';
 import type { PublicVrfContent } from '@/lib/public-vrf-content';
 
 const Overlays = lazy(() => import('./frame-overlays'));
@@ -71,10 +71,23 @@ export function WebsiteFrameProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!active) return;
     const preventLiveSubmission = (event: SubmitEvent) => { event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'form-blocked' }); };
+    const preventOperationalNavigation = (event: MouseEvent) => {
+      const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null;
+      if (!link) return;
+      const destination = new URL(link.href, location.href);
+      if (destination.origin !== location.origin || !isPublicWebsiteRoute(destination.pathname)) {
+        event.preventDefault(); event.stopImmediatePropagation(); send({ type: 'navigation-blocked' });
+      }
+    };
     document.addEventListener('submit', preventLiveSubmission, true);
-    return () => document.removeEventListener('submit', preventLiveSubmission, true);
+    document.addEventListener('click', preventOperationalNavigation, true);
+    return () => {
+      document.removeEventListener('submit', preventLiveSubmission, true);
+      document.removeEventListener('click', preventOperationalNavigation, true);
+    };
   }, [active, send]);
   const value = useMemo(() => ({ active, editing: active && Boolean(session?.editing), changes, register, select }), [active, session?.editing, changes, register, select]);
+  if (active && !isPublicWebsiteRoute(pathname)) return <p role="alert">This route is outside the public website editor. Return to the VRF page.</p>;
   return <Context.Provider value={value}>{children}{active && session?.editing && /^\/services\/vrf-systems\/?$/.test(pathname) ? <Suspense fallback={null}><Overlays onSelect={select} /></Suspense> : null}</Context.Provider>;
 }
 export function useWebsiteFrame() { return useContext(Context); }

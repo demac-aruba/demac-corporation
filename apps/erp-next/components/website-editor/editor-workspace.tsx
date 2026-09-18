@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import { EDITOR_PROTOCOL, PAGE, SESSION_TTL_MS, applyChanges, values, isOwner, isEditorEnabled, isReviewBuild, sameMessage, type EditorialField, type EditorialChange } from '@/lib/website-editor/contract';
-import { createEditorialRepository, type EditorialRepository, type RevisionEntry } from '@/lib/website-editor/client';
+import { createEditorialRepository, PublicationRecoveryRequired, type EditorialRepository, type RevisionEntry } from '@/lib/website-editor/client';
 import type { PublicVrfContent } from '@/lib/public-vrf-content';
 import styles from './website-editor.module.css';
 
@@ -43,7 +43,7 @@ export default function WebsiteEditorWorkspace() {
   const active = isEditorEnabled() && isOwner(principal, mode) && grant?.actorId === principal.userId && Date.now() < grant.until;
   const isVrf = /^\/services\/vrf-systems\/?$/.test(path);
   const review = isReviewBuild();
-  const selected = fields.find((item) => item.key === selectedKey);
+  const selected = documentState ? fields.find((item) => item.key === selectedKey) : undefined;
   const changes = useMemo(() => documentState ? delta(documentState.original, documentState.working) : [], [documentState]);
   const frameChanges = useMemo(() => documentState ? delta(renderedPublic || documentState.original, documentState.working) : [], [documentState, renderedPublic]);
   const unsaved = documentState ? delta(documentState.saved, documentState.working).length : 0;
@@ -113,6 +113,7 @@ export default function WebsiteEditorWorkspace() {
           setDocumentState({ original: event.data.content, saved: snapshot.content, working: snapshot.content, revision: snapshot.revision, savedAt: snapshot.savedAt, pendingPublicationId: snapshot.pendingPublicationId });
         }).catch((cause) => setError(message(cause))).finally(() => { loading.current = false; });
       }
+      if (event.data.type === 'navigation-blocked') setNotice('Staff pages and external actions are outside this website editor. Exit editing to use them.');
       if (event.data.type === 'form-blocked') setNotice('Forms cannot be submitted from edit mode. Exit the editor to send a real request.');
       if (event.data.type === 'select' && typeof event.data.key === 'string') { setSelectedKey(event.data.key); setError(''); }
     }
@@ -202,8 +203,12 @@ export default function WebsiteEditorWorkspace() {
       const result = await repo.current.publish(documentState.revision, crypto.randomUUID());
       setDocumentState((state) => state ? { ...state, original: result.content, saved: result.content, working: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state);
       setReviewOpen(false); setNotice(review ? 'Review version published in this tab only. No production data was written.' : 'Published version verified.');
-    } catch (cause) { setError(message(cause)); }
-    finally { setBusy(''); }
+    } catch (cause) {
+      if (cause instanceof PublicationRecoveryRequired) {
+        setDocumentState((state) => state ? { ...state, pendingPublicationId: cause.requestId } : state);
+      }
+      setError(message(cause));
+    } finally { setBusy(''); }
   }
   function exit() {
     if (unsaved && !window.confirm('Leave without saving the latest changes?')) return;
@@ -220,18 +225,18 @@ export default function WebsiteEditorWorkspace() {
   }
 
   async function reloadDraft(reset = false) {
-    if (!repo.current || !documentState || busy) return;
-    if (!window.confirm(reset ? 'Replace this draft with the current published content? No public content is changed.' : 'Reload the shared draft? Unsaved edits in this tab will be replaced.')) return;
+    if (!repo.current || busy || (!documentState && !renderedPublic)) return;
+    if (documentState && !window.confirm(reset ? 'Replace this draft with the current published content? No public content is changed.' : 'Reload the shared draft? Unsaved edits in this tab will be replaced.')) return;
     setBusy('Loading draft…'); setError('');
     try {
-      const result = reset ? await repo.current.reset(documentState.revision) : await repo.current.load(documentState.original);
-      setDocumentState((state) => state ? { ...state, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state);
+      const result = reset && documentState ? await repo.current.reset(documentState.revision) : await repo.current.load(documentState?.original || renderedPublic!);
+      setDocumentState((state) => ({ original: state?.original || renderedPublic!, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId }));
       setUndo([]); setNotice(reset ? 'Draft reset to published content. The public page was not changed.' : 'Shared draft reloaded.');
     } catch (cause) { setError(message(cause)); } finally { setBusy(''); }
   }
 
   if (!active) return <main className={styles.gate}><span className={styles.gateMark}>✎</span><h1>Website Content Editor</h1><p>{status === 'loading' ? 'Verifying your DEMAC session…' : launchStatus}</p><a href="/website-manager/">Return to Website Manager</a><p className={styles.muted}>Being signed in does not activate editing. This mode is opened explicitly from Settings.</p></main>;
-  const fieldList = fields.filter((field) => `${field.label} ${field.group}`.toLowerCase().includes(search.toLowerCase()));
+  const fieldList = (documentState ? fields : []).filter((field) => `${field.label} ${field.group}`.toLowerCase().includes(search.toLowerCase()));
   return <main className={styles.workspace} data-website-editor-session>
     <header className={styles.toolbar}>
       <div className={styles.brand}><span>✎</span><div><strong>Edit Front End</strong><small>{isVrf ? 'VRF Systems' : path.startsWith('/careers') ? 'Careers · managed in Settings' : 'Page not yet connected'}</small></div><b className={styles.draftTag}>{review ? 'REVIEW' : 'DRAFT'}</b></div>
@@ -247,18 +252,19 @@ export default function WebsiteEditorWorkspace() {
     {editing && isVrf ? <aside className={styles.panel} role="region" aria-label="Content editing panel">
       <header><div><small>EDITING CONTENT</small><h2>{selected?.label || 'Choose an element'}</h2></div>{selected ? <button type="button" aria-label="Close selected element" onClick={() => setSelectedKey('')}>×</button> : null}</header>
       <div className={styles.panelBody}>
+      {!documentState ? <p role="status">{error ? 'Draft loading failed. Use Reload shared draft to try again.' : 'Loading the draft. Editing starts only after it is available.'}</p> : null}
       {selected ? <>
         <div className={styles.contentOnly}>Content only · Layout and behavior are protected</div>
         {selected.kind === 'image' ? <>
           <div className={styles.imagePreview}><img src={input || values(documentState!.working)[selected.key]} alt="Selected image preview" /></div>
-          <label className={styles.uploadButton}>Replace image<input type="file" accept="image/jpeg,image/png,image/webp" disabled={Boolean(busy)} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ''; }} /></label>
+          <label className={styles.uploadButton}>Replace image<input type="file" accept="image/jpeg,image/png,image/webp" disabled={Boolean(busy) || Boolean(documentState?.pendingPublicationId)} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ''; }} /></label>
           <small>JPEG, PNG or WebP · up to 8 MB. Images are checked before use.</small>
           <label>Image URL<input value={input} onChange={(event) => setInput(event.target.value)} maxLength={4096} /></label>
           {selected.key === 'hero.imageUrl' ? <><label>Desktop focal point<select value={values(documentState!.working)['hero.imagePosition']} onChange={(event) => apply('hero.imagePosition', event.target.value)}><option value="left center">Left</option><option value="center center">Center</option><option value="74% center">Right of center</option><option value="right center">Right</option></select></label><label>Phone focal point<select value={values(documentState!.working)['hero.mobileImagePosition']} onChange={(event) => apply('hero.mobileImagePosition', event.target.value)}><option value="left center">Left</option><option value="center center">Center</option><option value="74% center">Right of center</option><option value="right center">Right</option></select></label></> : null}
           <details className={styles.library}><summary>Reuse an image from this page</summary><div>{fields.filter((field) => field.kind === 'image').map((field) => <button type="button" key={field.key} onClick={() => void applyImage(selected.key, values(documentState!.working)[field.key])}><img src={values(documentState!.working)[field.key]} alt={field.label} /><span>{field.label}</span></button>)}</div></details>
         </> : <label>{selected.kind === 'position' ? 'Focal point' : 'Text'}<textarea rows={selected.max <= 240 ? 4 : 7} value={input} maxLength={selected.max} onChange={(event) => setInput(event.target.value)} /><small>{input.length} / {selected.max}</small></label>}
-        <button type="button" className={styles.applyButton} disabled={Boolean(busy)} onClick={() => selected.kind === 'image' ? void applyImage(selected.key, input) : apply(selected.key, input)}>Apply to draft</button>
-        <button type="button" className={styles.linkButton} disabled={!undo.length || Boolean(busy)} onClick={() => { const previous = undo[undo.length - 1]; if (previous) { setDocumentState((state) => state ? { ...state, working: previous } : state); setUndo((items) => items.slice(0, -1)); } }}>↶ Undo last edit</button>
+        <button type="button" className={styles.applyButton} disabled={Boolean(busy) || Boolean(documentState?.pendingPublicationId)} onClick={() => selected.kind === 'image' ? void applyImage(selected.key, input) : apply(selected.key, input)}>Apply to draft</button>
+        <button type="button" className={styles.linkButton} disabled={!undo.length || Boolean(busy) || Boolean(documentState?.pendingPublicationId)} onClick={() => { const previous = undo[undo.length - 1]; if (previous) { setDocumentState((state) => state ? { ...state, working: previous } : state); setUndo((items) => items.slice(0, -1)); } }}>↶ Undo last edit</button>
       </> : <><p>Click a title, paragraph or image on the page. Navigation, tabs and accordions continue working normally.</p><label>Find content<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Hero, Cassette, FAQ…" /></label><div className={styles.fieldList}>{fieldList.map((field) => <button type="button" key={field.key} onClick={() => selectField(field.key)}><span>{field.kind === 'image' ? '▧' : 'T'}</span><span><strong>{field.label}</strong><small>{field.group}</small></span><b>›</b></button>)}</div></>}
       <button className={styles.linkButton} type="button" disabled={Boolean(busy)} onClick={() => void reloadDraft()}>Reload shared draft</button>
       <button className={styles.linkButton} type="button" disabled={Boolean(busy) || Boolean(documentState?.pendingPublicationId)} onClick={() => void reloadDraft(true)}>Reset draft to published</button>

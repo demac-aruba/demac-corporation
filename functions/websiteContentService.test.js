@@ -157,3 +157,44 @@ test('replaying a superseded publication never republishes historical content', 
   await env.execute('save', { changes: change('Later'), expectedRevision: 0 }); await env.execute('publish', { requestId: randomUUID(), expectedRevision: 1 });
   await assert.rejects(env.execute('publish', first), { code: 'publication-superseded' }); assert.equal(env.current().content.hero.title, 'Later'); assert.equal(env.writes(), 2);
 });
+
+// Firestore does not preserve JavaScript object insertion order. The recovery
+// digest must cover the content, not incidental map-key ordering.
+const sortedMaps = (value) => Array.isArray(value) ? value.map(sortedMaps)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedMaps(value[key])])) : value;
+test('publication replay survives Firestore map-key canonicalization', async () => {
+  const env = setup(), args = { requestId: randomUUID(), expectedRevision: 0 };
+  await env.execute('publish', args);
+  env.state.releases.set(args.requestId, sortedMaps(env.state.releases.get(args.requestId)));
+  env.externallyPublish(sortedMaps(env.current().content));
+  assert.equal((await env.execute('publish', args)).publicationId, args.requestId);
+  assert.equal(env.writes(), 1);
+});
+test('lost response recovers a sorted Firestore receipt without rewriting public content', async () => {
+  const env = setup(), args = { requestId: randomUUID(), expectedRevision: 0 };
+  env.afterWrite(async () => { env.readFailure(Error('lost acknowledgement')); throw Error('timeout'); });
+  await assert.rejects(env.execute('publish', args), { code: 'publication-uncertain' });
+  env.state.releases.set(args.requestId, sortedMaps(env.state.releases.get(args.requestId)));
+  env.readFailure(null); env.afterWrite(null);
+  assert.equal((await env.execute('publish', args)).publicationId, args.requestId);
+  assert.equal(env.writes(), 1);
+});
+test('canonical publication digest ignores map order but not content or array order', () => {
+  const { digest } = require('./websiteContentService');
+  assert.equal(digest({ z: 1, a: { y: 2, b: 3 } }), digest({ a: { b: 3, y: 2 }, z: 1 }));
+  assert.notEqual(digest({ a: [1, 2] }), digest({ a: [2, 1] }));
+  assert.notEqual(digest({ a: 'published' }), digest({ a: 'different' }));
+});
+
+test('prepared receipts round-trip through sorted database maps before Storage write', async () => {
+  const env = setup();
+  const database = { ...env.store,
+    transaction: async (...args) => sortedMaps(await env.store.transaction(...args)),
+    release: async (id) => sortedMaps(await env.store.release(id)),
+  };
+  const service = createWebsiteContentService({ store: database, media: env.media });
+  const command = { pageId: 'vrf', action: 'publish', expectedRevision: 0, requestId: randomUUID() };
+  assert.equal((await service.execute({ uid: 'owner' }, command)).publicationId, command.requestId);
+  assert.equal((await service.execute({ uid: 'owner' }, command)).publicationId, command.requestId);
+  assert.equal(env.writes(), 1);
+});

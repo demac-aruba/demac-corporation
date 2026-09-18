@@ -124,6 +124,10 @@ async function editorReview(browser, name) {
     await expect(visitor.locator('[data-vrf-desktop] [data-website-text="hero.title"]')).toHaveText(defaults.hero.title);
     await expect(visitor.locator('[data-editor-highlight], [data-website-editor-session]')).toHaveCount(0);
     await visitor.close();
+    await frame.getByRole('link', { name: 'Staff Login →', exact: true }).click();
+    await expect(editor.getByText('Staff pages and external actions are outside this website editor.', { exact: false })).toBeVisible();
+    assert(editor.frames().some((child) => child.url().includes('/services/vrf-systems/')), 'Staff Login cannot enter the ERP through the editor');
+    await expect(frame.locator('[data-vrf-desktop]')).toBeVisible();
     // Same actual navigation, not a route-list mock. Careers remains read-only.
     await frame.getByRole('navigation', { name: 'Main navigation', exact: true }).getByRole('link', { name: 'Careers', exact: true }).click();
     await expect(editor.getByText('Careers · managed in Settings', { exact: true })).toBeVisible({ timeout: 15000 });

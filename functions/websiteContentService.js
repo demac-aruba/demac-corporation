@@ -1,7 +1,13 @@
 'use strict';
 const crypto = require('node:crypto');
 const { PAGE, defaults, normalizeVrf, applyChanges, values } = require('./websiteEditorialContract');
-const digest = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// Firestore sorts map keys. Hash canonical JSON so prepared receipts remain
+// recoverable after a real database round trip; array order stays significant.
+function canonicalJson(value) {
+  return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item);
+}
+const digest = (value) => crypto.createHash('sha256').update(canonicalJson(value)).digest('hex');
 const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, message, status = 400) { return Object.assign(new Error(message), { code, status }); }
 function assertOwner(profile) {

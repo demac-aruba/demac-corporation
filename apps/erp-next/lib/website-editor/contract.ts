@@ -13,3 +13,9 @@ export function isEditorEnabled() { return ['review', 'live'].includes(process.e
 export function sameMessage(event: MessageEvent, source: Window | null, channel: string) {
   return event.origin === window.location.origin && event.source === source && event.data?.protocol === EDITOR_PROTOCOL && event.data?.channel === channel;
 }
+
+export function isPublicWebsiteRoute(pathname: string) {
+  const path = pathname.replace(/\/$/, '') || '/';
+  return ['/', '/about', '/services', '/services/commercial', '/services/vrf-systems', '/careers', '/contact', '/project-gallery'].includes(path)
+    || /^\/project-gallery\/[a-z0-9_-]+$/i.test(path);
+}

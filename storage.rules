@@ -171,9 +171,9 @@ service firebase.storage {
     match /public-website/{allPaths=**} {
       allow read: if true;
       // Avoid a recursive allow overriding the exact protected JSON match.
-      allow create: if allPaths != 'vrf/published.json' && validWebsiteImage();
+      allow create: if allPaths != /vrf/published.json && validWebsiteImage();
       allow update: if false;
-      allow delete: if allPaths != 'vrf/published.json' && websiteAdmin();
+      allow delete: if allPaths != /vrf/published.json && websiteAdmin();
     }
 
     match /field-evidence/{visitId}/{allPaths=**} {
