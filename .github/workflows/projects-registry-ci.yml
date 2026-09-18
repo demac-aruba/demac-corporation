@@ -19,6 +19,31 @@ concurrency:
   group: projects-registry-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  scoped-review-source:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Archive only versioned Projects code for reproducible review
+        run: >-
+          git archive --format=zip --output="$RUNNER_TEMP/projects-review-source.zip" HEAD
+          AGENTS.md docs/ai functions/projects
+          apps/erp-next/lib/browser-projects.ts apps/erp-next/lib/project-phase-planner.ts
+          apps/erp-next/lib/project-record-sanitizer.ts
+          apps/erp-next/components/projects/projects-phase-workspace-v2.tsx
+          apps/erp-next/components/projects/projects-recovery.tsx
+          functions/fieldOperationsAuthorityWorkVisit.js functions/fieldOperationsOfficeReview.js
+          functions/package.json functions/package-lock.json
+          .github/workflows/projects-registry-ci.yml firebase.projects-emulator.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: projects-review-source
+          path: ${{ runner.temp }}/projects-review-source.zip
+          retention-days: 3
+          if-no-files-found: error
   isolated-auth-firestore:
     runs-on: ubuntu-latest
     timeout-minutes: 20
