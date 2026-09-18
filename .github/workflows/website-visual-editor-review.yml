@@ -8,6 +8,10 @@ on:
       - 'functions/bootstrap.js'
       - 'firestore.rules'
       - 'storage.rules'
+      - 'src/state/CalendarState.tsx'
+      - 'src/services/firebase.ts'
+      - 'scripts/patchAppointmentSettingsV11.cjs'
+      - 'website-editor.emulator.json'
       - 'docs/ai/website-editor/**'
       - '.github/workflows/website-visual-editor-review.yml'
 
@@ -80,4 +84,4 @@ jobs:
       - name: Install isolated emulator test tools
         run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 --no-audit --no-fund
       - name: Validate actual allow/deny rules against local demo emulators
-        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config functions/website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs"
+        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs"

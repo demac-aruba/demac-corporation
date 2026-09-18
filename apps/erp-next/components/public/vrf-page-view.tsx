@@ -73,8 +73,8 @@ export function VrfPageView({ content }: { content: PublicVrfContent }) {
       <VrfMobileExperience content={content} heroImage={heroImage} heroPosition={content.hero.mobileImagePosition || heroPosition} solutionImages={content.solutions.map((card, i) => ({ ...solutionImages[i], primary: card.imageUrl || solutionImages[i].primary }))} applicationImages={Object.fromEntries(content.applications.map((card) => [card.id, card.imageUrl || applicationImages[card.id] || applicationImages.office]))} trustImage={trustImage} indoorArt={content.indoorUnits.map((card) => <VrfIndoorPhoto key={card.id} card={card} />)} />
       <div className={mobileStyles.desktop} data-vrf-desktop>
       <main className={styles.page}>
-        <section className={styles.hero}>
-          <div className={styles.heroMedia} aria-hidden="true" data-website-image="hero.imageUrl">
+        <section className={styles.hero} data-website-image="hero.imageUrl">
+          <div className={styles.heroMedia} aria-hidden="true">
             <div className={styles.heroImage} style={{ backgroundImage: `url(${heroImage})`, backgroundPosition: heroPosition }} />
             <div className={styles.heroWash} />
           </div>

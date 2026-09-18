@@ -69,3 +69,11 @@ test('office and technicians still read the canonical calendar without listing p
     await assertFails(getDoc(doc(db, 'businessSettings/publicVrfPageDraft')));
   }
 });
+
+test('appointment presets retain their existing source-owned admin-only write gate', async () => {
+  const owner = env.authenticatedContext('owner').firestore();
+  const office = env.authenticatedContext('office').firestore();
+  await assertSucceeds(setDoc(doc(owner, 'businessSettings/appointment-work-presets'), { presets: [] }));
+  await assertSucceeds(getDoc(doc(office, 'businessSettings/appointment-work-presets')));
+  await assertFails(setDoc(doc(office, 'businessSettings/appointment-work-presets'), { presets: ['unauthorized'] }));
+});

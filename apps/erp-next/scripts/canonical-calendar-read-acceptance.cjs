@@ -37,3 +37,52 @@ test('read denial and connectivity failures propagate, never masquerade as missi
   const error = Error('permission/network failure');
   await assert.rejects(loader(null, error).load(), (cause) => cause === error);
 });
+
+function legacyReader(reply) {
+  const sourcePath = path.resolve(__dirname, '../../../src/services/firebase.ts');
+  const legacy = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  const reads = [];
+  const module = { exports: {} };
+  const session = JSON.stringify({ uid: 'local-fixture', idToken: 'test-only', expiresAt: Date.now() + 3_600_000 });
+  const context = {
+    module, exports: module.exports,
+    process: { env: { EXPO_PUBLIC_FIREBASE_PROJECT_ID: 'demo-local-calendar' } },
+    require: (id) => {
+      assert.equal(id, '@react-native-async-storage/async-storage');
+      return { getItem: async () => session, setItem: async () => {}, removeItem: async () => {} };
+    },
+    fetch: async (url, options) => {
+      assert.equal(options?.method || 'GET', 'GET', 'Calendar compatibility is read-only');
+      reads.push(new URL(url).pathname);
+      return reply(url, reads.length);
+    },
+  };
+  vm.runInNewContext(legacy, context, { filename: sourcePath });
+  return { list: module.exports.listFirestoreCollection, reads };
+}
+const response = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+test('Legacy calendar requests exact documents and retains decoded values and array shape', async () => {
+  const { list, reads } = legacyReader((url) => response(200, { fields: { label: { stringValue: new URL(url).pathname.endsWith('business-calendar') ? 'Calendar' : 'Presets' }, active: { booleanValue: true } } }));
+  const result = await list('businessSettings', ['business-calendar', 'appointment-work-presets', 'business-calendar']);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [ { label: 'Calendar', active: true, id: 'business-calendar' }, { label: 'Presets', active: true, id: 'appointment-work-presets' } ]);
+  assert.equal(reads.length, 2);
+  assert(reads.every((url) => /\/businessSettings\/(business-calendar|appointment-work-presets)$/.test(url)));
+  const calendarSource = fs.readFileSync(path.resolve(__dirname, '../../../src/state/CalendarState.tsx'), 'utf8');
+  assert(calendarSource.includes("listFirestoreCollection<BusinessCalendarSettings>('businessSettings', ['business-calendar', 'appointment-work-presets'])"));
+});
+test('Legacy selected reads omit missing documents but propagate permission and network failures', async () => {
+  assert.equal((await legacyReader(() => response(404, {})).list('businessSettings', ['business-calendar'])).length, 0);
+  await assert.rejects(legacyReader(() => response(403, { error: { message: 'denied fixture' } })).list('businessSettings', ['business-calendar']), /denied fixture/);
+  await assert.rejects(legacyReader(() => { throw Error('offline fixture'); }).list('businessSettings', ['business-calendar']), /offline fixture/);
+});
+test('Legacy unrelated collection pagination keeps its original behavior', async () => {
+  const { list, reads } = legacyReader((url, index) => response(200, { documents: [{ name: `documents/vans/v${index}`, fields: { active: { booleanValue: true } } }], ...(index === 1 ? { nextPageToken: 'page-two' } : {}) }));
+  const result = await list('vans');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [{ active: true, id: 'v1' }, { active: true, id: 'v2' }]);
+  assert.equal(reads.length, 2);
+});
+test('source-owned appointment preset authority remains explicit before the legacy patch pipeline', () => {
+  const rules = fs.readFileSync(path.resolve(__dirname, '../../../firestore.rules'), 'utf8');
+  assert(rules.includes('APPOINTMENT_SETTINGS_V11'));
+  assert(rules.includes("settingId == 'appointment-work-presets' ? adminRole() : operationsRole()"));
+});

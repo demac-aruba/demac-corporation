@@ -77,6 +77,8 @@ async function editorReview(browser, name) {
     const frame = editor.frameLocator('iframe');
     await expect(editor.getByRole('button', { name: 'Hero title', exact: false }).first()).toBeVisible({ timeout: 20000 });
     await expect(frame.locator('[data-vrf-desktop]')).toBeVisible();
+    await frame.locator('[data-vrf-desktop] section[data-website-image="hero.imageUrl"]').click({ position: { x: 900, y: 250 } });
+    await expect(editor.getByRole('heading', { name: 'Hero image', exact: true })).toBeVisible();
     const heading = frame.locator('[data-vrf-desktop] [data-website-text="hero.title"]');
     await heading.click();
     await expect(editor.getByRole('heading', { name: 'Hero title', exact: true })).toBeVisible();
@@ -134,6 +136,7 @@ async function editorReview(browser, name) {
     await editor.setViewportSize({ width: 390, height: 844 });
     await editor.getByRole('button', { name: 'Close selected element' }).click().catch(() => {});
     await editor.getByRole('button', { name: 'Hero title', exact: false }).first().click();
+    await expect(editor.locator('aside textarea')).toHaveValue(defaults.hero.title);
     await editor.screenshot({ path: path.join(output, `${name}-phone-edit.png`) });
     assert.equal(await editor.locator('html').evaluate((node) => node.scrollWidth > innerWidth + 1), false, 'Editor shell fits phone');
     // Forged cross-window commands carry no authority; the owner session stays
@@ -143,7 +146,7 @@ async function editorReview(browser, name) {
     profile.active = false;
     await editor.locator('aside textarea').fill('Rejected after revocation');
     await editor.getByRole('button', { name: 'Apply to draft', exact: true }).click();
-    await expect(editor.getByRole('alert')).toContainText('inactive', { timeout: 10000 });
+    await expect(editor.locator('[data-error="true"][role="alert"]')).toContainText('inactive', { timeout: 10000 });
     assert.equal(report.mutations.length, 0, 'Review must never attempt cloud mutations');
     // Cross-tab sign-out signal has no credentials and only closes editor mode.
     await settings.evaluate(() => { const channel = new BroadcastChannel('demac-website-editor-session'); channel.postMessage({ type: 'signed-out' }); channel.close(); });

@@ -158,7 +158,7 @@ export function VrfMobileExperience({ content, heroImage, heroPosition, solution
     <section id="vrf-mobile-indoors" className={styles.section}>
       <Heading eyebrow={content.editorial.indoorsEyebrow} eyebrowField="editorial.indoorsEyebrow" title={content.indoorHeading} titleField="indoorHeading"><p data-website-text="indoorIntro">{content.indoorIntro}</p></Heading>
       <div className={styles.unitGrid}>{content.indoorUnits.map((card, index) => <details key={card.id} className={styles.unitCard}>
-        <summary><span className={styles.unitArt}>{indoorArt[index]}</span><span className={styles.unitTitle}><span data-website-text={`indoorUnits.${card.id}.title`}>{card.title}</span><span aria-hidden="true">+</span></span><span className={styles.unitHint}>Explore this unit</span></summary>
+        <summary><span className={styles.unitArt}>{indoorArt[index]}</span><span className={styles.unitTitle} data-website-text={`indoorUnits.${card.id}.title`}>{card.title}<span aria-hidden="true">+</span></span><span className={styles.unitHint}>Explore this unit</span></summary>
         <div className={styles.unitDetails}><p data-website-text={`indoorUnits.${card.id}.description`}>{card.description}</p>{card.detail ? <small data-website-text={`indoorUnits.${card.id}.detail`}>{card.detail}</small> : null}</div>
       </details>)}</div>
     </section>
@@ -193,7 +193,7 @@ export function VrfMobileExperience({ content, heroImage, heroPosition, solution
     <section className={`${styles.section} ${styles.trust}`}>
       <div className={styles.trustBox}>
         <div className={styles.trustHeader}><div><span className={styles.eyebrow} data-website-text="trust.eyebrow">{content.trust.eyebrow}</span><h2 data-website-text="trust.title">{content.trust.title}</h2></div><div role="img" aria-label="HVAC service technician" className={styles.trustPhoto} data-website-image="trust.imageUrl" style={{ backgroundImage: `url("${trustImage}")` }} /></div>
-        <div className={styles.trustBullets}>{content.trust.bullets.map((bullet, index) => <div key={index}><span aria-hidden="true">✓</span><span data-website-text={`trust.bullets.${index}`}>{bullet}</span></div>)}</div>
+        <div className={styles.trustBullets}>{content.trust.bullets.map((bullet, index) => <div key={index} data-website-text={`trust.bullets.${index}`}><span aria-hidden="true">✓</span>{bullet}</div>)}</div>
         <details className={styles.trustMore}><summary>Our local approach <span aria-hidden="true">+</span></summary><p data-website-text="trust.description">{content.trust.description}</p></details>
         <a href="/projects" className={styles.textLink}>Our projects <span aria-hidden="true">↗</span></a>
       </div>
