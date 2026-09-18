@@ -9,7 +9,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from 'react';
-import { projectMetrics, type BrowserProject } from '@/lib/browser-projects';
+import { projectMetrics, planProjectScheduling, type BrowserProject } from '@/lib/browser-projects';
+import { ProjectLaborBudgetWarning } from './project-labor-budget-status';
 import {
   phaseBriefing,
   phaseCapacitySummary,
@@ -293,6 +294,9 @@ export function SchedulePhaseDialog({
   const hours = Number.isFinite(slotCount) ? slotCount * project.slotDurationMinutes / 60 : 0;
   const remaining = phaseRemainingHours(project, phase);
   const projectRemaining = projectMetrics(project).remainingUnscheduledHours;
+  const budgetPlan = useMemo(() => {
+    try { return planProjectScheduling(project, slotCount, phase.id); } catch { return null; }
+  }, [project, slotCount, phase.id]);
   const briefing = useMemo(() => phaseBriefing(project, phase), [phase, project]);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -312,7 +316,7 @@ export function SchedulePhaseDialog({
       setError(cause instanceof Error ? cause.message : 'The preview assignment could not be created.');
     }
   };
-  return <DialogShell eyebrow="Projects · Scheduling Handoff" title={`Schedule ${phase.name}`} description="Reserve this phase’s approved capacity and preview the structured handoff sent to the assigned technicians." wide busy={busy} onClose={onClose}>
+  return <DialogShell eyebrow="Projects · Scheduling Handoff" title={`Schedule ${phase.name}`} description="Plan Van time for this phase and preview the technician handoff. Budget overruns warn without blocking; this preview does not reserve the live agenda." wide busy={busy} onClose={onClose}>
     <form onSubmit={submit}><div className={styles.simpleForm}>
       <div className={styles.scheduleSummary}><div><span>Phase budget</span><strong>{number(phase.estimatedLaborHours)}h</strong></div><div><span>Phase available</span><strong>{number(remaining, 1)}h</strong></div><div><span>Project available</span><strong>{number(projectRemaining, 1)}h</strong></div><div><span>This visit</span><strong>{number(hours, 1)}h</strong></div></div>
       <label><span>Scheduled date *</span><input name="scheduledDate" type="date" required defaultValue={phase.startsOn} /></label>
@@ -321,9 +325,11 @@ export function SchedulePhaseDialog({
       <label><span>Van capacity slots *</span><select name="scheduledSlots" value={slots} onChange={(event) => setSlots(event.target.value)}>{Array.from({ length: project.slotsPerWorkDay }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} slot{value === 1 ? '' : 's'} · {number(value * project.slotDurationMinutes / 60)}h</option>)}</select></label>
       <label><span>Technician IDs or names</span><input name="technicianIds" placeholder="Miguel Reyes, Walter" /></label>
       <label><span>Units planned for this visit</span><input name="unitsPlanned" type="number" min="0" step="1" defaultValue={phase.progressMethod === 'units' ? Math.min(phase.unitsPlanned, 2) : 0} /></label>
-      <div className={hours > remaining || hours > projectRemaining ? styles.alertBox : styles.infoBox}>This visit reserves {number(hours, 1)}h. {number(Math.max(0, remaining - hours), 1)}h will remain uncommitted in this phase.</div>
+      {budgetPlan ? <ProjectLaborBudgetWarning budget={budgetPlan.laborBudget} /> : null}
+      {budgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={budgetPlan.phaseLaborBudget} scope="Phase" /> : null}
+      <div className={styles.infoBox}>This preview plans {number(hours, 1)}h. Remaining phase budget: {number(Math.max(0, remaining - hours), 1)}h. Exceeding an estimate does not block planning or change the original budget. Live bookings still go through Canonical Scheduling.</div>
       <div className={styles.briefingPreview}><span>Technician handoff preview</span><p>{briefing}</p></div>
       {error ? <div className={styles.formError}>{error}</div> : null}
-    </div><footer className={styles.scheduleFooter}><a className={styles.secondaryButton} href="/scheduling">Open Canonical Scheduling</a><span /><button type="button" className={styles.secondaryButton} onClick={onClose}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={busy || hours > remaining || hours > projectRemaining}>Create Preview Assignment</button></footer></form>
+    </div><footer className={styles.scheduleFooter}><a className={styles.secondaryButton} href="/scheduling">Open Canonical Scheduling</a><span /><button type="button" className={styles.secondaryButton} onClick={onClose}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={busy}>Create Preview Assignment</button></footer></form>
   </DialogShell>;
 }
