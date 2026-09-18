@@ -1,0 +1,44 @@
+name: Project budget advisory acceptance
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/lib/browser-projects.ts'
+      - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/lib/project-phase-planner.ts'
+      - 'apps/erp-next/components/projects/**'
+      - 'apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx'
+      - 'apps/erp-next/scripts/project-budget-acceptance.ts'
+      - '.github/workflows/project-budget-warning.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/scripts/project-budget-acceptance.ts'
+      - '.github/workflows/project-budget-warning.yml'
+permissions:
+  contents: read
+jobs:
+  budget-advisory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/erp-next
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Budget and phase acceptance
+        run: >-
+          npx tsc --ignoreConfig scripts/project-budget-acceptance.ts scripts/project-phase-planner-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node --outDir .project-budget-test --rootDir . --lib ES2022,DOM
+          && node .project-budget-test/scripts/project-budget-acceptance.js
+          && node .project-budget-test/scripts/project-phase-planner-acceptance.js
+      - run: npm run test:projects-preview
+      - run: npm run typecheck

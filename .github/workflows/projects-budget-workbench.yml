@@ -1,0 +1,91 @@
+name: Projects budget isolated workbench
+on:
+  push:
+    branches: ['fix/projects-budget-soft-warning']
+    paths:
+      - '.github/workflows/projects-budget-workbench.yml'
+      - 'scripts/dev/apply-project-budget-warning.py'
+permissions:
+  contents: write
+concurrency:
+  group: projects-budget-isolated-workbench
+  cancel-in-progress: false
+jobs:
+  prepare-reviewed-commit:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/fix/projects-budget-soft-warning'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Apply the exact-base source edit in this disposable workspace only
+        run: python3 scripts/dev/apply-project-budget-warning.py
+      - name: Install ERP test dependencies without any production credentials
+        working-directory: apps/erp-next
+        run: npm install --no-audit --no-fund
+      - name: Validate types, the new rule and the existing Projects acceptance suite
+        working-directory: apps/erp-next
+        run: |
+          npm run typecheck
+          npx tsc --ignoreConfig scripts/project-budget-acceptance.ts scripts/project-phase-planner-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .project-budget-test --rootDir . --lib ES2022,DOM
+          node .project-budget-test/scripts/project-budget-acceptance.js
+          node .project-budget-test/scripts/project-phase-planner-acceptance.js
+          npm run test:projects-preview
+      - name: ERP build with existing prebuild gates intact
+        working-directory: apps/erp-next
+        run: npm run build
+      - name: Check exact final source diff
+        run: |
+          git diff --check
+          git diff --stat -- apps/erp-next/lib/browser-projects.ts apps/erp-next/lib/project-phase-planner.ts apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx apps/erp-next/components/projects/projects-phase-workspace-v2.tsx apps/erp-next/components/projects/project-phase-planner-dialogs.tsx apps/erp-next/scripts/projects-preview-acceptance.ts
+      - name: Create proposed Git objects only, never update a branch or deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from pathlib import Path
+          repo = 'demac-aruba/demac-corporation'
+          ref = 'refs/heads/fix/projects-budget-soft-warning'
+          assert os.environ['GITHUB_REPOSITORY'] == repo
+          assert os.environ['GITHUB_REF'] == ref
+          head = os.environ['GITHUB_SHA']
+          def api(path, body=None):
+              request = urllib.request.Request('https://api.github.com/repos/' + repo + path,
+                  data=None if body is None else json.dumps(body).encode(),
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'},
+                  method='GET' if body is None else 'POST')
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          # No update-ref, push, merge, deployment, secret or production-database operation exists here.
+          current = api('/git/ref/heads/fix/projects-budget-soft-warning')['object']['sha']
+          assert current == head, 'Branch advanced; review the new head instead of proposing stale work.'
+          base_tree = api('/git/commits/' + head)['tree']['sha']
+          paths = [
+              'apps/erp-next/lib/browser-projects.ts',
+              'apps/erp-next/lib/project-phase-planner.ts',
+              'apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx',
+              'apps/erp-next/components/projects/projects-phase-workspace-v2.tsx',
+              'apps/erp-next/components/projects/project-phase-planner-dialogs.tsx',
+              'apps/erp-next/scripts/projects-preview-acceptance.ts',
+          ]
+          entries = []
+          for path in paths:
+              blob = api('/git/blobs', {'content': Path(path).read_text(), 'encoding': 'utf-8'})
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+          for path in ['scripts/dev/apply-project-budget-warning.py', '.github/workflows/projects-budget-workbench.yml']:
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
+          tree = api('/git/trees', {'base_tree': base_tree, 'tree': entries})
+          commit = api('/git/commits', {
+              'message': 'fix(projects): warn on labor budget overrun without blocking valid bookings\n\nPreserve the original estimate, canonical availability/identity gates and actuals. Add advisory project/phase forecasts and local assignment snapshots. Replace only the obsolete hard-budget test with positive warning assertions. Remove the one-use isolated workbench. No production changes.',
+              'tree': tree['sha'], 'parents': [head],
+          })
+          print('PROPOSED_COMMIT=' + commit['sha'])
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Proposed source commit: `' + commit['sha'] + '`\n\nNo branch was moved; connector review and explicit branch update are still required. Main and production are unchanged.\n')
+          PY
