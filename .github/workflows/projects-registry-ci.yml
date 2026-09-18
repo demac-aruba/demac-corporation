@@ -36,7 +36,7 @@ jobs:
           apps/erp-next/components/projects/projects-phase-workspace-v2.tsx
           apps/erp-next/components/projects/projects-recovery.tsx
           functions/fieldOperationsAuthorityWorkVisit.js functions/fieldOperationsOfficeReview.js
-          functions/package.json functions/package-lock.json
+          functions/package.json
           .github/workflows/projects-registry-ci.yml firebase.projects-emulator.json
       - uses: actions/upload-artifact@v4
         with:
