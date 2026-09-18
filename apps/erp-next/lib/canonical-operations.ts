@@ -1,4 +1,4 @@
-import { getFirestoreDocument, listFirestoreCollection } from './firebase/firestore-rest';
+import { listFirestoreCollection } from './firebase/firestore-rest';
 import { normalizeWorkforceSkills, type WorkforceEmployee } from './workforce-readiness';
 
 export type CanonicalStaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo' | string;
@@ -267,7 +267,7 @@ export function canonicalCrewReadinessRoster(state: CanonicalOperationsState, da
 }
 
 export async function loadCanonicalOperationsState(): Promise<CanonicalOperationsState> {
-  const [staffProfiles, vans, dailyVanAssignments, vanMaintenanceLogs, staffAbsences, vanHalfDaySchedules, calendarClosures, businessCalendarDocument] = await Promise.all([
+  const [staffProfiles, vans, dailyVanAssignments, vanMaintenanceLogs, staffAbsences, vanHalfDaySchedules, calendarClosures, businessSettings] = await Promise.all([
     listFirestoreCollection<CanonicalStaffProfile>('staffProfiles', 500),
     listFirestoreCollection<CanonicalVan>('vans', 250),
     listFirestoreCollection<CanonicalDailyVanAssignment>('dailyVanAssignments', 1000),
@@ -275,12 +275,10 @@ export async function loadCanonicalOperationsState(): Promise<CanonicalOperation
     listFirestoreCollection<CanonicalStaffAbsence>('staffAbsences', 1000),
     listFirestoreCollection<CanonicalVanHalfDaySchedule>('vanHalfDaySchedules', 250),
     listFirestoreCollection<CanonicalCalendarClosure>('calendarClosures', 500),
-    // Editorial drafts in businessSettings are private. Read only the canonical
-    // calendar this loader actually consumes; rules are not collection filters.
-    getFirestoreDocument<CanonicalBusinessCalendar>('businessSettings', 'business-calendar'),
+    listFirestoreCollection<CanonicalBusinessCalendar>('businessSettings', 250),
   ]);
 
-  const businessCalendar = businessCalendarDocument ?? {
+  const businessCalendar = businessSettings.find((setting) => setting.id === 'business-calendar') ?? {
     id: 'business-calendar',
     closedWeekdays: [0],
   };

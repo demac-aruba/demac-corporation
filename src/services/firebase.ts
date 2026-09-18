@@ -133,25 +133,8 @@ export async function getFirebaseUserProfile(uid: string, idToken: string) {
   return decodeFirestoreFields(payload.fields ?? {});
 }
 
-export async function listFirestoreCollection<T extends { id: string }>(collectionPath: string, documentIds?: readonly string[]): Promise<T[]> {
+export async function listFirestoreCollection<T extends { id: string }>(collectionPath: string): Promise<T[]> {
   const session = await requireFirebaseSession();
-  // Calendar readers request only their known public-to-staff documents. A
-  // collection-wide read would now include private editorial drafts. Preserve
-  // the existing array contract and all other collection callers unchanged.
-  if (documentIds) {
-    // Keep T inside a result envelope so Promise.all does not unwrap a generic
-    // document as Awaited<T>. The returned array and read behavior are unchanged.
-    const selected = await Promise.all([...new Set(documentIds)].map(async (id): Promise<{ document: T } | null> => {
-      const response = await fetch(`${getFirestoreBaseUrl()}/${collectionPath}/${encodeURIComponent(id)}`, {
-        headers: { Authorization: `Bearer ${session.idToken}` },
-      });
-      if (response.status === 404) return null;
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error?.message ?? `No se pudo cargar ${collectionPath}/${id}.`);
-      return { document: { ...decodeFirestoreFields(payload.fields ?? {}), id } as T };
-    }));
-    return selected.filter((entry): entry is { document: T } => entry !== null).map(({ document }) => document);
-  }
   const documents: T[] = [];
   let pageToken = '';
 

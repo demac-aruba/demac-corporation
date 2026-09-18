@@ -66,7 +66,7 @@ export function CalendarStateProvider({ children }: { children: ReactNode }) {
     try {
       const [remoteClosures, remoteSettings] = await Promise.all([
         listFirestoreCollection<CalendarClosure>('calendarClosures'),
-        listFirestoreCollection<BusinessCalendarSettings>('businessSettings', ['business-calendar', 'appointment-work-presets']),
+        listFirestoreCollection<BusinessCalendarSettings>('businessSettings'),
       ]);
       setCalendarClosures(remoteClosures.filter((item) => item.active !== false).sort((a, b) => a.date.localeCompare(b.date)));
       const saved = remoteSettings.find((item) => item.id === DEFAULT_SETTINGS.id);

@@ -10,9 +10,12 @@ const { doc, setDoc, getDoc, deleteDoc, getDocs, collection } = requireTest('fir
 const { ref, uploadBytes, getBytes, deleteObject } = requireTest('firebase/storage');
 const projectId = 'demo-demac-website';
 if (!/^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST || '') || !/^127\.0\.0\.1:\d+$/.test(process.env.FIREBASE_STORAGE_EMULATOR_HOST || '')) throw Error('Only local demo emulators may run these tests.');
+const config = JSON.parse(readFileSync(resolve('website-editor.emulator.json'), 'utf8'));
+assert.equal(config.firestore.rules, 'functions/website-editor-review/firestore.rules');
+assert.equal(config.storage.rules, 'functions/website-editor-review/storage.rules');
 let env;
 before(async () => {
-  env = await initializeTestEnvironment({ projectId, firestore: { rules: readFileSync(resolve('firestore.rules'), 'utf8'), host: '127.0.0.1', port: 8187 }, storage: { rules: readFileSync(resolve('storage.rules'), 'utf8'), host: '127.0.0.1', port: 9297 } });
+  env = await initializeTestEnvironment({ projectId, firestore: { rules: readFileSync(resolve(config.firestore.rules), 'utf8'), host: '127.0.0.1', port: 8187 }, storage: { rules: readFileSync(resolve(config.storage.rules), 'utf8'), host: '127.0.0.1', port: 9297 } });
   await env.withSecurityRulesDisabled(async (context) => {
     for (const [id, role, active] of [['owner','admin',true],['office','office',true],['supervisor','supervisor',true],['inactive','admin',false],['tech','technician',true]]) await setDoc(doc(context.firestore(), `users/${id}`), { role, active });
     await setDoc(doc(context.firestore(), 'businessSettings/publicVrfPageDraft'), { title: 'Private draft' });
@@ -59,8 +62,7 @@ test('other business settings, homepage publishing and owner image uploads retai
   await assertFails(uploadBytes(ref(office.storage(), 'public-website/vrf/editor/denied.png'), Buffer.from([137,80,78,71]), { contentType: 'image/png' }));
   await assertFails(setDoc(doc(owner.firestore(), 'businessSettings/publicVrfPagePublished/editorReleases/forged-again'), { status: 'published' }));
 });
-
-test('office and technicians still read the canonical calendar without listing private settings', async () => {
+test('candidate rules require scoped calendar reads before production activation', async () => {
   for (const id of ['office', 'tech', 'supervisor']) {
     const db = env.authenticatedContext(id).firestore();
     const snapshot = await assertSucceeds(getDoc(doc(db, 'businessSettings/business-calendar')));
@@ -69,7 +71,6 @@ test('office and technicians still read the canonical calendar without listing p
     await assertFails(getDoc(doc(db, 'businessSettings/publicVrfPageDraft')));
   }
 });
-
 test('appointment presets retain their existing source-owned admin-only write gate', async () => {
   const owner = env.authenticatedContext('owner').firestore();
   const office = env.authenticatedContext('office').firestore();

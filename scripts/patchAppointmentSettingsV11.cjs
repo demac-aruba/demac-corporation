@@ -9,18 +9,11 @@ const targetFiles = [
   'src/screens/SettingsScreen.tsx',
   'src/state/CalendarState.tsx',
   'src/types.ts',
+  'firestore.rules',
 ];
 const materializedFiles = new Set([
   'src/screens/SettingsHubScreen.tsx',
-  'firestore.rules',
 ]);
-
-// The V11 rules block is now maintained in source alongside scoped website rules.
-// Keep the original patch targets, range checks and all-or-nothing application.
-const rules = fs.readFileSync('firestore.rules', 'utf8');
-if (!rules.includes(marker) || !rules.includes("settingId == 'appointment-work-presets' ? adminRole() : operationsRole()")) {
-  throw new Error('Appointment settings V11 source-owned admin gate is missing.');
-}
 
 const marked = targetFiles.filter((file) => fs.readFileSync(file, 'utf8').includes(marker));
 if (marked.length === targetFiles.length) {
@@ -141,4 +134,4 @@ for (const { file, hunks } of parsed) {
 if (outputs.size !== targetFiles.length) throw new Error('Appointment settings V11 patch is missing one or more target files.');
 for (const [file, content] of outputs) fs.writeFileSync(file, content);
 
-console.log('patchAppointmentSettingsV11.cjs applied; SettingsHub and the validated admin gate are materialized in source.');
+console.log('patchAppointmentSettingsV11.cjs applied; SettingsHub is materialized directly in source.');

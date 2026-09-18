@@ -5,6 +5,7 @@ on:
     paths:
       - 'apps/erp-next/**'
       - 'functions/website*'
+      - 'functions/website-editor-review/**'
       - 'functions/bootstrap.js'
       - 'firestore.rules'
       - 'storage.rules'
@@ -32,17 +33,25 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - run: node --check functions/websiteContentApi.js && node --test functions/websiteContentService.test.js
+      - run: node --check functions/websiteContentApi.js && node --check functions/websiteContentFirebase.js && node --test functions/websiteContentService.test.js
 
   browser-review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Preserve operational sources and deployed rule paths for this editor PR
+        if: github.event.pull_request.number == 513
+        env:
+          WEBSITE_EDITOR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node apps/erp-next/scripts/website-editor-release-scope.cjs
       - name: Build the actual site without live writes
         env:
           VERCEL_ENV: preview
@@ -55,10 +64,11 @@ jobs:
         run: |
           npm install --prefix /tmp/vrf-browser playwright@1.56.1 @playwright/test@1.56.1 --no-audit --no-fund
           /tmp/vrf-browser/node_modules/.bin/playwright install --with-deps chromium webkit
-      - name: Exercise editor, negative activation, responsive UI and recovery
+      - name: Exercise editor, negative activation, responsive UI, recovery and native navigation
         run: |
           python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out >/tmp/editor-server.log 2>&1 &
           node apps/erp-next/scripts/website-editor-browser-review.cjs
+          node apps/erp-next/scripts/website-editor-navigation-review.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,13 +85,13 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '22'
           package-manager-cache: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - name: Install isolated emulator test tools
-        run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 --no-audit --no-fund
-      - name: Validate actual allow/deny rules against local demo emulators
-        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs"
+        run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 firebase-admin@13.4.0 --no-audit --no-fund
+      - name: Validate candidate rules and real persistence against local demo emulators only
+        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs && node functions/websiteContentPersistence.test.cjs"

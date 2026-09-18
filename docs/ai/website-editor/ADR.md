@@ -1,83 +1,65 @@
-# ADR: Visual editing is a presentation over governed Website Manager content
+# ADR: Shared visual content editor, isolated from operational rollout
 
-- Status: Proposed for PR #513; production rollout is not approved.
-- Date: 2026-09-17
-- Owner: DEMAC / Christian
-- Scope: issue #512; VRF first
+- Status: Proposed, functional preview on PR #513. No production activation.
+- Updated: 2026-09-18
+- Owner intent: issue #512 and Christian's explicit frontend-only clarification.
 
-## Decision
+## Content and interface
 
-Keep one public content representation, one actual responsive page renderer and one
-editor workspace. Reuse existing VRF Firestore documents/Storage path. A pure shared
-contract owns exact editable fields and legacy normalization; it is used by browser
-review, public content reader and protected backend. It does not accept arbitrary HTML,
-CSS, object paths, link destinations, form fields or structural mutations.
+One canonical VRF content representation, one actual responsive renderer, one editor.
+Reuse Website Manager document identities and published Storage JSON. Exact text/image
+field allowlists exclude actions, links, forms, arbitrary HTML/CSS and layout mutation.
+Future approved commercial pages add adapters/bindings, not another backend form UI.
+Careers remains excluded and managed by its recruitment module.
 
-The editor opens from Settings into a separate tab with a one-use launch nonce. A
-same-origin iframe renders the real public route. Message acceptance requires exact
-origin, source window and channel; the frame also checks the owner's actual session.
-Normal top-level public visits do not load overlays. The nonce is a UX activation
-capability, not a substitute for authenticated backend authorization.
+Settings grants one-use, source-window-bound launch into a separate tab. The iframe
+uses actual public routes; message checks bind origin, source and channel. Normal
+signed-in top-level visits do not activate editing or load overlays. The launch nonce
+is a UX capability, not a substitute for authenticated service authorization.
 
-The draft is not public. Live writes use `websiteContentApi`, which verifies Firebase
-tokens and fresh governed role records, then applies field patches at an expected draft
-revision. Protected links/actions come from the current published snapshot even if an
-old manager draft contains non-editorial changes. Private release receipts in the
-existing published document's `editorReleases` subcollection freeze content for retry
-reconciliation/history; they do not introduce a competing public source.
+## Persistence boundary
 
-Storage publishes one JSON object with an `ifGenerationMatch` precondition. An uncertain
-outcome is recovered by request ID and exact content digest. The pending receipt blocks
-another publication/draft overwrite until recovery. A newer publication is never replaced
-by replaying an earlier completed request. Success requires matching read-back bytes and
-an audit receipt. The private draft/receipt rule boundary and server-only live publish
-path are staged behind explicit owner-approved activation.
+The website-only service validates the owner and activation, applies optimistic draft
+revisions and preserves noneditorial fields. Storage published JSON is public authority;
+Firestore publication records are manager/audit projections. Frozen release receipts
+support history and request-bound recovery, not another CMS. Conditional generation
+writes and exact readback protect concurrent publication and lost responses.
 
-## Preview versus production
+The Firebase adapter is separate from service rules and UI. It initializes nothing by
+itself and only accepts the canonical website documents/bucket path. The same adapter
+runs against actual local demo Firestore/Storage emulators for persistence verification.
+No operational service is imported. Browser review mode remains explicitly tab-local.
 
-Non-production builds use `review` mode: only the authenticated owner's editing tab holds
-review drafts, selected file object URLs and history. They disappear when the tab closes.
-The UI says so and never reports a cloud save or live publication. Production builds are
-`disabled` unless deliberately configured `WEBSITE_EDITOR_MODE=live`. Backend requires
-both `WEBSITE_EDITOR_ENABLED=true` and the governed `website-editor.backendEnabled=true`.
-No flag or rule has been changed in production during implementation.
+## Releasing without operational side effects
 
-The legacy VRF editor remains functional before activation; after activation it links to
-the common visual editor instead of becoming a concurrent writer. Other Website Manager
-pages and operational settings preserve their existing behavior. The operations calendar
-loader narrows a former collection-wide settings read to the exact `business-calendar`
-document, so private editorial rules do not break office/technician reads. This does not
-change scheduling rules, write paths or the missing-calendar fallback.
+An earlier implementation put proposed access rules in the deployed root paths and
+narrowed Legacy/ERP calendar reads to accommodate private editorial documents. Review
+found that merging those paths would automatically deploy Firebase rules. That coupling
+was rejected for this frontend delivery.
 
-## Alternatives considered
+Production rules and operational readers/patcher are restored exactly to the PR base.
+Candidate rules are emulator-only fixtures under functions/website-editor-review.
+Existing security tests still exercise every candidate allow/deny boundary. The removed
+calendar refactor's acceptance tests now validate the actual retained reader behavior,
+plus a Git scope gate proves no operational-source/deployed-rule changes in this PR.
+This changes task scope, not permission expectations or pass/fail thresholds.
 
-- Arbitrary `contentEditable`/DOM serialization: rejected, because it can persist layout,
-  links or transient UI instead of canonical content and is unsafe for source identity.
-- Another backend form per page: rejected, because the owner requires visual maintenance
-  without duplicate administration screens.
-- Separate mock page in the editor: rejected; it would drift from real desktop/mobile UI.
-- Change the entire ERP from static export to a new server runtime: deferred; too broad
-  for the scoped editor. Same-source client refresh provides published content updates.
+The website API is deliberately not exported by operational bootstrap. Live UI defaults
+to disabled. A separate explicitly reviewed activation must reconcile current content,
+isolate the function deployment and resolve rule compatibility before enabling writes.
+Do not claim the full production feature is finished merely because review-mode UI works.
 
-## Consequences and limitations
+## Interaction invariants
 
-The initial HTML/metadata still represents the last static build; the public client
-loads the current published snapshot after hydration. Content-only changes therefore
-become visible without a code merge, but raw HTML/search metadata is not regenerated by
-this first implementation. A controlled HTML revalidation/build integration would be a
-separate infrastructure decision, not an undocumented side effect of Publish.
+Overlays check the actual clicked descendant for links/buttons/disclosures before
+selecting a parent image. Actual hero/final CTA native navigation is tested separately
+from background selection. Menus, system tabs and accordions retain their behavior.
+Forms and operational/external routes are protected within an editing frame only.
 
-The shared workspace uses a VRF content adapter first. Future pages register their own
-approved field contracts and render bindings; they must not copy the editor or create
-another CMS. Unsupported pages are visibly read-only, not silently half-editable.
+## Known limits
 
-Images reuse website media storage intended for public assets. Draft JSON/history remain
-private; unreferenced uploaded images are not a secure store for confidential documents.
-The pilot does not introduce destructive asset cleanup. Production media processing,
-retention and global header/footer scopes must be reviewed before extending them.
-
-## Rollout / recovery
-
-See RELEASE.md. Preview approval is not authorization to deploy functions/rules or activate
-production writes. Rollback does not delete public content, images, private drafts or
-receipts. Pending publications must be reconciled before switching writers.
+VRF is the first connected page. Header/footer shared editing is not in this pilot.
+Review-only uploads/drafts disappear on tab closure. Images use public website media
+storage, not confidential document storage. Static HTML remains build-time while
+hydrated public content refreshes from the same published JSON. These are explicit
+review/rollout limits, not evidence of production cloud publishing.

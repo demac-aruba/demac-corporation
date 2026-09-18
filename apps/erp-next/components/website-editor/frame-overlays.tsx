@@ -2,17 +2,29 @@
 import { useEffect, useState } from 'react';
 import styles from './website-editor.module.css';
 
+const EDITABLE = '[data-website-text], [data-website-image]';
+const INTERACTIVE = 'a,button,summary,form,input,select,textarea,[role="button"],[role="tab"],[role="link"]';
+
 export default function FrameOverlays({ onSelect }: { onSelect: (field: string) => void }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [box, setBox] = useState<DOMRect | null>(null);
   useEffect(() => {
-    const find = (node: EventTarget | null) => node instanceof Element ? node.closest<HTMLElement>('[data-website-text], [data-website-image]') : null;
-    function hover(event: PointerEvent) { const item = find(event.target); if (item) { setTarget(item); setBox(item.getBoundingClientRect()); } }
+    function hover(event: PointerEvent) {
+      const origin = event.target instanceof Element ? event.target : null;
+      // Keep the badge reachable; do not retain a misleading image selection
+      // when the pointer moves over a link nested inside an editable background.
+      if (origin?.closest('[data-editor-highlight]')) return;
+      const item = origin?.closest<HTMLElement>(EDITABLE) || null;
+      setTarget(item); setBox(item?.getBoundingClientRect() || null);
+    }
     function click(event: MouseEvent) {
-      const item = find(event.target); if (!item) return;
+      const origin = event.target instanceof Element ? event.target : null;
+      // Check the actual clicked descendant BEFORE its editable container.
+      // A hero's background also contains CTA links and their SVG/span children.
+      if (!origin || origin.closest(INTERACTIVE)) return;
+      const item = origin.closest<HTMLElement>(EDITABLE);
+      if (!item) return;
       setTarget(item); setBox(item.getBoundingClientRect());
-      // Never steal a navigation, tab, disclosure, form or link action.
-      if (item.closest('a,button,summary,form,input,select,textarea')) return;
       event.preventDefault(); event.stopPropagation();
       onSelect(item.dataset.websiteText || item.dataset.websiteImage || '');
     }

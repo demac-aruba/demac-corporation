@@ -1,6 +1,6 @@
 {
-  "firestore": { "rules": "firestore.rules" },
-  "storage": { "rules": "storage.rules" },
+  "firestore": { "rules": "functions/website-editor-review/firestore.rules" },
+  "storage": { "rules": "functions/website-editor-review/storage.rules" },
   "emulators": {
     "firestore": { "host": "127.0.0.1", "port": 8187 },
     "storage": { "host": "127.0.0.1", "port": 9297 },

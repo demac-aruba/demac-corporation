@@ -372,10 +372,28 @@ service cloud.firestore {
       allow create, update, delete: if operationsRole();
     }
 
+    function websiteOwner() {
+      return activeStaff() && userProfile().data.role in ['admin', 'owner', 'superadmin', 'super_admin'];
+    }
+
+    function websiteEditorEnabled() {
+      let config = /databases/$(database)/documents/businessSettings/website-editor;
+      return exists(config) && get(config).data.get('backendEnabled', false) == true;
+    }
+
+    // APPOINTMENT_SETTINGS_V11: scheduling work type presets are admin-owned.
     match /businessSettings/{settingId} {
-      allow read: if activeStaff();
-      allow create, update: if operationsRole();
-      allow delete: if adminOrSupervisor();
+      function editorialDocument() { return settingId in ['publicVrfPageDraft', 'publicVrfPagePublished', 'website-editor']; }
+      allow read: if editorialDocument() ? websiteOwner() : activeStaff();
+      allow create, update: if editorialDocument()
+        ? (settingId != 'website-editor' && websiteOwner() && !websiteEditorEnabled())
+        : (settingId == 'appointment-work-presets' ? adminRole() : operationsRole());
+      allow delete: if !editorialDocument() && adminOrSupervisor();
+    }
+
+    match /businessSettings/publicVrfPagePublished/editorReleases/{releaseId} {
+      allow read: if websiteOwner();
+      allow write: if false; // Protected service only; immutable published receipts.
     }
 
     match /marketingUploadSessions/{sessionId} {
@@ -523,7 +541,6 @@ service cloud.firestore {
           && request.resource.data.visitId == resource.data.visitId
           && request.resource.data.visitUnitId == resource.data.visitUnitId
           && request.resource.data.interventionId == resource.data.interventionId
-          && request.resource.data.type == resource.data.type
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.createdByUserId == resource.data.createdByUserId
           && technicianAddOnFieldsOnly());
