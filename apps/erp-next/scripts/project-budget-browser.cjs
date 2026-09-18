@@ -100,7 +100,7 @@ async function main() {
           const page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
           try {
             await page.goto(url);
-            await page.getByRole('button',{name:/Project Booking/i}).click();
+            await page.getByRole('button',{name:/^Project Find a Project/i}).click();
             await page.getByRole('button',{name:/PRJ-BROWSER-TEST/}).click();
             await page.getByLabel(/Planned Project slots/i).fill('6');
             await page.locator('[data-project-budget-warning]').first().waitFor();
