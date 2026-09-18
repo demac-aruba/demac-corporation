@@ -19,31 +19,6 @@ concurrency:
   group: projects-registry-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  scoped-review-source:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Archive only versioned Projects code for reproducible review
-        run: >-
-          git archive --format=zip --output="$RUNNER_TEMP/projects-review-source.zip" HEAD
-          AGENTS.md docs/ai functions/projects
-          apps/erp-next/lib/browser-projects.ts apps/erp-next/lib/project-phase-planner.ts
-          apps/erp-next/lib/project-record-sanitizer.ts
-          apps/erp-next/components/projects/projects-phase-workspace-v2.tsx
-          apps/erp-next/components/projects/projects-recovery.tsx
-          functions/fieldOperationsAuthorityWorkVisit.js functions/fieldOperationsOfficeReview.js
-          functions/package.json
-          .github/workflows/projects-registry-ci.yml firebase.projects-emulator.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: projects-review-source
-          path: ${{ runner.temp }}/projects-review-source.zip
-          retention-days: 3
-          if-no-files-found: error
   isolated-auth-firestore:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -74,4 +49,42 @@ jobs:
         run: >-
           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
-          'node --test functions/projects/registry.emulator.cjs'
+          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs'
+
+  combined-budget-regression:
+    # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BUDGET_FIX_SHA: 3622bc5a4871b6ce7019af02f7354a5cc23171ee
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Integrate the reviewed budget fix in the disposable workspace
+        run: |
+          git fetch --no-tags origin "$BUDGET_FIX_SHA"
+          git -c user.name='Isolated Projects QA' -c user.email='qa@example.test' merge --no-commit --no-ff "$BUDGET_FIX_SHA"
+          git diff --check
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install dependencies without production credentials
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix functions --no-audit --no-fund
+      - name: Combined project contracts and operational authorities
+        run: |
+          node --test functions/projects/*.test.js
+          npm run test:booking-authority --prefix functions
+          npm run test:field-authority --prefix functions
+      - name: Combined ERP types, budget rule and existing full build
+        working-directory: apps/erp-next
+        run: |
+          npm run typecheck
+          npx tsc --ignoreConfig scripts/project-budget-acceptance.ts scripts/project-phase-planner-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .project-budget-test --rootDir . --lib ES2022,DOM
+          node .project-budget-test/scripts/project-budget-acceptance.js
+          node .project-budget-test/scripts/project-phase-planner-acceptance.js
+          npm run build

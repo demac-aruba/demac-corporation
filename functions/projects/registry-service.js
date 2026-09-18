@@ -1,14 +1,15 @@
 'use strict';
 const d = require('./registry-domain');
 const { loadProjectActivity } = require('./registry-activity');
+const { prepareImportTransaction, readImportSource } = require('./registry-import-transaction');
 const COLLECTIONS = Object.freeze({ records: 'projectRecords', numbers: 'projectNumbers', links: 'projectAppointmentLinks', events: 'projectEvents', receipts: 'projectCommandReceipts', settings: 'businessSettings' });
-const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment']);
-const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity']);
+const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan']);
+const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'preview_legacy_import', 'get_import_source']);
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
 
 /** Not exported by bootstrap/index; creation requires explicit deployment AND server activation. */
-function createProjectRegistryService({ db, verifyIdToken, enabled = false, clock = () => new Date().toISOString() } = {}) {
+function createProjectRegistryService({ db, verifyIdToken, enabled = false, allowLegacyImport = false, clock = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.runTransaction !== 'function' || typeof db.collection !== 'function' || typeof verifyIdToken !== 'function') throw new Error('Trusted Firestore and token verifier required.');
   function ref(collection, identifier) { return db.collection(collection).doc(identifier); }
   async function execute({ idToken, command }) {
@@ -32,6 +33,8 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, cloc
       const [profile, activation] = await transaction.getAll(ref('users', decoded.uid), ref(COLLECTIONS.settings, 'projects-registry'));
       const principal = d.actor(decoded.uid, snapshotRecord(profile), write);
       if (!activation.exists || activation.data().backendEnabled !== true) throw d.fault('projects_not_active', 'Central Projects is not activated.', 503);
+      if (['preview_legacy_import', 'import_legacy_plan', 'get_import_source'].includes(input.action) && principal.role !== 'super_admin') throw d.fault('import_owner_required', 'Owner authorization is required for legacy recovery.', 403);
+      if (input.action === 'import_legacy_plan' && (allowLegacyImport !== true || activation.data().legacyImportEnabled !== true)) throw d.fault('legacy_import_not_active', 'Legacy import is not activated. Preview is read-only.', 503);
       const receiptRef = write ? ref(COLLECTIONS.receipts, commandId) : null;
       if (receiptRef) {
         const receipt = snapshotRecord(await transaction.get(receiptRef));
@@ -50,8 +53,12 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, cloc
         const rows = snapshot.docs.slice(0, limit).map(snapshotRecord).map(d.requireRecord);
         return { source: 'project_registry_v1', projects: rows, nextCursor: snapshot.docs.length > limit ? rows[rows.length - 1].id : null };
       }
-      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null;
-      if (input.action === 'create_plan') {
+      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null; let archiveWrite = null; let importAudit = null;
+      if (input.action === 'preview_legacy_import' || input.action === 'import_legacy_plan') {
+        const prepared = await prepareImportTransaction({ db, transaction, input, principal, occurredAt, collections: COLLECTIONS });
+        if (prepared.preview) return prepared.preview;
+        ({ recordRef, next, numberWrite, archiveWrite, importAudit } = prepared);
+      } else if (input.action === 'create_plan') {
         const plan = d.normalizePlanInput(data);
         const projectId = `P-${d.digest(`${principal.uid}:${input.requestId}`).slice(0, 32)}`;
         const projectNumber = `PRJ-${projectId.slice(2, 18).toUpperCase()}`;
@@ -73,11 +80,16 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, cloc
           d.allowedKeys(data, ['projectId']);
           return { source: 'project_registry_v1', project };
         }
+        if (input.action === 'get_import_source') {
+          d.allowedKeys(data, ['projectId']);
+          return readImportSource({ db, transaction, project, principal });
+        }
         if (input.action === 'get_activity') {
           d.allowedKeys(data, ['projectId', 'afterId'], ['projectId']);
           return loadProjectActivity({ db, transaction, project, afterId: data.afterId });
         }
         d.requireVersion(project, data.expectedVersion);
+        if (project.version >= Number.MAX_SAFE_INTEGER - 1) throw d.fault('project_version_exhausted', 'The project revision cannot advance safely.', 409);
         if (input.action === 'edit_metadata') {
           d.allowedKeys(data, ['projectId', 'expectedVersion', 'patch']);
           next = { ...project, ...d.applyMetadata(project, data.patch) };
@@ -85,6 +97,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, cloc
           d.allowedKeys(data, ['projectId', 'expectedVersion', 'budgetedVanMinutes', 'reason']);
           d.text(data.reason, 'estimate revision reason', 1000);
           const minutes = d.integer(data.budgetedVanMinutes, 'project estimate', 1);
+          if (project.budget.revision >= Number.MAX_SAFE_INTEGER - 1) throw d.fault('budget_revision_exhausted', 'The budget revision cannot advance safely.', 409);
           if (project.phases.reduce((sum, phase) => sum + phase.plannedVanMinutes, 0) > minutes) throw d.fault('phase_budget_allocation', 'Reconcile phase estimates before reducing the project planning baseline.');
           next = { ...project, budget: { ...project.budget, currentMinutes: minutes, revision: project.budget.revision + 1 } };
         } else if (input.action === 'set_phases') {
@@ -127,15 +140,17 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, cloc
         }
       }
       if (!next) throw d.fault('unsupported_action', 'No Project mutation was resolved.', 500);
-      const changed = input.action === 'create_plan' || next !== before;
+      const createsRecord = ['create_plan', 'import_legacy_plan'].includes(input.action);
+      const changed = createsRecord || next !== before;
       if (before && changed) next = { ...next, version: before.version + 1, updatedAt: occurredAt, updatedBy: principal.uid };
       const result = { success: true, projectId: next.id, version: next.version, changed, ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, linked: true } : {}) };
       // All reads above; all writes below. No side effects in retryable transaction callbacks.
-      if (input.action === 'create_plan') transaction.create(recordRef, next);
+      if (createsRecord) transaction.create(recordRef, next);
       else if (changed) transaction.set(recordRef, next);
       if (numberWrite) transaction.create(numberWrite.ref, numberWrite.data);
       if (linkWrite) transaction.create(linkWrite.ref, linkWrite.data);
-      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
+      if (archiveWrite) transaction.create(archiveWrite.ref, archiveWrite.data);
+      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
       transaction.create(receiptRef, { actorId: principal.uid, requestHash, projectId: next.id, occurredAt, result });
       return { ...result, replayed: false };
     }, write ? { maxAttempts: 5 } : { readOnly: true });

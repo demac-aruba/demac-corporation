@@ -135,4 +135,23 @@ function inspectLocalBackup(backup) {
   };
 }
 
-module.exports = { STORAGE_KEYS, MAX_BACKUP_BYTES, captureLocalBackup, verifyLocalBackup, inspectLocalBackup };
+/** Extract one bounded review candidate from a verified full backup. No upload/import is performed. */
+async function projectImportCandidate(serializedBackup, projectId) {
+  const backup = await verifyLocalBackup(serializedBackup);
+  const inspected = inspectLocalBackup(backup);
+  if (!inspected.projects) throw fail('invalid_project_source', 'The backup has no valid Projects state.');
+  const matches = inspected.projects.filter((item) => item && item.id === projectId);
+  if (typeof projectId !== 'string' || !projectId || matches.length !== 1) throw fail('ambiguous_project_identity', 'Choose exactly one unambiguous Project from the source backup.');
+  const selected = matches[0];
+  if (typeof selected.projectNumber !== 'string' || inspected.projects.filter((item) => typeof item?.projectNumber === 'string' && item.projectNumber.trim().toUpperCase() === selected.projectNumber.trim().toUpperCase()).length !== 1) {
+    throw fail('ambiguous_project_number', 'The source contains duplicate or invalid Project numbers.');
+  }
+  const rawProjectJson = JSON.stringify(selected);
+  if (new TextEncoder().encode(rawProjectJson).byteLength > 96 * 1024) throw fail('legacy_payload_too_large', 'This Project exceeds the reviewed 96 KiB import scope. Keep the original backup; do not truncate it.');
+  return {
+    source: { storageKey: STORAGE_KEYS[0], origin: backup.body.origin, capturedAt: backup.body.capturedAt, backupDigest: backup.integrity.digest, projectDigest: await sha256(rawProjectJson) },
+    rawProjectJson,
+  };
+}
+
+module.exports = { STORAGE_KEYS, MAX_BACKUP_BYTES, captureLocalBackup, verifyLocalBackup, inspectLocalBackup, projectImportCandidate };

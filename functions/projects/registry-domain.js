@@ -68,10 +68,57 @@ function actor(uid, profile, write = false) {
   if (profile?.active !== true || !(write ? WRITE_ROLES : READ_ROLES).has(normalizedRole)) throw fault('forbidden', 'This account is not authorized for this Projects operation.', 403);
   return { uid: id(uid, 'user'), role: normalizedRole };
 }
+const PRIORITIES = new Set(['Low', 'Normal', 'High', 'Critical']);
+function normalizeDetails(value, phase = false) {
+  const keys = phase
+    ? ['sequence', 'objective', 'outOfScope', 'technicianInstructions', 'startsOn', 'endsOn', 'priority', 'responsibleManagerSnapshot']
+    : ['priority', 'totalUnits', 'unitType', 'contactPersonSnapshot', 'managerSnapshot', 'scheduleEstimate', 'materialBudget'];
+  allowedKeys(value, keys, []);
+  const result = {};
+  for (const key of ['objective', 'outOfScope', 'technicianInstructions']) {
+    if (Object.hasOwn(value, key)) result[key] = text(value[key], key, 2000, true);
+  }
+  for (const key of ['unitType', 'contactPersonSnapshot', 'responsibleManagerSnapshot']) {
+    if (Object.hasOwn(value, key)) result[key] = text(value[key], key, 200, true);
+  }
+  if (Object.hasOwn(value, 'priority')) result.priority = enumValue(value.priority, PRIORITIES, 'priority');
+  if (Object.hasOwn(value, 'sequence')) result.sequence = integer(value.sequence, 'sequence', 1);
+  if (Object.hasOwn(value, 'totalUnits')) result.totalUnits = integer(value.totalUnits, 'planned units');
+  if (Object.hasOwn(value, 'startsOn')) result.startsOn = date(value.startsOn, 'phase start');
+  if (Object.hasOwn(value, 'endsOn')) result.endsOn = date(value.endsOn, 'phase end');
+  if (result.startsOn && result.endsOn && result.endsOn < result.startsOn) throw fault('invalid_date_range', 'Phase end cannot precede phase start.');
+  if (Object.hasOwn(value, 'managerSnapshot')) {
+    allowedKeys(value.managerSnapshot, ['sourceId', 'name']);
+    result.managerSnapshot = {
+      sourceId: value.managerSnapshot.sourceId === '' ? '' : id(value.managerSnapshot.sourceId, 'historical manager reference'),
+      name: text(value.managerSnapshot.name, 'historical manager name', 200, true),
+    };
+  }
+  if (Object.hasOwn(value, 'scheduleEstimate')) {
+    const v = value.scheduleEstimate;
+    allowedKeys(v, ['workDays', 'slotsPerDay', 'slotMinutes', 'estimatedSlots']);
+    result.scheduleEstimate = {
+      workDays: integer(v.workDays, 'estimated work days', 1, 100000),
+      slotsPerDay: integer(v.slotsPerDay, 'planning slots per day', 1, 48),
+      slotMinutes: integer(v.slotMinutes, 'planning slot duration', 1, 1440),
+      estimatedSlots: integer(v.estimatedSlots, 'estimated slots', 1),
+    };
+    if (v.workDays * v.slotsPerDay !== v.estimatedSlots) throw fault('inconsistent_plan_units', 'Planning work days and slots do not reconcile.');
+  }
+  if (Object.hasOwn(value, 'materialBudget')) {
+    if (value.materialBudget === null) result.materialBudget = null;
+    else {
+      allowedKeys(value.materialBudget, ['currency', 'amountMinor']);
+      if (value.materialBudget.currency !== 'AWG') throw fault('unsupported_currency', 'Existing Projects material budgets use AWG.');
+      result.materialBudget = { currency: 'AWG', amountMinor: integer(value.materialBudget.amountMinor, 'material budget in cents', 1, Number.MAX_SAFE_INTEGER) };
+    }
+  }
+  return result;
+}
 function normalizePhases(value) {
   if (!Array.isArray(value) || value.length > MAX_PHASES) throw fault('invalid_phases', 'A project may contain at most 100 planning phases.');
   const phases = value.map((phase) => {
-    allowedKeys(phase, ['id', 'name', 'scopeOfWork', 'completionCriteria', 'plannedVanMinutes', 'dependencies', 'progressMethod', 'unitsPlanned', 'checklist']);
+    allowedKeys(phase, ['id', 'name', 'scopeOfWork', 'completionCriteria', 'plannedVanMinutes', 'dependencies', 'progressMethod', 'unitsPlanned', 'checklist', 'details'], ['id', 'name', 'scopeOfWork', 'completionCriteria', 'plannedVanMinutes', 'dependencies', 'progressMethod', 'unitsPlanned', 'checklist']);
     if (!Array.isArray(phase.dependencies) || phase.dependencies.length > MAX_PHASES) throw fault('invalid_dependencies', 'Invalid phase dependencies.');
     if (!Array.isArray(phase.checklist) || phase.checklist.length > 100) throw fault('invalid_checklist', 'Invalid phase checklist.');
     return {
@@ -81,7 +128,12 @@ function normalizePhases(value) {
       dependencies: phase.dependencies.map((dependency) => id(dependency, 'dependency')),
       progressMethod: enumValue(phase.progressMethod, new Set(['units', 'checklist', 'hours', 'approval']), 'progress method'),
       unitsPlanned: integer(phase.unitsPlanned, 'planned units'),
-      checklist: phase.checklist.map((item) => { allowedKeys(item, ['id', 'label']); return { id: id(item.id, 'checklist id'), label: text(item.label, 'checklist label', 500) }; }),
+      checklist: phase.checklist.map((item) => {
+        allowedKeys(item, ['id', 'label', 'required'], ['id', 'label']);
+        if (Object.hasOwn(item, 'required') && typeof item.required !== 'boolean') throw fault('invalid_checklist', 'Checklist requirement must be a boolean.');
+        return { id: id(item.id, 'checklist id'), label: text(item.label, 'checklist label', 500), ...(Object.hasOwn(item, 'required') ? { required: item.required } : {}) };
+      }),
+      ...(Object.hasOwn(phase, 'details') ? { details: normalizeDetails(phase.details, true) } : {}),
     };
   });
   const byId = new Map(phases.map((phase) => [phase.id, phase]));
@@ -101,12 +153,13 @@ function normalizePhases(value) {
   phases.forEach((phase) => visit(phase.id));
   return phases;
 }
-const META_KEYS = ['name', 'type', 'description', 'technicianInstructions', 'startsOn', 'estimatedCompletionOn'];
+const META_KEYS = ['name', 'type', 'description', 'technicianInstructions', 'startsOn', 'estimatedCompletionOn', 'details'];
 function metadata(value) {
   return {
     name: text(value.name, 'project name', 160), type: enumValue(value.type, PROJECT_TYPES, 'project type'),
     description: text(value.description, 'description', 3000, true), technicianInstructions: text(value.technicianInstructions, 'technician instructions', 2000, true),
     startsOn: date(value.startsOn, 'start'), estimatedCompletionOn: date(value.estimatedCompletionOn, 'completion'),
+    ...(Object.hasOwn(value, 'details') ? { details: normalizeDetails(value.details) } : {}),
   };
 }
 function normalizePlanInput(value) {
@@ -116,6 +169,7 @@ function normalizePlanInput(value) {
     budgetedVanMinutes: integer(value.budgetedVanMinutes, 'project estimate', 1), phases: normalizePhases(value.phases),
   };
   if (plan.estimatedCompletionOn < plan.startsOn) throw fault('invalid_date_range', 'Completion cannot precede project start.');
+  if (plan.details?.scheduleEstimate && plan.details.scheduleEstimate.estimatedSlots * plan.details.scheduleEstimate.slotMinutes !== plan.budgetedVanMinutes) throw fault('inconsistent_plan_units', 'Initial estimate must match its originating slot snapshot.');
   // Phase budgeting remains a planning rule; booking beyond those estimates is always advisory.
   if (plan.phases.reduce((sum, phase) => sum + phase.plannedVanMinutes, 0) > plan.budgetedVanMinutes) throw fault('phase_budget_allocation', 'Phase estimates exceed the project planning baseline.');
   return plan;
@@ -123,7 +177,9 @@ function normalizePlanInput(value) {
 function applyMetadata(plan, patch) {
   allowedKeys(patch, META_KEYS, []);
   if (!Object.keys(patch).length) throw fault('empty_patch', 'Provide at least one planning field.');
-  const next = metadata({ ...plan, ...patch });
+  // Metadata patches preserve other recorded details; the planning unit snapshot is not editable here.
+  if (patch.details && Object.hasOwn(patch.details, 'scheduleEstimate')) throw fault('estimate_revision_required', 'Revise the estimate explicitly; metadata must not rewrite its unit snapshot.');
+  const next = metadata({ ...plan, ...patch, ...(patch.details ? { details: { ...plan.details, ...patch.details } } : {}) });
   if (next.estimatedCompletionOn < next.startsOn) throw fault('invalid_date_range', 'Completion cannot precede project start.');
   return next;
 }
@@ -134,6 +190,8 @@ function requireRecord(record) {
   integer(record.budget.originalMinutes, 'original estimate', 1); integer(record.budget.currentMinutes, 'current estimate', 1);
   integer(record.budget.revision, 'budget revision', 1, Number.MAX_SAFE_INTEGER - 1);
   normalizePhases(record.phases);
+  if (Object.hasOwn(record, 'details')) normalizeDetails(record.details);
+  if (record.details?.scheduleEstimate && record.details.scheduleEstimate.estimatedSlots * record.details.scheduleEstimate.slotMinutes !== record.budget.originalMinutes) throw fault('project_schema_conflict', 'Captured planning units disagree with the originating baseline.', 409);
   return record;
 }
 function requireVersion(record, expected) {
@@ -144,4 +202,4 @@ function forecast(budgetMinutes, plannedMinutes) {
   integer(budgetMinutes, 'budgeted Van minutes', 1); integer(plannedMinutes, 'planned Van minutes');
   return { unit: 'van_minutes', budgetMinutes, plannedMinutes, remainingMinutes: Math.max(0, budgetMinutes - plannedMinutes), overBudgetMinutes: Math.max(0, plannedMinutes - budgetMinutes), blocksBooking: false };
 }
-module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast };
+module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast, normalizeDetails };

@@ -18,7 +18,8 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
   const linkSnapshot = await transaction.get(query.limit(PAGE_SIZE + 1));
   const linkDocs = linkSnapshot.docs.slice(0, PAGE_SIZE);
   const links = linkDocs.map(record);
-  const issues = [];
+  const importReviewPending = project.migration?.status === 'pending_reconciliation';
+  const issues = importReviewPending ? [{ code: 'legacy_import_requires_reconciliation' }] : [];
   const more = linkSnapshot.docs.length > PAGE_SIZE;
   const selectedIds = links.map((link) => d.id(link.appointmentId));
   for (const link of links) {
@@ -112,7 +113,7 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
   return {
     projectId: project.id, projectVersion: project.version, source: 'canonical_work_orders_and_field',
     rows, issues, nextCursor: more ? linkDocs[linkDocs.length - 1].id : null,
-    coverage: { pageIsValid, allProjectLinksIncluded, linkedAppointmentsOnPage: links.length },
+    coverage: { pageIsValid, allProjectLinksIncluded, linkedAppointmentsOnPage: links.length, importReviewPending },
     pageTotals: { plannedVanMinutes: pageIsValid ? planned : null, scheduledSlots: pageIsValid ? activeRows.reduce((sum, row) => sum + row.scheduledSlots, 0) : null, visits: rows.reduce((sum, row) => sum + row.visits.length, 0), approvedWorkOrders: rows.filter((row) => row.review?.status === 'approved').length },
     // Do not label a page subtotal as a project total, or a reservation as executed labor.
     projectForecast: allProjectLinksIncluded ? d.forecast(project.budget.currentMinutes, planned) : null,

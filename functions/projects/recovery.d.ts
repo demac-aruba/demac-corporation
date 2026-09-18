@@ -23,3 +23,10 @@ export function captureLocalBackup(storage: Pick<Storage, 'getItem'>, context: {
 export function verifyLocalBackup(serialized: string): Promise<LocalProjectsBackup>;
 /** Inspect only after verifyLocalBackup. An intact backup may contain malformed legacy data. */
 export function inspectLocalBackup(backup: LocalProjectsBackup): BackupInspection;
+
+export type LegacyProjectImportCandidate = {
+  source: { storageKey: string; origin: string; capturedAt: string; backupDigest: string; projectDigest: string };
+  rawProjectJson: string;
+};
+/** Review extraction only: verifies the full backup, returns one original Project, writes nothing. */
+export function projectImportCandidate(serializedBackup: string, projectId: string): Promise<LegacyProjectImportCandidate>;
