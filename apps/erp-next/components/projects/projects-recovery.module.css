@@ -1,0 +1,12 @@
+.root { display: grid; gap: 1.25rem; max-width: 65rem; margin: 0 auto; padding: 1.25rem; }
+.root h1, .root h2 { margin-top: 0; }
+.root p { line-height: 1.6; }
+.panel { padding: 1.25rem; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 1rem; overflow-wrap: anywhere; }
+.panel button, .panel input { font: inherit; max-width: 100%; }
+.panel button { min-height: 2.75rem; padding: .65rem 1rem; border: 1px solid currentColor; border-radius: .6rem; color: inherit; background: transparent; cursor: pointer; }
+.panel button:disabled { cursor: wait; opacity: .6; }
+.panel button:focus-visible, .panel input:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.panel label { display: grid; gap: .75rem; }
+.summary { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); gap: .75rem 1rem; }
+.summary dd { margin: 0; }
+@media (max-width: 40rem) { .root { padding: .75rem; } .summary { grid-template-columns: 1fr; } .summary dt { font-weight: 600; } .panel button { width: 100%; } }
