@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { createProjectBookingIntegration } = require("./projects/booking-integration");
 const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -495,11 +496,14 @@ function createOfficeBookingApi({
   operationalMoveAuthority = null,
   adhocSupportAuthority = null,
   appointmentNotificationService = null,
+  projectsEnabled = false,
 } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const provider = schedulingProvider || createSchedulingProvider({ db });
-  const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
+  const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider,
+    projectIntegration: createProjectBookingIntegration({ db, enabled: projectsEnabled }),
+  });
   const notifications = appointmentNotificationService || createAppointmentNotificationService({ db });
   let lifecycle = lifecycleAuthority;
   let operationalMove = operationalMoveAuthority;
@@ -1164,6 +1168,7 @@ function createOfficeBookingApi({
           channel: "office",
           requestKey: `office:${identity.uid}:${requestId}:availability${backdated ? ":backdated" : ""}`,
           officeRequestId: requestId,
+          ...(data.projectSelection !== undefined ? { projectSelection: data.projectSelection } : {}),
           excludeAppointmentId,
           requiredPrimaryVanId,
           requestedSupportSlotIds,
@@ -1313,6 +1318,7 @@ function getDefaultApi() {
     defaultApi = createOfficeBookingApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token),
+      projectsEnabled: process.env.PROJECTS_REGISTRY_ENABLED === "true",
     });
   }
   return defaultApi;

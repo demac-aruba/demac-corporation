@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'functions/projects/**'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/officeBookingAuthority.js'
       - 'functions/fieldOperationsAuthorityWorkVisit.js'
       - 'functions/fieldOperationsOfficeReview.js'
       - 'firebase.projects-emulator.json'
@@ -11,6 +13,8 @@ on:
     branches: ['feature/projects-canonical-integration']
     paths:
       - 'functions/projects/**'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/officeBookingAuthority.js'
       - 'firebase.projects-emulator.json'
       - '.github/workflows/projects-registry-ci.yml'
 permissions:
@@ -49,7 +53,7 @@ jobs:
         run: >-
           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
-          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs'
+          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs'
 
   combined-budget-regression:
     # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
