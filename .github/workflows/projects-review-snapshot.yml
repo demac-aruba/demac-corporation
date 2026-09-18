@@ -1,0 +1,47 @@
+name: Projects isolated review snapshot
+on:
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths: ['.github/workflows/projects-review-snapshot.yml']
+permissions:
+  contents: read
+jobs:
+  source-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Archive scoped tracked source, never credentials or runtime records
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess, zipfile
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          roots = ('apps/erp-next/app/', 'apps/erp-next/components/', 'apps/erp-next/lib/', 'apps/erp-next/scripts/', 'functions/projects/', 'docs/ai/', '.github/workflows/')
+          exact = {'AGENTS.md', 'functions/package.json', 'firebase.projects-emulator.json', 'apps/erp-next/package.json', 'apps/erp-next/tsconfig.json', 'apps/erp-next/next.config.ts', 'apps/erp-next/next.config.mjs', 'apps/erp-next/next-env.d.ts'}
+          suffixes = {'.ts', '.tsx', '.js', '.cjs', '.mjs', '.css', '.md', '.yml'}
+          blocked = ('credential', 'service-account', 'serviceaccount', 'private-key', '.env')
+          selected = []
+          for name in paths:
+              p = pathlib.PurePosixPath(name)
+              if any(word in name.lower() for word in blocked):
+                  continue
+              if name in exact or (p.suffix in suffixes and (name.startswith(roots) or (str(p.parent) == 'functions' and p.suffix in {'.js', '.cjs'}))):
+                  selected.append(name)
+          manifest = {'commit': head, 'files': {}}
+          with zipfile.ZipFile('projects-review-snapshot.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in selected:
+                  data = subprocess.check_output(['git', 'show', head + ':' + name])
+                  archive.writestr(name, data)
+                  manifest['files'][name] = hashlib.sha256(data).hexdigest()
+              archive.writestr('SOURCE-MANIFEST.json', json.dumps(manifest, indent=2))
+          print('Captured', len(selected), 'tracked source files at', head)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: projects-review-snapshot
+          path: projects-review-snapshot.zip
+          retention-days: 2
+          if-no-files-found: error
