@@ -15,37 +15,88 @@ const OUT=path.join(ROOT,'apps/erp-next/out');const ART=path.join(ROOT,'projects
 const protectedCollections=['clients','properties','appointments','workOrders','workVisits','bookingCapacityLocks','whatsappOutboundQueue','warehouseInventory'];
 let sequence=0;const actors={};let origin='';let handler;let dropNext=false;let previewRequests=0;
 const CUSTOMER='UI-CUSTOMER',PROPERTY='UI-PROPERTY';
-const server=http.createServer((request,response)=>{const pathname=decodeURIComponent(new URL(request.url,'http://local').pathname);let file=path.resolve(OUT,`.${pathname}`);if(!file.startsWith(OUT+path.sep)){response.writeHead(403).end();return;}try{if(fs.statSync(file).isDirectory())file=path.join(file,'index.html');response.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.html')?'text/html':file.endsWith('.txt')?'text/plain':'application/octet-stream');response.end(fs.readFileSync(file));}catch{response.writeHead(404).end();}});
+// Native loopback HTTP for both app assets and the isolated backend proxy. No Playwright
+// network interception: its WebKit implementation intercepts all URLs when any route exists.
+// This is not a test of deployed cross-origin TLS/CORS; registry HTTP CORS contracts are
+// tested separately. No production URL is forwarded from this server.
+const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; worker-src 'none'; frame-src 'none'; object-src 'none'";
+const server=http.createServer(async(request,response)=>{
+  const requested=new URL(request.url,'http://local');
+  if(requested.pathname==='/__projects-test-external') {
+    try {
+      const chunks=[];let size=0;
+      for await(const chunk of request){size+=chunk.length;if(size>128*1024){response.writeHead(413).end();return;}chunks.push(chunk);}
+      const result=await externalResponse(new URL(requested.searchParams.get('target')),request,Buffer.concat(chunks).toString('utf8'));
+      if(result.connectionLost){response.destroy();return;}
+      response.writeHead(result.status,result.headers);response.end(result.body??'');
+    }catch(error){response.writeHead(503,{'content-type':'application/json'}).end(JSON.stringify({success:false,error:{code:'test_transport_error',message:String(error.message),outcome:'unknown'}}));}
+    return;
+  }
+  let pathname;
+  try{pathname=decodeURIComponent(requested.pathname);}catch{response.writeHead(400).end();return;}
+  let file=path.resolve(OUT,`.${pathname}`);
+  if(!file.startsWith(OUT+path.sep)){response.writeHead(403).end();return;}
+  try{
+    if(fs.statSync(file).isDirectory())file=path.join(file,'index.html');
+    response.setHeader('Content-Security-Policy',CSP);
+    response.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.html')?'text/html':file.endsWith('.txt')?'text/plain':'application/octet-stream');
+    response.end(fs.readFileSync(file));
+  }catch{response.writeHead(404).end();}
+});
 function field(value){if(value===null)return{nullValue:null};if(typeof value==='boolean')return{booleanValue:value};if(typeof value==='number')return{integerValue:String(value)};if(typeof value==='string')return{stringValue:value};return{mapValue:{fields:Object.fromEntries(Object.entries(value).map(([key,v])=>[key,field(v)]))}};}
 function document(id,data){return{name:`projects/${PROJECT}/databases/(default)/documents/${id}`,fields:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,field(value)]))};}
 async function api(action,data,who='admin'){return service.execute({idToken:actors[who].idToken,command:{action,data,requestId:`UI-REQUEST-${++sequence}`}});}
 async function snapshotProtected(){const output={};for(const collection of protectedCollections){const values=await db.collection(collection).get();output[collection]=values.docs.map(doc=>[doc.id,doc.data()]).sort((a,b)=>a[0].localeCompare(b[0]));}return output;}
-async function contextFor(browser,who='admin'){
- const context=await browser.newContext({viewport:{width:1600,height:1050},serviceWorkers:'block'});const actor=actors[who];
- await context.addInitScript(session=>sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)),{uid:actor.localId,email:`ui-${who}@example.test`,idToken:actor.idToken,refreshToken:'NEVER-USE',expiresAt:Date.now()+3600000});
- // Leave same-origin assets on the real local server. Mock only external authorities.
- // Intercepting and continuing every RSC prefetch perturbs WebKit navigation/cancellation.
- await context.route(url=>url.origin!==origin,async route=>{const request=route.request();const url=new URL(request.url());assert.notEqual(url.origin,origin,'Local assets must use native browser networking');const headers={'access-control-allow-origin':origin,'access-control-allow-headers':'authorization,content-type','content-type':'application/json'};
-  if(url.pathname==='/projectsRegistry'){
-   const body=request.method()==='POST'?request.postDataJSON():null;if(body?.action==='preview_legacy_import')previewRequests++;
-   const result=await handler({method:request.method(),headers:request.headers(),body});
-   if(dropNext&&body?.action==='edit_metadata'&&result.status===200){dropNext=false;return route.abort();}
-   return route.fulfill({status:result.status,headers:{...headers,...result.headers},body:result.body===null?'':JSON.stringify(result.body)});
+async function externalResponse(url,request,rawBody) {
+  assert.equal(url.protocol,'https:','Only expected HTTPS service URLs are mocked');
+  const headers={'content-type':'application/json'};
+  const json=(body,status=200)=>({status,headers,body:JSON.stringify(body)});
+  const body=rawBody?JSON.parse(rawBody):null;
+  if(url.hostname.endsWith('.cloudfunctions.net')&&url.pathname==='/projectsRegistry') {
+    if(body?.action==='preview_legacy_import')previewRequests++;
+    const result=await handler({method:request.method,headers:{...request.headers,origin},body});
+    if(dropNext&&body?.action==='edit_metadata'&&result.status===200){dropNext=false;return{connectionLost:true};}
+    return{status:result.status,headers:result.headers,body:result.body===null?'':JSON.stringify(result.body)};
   }
-  if(request.method()==='OPTIONS')return route.fulfill({status:204,headers,body:''});
-  if(url.hostname==='firestore.googleapis.com'){
-    assert.ok(request.method()==='GET'||(request.method()==='POST'&&url.pathname.endsWith(':runQuery')),'No direct Firestore writes are allowed from the browser test');
-    if(/\/users\/[^/]+$/.test(url.pathname))return route.fulfill({status:200,headers,body:JSON.stringify(document(`users/${actor.localId}`,{role:who==='admin'?'admin':who==='finance'?'finance':'operations',active:true,name:`Synthetic ${who}`}))});
-    const clients=[document(`clients/${CUSTOMER}`,{name:'Synthetic CRM customer',active:true})];const properties=[document(`properties/${PROPERTY}`,{name:'Synthetic CRM property',clientId:CUSTOMER,address:'Synthetic site',active:true})];
-    if(url.pathname.endsWith('/clients'))return route.fulfill({status:200,headers,body:JSON.stringify({documents:clients})});
-    if(url.pathname.endsWith('/properties'))return route.fulfill({status:200,headers,body:JSON.stringify({documents:properties})});
-    if(url.pathname.endsWith(':runQuery')){const collection=request.postDataJSON()?.structuredQuery?.from?.[0]?.collectionId;const docs=collection==='clients'?clients:collection==='properties'?properties:[];return route.fulfill({status:200,headers,body:JSON.stringify(docs.map(document=>({document})))});}
-    return route.fulfill({status:200,headers,body:JSON.stringify({documents:[]})});
+  if(url.hostname==='firestore.googleapis.com') {
+    assert.ok(request.method==='GET'||(request.method==='POST'&&url.pathname.endsWith(':runQuery')),'No direct Firestore writes are allowed from the browser test');
+    const userId=/\/users\/([^/]+)$/.exec(url.pathname)?.[1];
+    if(userId) {
+      const who=Object.keys(actors).find(name=>actors[name].localId===userId);
+      assert.ok(who,'Only the synthetic provisioned test users may be read');
+      return json(document(`users/${userId}`,{role:who==='admin'?'admin':who==='finance'?'finance':'operations',active:true,name:`Synthetic ${who}`}));
+    }
+    const clients=[document(`clients/${CUSTOMER}`,{name:'Synthetic CRM customer',active:true})];
+    const properties=[document(`properties/${PROPERTY}`,{name:'Synthetic CRM property',clientId:CUSTOMER,address:'Synthetic site',active:true})];
+    if(url.pathname.endsWith('/clients'))return json({documents:clients});
+    if(url.pathname.endsWith('/properties'))return json({documents:properties});
+    if(url.pathname.endsWith(':runQuery')){const collection=body?.structuredQuery?.from?.[0]?.collectionId;const docs=collection==='clients'?clients:collection==='properties'?properties:[];return json(docs.map(document=>({document})));}
+    return json({documents:[]});
   }
-  // Optional app-shell reads are isolated; never forward a call to an operational authority.
-  if(url.hostname.endsWith('.cloudfunctions.net'))return route.fulfill({status:503,headers,body:JSON.stringify({error:{code:'test_isolated',message:'No external operational functions in this test'}})});
-  return route.abort();
- });return context;
+  if(url.hostname.endsWith('.cloudfunctions.net'))return json({error:{code:'test_isolated',message:'No external operational functions in this test'}},503);
+  throw Error('Unmocked external service; no request forwarded.');
+}
+async function contextFor(browser,who='admin') {
+  const context=await browser.newContext({viewport:{width:1600,height:1050},serviceWorkers:'block'});
+  const actor=actors[who];
+  await context.addInitScript(session=>{
+    sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session));
+    const nativeFetch=window.fetch.bind(window);
+    window.fetch=async(input,init)=>{
+      const target=new URL(input instanceof Request?input.url:String(input),location.href);
+      if(target.origin===location.origin)return nativeFetch(input,init);
+      const request=new Request(input,init);
+      if(request.signal.aborted)throw new DOMException('The request was aborted.','AbortError');
+      const body=['GET','HEAD'].includes(request.method)?undefined:await request.arrayBuffer();
+      // Preserve payload bytes, token header and cancellation while using real native fetch.
+      // CSP independently prevents any unmocked network path from reaching production.
+      return nativeFetch('/__projects-test-external?target='+encodeURIComponent(target.href),{
+        method:request.method,headers:request.headers,body,signal:request.signal,
+        credentials:'omit',cache:'no-store',redirect:'error',
+      });
+    };
+  },{uid:actor.localId,email:`ui-${who}@example.test`,idToken:actor.idToken,refreshToken:'NEVER-USE',expiresAt:Date.now()+3600000});
+  return context;
 }
 async function main(){
  for(const [who,role]of[['admin','admin'],['operations','operations'],['finance','finance']]){const response=await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:`projects-ui-${who}@example.test`,password:'synthetic-ui-test-password',returnSecureToken:true})});actors[who]=await response.json();assert.ok(actors[who].idToken);await db.collection('users').doc(actors[who].localId).set({role,active:true});}
@@ -56,7 +107,8 @@ async function main(){
  for(const collection of protectedCollections)await db.collection(collection).doc('UI-PROTECTED').set({protected:true,collection});const before=await snapshotProtected();
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;handler=createProjectRegistryHttp({service,allowedOrigins:[origin]});
  for(const [engineName,engine]of[['chromium',chromium],['webkit',webkit]]){
-  const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];const network=[];let stage='load';
+  const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];const network=[];const externalNetwork=[];let stage='load';
+  page.on('request',request=>{const url=new URL(request.url());if(url.origin!==origin)externalNetwork.push(url.origin);});
   page.on('pageerror',error=>{errors.push(error.message);network.push({stage,event:'pageerror',message:error.message});});
   page.on('requestfailed',request=>{const url=new URL(request.url());network.push({stage,event:'requestfailed',path:url.origin===origin?url.pathname:url.origin,reason:request.failure()?.errorText});});
   page.on('response',response=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.includes('__next.'))network.push({stage,event:'rsc-response',path:url.pathname,status:response.status()});});
@@ -82,7 +134,7 @@ async function main(){
       const file=JSON.stringify(await captureLocalBackup({getItem:key=>key===STORAGE_KEYS[0]?JSON.stringify({version:1,projects:[source]}):'[]'},{capturedAt:'2026-09-18T12:00:00.000Z',origin:'https://erp.example.test'}));const priorPreviewCount=previewRequests;
       await page.getByLabel('Saved backup file',{exact:true}).setInputFiles({name:'synthetic-projects.json',mimeType:'application/json',buffer:Buffer.from(file)});await page.getByRole('combobox',{name:/^Select backed-up project/}).selectOption(source.id);assert.equal(previewRequests,priorPreviewCount);await page.getByRole('button',{name:'Review import — no writes',exact:true}).click();await page.getByText('Read-only preview',{exact:true}).waitFor();assert.equal((await db.collection('projectRecords').doc(source.id).get()).exists,false);await page.screenshot({path:path.join(ART,'central-import-preview.png'),fullPage:true});
     }
-    assert.deepEqual(errors,[]);console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
+    assert.deepEqual(errors,[]);assert.deepEqual(externalNetwork,[],'No native request may reach an external service');console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
   }catch(error){console.error('CENTRAL_UI_FAILURE',engineName,stage,JSON.stringify({errors,text:(await page.locator('body').innerText().catch(()=>'' )).slice(0,6000)}));await page.screenshot({path:path.join(ART,`${engineName}-failure.png`),fullPage:true}).catch(()=>{});throw error;}
   finally{fs.writeFileSync(path.join(ART,`${engineName}-network.json`),JSON.stringify(network,null,2));await context.close();await browser.close();}
  }
