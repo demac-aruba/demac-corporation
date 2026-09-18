@@ -32,6 +32,7 @@ replace(p, "export function projectMetrics(project: BrowserProject) {\n", "expor
 replace(p, "const remainingUnscheduledHours = Math.max(0, project.estimatedLaborHours - project.actualLaborHours - project.scheduledFutureHours);", "const remainingUnscheduledHours = laborBudget.remainingHoursBefore;")
 replace(p, "laborConsumption >= 90 || materialAtRisk ? 'At Risk'", "laborBudget.overBudgetHoursAfter > 0 || laborConsumption >= 90 || materialAtRisk ? 'At Risk'")
 replace(p, "return { physicalCompletion, laborConsumption, materialBudgetSet, materialConsumption, remainingUnscheduledHours, materialRemaining, health };", "return { physicalCompletion, laborConsumption, materialBudgetSet, materialConsumption, remainingUnscheduledHours, materialRemaining, health, laborBudget };")
+replace(p, "  if (capacity.estimatedLaborHours < committedLaborHours) {", "  // An unchanged estimate must not block an unrelated edit after an allowed overrun.\n  if (capacity.estimatedLaborHours < project.estimatedLaborHours && capacity.estimatedLaborHours < committedLaborHours) {")
 start = source[p].index('export function planProjectScheduling(')
 end = source[p].index('\nfunction stableProjectAssignmentId', start)
 source[p] = source[p][:start] + '''export function planProjectScheduling(project: BrowserProject, scheduledSlots: number, phaseId?: string): ProjectSchedulingPlan {
@@ -66,6 +67,7 @@ replace(p, "    scheduledSlots: scheduledPlan.scheduledSlots,\n", "    scheduled
 p = 'apps/erp-next/lib/project-phase-planner.ts'
 replace(p, "  postProjectAssignment,\n", "  postProjectAssignment,\n  planProjectScheduling,\n")
 replace(p, "  if (phase.actualLaborHours > phase.estimatedLaborHours) return 'Over Budget';\n", "  if (phase.actualLaborHours > phase.estimatedLaborHours) return 'Over Budget';\n  if (committed > phase.estimatedLaborHours) return 'At Risk';\n")
+replace(p, "    if (plannedHours < committed) {", "    // Keep ordinary phase edits possible after a permitted forecast overrun.\n    if (plannedHours < existing.estimatedLaborHours && plannedHours < committed) {")
 replace(p, '''  const hours = slots * project.slotDurationMinutes / 60;
   if (hours > phaseRemainingHours(project, phase)) throw new Error(`${phase.name} has only ${phaseRemainingHours(project, phase)} uncommitted hours.`);
   if (hours > projectMetrics(project).remainingUnscheduledHours) throw new Error(`The Project has only ${projectMetrics(project).remainingUnscheduledHours} uncommitted hours.`);''', '''  const budgetPlan = planProjectScheduling(project, slots, phase.id);
@@ -116,6 +118,24 @@ assert.equal(overBudgetPlan.scheduledSlots, 1, 'Budget exhaustion must not block
 assert.equal(overBudgetPlan.laborBudget.overBudgetHoursAfter, 0.5, 'The advisory forecast must retain the precise overrun.');
 assert.equal(overBudgetPlan.remainingHoursAfter, 0, 'Budget remaining is clamped to zero without hiding the separate overrun.');
 assert.equal(overBudgetPlan.laborBudget.budgetHours, 120, 'Continuing over budget must preserve the original estimate.');''')
+replace(p, '''assert.throws(
+  () => linkProjectSchedulingAssignment(nearlyAllocatedState, { ...schedulingLinkInput, scheduledSlots: 1 }),
+  /0.5 project labor hours remain unscheduled/,
+  'The reducer must reject a new canonical booking that exceeds remaining labor capacity.',
+);''', '''const overBudgetLinkInput = { ...schedulingLinkInput, scheduledSlots: 1 };
+const overBudgetLinkedState = linkProjectSchedulingAssignment(nearlyAllocatedState, overBudgetLinkInput);
+const overBudgetLinkedProject = overBudgetLinkedState.projects.find((row) => row.id === project.id)!;
+const overBudgetLinkedAssignment = overBudgetLinkedProject.assignments.find((row) => row.workOrderId === overBudgetLinkInput.workOrderId)!;
+assert.equal(overBudgetLinkedProject.scheduledFutureHours, nearlyAllocatedProject.scheduledFutureHours + 1, 'An over-budget booking must be linked once rather than rejected.');
+assert.equal(overBudgetLinkedProject.actualLaborHours, project.actualLaborHours, 'Additional booked time must not become actual work.');
+assert.equal(overBudgetLinkedProject.estimatedLaborHours, project.estimatedLaborHours, 'Continuing work must not increase the estimate.');
+assert.equal(overBudgetLinkedAssignment.laborBudgetAtScheduling?.overBudgetHoursAfter, 0.5, 'The link must preserve its exact at-scheduling overrun.');
+assert.strictEqual(linkProjectSchedulingAssignment(overBudgetLinkedState, overBudgetLinkInput), overBudgetLinkedState, 'Retrying an over-budget link must not double count.');
+const overBudgetMetadataEdit = editBrowserProject(overBudgetLinkedState, { ...unchangedProjectEdit, name: 'Project metadata updated after overrun' });
+const editedOverBudgetProject = overBudgetMetadataEdit.projects.find((row) => row.id === project.id)!;
+assert.equal(editedOverBudgetProject.name, 'Project metadata updated after overrun', 'An unchanged estimate must not prevent ordinary metadata edits after permitted overrun.');
+assert.equal(editedOverBudgetProject.estimatedLaborHours, project.estimatedLaborHours, 'A metadata edit after overrun must preserve the original estimate.');
+assert.strictEqual(editedOverBudgetProject.assignments, overBudgetLinkedProject.assignments, 'A metadata edit must preserve allocation history by reference.');''')
 
 for filename, content in source.items():
     (ROOT / filename).write_text(content)
