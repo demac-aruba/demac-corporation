@@ -45,7 +45,7 @@ await test('oversized commands fail before network and never truncate',async()=>
 await test('lost-response retry uses the same ID and frozen payload, blocking alternate writes',async()=>{
  const calls:RegistryCommand[]=[];let first=true;const send:RegistryRequest=async<T>(command:RegistryCommand)=>{calls.push(command);if(first){first=false;throw new RegistryRequestError('network','unknown',true);}return result as T;};
  const writer=createRegistryWriter(send,requestId);const patch={name:'ORIGINAL'};
- await assert.rejects(writer.start('edit_metadata',{projectId:'P',expectedVersion:1,patch}));patch.name='CHANGED';
+ await assert.rejects(writer.start('edit_metadata',{projectId:result.projectId,expectedVersion:1,patch}));patch.name='CHANGED';
  assert.equal(writer.hasPending(),true);await assert.rejects(writer.start('create_plan',{}),{code:'write_busy'});
  assert.deepEqual(await writer.retry(),result);assert.deepEqual(calls[0],calls[1]);assert.equal((calls[1].data.patch as {name:string}).name,'ORIGINAL');assert.equal(writer.hasPending(),false);
 });
@@ -81,6 +81,16 @@ await test('corrupt journals fail closed without deleting recovery evidence',()=
  const disk=storage();disk.setItem('demac.projects.pending.v1:USER-A','not-json');assert.throws(()=>createIntentJournal(disk,'USER-A').read(),{code:'invalid_pending_request'});assert.equal(disk.data.size,1);
 });
 await test('unknown and zero measurements remain distinguishable',()=>{assert.equal(minutesLabel(null),'Not reconciled');assert.equal(minutesLabel(0),'0h');assert.equal(minutesLabel(90),'1.5h');});
+await test('invalid mutation acknowledgements do not clear durable retry evidence',async()=>{
+ for(const bad of [{},{...result,success:false},{...result,version:0},{...result,version:1.5},{...result,changed:'yes'},{...result,replayed:null},{...result,projectId:''}]){
+   const disk=storage();const writer=createRegistryWriter((async()=>bad) as RegistryRequest,requestId,createIntentJournal(disk,'USER-A'));
+   await assert.rejects(writer.start('create_plan',{name:'Synthetic'}),{code:'invalid_acknowledgement',uncertain:true});assert.equal(writer.hasPending(),true);assert.equal(disk.data.size,1);
+ }
+});
+await test('an acknowledgement for a different project cannot certify the requested edit',async()=>{
+ const writer=createRegistryWriter((async()=>result) as RegistryRequest,requestId);
+ await assert.rejects(writer.start('edit_metadata',{projectId:'DIFFERENT-PROJECT',expectedVersion:1,patch:{name:'Test'}}),{code:'invalid_acknowledgement',uncertain:true});assert.equal(writer.hasPending(),true);
+});
 console.log(`Projects central client: ${passed} scenarios passed; synthetic data only.`);
 }
 void main().catch(error=>{console.error(error);process.exitCode=1;});
