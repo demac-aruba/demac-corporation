@@ -34,14 +34,22 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
     if (snapshot.docs.length > MAX_ORDERS) issues.push({ code: 'work_order_read_truncated' });
     orders = snapshot.docs.slice(0, MAX_ORDERS).map(record);
   }
+  // Reject identity-conflicting parents before reading any of their Field children.
+  const eligibleOrders = orders.filter((order) => {
+    const appointment = byAppointment.get(order.appointmentId);
+    return appointment && appointment.customerId === project.customerId && appointment.propertyId === project.propertyId
+      && (appointment.clientId === undefined || appointment.clientId === project.customerId)
+      && order.clientId === project.customerId && order.propertyId === project.propertyId
+      && (order.customerId === undefined || order.customerId === project.customerId);
+  });
   // Batch equality reads, never one unbounded full-collection read per row.
-  for (const ids of groups(orders.map((order) => order.id))) {
+  for (const ids of groups(eligibleOrders.map((order) => order.id))) {
     const remaining = MAX_VISITS - visits.length;
     const snapshot = await transaction.get(db.collection('workVisits').where('workOrderId', 'in', ids).limit(remaining + 1));
     if (snapshot.docs.length > remaining) { issues.push({ code: 'work_visit_read_truncated' }); visits.push(...snapshot.docs.slice(0, remaining).map(record)); break; }
     visits.push(...snapshot.docs.map(record));
   }
-  const reviewSnapshots = orders.length ? await transaction.getAll(...orders.map((order) => db.collection('fieldOfficeReviews').doc(officeReviewDocumentId(order.id)))) : [];
+  const reviewSnapshots = eligibleOrders.length ? await transaction.getAll(...eligibleOrders.map((order) => db.collection('fieldOfficeReviews').doc(officeReviewDocumentId(order.id)))) : [];
   const rawReviews = reviewSnapshots.filter((item) => item.exists).map(record);
   const orderIds = new Set(orders.map((item) => item.id));
   for (const review of rawReviews) if (!orderIds.has(review.workOrderId) || review.id !== officeReviewDocumentId(review.workOrderId)) issues.push({ code: 'office_review_identity_conflict' });
@@ -67,6 +75,7 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
     const fieldVisits = [];
     for (const raw of visitsByOrder.get(order.id) || []) {
       try {
+        if ((raw.clientId !== undefined && raw.clientId !== project.customerId) || (raw.customerId !== undefined && raw.customerId !== project.customerId)) throw new Error('conflicting Field identity');
         const visit = projectCanonicalWorkVisit(raw);
         if ([visit.startedAt, visit.completedAt].some((value) => value !== undefined && !Number.isFinite(Date.parse(value)))) throw new Error('invalid visit timestamp');
         if (visit.workOrderId !== order.id || visit.appointmentId !== appointment.id || visit.customerId !== project.customerId || visit.propertyId !== project.propertyId) throw new Error('identity conflict');
@@ -77,8 +86,12 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
     if (byReview.has(order.id)) {
       try {
         const expected = { workOrderId: order.id, appointmentId: appointment.id, customerId: project.customerId, propertyId: project.propertyId };
-        const validated = projectOfficeReview(byReview.get(order.id), expected);
-        const revision = projectOfficeReviewRevision(byRevision.get(validated.currentRevisionId), { ...expected, reviewId: validated.id, visitId: validated.visitId });
+        const rawReview = byReview.get(order.id);
+        if ((rawReview.clientId !== undefined && rawReview.clientId !== project.customerId) || (rawReview.customerId !== undefined && rawReview.customerId !== project.customerId)) throw new Error('conflicting review identity');
+        const validated = projectOfficeReview(rawReview, expected);
+        const rawRevision = byRevision.get(validated.currentRevisionId);
+        if ((rawRevision?.clientId !== undefined && rawRevision.clientId !== project.customerId) || (rawRevision?.customerId !== undefined && rawRevision.customerId !== project.customerId)) throw new Error('conflicting revision identity');
+        const revision = projectOfficeReviewRevision(rawRevision, { ...expected, reviewId: validated.id, visitId: validated.visitId });
         if (revision.revisionNumber !== validated.currentRevisionNumber || !fieldVisits.some((visit) => visit.id === validated.visitId)) throw new Error('revision mismatch');
         review = { status: validated.status, source: `fieldOfficeReviews/${validated.id}`, revisionId: revision.id, reviewedAt: validated.reviewedAt || null };
       } catch { issues.push({ code: 'office_review_reconciliation_required', workOrderId: order.id }); }

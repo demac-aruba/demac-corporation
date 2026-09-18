@@ -97,12 +97,14 @@ test('estimate revisions preserve original baseline and complete revision eviden
   const plan=await read(project.projectId);assert.equal(plan.budget.originalMinutes,3960);assert.equal(plan.budget.currentMinutes,4200);
   const events=await db.collection(COLLECTIONS.events).where('projectId','==',project.projectId).get();
   const revision=events.docs.map(x=>x.data()).find(x=>x.action==='revise_estimate');assert.equal(revision.beforePlan.budget.currentMinutes,3960);assert.equal(revision.afterPlan.budget.currentMinutes,4200);
-  await assert.rejects(run('revise_estimate',{projectId:project.projectId,expectedVersion:2,budgetedVanMinutes:4260,reason:'Test'},'manager'),{code:'estimate_forbidden'});
+  await run('revise_estimate',{projectId:project.projectId,expectedVersion:2,budgetedVanMinutes:4260,reason:'Explicit project manager revision'},'manager');
+  assert.equal((await read(project.projectId)).budget.originalMinutes,3960);
+  await assert.rejects(run('revise_estimate',{projectId:project.projectId,expectedVersion:3,budgetedVanMinutes:4320,reason:'Test'},'finance'),{code:'forbidden'});
 });
 test('metadata edits and over-budget existing links do not modify estimates or actual labor',async()=>{
-  const project=await create();const appointment=await seedAppointment({duration:4200});await attach(project,appointment);
-  const plan=await read(project.projectId);assert.equal(plan.budget.currentMinutes,3960);assert.equal(plan.actualLaborHours,undefined);
-  const activity=await run('get_activity',{projectId:project.projectId});assert.equal(activity.projectForecast.overBudgetMinutes,240);assert.equal(activity.projectForecast.blocksBooking,false);assert.equal(activity.actualLabor.personMinutes,null);
+  const project=await create({...PLAN(),budgetedVanMinutes:300});const appointment=await seedAppointment({duration:360});await attach(project,appointment);
+  const plan=await read(project.projectId);assert.equal(plan.budget.currentMinutes,300);assert.equal(plan.actualLaborHours,undefined);
+  const activity=await run('get_activity',{projectId:project.projectId});assert.equal(activity.projectForecast.overBudgetMinutes,60);assert.equal(activity.projectForecast.blocksBooking,false);assert.equal(activity.actualLabor.personMinutes,null);
 });
 test('association includes all current support Work Orders and newly added support without stale copied counters',async()=>{
   const project=await create();const appointment=await seedAppointment({support:true});await attach(project,appointment);
@@ -183,4 +185,10 @@ test('a missing declared support Work Order blocks totals instead of undercounti
   const project=await create();const appointment=await seedAppointment();await attach(project,appointment);
   await db.collection('appointments').doc(appointment.appointmentId).update({workOrderIds:[appointment.workOrderId,'MISSING-SUPPORT']});
   const activity=await run('get_activity',{projectId:project.projectId});assert.equal(activity.projectForecast,null);assert.ok(activity.issues.some(x=>x.code==='appointment_work_order_missing'));
+});
+
+test('contradictory Field identity aliases are not silently counted as project execution',async()=>{
+  const project=await create();const appointment=await seedAppointment();await attach(project,appointment);
+  await db.collection('workVisits').doc(uid('FIELD-BAD-ALIAS')).set({workOrderId:appointment.workOrderId,appointmentId:appointment.appointmentId,clientId:PLAN().customerId,customerId:'FOREIGN',propertyId:PLAN().propertyId,status:'completed',version:1});
+  const activity=await run('get_activity',{projectId:project.projectId});assert.equal(activity.projectForecast,null);assert.ok(activity.issues.some(x=>x.code==='field_visit_reconciliation_required'));
 });
