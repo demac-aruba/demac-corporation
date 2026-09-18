@@ -1,5 +1,7 @@
 'use client';
 
+import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-budget-status';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
@@ -648,7 +650,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return { plan: null, error: 'Select an active or planned Project phase.' };
     }
     try {
-      return { plan: planProjectScheduling(selectedProject, Number(projectSlots)), error: '' };
+      return { plan: planProjectScheduling(selectedProject, Number(projectSlots), selectedProjectPhase?.id), error: '' };
     } catch (error) {
       return { plan: null, error: error instanceof Error ? error.message : 'Enter a valid whole number of Project slots.' };
     }
@@ -1568,11 +1570,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> enter whole slots only. One slot reserves {selectedProject.slotDurationMinutes} minutes of Van capacity; this Project allows up to {selectedProject.slotsPerWorkDay} slots per workday. Each technician records actual labor time separately in the Technician Portal.</div>
                     </div>
                     {projectPlanState.error ? <div className={styles.projectPlanError} role="alert">{projectPlanState.error}</div> : null}
+                    {projectPlan ? <ProjectLaborBudgetWarning budget={projectPlan.laborBudget} /> : null}
+                    {projectPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={projectPlan.phaseLaborBudget} scope="Phase" /> : null}
                     {projectPlan ? (
                       <div className={styles.projectPlanSummary}>
                         <div><span>PROJECT SLOTS</span><strong>{projectPlan.scheduledSlots}</strong><small>{selectedProject.slotDurationMinutes} min each</small></div>
                         <div><span>EQUIVALENT VAN TIME</span><strong>{durationLabel(projectPlan.scheduledHours * 60)}</strong></div>
-                        <div><span>PROJECT HOURS LEFT</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
+                        <div><span>BUDGET HOURS REMAINING</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
                       </div>
                     ) : null}
                     {!projectWorkPreset && !presetsLoading ? <div className={styles.projectPlanError} role="alert">Scheduling needs the active “Other” work type to reserve manual Project hours. Enable it in Services & Products.</div> : null}

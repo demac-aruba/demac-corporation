@@ -1,6 +1,7 @@
 import {
   GENERAL_PROJECT_WORK_PHASE_ID,
   postProjectAssignment,
+  planProjectScheduling,
   projectMetrics,
   type BrowserProject,
   type BrowserProjectsPreviewState,
@@ -298,6 +299,7 @@ export function phaseRisk(project: BrowserProject, phaseInput: ProjectPhase): 'O
   const scheduled = phaseScheduledHours(project, phase.id);
   const committed = phase.actualLaborHours + scheduled;
   if (phase.actualLaborHours > phase.estimatedLaborHours) return 'Over Budget';
+  if (committed > phase.estimatedLaborHours) return 'At Risk';
   if (phase.estimatedLaborHours > 0 && committed / phase.estimatedLaborHours >= 0.85 && phaseProgressPercent(phase) < 70) return 'At Risk';
   return 'On Track';
 }
@@ -336,7 +338,8 @@ function normalizeDraft(project: BrowserProject, input: PhaseDraftInput, existin
   }
   if (existing) {
     const committed = existing.actualLaborHours + phaseScheduledHours(project, existing.id);
-    if (plannedHours < committed) {
+    // Keep ordinary phase edits possible after a permitted forecast overrun.
+    if (plannedHours < existing.estimatedLaborHours && plannedHours < committed) {
       throw new Error(`Planned capacity cannot be below ${committed} committed hours (${existing.actualLaborHours} actual + ${phaseScheduledHours(project, existing.id)} scheduled).`);
     }
   }
@@ -638,9 +641,8 @@ export function schedulePreviewPhaseAssignment(project: BrowserProject, input: P
   }
   const slots = positiveWhole(input.scheduledSlots, 'Scheduled slots');
   if (slots > project.slotsPerWorkDay) throw new Error(`A single Van assignment cannot exceed ${project.slotsPerWorkDay} slots.`);
-  const hours = slots * project.slotDurationMinutes / 60;
-  if (hours > phaseRemainingHours(project, phase)) throw new Error(`${phase.name} has only ${phaseRemainingHours(project, phase)} uncommitted hours.`);
-  if (hours > projectMetrics(project).remainingUnscheduledHours) throw new Error(`The Project has only ${projectMetrics(project).remainingUnscheduledHours} uncommitted hours.`);
+  const budgetPlan = planProjectScheduling(project, slots, phase.id);
+  const hours = budgetPlan.scheduledHours;
   const scheduledDate = assertDate(input.scheduledDate, 'Scheduled date');
   const start = trim(input.scheduledStart);
   if (!/^\d{2}:\d{2}$/.test(start)) throw new Error('Scheduled start must use HH:MM.');
@@ -663,6 +665,8 @@ export function schedulePreviewPhaseAssignment(project: BrowserProject, input: P
     scheduledDate,
     scheduledStart: start,
     scheduledEnd: end,
+    laborBudgetAtScheduling: budgetPlan.laborBudget,
+    ...(budgetPlan.phaseLaborBudget ? { phaseLaborBudgetAtScheduling: budgetPlan.phaseLaborBudget } : {}),
     actualHours: 0,
     unitsPlanned,
     unitsCompleted: 0,

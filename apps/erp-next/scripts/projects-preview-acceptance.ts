@@ -416,12 +416,20 @@ assert.equal(
 
 assert.deepEqual(
   planProjectScheduling(project, 6),
-  { scheduledHours: 6, scheduledSlots: 6, remainingHoursBefore: 30, remainingHoursAfter: 24 },
+  { scheduledHours: 6, scheduledSlots: 6, remainingHoursBefore: 30, remainingHoursAfter: 24, laborBudget: {
+    budgetHours: 120, recordedActualHours: 66, scheduledHoursBefore: 24, requestedHours: 6,
+    committedHoursBefore: 90, committedHoursAfter: 96, remainingHoursBefore: 30, remainingHoursAfter: 24,
+    overBudgetHoursBefore: 0, overBudgetHoursAfter: 0, additionalOverBudgetHours: 0, actualOverBudgetHours: 0,
+  } },
   'A full Project workday must preserve six whole Scheduling slots and derive six labor hours.',
 );
 assert.deepEqual(
   planProjectScheduling({ ...project, slotDurationMinutes: 30 }, 6),
-  { scheduledHours: 3, scheduledSlots: 6, remainingHoursBefore: 30, remainingHoursAfter: 27 },
+  { scheduledHours: 3, scheduledSlots: 6, remainingHoursBefore: 30, remainingHoursAfter: 27, laborBudget: {
+    budgetHours: 120, recordedActualHours: 66, scheduledHoursBefore: 24, requestedHours: 3,
+    committedHoursBefore: 90, committedHoursAfter: 93, remainingHoursBefore: 30, remainingHoursAfter: 27,
+    overBudgetHoursBefore: 0, overBudgetHoursAfter: 0, additionalOverBudgetHours: 0, actualOverBudgetHours: 0,
+  } },
   'Project labor hours must derive from slots multiplied by the Project slot duration.',
 );
 for (const invalidSlots of [0, 0.5, 6.5, 7, Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -436,11 +444,11 @@ assert.throws(
   /not available for Scheduling/,
   'An On Hold project must not accept new Scheduling work.',
 );
-assert.throws(
-  () => planProjectScheduling({ ...project, actualLaborHours: 119.5, scheduledFutureHours: 0 }, 1),
-  /0.5 project labor hours remain unscheduled/,
-  'A Scheduling plan must not exceed remaining project labor hours.',
-);
+const overBudgetPlan = planProjectScheduling({ ...project, actualLaborHours: 119.5, scheduledFutureHours: 0 }, 1);
+assert.equal(overBudgetPlan.scheduledSlots, 1, 'Budget exhaustion must not block a valid Project booking.');
+assert.equal(overBudgetPlan.laborBudget.overBudgetHoursAfter, 0.5, 'The advisory forecast must retain the precise overrun.');
+assert.equal(overBudgetPlan.remainingHoursAfter, 0, 'Budget remaining is clamped to zero without hiding the separate overrun.');
+assert.equal(overBudgetPlan.laborBudget.budgetHours, 120, 'Continuing over budget must preserve the original estimate.');
 
 const schedulingLinkInput = {
   projectId: project.id,
@@ -811,11 +819,20 @@ assert.throws(
 );
 const nearlyAllocatedProject: BrowserProject = { ...project, scheduledFutureHours: project.estimatedLaborHours - project.actualLaborHours - 0.5 };
 const nearlyAllocatedState = { ...state, projects: state.projects.map((row) => row.id === project.id ? nearlyAllocatedProject : row) };
-assert.throws(
-  () => linkProjectSchedulingAssignment(nearlyAllocatedState, { ...schedulingLinkInput, scheduledSlots: 1 }),
-  /0.5 project labor hours remain unscheduled/,
-  'The reducer must reject a new canonical booking that exceeds remaining labor capacity.',
-);
+const overBudgetLinkInput = { ...schedulingLinkInput, scheduledSlots: 1 };
+const overBudgetLinkedState = linkProjectSchedulingAssignment(nearlyAllocatedState, overBudgetLinkInput);
+const overBudgetLinkedProject = overBudgetLinkedState.projects.find((row) => row.id === project.id)!;
+const overBudgetLinkedAssignment = overBudgetLinkedProject.assignments.find((row) => row.workOrderId === overBudgetLinkInput.workOrderId)!;
+assert.equal(overBudgetLinkedProject.scheduledFutureHours, nearlyAllocatedProject.scheduledFutureHours + 1, 'An over-budget booking must be linked once rather than rejected.');
+assert.equal(overBudgetLinkedProject.actualLaborHours, project.actualLaborHours, 'Additional booked time must not become actual work.');
+assert.equal(overBudgetLinkedProject.estimatedLaborHours, project.estimatedLaborHours, 'Continuing work must not increase the estimate.');
+assert.equal(overBudgetLinkedAssignment.laborBudgetAtScheduling?.overBudgetHoursAfter, 0.5, 'The link must preserve its exact at-scheduling overrun.');
+assert.strictEqual(linkProjectSchedulingAssignment(overBudgetLinkedState, overBudgetLinkInput), overBudgetLinkedState, 'Retrying an over-budget link must not double count.');
+const overBudgetMetadataEdit = editBrowserProject(overBudgetLinkedState, { ...unchangedProjectEdit, name: 'Project metadata updated after overrun' });
+const editedOverBudgetProject = overBudgetMetadataEdit.projects.find((row) => row.id === project.id)!;
+assert.equal(editedOverBudgetProject.name, 'Project metadata updated after overrun', 'An unchanged estimate must not prevent ordinary metadata edits after permitted overrun.');
+assert.equal(editedOverBudgetProject.estimatedLaborHours, project.estimatedLaborHours, 'A metadata edit after overrun must preserve the original estimate.');
+assert.strictEqual(editedOverBudgetProject.assignments, overBudgetLinkedProject.assignments, 'A metadata edit must preserve allocation history by reference.');
 
 const seededMetrics = projectMetrics(project);
 assertNear(seededMetrics.physicalCompletion, 7 / 12 * 100, 'Physical completion must derive from completed versus planned units.');

@@ -1,0 +1,74 @@
+name: Project budget advisory acceptance
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/lib/browser-projects.ts'
+      - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/lib/project-phase-planner.ts'
+      - 'apps/erp-next/components/projects/**'
+      - 'apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx'
+      - 'apps/erp-next/scripts/project-budget*'
+      - '.github/workflows/project-budget-warning.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/scripts/project-budget*'
+      - '.github/workflows/project-budget-warning.yml'
+permissions:
+  contents: read
+jobs:
+  budget-advisory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/erp-next
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - name: Budget and phase acceptance
+        run: >-
+          npx tsc --ignoreConfig scripts/project-budget-acceptance.ts scripts/project-phase-planner-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node --outDir .project-budget-test --rootDir . --lib ES2022,DOM
+          && node .project-budget-test/scripts/project-budget-acceptance.js
+          && node .project-budget-test/scripts/project-phase-planner-acceptance.js
+      - run: npm run test:projects-preview
+      - run: npm run typecheck
+  isolated-budget-browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install isolated browser tooling
+        env:
+          BUDGET_TEST_TOOLS: ${{ runner.temp }}/budget-tools
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$BUDGET_TEST_TOOLS" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          "$BUDGET_TEST_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Real drawer with synthetic authority responses; no external requests
+        env:
+          BUDGET_TEST_TOOLS: ${{ runner.temp }}/budget-tools
+        run: node apps/erp-next/scripts/project-budget-browser.cjs
+      - name: Retain synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-budget-browser-evidence
+          path: project-budget-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 7
