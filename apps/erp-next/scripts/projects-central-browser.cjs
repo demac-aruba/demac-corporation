@@ -23,7 +23,9 @@ async function snapshotProtected(){const output={};for(const collection of prote
 async function contextFor(browser,who='admin'){
  const context=await browser.newContext({viewport:{width:1600,height:1050},serviceWorkers:'block'});const actor=actors[who];
  await context.addInitScript(session=>sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)),{uid:actor.localId,email:`ui-${who}@example.test`,idToken:actor.idToken,refreshToken:'NEVER-USE',expiresAt:Date.now()+3600000});
- await context.route('**/*',async route=>{const request=route.request();const url=new URL(request.url());if(url.origin===origin)return route.continue();const headers={'access-control-allow-origin':origin,'access-control-allow-headers':'authorization,content-type','content-type':'application/json'};
+ // Leave same-origin assets on the real local server. Mock only external authorities.
+ // Intercepting and continuing every RSC prefetch perturbs WebKit navigation/cancellation.
+ await context.route(url=>url.origin!==origin,async route=>{const request=route.request();const url=new URL(request.url());assert.notEqual(url.origin,origin,'Local assets must use native browser networking');const headers={'access-control-allow-origin':origin,'access-control-allow-headers':'authorization,content-type','content-type':'application/json'};
   if(url.pathname==='/projectsRegistry'){
    const body=request.method()==='POST'?request.postDataJSON():null;if(body?.action==='preview_legacy_import')previewRequests++;
    const result=await handler({method:request.method(),headers:request.headers(),body});
@@ -54,7 +56,10 @@ async function main(){
  for(const collection of protectedCollections)await db.collection(collection).doc('UI-PROTECTED').set({protected:true,collection});const before=await snapshotProtected();
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;handler=createProjectRegistryHttp({service,allowedOrigins:[origin]});
  for(const [engineName,engine]of[['chromium',chromium],['webkit',webkit]]){
-  const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];page.on('pageerror',error=>errors.push(error.message));let stage='load';
+  const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];const network=[];let stage='load';
+  page.on('pageerror',error=>{errors.push(error.message);network.push({stage,event:'pageerror',message:error.message});});
+  page.on('requestfailed',request=>{const url=new URL(request.url());network.push({stage,event:'requestfailed',path:url.origin===origin?url.pathname:url.origin,reason:request.failure()?.errorText});});
+  page.on('response',response=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.includes('__next.'))network.push({stage,event:'rsc-response',path:url.pathname,status:response.status()});});
   try{
     const name=`Synthetic shared ${engineName}`;await page.goto(origin+'/projects/central/');await page.getByRole('button',{name:/Create Project/}).waitFor();
     stage='create';await page.getByRole('button',{name:/Create Project/}).click();const dialog=page.getByRole('dialog',{name:'Create shared project'});
@@ -79,7 +84,7 @@ async function main(){
     }
     assert.deepEqual(errors,[]);console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
   }catch(error){console.error('CENTRAL_UI_FAILURE',engineName,stage,JSON.stringify({errors,text:(await page.locator('body').innerText().catch(()=>'' )).slice(0,6000)}));await page.screenshot({path:path.join(ART,`${engineName}-failure.png`),fullPage:true}).catch(()=>{});throw error;}
-  finally{await context.close();await browser.close();}
+  finally{fs.writeFileSync(path.join(ART,`${engineName}-network.json`),JSON.stringify(network,null,2));await context.close();await browser.close();}
  }
  assert.deepEqual(await snapshotProtected(),before,'Operational customer/appointment/Field/capacity/stock/message data must remain unchanged');
  fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile'}));
