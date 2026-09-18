@@ -1,0 +1,100 @@
+name: Projects atomic booking isolated workbench
+on:
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - '.github/workflows/projects-atomic-workbench.yml'
+      - 'scripts/dev/projects-atomic-booking-edits.patch'
+      - 'functions/projects/booking-integration*'
+permissions:
+  contents: write
+concurrency:
+  group: projects-atomic-isolated-workbench
+  cancel-in-progress: false
+jobs:
+  verify-proposed-sources:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/projects-canonical-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Apply reviewed edits to exact source versions in disposable workspace
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          before = {'functions/bookingAuthorityFirestore.js':'719c06e3310142ed8f16f4a703a1e4d8f4f2c70c', 'functions/officeBookingAuthority.js':'048be2c74f830a187dc4bca0fcc5869fb89f2058', '.github/workflows/projects-registry-ci.yml':'356c6dc64f06584c6c79397d7cffced2153919d2'}
+          after = {'functions/bookingAuthorityFirestore.js':'d7c8d17463c441788b539449abb6c20fa83bc0e3', 'functions/officeBookingAuthority.js':'29a269eb1a04d7338598ef544455f830d2336914', '.github/workflows/projects-registry-ci.yml':'e772ad9bca7ec70af9feac8e15ac4a5e2761cae1'}
+          for path, sha in before.items():
+              assert subprocess.check_output(['git','hash-object',path],text=True).strip() == sha, 'Unexpected source: ' + path
+          subprocess.run(['git','apply','--check','scripts/dev/projects-atomic-booking-edits.patch'],check=True)
+          subprocess.run(['git','apply','scripts/dev/projects-atomic-booking-edits.patch'],check=True)
+          for path, sha in after.items():
+              assert subprocess.check_output(['git','hash-object',path],text=True).strip() == sha, 'Unexpected edited source: ' + path
+          subprocess.run(['git','diff','--check'],check=True)
+          PY
+      - name: Install test dependencies without production credentials
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/projects-atomic-tools" --no-audit --no-fund firebase-tools@15.30.0
+          mkdir -p projects-atomic-evidence
+      - name: Domain and existing Booking and Field authority regression
+        run: |
+          set -o pipefail
+          node --check functions/projects/booking-integration.js
+          node --check functions/officeBookingAuthority.js
+          node --test functions/projects/*.test.js 2>&1 | tee projects-atomic-evidence/domain.log
+          npm run test:booking-authority --prefix functions 2>&1 | tee projects-atomic-evidence/booking.log
+          npm run test:field-authority --prefix functions 2>&1 | tee projects-atomic-evidence/field.log
+          node --test functions/officeBookingAuthority*.test.js 2>&1 | tee projects-atomic-evidence/office.log
+      - name: Real Auth and Firestore atomicity and concurrent booking tests
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/projects-atomic-tools/node_modules/.bin/firebase" emulators:exec --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth 'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs' 2>&1 | tee projects-atomic-evidence/emulators.log
+      - name: Create proposed Git objects only; no branch update, merge or deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, urllib.request
+          repo='demac-aruba/demac-corporation'
+          assert os.environ['GITHUB_REPOSITORY']==repo
+          assert os.environ['GITHUB_REF']=='refs/heads/feature/projects-canonical-integration'
+          head=os.environ['GITHUB_SHA']
+          def api(path, body=None):
+              request=urllib.request.Request('https://api.github.com/repos/'+repo+path, data=None if body is None else json.dumps(body).encode(), headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'}, method='GET' if body is None else 'POST')
+              with urllib.request.urlopen(request,timeout=45) as response: return json.load(response)
+          assert api('/git/ref/heads/feature/projects-canonical-integration')['object']['sha']==head, 'Branch advanced; refusing stale proposal.'
+          base=api('/git/commits/'+head)['tree']['sha']
+          entries=[]
+          for path in ['functions/bookingAuthorityFirestore.js','functions/officeBookingAuthority.js','.github/workflows/projects-registry-ci.yml']:
+              blob=api('/git/blobs',{'content':pathlib.Path(path).read_text(),'encoding':'utf-8'})
+              entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
+          for path in ['scripts/dev/projects-atomic-booking-edits.patch','.github/workflows/projects-atomic-workbench.yml','.github/workflows/projects-review-snapshot.yml']:
+              entries.append({'path':path,'mode':'100644','type':'blob','sha':None})
+          tree=api('/git/trees',{'base_tree':base,'tree':entries})
+          commit=api('/git/commits',{'message':'feat(projects): commit project linkage inside canonical booking transaction\n\nBind project identity to verified offers, preserve advisory budgets, atomically link all vans with appointment/locks/audit, and protect exact retries. Default-off activation. Remove one-use source workbench. No live data changes or deployment.','tree':tree['sha'],'parents':[head]})
+          result={'parent':head,'proposedCommit':commit['sha'],'tree':tree['sha'],'branchUpdated':False,'deployed':False}
+          pathlib.Path('projects-atomic-evidence/proposed-commit.json').write_text(json.dumps(result,indent=2))
+          print(json.dumps(result))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary: summary.write('Tested proposed commit: `'+commit['sha']+'`. No branch/ref update or deployment performed. Whole-module release remains blocked.\n')
+          PY
+      - name: Keep synthetic verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projects-atomic-booking-evidence
+          path: projects-atomic-evidence/
+          if-no-files-found: warn
+          retention-days: 7

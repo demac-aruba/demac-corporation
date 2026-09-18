@@ -1,0 +1,221 @@
+diff --git a/.github/workflows/projects-registry-ci.yml b/.github/workflows/projects-registry-ci.yml
+index 356c6dc..e772ad9 100644
+--- a/.github/workflows/projects-registry-ci.yml
++++ b/.github/workflows/projects-registry-ci.yml
+@@ -3,6 +3,8 @@ on:
+   pull_request:
+     paths:
+       - 'functions/projects/**'
++      - 'functions/bookingAuthorityFirestore.js'
++      - 'functions/officeBookingAuthority.js'
+       - 'functions/fieldOperationsAuthorityWorkVisit.js'
+       - 'functions/fieldOperationsOfficeReview.js'
+       - 'firebase.projects-emulator.json'
+@@ -11,6 +13,8 @@ on:
+     branches: ['feature/projects-canonical-integration']
+     paths:
+       - 'functions/projects/**'
++      - 'functions/bookingAuthorityFirestore.js'
++      - 'functions/officeBookingAuthority.js'
+       - 'firebase.projects-emulator.json'
+       - '.github/workflows/projects-registry-ci.yml'
+ permissions:
+@@ -49,7 +53,7 @@ jobs:
+         run: >-
+           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
+           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+-          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs'
++          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs'
+ 
+   combined-budget-regression:
+     # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
+diff --git a/functions/bookingAuthorityFirestore.js b/functions/bookingAuthorityFirestore.js
+index 719c06e..d7c8d17 100644
+--- a/functions/bookingAuthorityFirestore.js
++++ b/functions/bookingAuthorityFirestore.js
+@@ -102,6 +102,13 @@ function actorFields(actor = {}) {
+   };
+ }
+ 
++function sameProjectContext(left, right) {
++  if (!left || !right) return left === right;
++  const keys = ["schemaVersion", "projectId", "phaseId", "expectedVersion", "actorId"];
++  return Object.keys(left).length === keys.length && Object.keys(right).length === keys.length
++    && keys.every(key => left[key] === right[key]);
++}
++
+ function requestFingerprint(request) {
+   return hashKey(JSON.stringify(normalizeBookingRequest(request)), 40);
+ }
+@@ -228,6 +235,7 @@ function createBookingAuthority({
+   serverTimestamp = defaultServerTimestamp,
+   offerTtlMinutes = 30,
+   collections = BOOKING_COLLECTIONS,
++  projectIntegration = null,
+ } = {}) {
+   if (!db || typeof db.collection !== "function" || typeof db.runTransaction !== "function") {
+     throw new Error("A Firestore-compatible db is required.");
+@@ -235,6 +243,11 @@ function createBookingAuthority({
+ 
+   async function checkAvailability({ request, actor = {}, context = {} } = {}) {
+     const normalizedRequest = normalizeBookingRequest(request);
++    if (context.projectSelection !== undefined && !projectIntegration) {
++      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Central Project booking is not configured.", { reason: "project_booking_not_active" });
++    }
++    const projectContext = context.projectSelection === undefined
++      ? null : await projectIntegration.prepareOffer({ request: normalizedRequest, actor, context });
+     const now = asDate(clock());
+     const requestKey = cleanText(context.requestKey || context.inboundMessageId || context.idempotencyKey, 500);
+     const offerId = canonicalOfferIdentity(requestKey);
+@@ -244,6 +257,9 @@ function createBookingAuthority({
+       const existingSnapshot = await offerRef.get();
+       if (existingSnapshot.exists) {
+         const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
++        if (!sameProjectContext(existing.projectContext || null, projectContext)) {
++          throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, "This availability request belongs to another Project selection.", { reason: "project_offer_context_conflict" });
++        }
+         if (existing.requestFingerprint === requestFingerprint(normalizedRequest) && offerStillUsable(existing, now)) {
+           return { success: true, available: true, replayed: true, offer: existing, options: existing.options || [], metadata: compactObject(existing.metadata || {}) };
+         }
+@@ -282,6 +298,7 @@ function createBookingAuthority({
+       version: 1,
+       status: "open",
+       request: normalizedRequest,
++      ...(projectContext ? { projectContext } : {}),
+       requestFingerprint: requestFingerprint(normalizedRequest),
+       options,
+       providerVersion: cleanText(result?.providerVersion, 120),
+@@ -296,8 +313,21 @@ function createBookingAuthority({
+       createdAt: serverTimestamp(),
+       updatedAt: serverTimestamp(),
+     });
+-    await offerRef.set(offer);
+-    return { success: true, available: true, replayed: false, offer, options, metadata: compactObject(offer.metadata || {}) };
++    // Serialize ownership of an offer ID. A concurrent ordinary/Project check must not
++    // overwrite the other's bound Project context between the initial read and this write.
++    const persistedOffer = await db.runTransaction(async (transaction) => {
++      const current = await transaction.get(offerRef);
++      if (current.exists && !sameProjectContext(current.data().projectContext || null, projectContext)) {
++        throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, "This availability request belongs to another Project selection.", { reason: "project_offer_context_conflict" });
++      }
++      if (current.exists && current.data().requestFingerprint === offer.requestFingerprint && offerStillUsable(current.data(), now)) {
++        return { offer: { id: current.id, ...current.data() }, replayed: true };
++      }
++      transaction.set(offerRef, offer);
++      return { offer, replayed: false };
++    });
++    return { success: true, available: true, replayed: persistedOffer.replayed, offer: persistedOffer.offer,
++      options: persistedOffer.offer.options, metadata: compactObject(persistedOffer.offer.metadata || {}) };
+   }
+ 
+   async function getAppointment(appointmentId) {
+@@ -320,6 +350,12 @@ function createBookingAuthority({
+     return { id: snapshot.id, ...snapshot.data() };
+   }
+ 
++  async function validateProjectReplay(transaction, appointment, actor, context) {
++    if (!appointment.projectContext) return;
++    if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "This Project booking needs its configured recovery workflow.", { reason: "project_booking_not_active" });
++    await projectIntegration.validateReplay({ transaction, appointment, actor, context });
++  }
++
+   async function createAppointment({
+     offerId,
+     offerVersion,
+@@ -360,6 +396,7 @@ function createBookingAuthority({
+         );
+       }
+       const replay = await getAppointment(record.appointmentId);
++      await validateProjectReplay(null, replay, actor, context);
+       return {
+         success: true,
+         replayed: true,
+@@ -430,6 +467,7 @@ function createBookingAuthority({
+           );
+         }
+         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
++        await validateProjectReplay(transaction, replay, actor, context);
+         return {
+           success: true,
+           replayed: true,
+@@ -449,6 +487,7 @@ function createBookingAuthority({
+             { appointmentId: identity.appointmentId },
+           );
+         }
++        await validateProjectReplay(transaction, existing, actor, context);
+         return {
+           success: true,
+           replayed: true,
+@@ -547,10 +586,17 @@ function createBookingAuthority({
+       } catch (error) {
+         throw providerError(error, "buildWorkOrders");
+       }
++      let projectWrite = null;
++      if (currentOffer.projectContext) {
++        if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Central Project booking is not configured.", { reason: "project_booking_not_active" });
++        projectWrite = await projectIntegration.prepareCommit({ transaction, appointment, workOrders,
++          boundContext: currentOffer.projectContext, actor, context, now });
++      }
+       const workOrderIds = workOrders.map((item) => item.id);
+       const actorInfo = actorFields(actor);
+       const appointmentRecord = compactObject({
+         ...appointment,
++        ...(currentOffer.projectContext ? { projectContext: currentOffer.projectContext } : {}),
+         status: normalizedCreateMode,
+         notificationRecipients,
+         workOrderIds,
+@@ -572,6 +618,12 @@ function createBookingAuthority({
+         updatedAt: serverTimestamp(),
+       });
+ 
++      // All Project reads/validation are complete before ANY write. These commit or roll back
++      // together with the canonical appointment, every Van Work Order and capacity lock.
++      if (projectWrite) {
++        transaction.create(projectWrite.linkRef, projectWrite.linkData);
++        transaction.create(projectWrite.eventRef, projectWrite.eventData);
++      }
+       transaction.set(appointmentRef, appointmentRecord);
+       workOrders.forEach((workOrder) => {
+         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
+diff --git a/functions/officeBookingAuthority.js b/functions/officeBookingAuthority.js
+index 048be2c..29a269e 100644
+--- a/functions/officeBookingAuthority.js
++++ b/functions/officeBookingAuthority.js
+@@ -1,4 +1,5 @@
+ const crypto = require("node:crypto");
++const { createProjectBookingIntegration } = require("./projects/booking-integration");
+ const { onRequest } = require("firebase-functions/v2/https");
+ const { getAuth } = require("firebase-admin/auth");
+ const { getFirestore } = require("firebase-admin/firestore");
+@@ -495,11 +496,14 @@ function createOfficeBookingApi({
+   operationalMoveAuthority = null,
+   adhocSupportAuthority = null,
+   appointmentNotificationService = null,
++  projectsEnabled = false,
+ } = {}) {
+   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
+   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
+   const provider = schedulingProvider || createSchedulingProvider({ db });
+-  const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
++  const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider,
++    projectIntegration: createProjectBookingIntegration({ db, enabled: projectsEnabled }),
++  });
+   const notifications = appointmentNotificationService || createAppointmentNotificationService({ db });
+   let lifecycle = lifecycleAuthority;
+   let operationalMove = operationalMoveAuthority;
+@@ -1164,6 +1168,7 @@ function createOfficeBookingApi({
+           channel: "office",
+           requestKey: `office:${identity.uid}:${requestId}:availability${backdated ? ":backdated" : ""}`,
+           officeRequestId: requestId,
++          ...(data.projectSelection !== undefined ? { projectSelection: data.projectSelection } : {}),
+           excludeAppointmentId,
+           requiredPrimaryVanId,
+           requestedSupportSlotIds,
+@@ -1313,6 +1318,7 @@ function getDefaultApi() {
+     defaultApi = createOfficeBookingApi({
+       db,
+       verifyIdToken: (token) => getAuth().verifyIdToken(token),
++      projectsEnabled: process.env.PROJECTS_REGISTRY_ENABLED === "true",
+     });
+   }
+   return defaultApi;
