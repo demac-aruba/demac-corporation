@@ -12,11 +12,18 @@ const defaults = require('../../../functions/websiteVrfDefaults.json');
 const origin = 'http://127.0.0.1:4173';
 const output = path.resolve('.website-editor-artifacts');
 fs.mkdirSync(output, { recursive: true });
-const report = { checks: [], mutations: [], errors: [] };
+const report = { checks: [], mutations: [], errors: [], failedRequests: [] };
 async function run(browser, name) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   await context.addInitScript(() => sessionStorage.setItem('demac.erp-next.firebase.session.v1', JSON.stringify({ uid: 'editor-nav-fixture', email: 'editor@example.test', idToken: 'test-only-not-a-credential', refreshToken: 'test-only', expiresAt: Date.now() + 3_600_000 })));
-  await context.route('**/*', async (route) => {
+  context.on('request', (request) => {
+    if (new URL(request.url()).origin === origin && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) report.mutations.push({ host: 'localhost', path: new URL(request.url()).pathname, method: request.method() });
+  });
+  context.on('requestfailed', (request) => report.failedRequests.push({ engine: name, url: request.url(), reason: request.failure()?.errorText }));
+  // Mock external dependencies only. Let native same-origin document/module/RSC
+  // requests keep their actual browser behavior instead of routing them through
+  // an asynchronous cross-origin fixture handler during iframe navigation.
+  await context.route((url) => url.origin !== origin, async (route) => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     const headers = { 'access-control-allow-origin': origin, 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
     const json = (value, status = 200) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(value) });
@@ -41,7 +48,15 @@ async function run(browser, name) {
     editor.on('pageerror', (error) => report.errors.push(error.message));
     await expect(editor.locator('[data-website-editor-session]')).toBeVisible({ timeout: 20000 });
     const frame = editor.frameLocator('iframe');
+    const childFrame = () => editor.frames().find((item) => item.parentFrame());
+    async function vrfReady() {
+      await expect(editor.getByRole('region', { name: 'Content editing panel' })).toBeVisible({ timeout: 15000 });
+      await expect(editor.getByRole('button', { name: 'Return to VRF', exact: true })).toHaveCount(0);
+      await expect(frame.locator('[data-vrf-desktop] [data-website-text="hero.title"]')).toHaveText(defaults.hero.title);
+      await expect.poll(() => new URL(childFrame().url()).pathname.replace(/\/$/, '')).toBe('/services/vrf-systems');
+    }
     await expect(editor.getByRole('button', { name: /Hero title/ }).first()).toBeVisible({ timeout: 20000 });
+    await vrfReady();
     for (const [container, linkLabel, descendant] of [
       ['section[data-website-image="hero.imageUrl"]', defaults.hero.primaryCta.label, false],
       ['section[data-website-image="hero.imageUrl"]', defaults.hero.primaryCta.label, true],
@@ -51,17 +66,16 @@ async function run(browser, name) {
       const link = frame.locator(`[data-vrf-desktop] ${container}`).getByRole('link', { name: linkLabel, exact: false }).first();
       await expect(link).toBeVisible();
       const href = await link.getAttribute('href');
-      // The descendant cases deliberately exercise bubbling/native activation,
-      // not coordinate hit-testing through the floating editing panel.
       if (descendant) await link.locator('span').last().dispatchEvent('click', { bubbles: true, cancelable: true });
       else await link.click({ position: { x: 5, y: 8 } });
-      await expect(editor.getByRole('button', { name: 'Return to VRF', exact: true })).toBeVisible({ timeout: 10000 });
-      const child = editor.frames().find((item) => item.parentFrame());
-      assert.equal(new URL(child.url()).pathname.replace(/\/$/, ''), '/contact');
-      assert.equal(new URL(child.url()).search, new URL(href, origin).search);
+      // A parent route notification is not evidence that the child finished
+      // navigation. Require the actual contact document and exact URL first.
+      await expect.poll(() => new URL(childFrame().url()).pathname.replace(/\/$/, ''), { timeout: 15000 }).toBe('/contact');
+      await expect(frame.getByRole('heading', { name: 'Tell us what cooling solution you need.', exact: true })).toBeVisible();
+      assert.equal(new URL(childFrame().url()).search, new URL(href, origin).search);
       await expect(editor.getByRole('region', { name: 'Content editing panel' })).toHaveCount(0);
       await editor.getByRole('button', { name: 'Return to VRF', exact: true }).click();
-      await expect(frame.locator('[data-vrf-desktop] [data-website-text="hero.title"]')).toHaveText(defaults.hero.title);
+      await vrfReady();
       report.checks.push(`${name}: ${container} ${linkLabel} (${descendant ? 'descendant event' : 'pointer'}) preserves navigation`);
     }
     await frame.locator('[data-vrf-desktop] section[data-website-image="hero.imageUrl"]').click({ position: { x: 850, y: 200 } });
