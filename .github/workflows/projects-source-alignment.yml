@@ -1,0 +1,74 @@
+name: Projects isolated source alignment
+on:
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths: ['.github/workflows/projects-source-alignment.yml']
+permissions:
+  contents: write
+jobs:
+  source-alignment:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/projects-canonical-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Apply exactly reviewed alignment without changing behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          p=Path('apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx')
+          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='a5474c9f0c19f1c0f8efbc32637d7ddd7b6a61e8'
+          s=p.read_text(); start=s.index('import { centralProjectsEnabled }'); end=s.index('import { useCallback',start)
+          imports=s[start:end]; s=s[:start]+s[end:]
+          needle="import styles from './live-appointment-create-drawer.module.css';\n"
+          assert s.count(needle)==1
+          s=s.replace(needle,needle+imports)
+          s=s.replace('const projectPlanState = useMemo<','const legacyProjectPlanState = useMemo<')
+          s=s.replace('const projectPlan = projectPlanState.plan;','const projectPlan = legacyProjectPlanState.plan;')
+          s=s.replace('const workPlanError = centralProject ? centralPlanState.error : projectPlanState.error;','const projectPlanState = centralProject ? centralPlanState : legacyProjectPlanState;')
+          s=s.replace('workPlanError','projectPlanState.error')
+          p.write_text(s)
+          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='f83efe90d27ce604ebd51c9221291bc1042c16f8'
+          p=Path('apps/erp-next/scripts/projects-drawer-browser.cjs');s=p.read_text()
+          old="define: { 'process.env.NODE_ENV': '\"production\"', 'process.env.NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED': '\"true\"', 'process.env.NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED': '\"true\"', 'process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID': JSON.stringify(PROJECT) }"
+          assert s.count(old)==1
+          s=s.replace(old,"define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true', NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED: 'true', NEXT_PUBLIC_FIREBASE_PROJECT_ID: PROJECT }) }")
+          p.write_text(s)
+          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='57c0053bbec320e0a173c5977a45ed313b03a87a'
+          PY
+          git diff --check
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify exact edited types and client recovery
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run typecheck --prefix apps/erp-next
+          node --test apps/erp-next/scripts/projects-booking-recovery.test.cjs
+      - name: Propose Git objects only; no ref update, merge or deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from pathlib import Path
+          repo='demac-aruba/demac-corporation';head=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REPOSITORY']==repo and os.environ['GITHUB_REF']=='refs/heads/feature/projects-canonical-integration'
+          def api(path,body=None):
+              req=urllib.request.Request('https://api.github.com/repos/'+repo+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='GET' if body is None else 'POST')
+              with urllib.request.urlopen(req,timeout=60) as response:return json.load(response)
+          assert api('/git/ref/heads/feature/projects-canonical-integration')['object']['sha']==head
+          base=api('/git/commits/'+head)['tree']['sha']
+          entries=[]
+          for path in ['apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx','apps/erp-next/scripts/projects-drawer-browser.cjs']:
+              blob=api('/git/blobs',{'content':Path(path).read_text(),'encoding':'utf-8'})
+              entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
+          entries.append({'path':'.github/workflows/projects-source-alignment.yml','mode':'100644','type':'blob','sha':None})
+          tree=api('/git/trees',{'base_tree':base,'tree':entries})
+          commit=api('/git/commits',{'message':'refactor(projects): separate legacy planning from effective validation and align budget integration\n\nPreserve all central and legacy validation behavior while removing overlapping source edits with budget PR. Supply complete public build constants in isolated browser harness. No checks skipped, no runtime Node global injection, no production or main changes. Remove one-use preparation workflow.','tree':tree['sha'],'parents':[head]})
+          print('PROPOSED_COMMIT='+commit['sha'])
+          PY
