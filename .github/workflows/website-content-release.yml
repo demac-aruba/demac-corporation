@@ -41,7 +41,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
           node --test functions/websiteContentService.test.js
-          node services/website-content/build.cjs
+          node functions/website-content-deployment/build.cjs
           npm install --prefix .website-content-build --no-audit --no-fund
       - name: Configure only the new website function
         env:

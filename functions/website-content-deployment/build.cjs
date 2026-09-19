@@ -1,6 +1,6 @@
 'use strict';
-// Build one explicit website-only codebase. Never import/copy operational index,
-// bootstrap, production rules, credentials, or the operational package.json.
+// Website function packaging belongs to its functions boundary, never the
+// operational services tree. Only these reviewed source files may be deployed.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '../..'), output = path.join(root, '.website-content-build');
 const files = ['websiteContentApi.js', 'websiteContentHttp.js', 'websiteContentFirebase.js', 'websiteContentService.js', 'websiteEditorialContract.js', 'websiteVrfDefaults.json'];
