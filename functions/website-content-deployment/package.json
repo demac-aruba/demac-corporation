@@ -1,0 +1,8 @@
+{
+  "name": "demac-website-content-functions",
+  "version": "1.0.0",
+  "private": true,
+  "main": "websiteContentApi.js",
+  "engines": { "node": "22" },
+  "dependencies": { "firebase-admin": "13.4.0", "firebase-functions": "6.4.0" }
+}

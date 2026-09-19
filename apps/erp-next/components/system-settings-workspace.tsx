@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { WebsiteEditorLaunchButton } from '@/components/website-editor/launch-button';
 import { TextSizeControl } from '@/components/accessibility/text-size-control';
 import { CanonicalOperatingCalendar } from '@/components/canonical-operating-calendar';
 import { SchedulingWorkTypesSettings } from '@/components/scheduling-work-types-settings';
@@ -40,6 +41,7 @@ export function SystemSettingsWorkspace() {
       </section>
 
       <section className="sg-settings-grid">
+        <article className="panel sg-setting-card"><header><div><span>Website Manager</span><h2>Website content</h2></div></header><p>Activate text and image editing in a separate tab. Normal visits stay unchanged.</p><WebsiteEditorLaunchButton /><a className="btn" href="/website-manager">Open Website Manager</a></article>
         <SchedulingWorkTypesSettings />
 
         <article className="panel sg-setting-card">

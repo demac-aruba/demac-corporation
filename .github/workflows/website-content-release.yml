@@ -1,0 +1,76 @@
+name: Website content isolated release
+
+# Explicit deployment only. No push/merge trigger, security-rule deployment,
+# content migration or operational function is part of this workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: 'Exact reviewed main commit to deploy'
+        required: true
+        type: string
+      confirmation:
+        description: 'Type DEPLOY WEBSITE CONTENT ONLY after owner approval'
+        required: true
+        type: string
+      extra_origins:
+        description: 'Additional exact HTTPS origins, comma separated; no wildcards'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: website-content-isolated-release
+  cancel-in-progress: false
+jobs:
+  deploy-website-content:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DEPLOY WEBSITE CONTENT ONLY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Verify exact approval and assemble website-only source
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          node --test functions/websiteContentService.test.js
+          node functions/website-content-deployment/build.cjs
+          npm install --prefix .website-content-build --no-audit --no-fund
+      - name: Configure only the new website function
+        env:
+          EXTRA_ORIGINS: ${{ inputs.extra_origins }}
+        run: |
+          node - <<'JS'
+          const fs = require('node:fs');
+          const origins = (process.env.EXTRA_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+          for (const origin of origins) {
+            const u = new URL(origin);
+            if (u.protocol !== 'https:' || u.origin !== origin || origin.includes('*')) throw Error('Exact HTTPS origins required.');
+          }
+          fs.writeFileSync('.website-content-build/.env.demac-corporation', `WEBSITE_EDITOR_ENABLED=true\nWEBSITE_EDITOR_ALLOWED_ORIGINS=${origins.join(',')}\n`);
+          JS
+      - name: Deploy website-content codebase only, never rules or operational functions
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SERVICE_ACCOUNT_JSON:-}" || { echo 'Authorized deployment credential is required.'; exit 1; }
+          CREDENTIAL_FILE="$RUNNER_TEMP/website-content-deploy.json"
+          trap 'rm -f "$CREDENTIAL_FILE"' EXIT
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$CREDENTIAL_FILE"
+          chmod 600 "$CREDENTIAL_FILE"
+          export GOOGLE_APPLICATION_CREDENTIALS="$CREDENTIAL_FILE"
+          npx --yes firebase-tools@15.2.1 deploy --config firebase.website-content.json --only functions:website-content --project demac-corporation --non-interactive
+      - name: Confirm endpoint is deployed and rejects anonymous editor access
+        run: |
+          code=$(curl --silent --output /tmp/website-content-smoke.json --write-out '%{http_code}' -X POST -H 'Origin: https://demac-aruba.com' -H 'Content-Type: application/json' --data '{"pageId":"vrf","action":"status"}' 'https://us-central1-demac-corporation.cloudfunctions.net/websiteContentApi')
+          test "$code" = '401'
+          echo 'Website-only endpoint deployed; anonymous access denied. No draft or public content was mutated. Enable the reviewed front-end flag only after the authorized owner smoke test.'
