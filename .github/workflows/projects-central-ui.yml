@@ -72,10 +72,12 @@ jobs:
         run: |
           npm install --prefix functions --no-audit --no-fund
           npm install --prefix apps/erp-next --no-audit --no-fund
-          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0 esbuild@0.25.9
           "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
       - name: Build exact ERP with isolated central UI activation
         run: npm run build --prefix apps/erp-next
+      - name: Field component states in Chromium and WebKit with synthetic transport
+        run: node apps/erp-next/scripts/projects-central-field-browser.cjs
       - name: Actual ERP browser to authenticated handler to Firestore emulators
         run: >-
           "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
