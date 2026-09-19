@@ -1,7 +1,7 @@
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import { requireFirebaseWebSession } from '@/lib/firebase/session';
 import { firebaseClientConfig } from '@/lib/firebase/client-config';
-import { uploadPublicWebsiteImage } from '@/lib/firebase/storage-rest';
+import { uploadWebsiteEditorImage } from './media';
 import type { PublicVrfContent } from '@/lib/public-vrf-content';
 import { applyChanges, isReviewBuild, type EditorialChange } from './contract';
 import { verifyPublishedWebsiteVersion } from './publication-check';
@@ -109,9 +109,7 @@ export function createEditorialRepository(actorId: string): EditorialRepository 
     async upload(file) {
       if (!review) writable(); await owner(actorId); await verifyImage(file);
       if (review) { const url = URL.createObjectURL(file); urls.add(url); return url; }
-      const result = await uploadPublicWebsiteImage(file, 'vrf/editor');
-      if (result.persistence !== 'firebase-storage') throw new Error('The image was not uploaded to cloud storage. Nothing was published.');
-      return result.mediaUrl;
+      return uploadWebsiteEditorImage(file);
     },
     dispose() { urls.forEach((url) => URL.revokeObjectURL(url)); urls.clear(); snapshot = null; published = null; pendingRequest = undefined; seedToken = undefined; legacyConflictToken = undefined; revisions.length = 0; requests.clear(); },
   };

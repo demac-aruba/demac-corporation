@@ -62,7 +62,7 @@ async function routeNetwork(context) {
       if (method === 'POST') report.localWrites.push(`editor command: ${request.postDataJSON().action}`);
     } else if (['GET','HEAD'].includes(method) && !/(?:googleapis\.com|cloudfunctions\.net|firebaseapp\.com)$/.test(url.hostname)) return route.continue();
     else { report.forbiddenRequests.push(`${method} ${url.hostname}${url.pathname}`); return route.abort(); }
-    if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'GET,POST,HEAD,OPTIONS' } });
+    if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization,content-type,x-goog-upload-protocol', 'access-control-allow-methods': 'GET,POST,HEAD,OPTIONS' } });
     const headers = await request.allHeaders(); delete headers.host; delete headers['content-length'];
     const response = await fetch(destination, { method, headers, ...(!['GET','HEAD'].includes(method) ? { body: request.postDataBuffer() } : {}) });
     const received = Object.fromEntries(response.headers); delete received['content-encoding']; delete received['content-length']; delete received['transfer-encoding'];
@@ -105,9 +105,9 @@ async function run(engine, name) {
     await expect(heading).toHaveText('Persisted website content from the real editor in');
     await editor.getByRole('button', { name: 'Cassette Units · image', exact: false }).first().click();
     await editor.locator('input[type="file"]').setInputFiles('apps/erp-next/public/website/vrf/indoor-cassette-approved.webp');
-    await expect(editor.getByText('Saved in cloud', { exact: true })).toBeVisible({ timeout: 15000 });
     const image = frame.locator('[data-vrf-desktop] [data-vrf-indoor-photo="cassette"]');
-    await expect(image).toHaveAttribute('src', /^https:\/\/firebasestorage\.googleapis\.com\//);
+    await expect(image).toHaveAttribute('src', /^https:\/\/firebasestorage\.googleapis\.com\//, { timeout: 15000 });
+    await expect(editor.getByText('Saved in cloud', { exact: true })).toBeVisible({ timeout: 15000 });
     assert(await image.evaluate(async img => { await img.decode(); return img.naturalWidth > 0; }));
     await editor.getByRole('button', { name: 'Publish page', exact: true }).click();
     await expect(editor.getByRole('dialog', { name: 'Review publication' })).toBeVisible();

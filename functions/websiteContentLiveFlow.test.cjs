@@ -52,7 +52,7 @@ function liveClient() {
     '@/lib/firebase/principal': { loadFirebasePrincipal: async () => ({ active: (await db.doc(`users/${owner.uid}`).get()).data().active, role: 'super_admin', userId: owner.uid }) },
     '@/lib/firebase/session': { requireFirebaseWebSession: async () => ({ idToken: owner.token }) },
     '@/lib/firebase/client-config': { firebaseClientConfig: { projectId, storageBucket: bucketName } },
-    '@/lib/firebase/storage-rest': { uploadPublicWebsiteImage: async () => { throw Error('Image rules are exercised separately'); } },
+    './media': { uploadWebsiteEditorImage: async () => { throw Error('Image rules are exercised separately'); } },
     './contract': { ...C, isReviewBuild: () => false }, './publication-check': verifier,
   }, { fetch: (url, options) => { assert.equal(url, `https://us-central1-${projectId}.cloudfunctions.net/websiteContentApi`); return fetch(endpoint, { ...options, headers: { ...options.headers, Origin: origin } }); } });
   return client.createEditorialRepository(owner.uid);

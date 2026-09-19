@@ -16,7 +16,7 @@ function client(handler, readOverride) {
     '@/lib/firebase/principal': { loadFirebasePrincipal: async () => ({ active: true, role: 'super_admin', userId: 'owner' }) },
     '@/lib/firebase/session': { requireFirebaseWebSession: async () => ({ idToken: 'local-test-only' }) },
     '@/lib/firebase/client-config': { firebaseClientConfig: { projectId: 'demo-editor' } },
-    '@/lib/firebase/storage-rest': { uploadPublicWebsiteImage: async () => { throw Error('Unexpected image upload'); } },
+    './media': { uploadWebsiteEditorImage: async () => { throw Error('Unexpected image upload'); } },
     './contract': { ...contract, isReviewBuild: () => false }, './publication-check': verifier,
   }, { fetch: async (_url, options) => {
     const command = JSON.parse(options.body); commands.push(command); const response = await handler(command);
@@ -85,4 +85,39 @@ test('wrong public version or modified public text cannot become verified succes
 test('a reply for a different request is rejected before clearing pending state', async () => {
   const { repository, Recovery } = client(async () => response({ ...snapshot(3), publicationId: 'wrong' }));
   await assert.rejects(repository.publish(3, 'expected'), Recovery); await assert.rejects(repository.save([], 3), Recovery);
+});
+
+function mediaAdapter(reply, decodeFails = false) {
+  const calls = [], decoded = [];
+  const module = compile('../lib/website-editor/media.ts', {
+    '@/lib/firebase/client-config': { firebaseClientConfig: { storageBucket: 'demo-editor.appspot.com' } },
+    '@/lib/firebase/session': { requireFirebaseWebSession: async () => ({ idToken: 'test-fixture' }) },
+    './contract': { PAGE: { id: 'vrf' } },
+  }, { Blob, crypto: require('node:crypto').webcrypto, setTimeout, clearTimeout,
+    Image: class { naturalWidth = 236; naturalHeight = 159; async decode() { decoded.push(this.src); if (decodeFails) throw Error('Image decoding failed'); } },
+    fetch: async (url, options) => { calls.push({ url, options }); return reply(url, options); },
+  });
+  return { upload: module.uploadWebsiteEditorImage, calls, decoded };
+}
+test('website image upload preserves metadata, bytes and Firebase auth, then verifies the public URL', async () => {
+  const image = new Blob(['original-image-bytes'], { type: 'image/webp' });
+  const media = mediaAdapter(async (url, options) => {
+    const name = new URL(url).searchParams.get('name');
+    assert.equal(options.headers.Authorization, 'Firebase test-fixture');
+    assert.equal(options.headers['X-Goog-Upload-Protocol'], 'multipart');
+    const body = await options.body.text();
+    assert(body.includes('"contentType":"image/webp"')); assert(body.includes('original-image-bytes'));
+    return { ok: true, json: async () => ({ name, bucket: 'demo-editor.appspot.com', contentType: image.type, size: image.size }) };
+  });
+  const result = await media.upload(image);
+  assert.equal(media.calls.length, 1); assert.deepEqual(media.decoded, [result]);
+  assert.match(result, /public-website%2Fvrf%2Feditor%2F/); assert(!result.includes('token='));
+});
+test('denied or mismatched image acknowledgement cannot report a successful cloud upload', async () => {
+  const image = new Blob(['bytes'], { type: 'image/webp' });
+  const denied = mediaAdapter(async () => ({ ok: false, status: 403 }));
+  await assert.rejects(denied.upload(image), /not confirmed/); assert.equal(denied.decoded.length, 0);
+  const mismatch = mediaAdapter(async () => ({ ok: true, json: async () => ({ name: 'wrong-object' }) }));
+  await assert.rejects(mismatch.upload(image), /acknowledgement is invalid/);
+  await assert.rejects(mismatch.upload(new Blob(['bad'], { type: 'text/html' })), /JPEG/);
 });

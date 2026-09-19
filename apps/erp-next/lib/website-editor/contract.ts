@@ -19,3 +19,11 @@ export function isPublicWebsiteRoute(pathname: string) {
   return ['/', '/about', '/services', '/services/commercial', '/services/vrf-systems', '/careers', '/contact', '/project-gallery'].includes(path)
     || /^\/project-gallery\/[a-z0-9_-]+$/i.test(path);
 }
+
+/** Typed host commands keep navigation and content messages in agreement. */
+export type EditorFrameCommand =
+  | { type: 'initialize' }
+  | { type: 'state'; pageId: 'vrf'; changes: import('../../../../functions/websiteEditorialContract').EditorialChange[]; editing: boolean }
+  | { type: 'navigate'; path: string }
+  | { type: 'locate'; key: string }
+  | { type: 'stop' };

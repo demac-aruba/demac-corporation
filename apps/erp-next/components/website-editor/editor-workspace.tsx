@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
-import { EDITOR_PROTOCOL, PAGE, SESSION_TTL_MS, applyChanges, values, isOwner, isEditorEnabled, isReviewBuild, sameMessage, type EditorialField, type EditorialChange } from '@/lib/website-editor/contract';
+import { EDITOR_PROTOCOL, PAGE, SESSION_TTL_MS, applyChanges, values, isOwner, isEditorEnabled, isReviewBuild, sameMessage, type EditorialField, type EditorialChange, type EditorFrameCommand } from '@/lib/website-editor/contract';
 import { createEditorialRepository, PublicationRecoveryRequired, type EditorialRepository, type RevisionEntry } from '@/lib/website-editor/client';
 import type { PublicVrfContent } from '@/lib/public-vrf-content';
 import styles from './website-editor.module.css';
@@ -87,7 +87,7 @@ export default function WebsiteEditorWorkspace() {
     return () => { window.removeEventListener('demac-editor-revoke', revoke); broadcast?.close(); };
   }, [active]);
 
-  const post = useCallback((payload: Record<string, unknown>) => {
+  const post = useCallback((payload: EditorFrameCommand) => {
     if (frameRef.current?.contentWindow && channel.current) frameRef.current.contentWindow.postMessage({ protocol: EDITOR_PROTOCOL, channel: channel.current, ...payload }, location.origin);
   }, []);
   const initializeFrame = useCallback(() => {
@@ -241,10 +241,10 @@ export default function WebsiteEditorWorkspace() {
     <header className={styles.toolbar}>
       <div className={styles.brand}><span>✎</span><div><strong>Edit Front End</strong><small>{isVrf ? 'VRF Systems' : path.startsWith('/careers') ? 'Careers · managed in Settings' : 'Page not yet connected'}</small></div><b className={styles.draftTag}>{review ? 'REVIEW' : 'DRAFT'}</b></div>
       <div className={styles.devices} aria-label="Preview width">{(['desktop','tablet','phone'] as const).map((size) => <button key={size} type="button" aria-pressed={device === size} onClick={() => setDevice(size)}>{size === 'desktop' ? 'Desktop' : size === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
-      <div className={styles.tools}><span role="status" className={styles.saveState}>{busy || (unsaved ? 'Unsaved changes' : documentState?.savedAt ? review ? 'Saved in review tab' : 'Saved in cloud' : 'No changes')}</span><button type="button" disabled={!isVrf || !unsaved || Boolean(busy)} onClick={() => void save()}>Save Draft</button><button type="button" aria-pressed={!editing} onClick={() => setEditing((value) => !value)}>{editing ? 'Preview' : 'Back to edit'}</button><button type="button" className={styles.publish} disabled={!isVrf || (!changes.length && !documentState?.pendingPublicationId) || Boolean(documentState?.legacyDraftChanged) || Boolean(busy) || Boolean(unsaved)} onClick={() => setReviewOpen(true)}>{documentState?.pendingPublicationId ? 'Recover publication' : review ? 'Publish preview' : 'Publish page'}</button><button type="button" onClick={exit}>Exit</button></div>
+      <div className={styles.tools}><span role="status" className={styles.saveState}>{busy || (unsaved ? 'Unsaved changes' : documentState?.savedAt ? review ? 'Saved in review tab' : 'Saved in cloud' : 'No changes')}</span><button type="button" disabled={!isVrf || !unsaved || Boolean(busy)} onClick={() => void save()}>Save Draft</button><button type="button" aria-pressed={!editing} onClick={() => setEditing((value) => !value)}>{editing ? 'Preview' : 'Back to edit'}</button><button type="button" className={styles.publish} disabled={!isVrf || (!changes.length && !documentState?.pendingPublicationId) || Boolean(documentState?.legacyDraftChanged && !documentState?.pendingPublicationId) || Boolean(busy) || Boolean(unsaved)} onClick={() => setReviewOpen(true)}>{documentState?.pendingPublicationId ? 'Recover publication' : review ? 'Publish preview' : 'Publish page'}</button><button type="button" onClick={exit}>Exit</button></div>
     </header>
     <div className={styles.reviewRibbon}>{review ? 'Private review · Drafts, image uploads and publishing are isolated to this editing tab. The live website is unchanged.' : 'Editing a private draft · Changes are not public until you publish this page.'}</div>
-    {!isVrf ? <div className={styles.readOnlyNotice}>This page is view-only here. {path.startsWith('/careers') ? 'Careers remains managed by its existing recruitment module.' : 'New commercial pages will connect to this editor after design approval.'}<button type="button" onClick={() => post({ type: 'navigate', href: PAGE.route })}>Return to VRF</button></div> : null}
+    {!isVrf ? <div className={styles.readOnlyNotice}>This page is view-only here. {path.startsWith('/careers') ? 'Careers remains managed by its existing recruitment module.' : 'New commercial pages will connect to this editor after design approval.'}<button type="button" onClick={() => post({ type: 'navigate', path: PAGE.route })}>Return to VRF</button></div> : null}
     {documentState?.pendingPublicationId && isVrf ? <div className={styles.readOnlyNotice}>A previous publication needs verification. Recover it before editing more content.</div> : null}
     <div className={styles.canvas} data-device={device} inert={Boolean(reviewOpen || history)}>
       <iframe sandbox="allow-scripts allow-same-origin" ref={frameRef} src={PAGE.route} title="Actual DEMAC website editing canvas" onLoad={initializeFrame} className={styles.frame} />
