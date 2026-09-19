@@ -106,12 +106,16 @@ async function contextFor(browser,who='admin') {
     window.fetch=async(input,init)=>{
       const target=new URL(input instanceof Request?input.url:String(input),location.href);
       if(target.origin===location.origin){
-        const headers=new Headers(init?.headers||(input instanceof Request?input.headers:undefined));
-        emit('same-origin-fetch',{
-          url:target.href,method:init?.method||(input instanceof Request?input.method:'GET'),
-          rsc:headers.get('rsc'),prefetch:headers.get('next-router-prefetch'),
-          segment:headers.get('next-router-segment-prefetch'),
-        });
+        // Keep active-page timing close to the uninstrumented run. Raw errors and
+        // all DOM exceptions are always retained by their independent listeners.
+        if(lifecycle!=='active'){
+          const headers=new Headers(init?.headers||(input instanceof Request?input.headers:undefined));
+          emit('same-origin-fetch',{
+            url:target.href,method:init?.method||(input instanceof Request?input.method:'GET'),
+            rsc:headers.get('rsc'),prefetch:headers.get('next-router-prefetch'),
+            segment:headers.get('next-router-segment-prefetch'),
+          });
+        }
         return nativeFetch(input,init);
       }
       const request=new Request(input,init);
