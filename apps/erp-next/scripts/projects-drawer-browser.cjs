@@ -165,7 +165,10 @@ async function main() {
                 await page.getByRole('alert').filter({ hasText: /version_conflict/ }).waitFor();
                 assert.equal(await page.evaluate(() => window.__created), undefined);
               } else if (scenario === 'recovery') {
-                await page.getByRole('button', { name: 'Recover original booking', exact: true }).waitFor();
+                // The journal exists BEFORE sending. Its visible banner is not commit evidence.
+                // Wait for the failed request to settle before checking the committed receipt.
+                await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button =>
+                  button.textContent.trim() === 'Recover original booking' && !button.disabled));
                 const key = 'demac.projects.booking.pending.v1:' + actor.localId;
                 const raw = await page.evaluate(key => sessionStorage.getItem(key), key); assert.ok(raw);
                 assert.equal(current.commits, 1);
