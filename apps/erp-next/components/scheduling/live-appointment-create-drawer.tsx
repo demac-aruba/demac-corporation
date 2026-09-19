@@ -1,15 +1,5 @@
 'use client';
 
-import { centralProjectsEnabled } from '@/lib/projects/registry-client';
-import { centralBudgetForecast, centralSlotPlan, isCentralChoice, type SchedulingProjectChoice } from '@/lib/projects/scheduling-choice';
-import { useSchedulingProjects } from '@/components/projects/central/use-scheduling-projects';
-import { useBookingRecovery } from '@/components/projects/central/use-booking-recovery';
-import { bindCentralProjectBooking, prepareCentralProjectConfirmation, type BoundProjectBookingInput } from '@/lib/projects/booking-handoff';
-import type { OfficeAvailabilityResult } from '@/lib/office-booking-authority';
-import type { VerifiedProjectBooking } from '@/lib/projects/booking-recovery';
-
-const centralBookingEnabled = centralProjectsEnabled && process.env.NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED === 'true';
-
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
@@ -68,6 +58,16 @@ import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
 import { useAuth } from '../auth/auth-provider';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
 import styles from './live-appointment-create-drawer.module.css';
+import { centralProjectsEnabled } from '@/lib/projects/registry-client';
+import { centralBudgetForecast, centralSlotPlan, isCentralChoice, type SchedulingProjectChoice } from '@/lib/projects/scheduling-choice';
+import { useSchedulingProjects } from '@/components/projects/central/use-scheduling-projects';
+import { useBookingRecovery } from '@/components/projects/central/use-booking-recovery';
+import { bindCentralProjectBooking, prepareCentralProjectConfirmation, type BoundProjectBookingInput } from '@/lib/projects/booking-handoff';
+import type { OfficeAvailabilityResult } from '@/lib/office-booking-authority';
+import type { VerifiedProjectBooking } from '@/lib/projects/booking-recovery';
+
+const centralBookingEnabled = centralProjectsEnabled && process.env.NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED === 'true';
+
 
 export type LiveBookingTarget = {
   dateKey: string;
@@ -664,7 +664,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     ? (projectWorkPreset ? [projectWorkPreset] : [])
     : workLines.map((line) => presetById.get(line.presetId)).filter((preset): preset is OfficeBookingPreset => Boolean(preset));
   const projectDailySlotLimit = selectedProject?.slotsPerWorkDay ?? 6;
-  const projectPlanState = useMemo<{ plan: ProjectSchedulingPlan | null; error: string }>(() => {
+  const legacyProjectPlanState = useMemo<{ plan: ProjectSchedulingPlan | null; error: string }>(() => {
     if (!projectMode || !selectedProject || isCentralChoice(selectedProject) || !projectSlots.trim()) return { plan: null, error: '' };
     if (selectedProject.phases.length && !selectedProjectPhase) {
       return { plan: null, error: 'Select an active or planned Project phase.' };
@@ -675,7 +675,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return { plan: null, error: error instanceof Error ? error.message : 'Enter a valid whole number of Project slots.' };
     }
   }, [projectMode, projectSlots, selectedProject, selectedProjectPhase]);
-  const projectPlan = projectPlanState.plan;
+  const projectPlan = legacyProjectPlanState.plan;
   const centralPlanState = useMemo(() => {
     if (!selectedProject || !isCentralChoice(selectedProject) || !projectSlots.trim()) return { plan: null, error: '' };
     if (selectedProject.phases.length && !selectedProjectPhase) return { plan: null, error: 'Select the Project phase to schedule.' };
@@ -683,7 +683,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     catch (error) { return { plan: null, error: error instanceof Error ? error.message : 'Invalid Project slots.' }; }
   }, [selectedProject, selectedProjectPhase, projectSlots]);
   const workPlan = centralProject ? centralPlanState.plan : projectPlan;
-  const workPlanError = centralProject ? centralPlanState.error : projectPlanState.error;
+  const projectPlanState = centralProject ? centralPlanState : legacyProjectPlanState;
 
 
   const projectWorkDescription = selectedProject
@@ -1098,7 +1098,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     }
     if (!workValid) {
       if (!automatic) setAuthorityError(projectMode
-        ? workPlanError || 'Select a Project, its phase when applicable, and the whole Project slots to reserve.'
+        ? projectPlanState.error || 'Select a Project, its phase when applicable, and the whole Project slots to reserve.'
         : 'Add at least one valid work line. Other work requires a manual scheduled duration.');
       return;
     }
@@ -1202,7 +1202,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (validationAbortRef.current === requestController) validationAbortRef.current = null;
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [centralProject, principal.userId, bookingRecovery.blocked, authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, workPlanError, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, selectedSupportSlotIds, workRequestLines, workValid]);
+  }, [centralProject, principal.userId, bookingRecovery.blocked, authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, selectedSupportSlotIds, workRequestLines, workValid]);
 
   useEffect(() => {
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
@@ -1676,11 +1676,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       ) : <div className={styles.lockedIdentity}><span>PROJECT TYPE</span><strong>{selectedProject.type}</strong><small>This Project does not require a separate phase.</small></div>}
                       <label>
                         <span>Planned Project slots *</span>
-                        <input aria-invalid={Boolean(workPlanError)} aria-describedby="project-slots-help" type="number" min="1" max={projectDailySlotLimit} step="1" inputMode="numeric" value={projectSlots} onChange={(event) => { setProjectSlots(event.target.value); resetCapacityValidation(); }} placeholder={`1–${projectDailySlotLimit} slots`} />
+                        <input aria-invalid={Boolean(projectPlanState.error)} aria-describedby="project-slots-help" type="number" min="1" max={projectDailySlotLimit} step="1" inputMode="numeric" value={projectSlots} onChange={(event) => { setProjectSlots(event.target.value); resetCapacityValidation(); }} placeholder={`1–${projectDailySlotLimit} slots`} />
                       </label>
                       <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> enter whole slots only. One slot reserves {selectedProject.slotDurationMinutes} minutes of Van capacity; this Project allows up to {selectedProject.slotsPerWorkDay} slots per workday. Each technician records actual labor time separately in the Technician Portal.</div>
                     </div>
-                    {workPlanError ? <div className={styles.projectPlanError} role="alert">{workPlanError}</div> : null}
+                    {projectPlanState.error ? <div className={styles.projectPlanError} role="alert">{projectPlanState.error}</div> : null}
                     {projectPlan ? (
                       <div className={styles.projectPlanSummary}>
                         <div><span>PROJECT SLOTS</span><strong>{projectPlan.scheduledSlots}</strong><small>{selectedProject.slotDurationMinutes} min each</small></div>
