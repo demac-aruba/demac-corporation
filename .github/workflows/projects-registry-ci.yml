@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'functions/projects/**'
+      - 'apps/erp-next/lib/projects/booking-handoff.ts'
+      - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/fieldOperationsAuthorityWorkVisit.js'
@@ -13,6 +15,8 @@ on:
     branches: ['feature/projects-canonical-integration']
     paths:
       - 'functions/projects/**'
+      - 'apps/erp-next/lib/projects/booking-handoff.ts'
+      - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/officeBookingAuthority.js'
       - 'firebase.projects-emulator.json'
@@ -49,11 +53,13 @@ jobs:
           node --check functions/projects/registry-service.js
           node --check functions/projects/registry-activity.js
           node --test functions/projects/*.test.js
+      - name: Real client Project selection and commit-receipt contracts
+        run: node --experimental-strip-types --test apps/erp-next/scripts/projects-booking-handoff.test.cjs
       - name: Real Auth and Firestore; atomicity, contention, permissions and read-only activity
         run: >-
           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
-          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs'
+          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs && node --experimental-strip-types --test functions/projects/booking-client-handoff.emulator.cjs'
 
   combined-budget-regression:
     # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
