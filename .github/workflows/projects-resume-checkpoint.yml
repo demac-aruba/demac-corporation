@@ -6,10 +6,14 @@ on:
 permissions:
   contents: read
 jobs:
-  webkit-differential:
+  browser-engine-differential:
     if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/projects-canonical-integration'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        playwright: ['1.57.0', '1.63.0']
     env:
       GCLOUD_PROJECT: demo-demac-projects
       NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true'
@@ -28,51 +32,36 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-ui-tools" >> "$GITHUB_ENV"
-      - name: Install only isolated test dependencies
+      - name: Install isolated pinned browser engines
+        env:
+          PW_VERSION: ${{ matrix.playwright }}
         run: |
           npm install --prefix functions --no-audit --no-fund
           npm install --prefix apps/erp-next --no-audit --no-fund
-          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 "playwright@$PW_VERSION"
           "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
       - run: npm run build --prefix apps/erp-next
-      - name: Compare TLS native transport without changing production or suppressing errors
+      - name: Same source, same assertions, eight fresh emulator runs
         run: |
-          mkdir -p projects-differential-evidence
-          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/localhost-key.pem" -out "$RUNNER_TEMP/localhost-cert.pem" -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' 2>/dev/null
-          export PROJECTS_TEST_TLS_KEY="$RUNNER_TEMP/localhost-key.pem"
-          export PROJECTS_TEST_TLS_CERT="$RUNNER_TEMP/localhost-cert.pem"
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          p=Path('apps/erp-next/scripts/projects-central-browser.cjs')
-          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='bf14414d8a9f226235f6e8373553cd93da015b61'
-          s=p.read_text()
-          s=s.replace('const server=http.createServer(',"const server=require('node:https').createServer({key:fs.readFileSync(process.env.PROJECTS_TEST_TLS_KEY),cert:fs.readFileSync(process.env.PROJECTS_TEST_TLS_CERT)},")
-          s=s.replace('origin=`http://127.0.0.1:', 'origin=`https://127.0.0.1:')
-          s=s.replace("serviceWorkers:'block'", "serviceWorkers:'block',ignoreHTTPSErrors:true")
-          s=s.replace("message:error.message});", "message:error.message,name:error.name,stack:error.stack});")
-          s=s.replace("const nativeFetch=window.fetch.bind(window);", "const nativeFetch=window.fetch.bind(window);\n    for(const kind of ['error','unhandledrejection'])addEventListener(kind,event=>{const key='isolated-dom-errors';const values=JSON.parse(sessionStorage.getItem(key)||'[]');values.push({kind,message:String(event.message||event.reason),url:location.href});sessionStorage.setItem(key,JSON.stringify(values));});")
-          s=s.replace("assert.deepEqual(errors,[]);", "fs.writeFileSync(path.join(ART,`${engineName}-dom-errors.json`),await page.evaluate(()=>sessionStorage.getItem('isolated-dom-errors')||'[]'));assert.deepEqual(errors,[]);")
-          p.write_text(s)
-          PY
-          git diff --check
-          git diff -- apps/erp-next/scripts/projects-central-browser.cjs > projects-differential-evidence/tls.patch
+          mkdir -p projects-engine-evidence
+          test "$(git hash-object apps/erp-next/scripts/projects-central-browser.cjs)" = bf14414d8a9f226235f6e8373553cd93da015b61
+          node -e 'const p=require(process.env.PROJECTS_UI_TOOLS+"/node_modules/playwright/package.json");console.log(p.version)' > projects-engine-evidence/engine-version.txt
           failed=0
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3 4 5 6 7 8; do
             rm -rf projects-central-ui-evidence
             set +e
-            "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth 'node apps/erp-next/scripts/projects-central-browser.cjs' > "projects-differential-evidence/tls-$attempt.log" 2>&1
+            "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth 'node apps/erp-next/scripts/projects-central-browser.cjs' > "projects-engine-evidence/run-$attempt.log" 2>&1
             result=$?
             set -e
-            echo "$result" > "projects-differential-evidence/tls-$attempt.exit"
-            cp -r projects-central-ui-evidence "projects-differential-evidence/tls-$attempt"
-            if [ "$result" != 0 ]; then failed=1; tail -55 "projects-differential-evidence/tls-$attempt.log"; fi
+            echo "$result" > "projects-engine-evidence/run-$attempt.exit"
+            cp -r projects-central-ui-evidence "projects-engine-evidence/run-$attempt"
+            if [ "$result" != 0 ]; then failed=1; tail -45 "projects-engine-evidence/run-$attempt.log"; fi
           done
           exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: projects-tls-fetch-differential
-          path: projects-differential-evidence/
+          name: projects-browser-engine-${{ matrix.playwright }}
+          path: projects-engine-evidence/
           retention-days: 3
           if-no-files-found: error
