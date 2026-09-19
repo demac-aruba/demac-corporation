@@ -50,7 +50,7 @@ function createWebsiteContentService({ store, media, clock = () => new Date().to
     if (action === 'status') return { pageId: PAGE.id, active: true, schemaVersion: 1 };
     if (action === 'load') {
       const publicState = await publication(), state = await store.read();
-      return { ...snapshot(editableDraft(state, publicState), state.pending?.id), publishedContent: publicState.content, legacyDraftChanged: state.legacyDraftChanged === true };
+      return { ...snapshot(editableDraft(state, publicState), state.pending?.id), publishedContent: publicState.content, legacyDraftChanged: state.legacyDraftChanged === true, ...(state.legacyDraftChanged ? { legacyConflictToken: state.legacyFingerprint } : {}) };
     }
     if (action === 'history') return (await store.history()).filter((entry) => entry.status === 'published').slice(0, 20).map((entry) => ({ id: entry.id, savedAt: entry.createdAt, content: entry.previousContent }));
     if (['save', 'restore', 'reset'].includes(action)) {
@@ -61,9 +61,11 @@ function createWebsiteContentService({ store, media, clock = () => new Date().to
         assertOwner(state.profile);
         if (state.pending) throw fail('publication-pending', 'Recover the pending publication before changing this draft.', 409);
         const draft = editableDraft(state, publicState); revision(draft, command.expectedRevision, command.expectedSeedToken);
+        if (state.legacyDraftChanged && action !== 'reset') throw fail('legacy-draft-conflict', 'An older Website Manager tab changed its draft. Reload, review the warning and explicitly reset to published before continuing. Both drafts are preserved.', 409);
+        if (state.legacyDraftChanged && command.expectedLegacyFingerprint !== state.legacyFingerprint) throw fail('legacy-draft-conflict', 'The older draft changed again. Reload before reconciling it.', 409);
         const content = action === 'reset' ? publicState.content : action === 'restore' ? safeApply(draft, changesOnly(draft, normalizeVrf(old.previousContent))) : safeApply(draft, command.changes);
         const next = { ...normalizeVrf(content), id: PAGE.draftId, editorRevision: draft.editorRevision + 1, editorBaseGeneration: action === 'save' ? draft.editorBaseGeneration : publicState.generation, updatedAt: clock(), updatedBy: actor.uid };
-        return { draft: next, result: snapshot(next) };
+        return { draft: next, acknowledgeLegacy: action === 'reset' && state.legacyDraftChanged === true, result: { ...snapshot(next), publishedContent: publicState.content, legacyDraftChanged: false } };
       }, actor.uid);
     }
     if (action !== 'publish') throw fail('invalid-action', 'Unsupported content-editor operation.');
@@ -77,6 +79,7 @@ function createWebsiteContentService({ store, media, clock = () => new Date().to
         assertOwner(state.profile);
         if (state.release) return { result: state.release };
         if (state.pending) throw fail('publication-pending', 'A publication needs recovery. Reload the editor to resume it.', 409);
+        if (state.legacyDraftChanged) throw fail('legacy-draft-conflict', 'An older Website Manager tab changed its draft. Reload and reconcile it before publishing. Both drafts are preserved.', 409);
         const draft = editableDraft(state, publicState); revision(draft, command.expectedRevision, command.expectedSeedToken);
         if (draft.editorBaseGeneration !== publicState.generation) throw fail('published-version-conflict', 'The public version changed. Reset the draft to published and review your edits first.', 409);
         if (/"imageUrl"\s*:\s*"(?:blob:|data:)/.test(JSON.stringify(state.draft || state.legacyDraft || {}))) throw fail('unpublished-image', 'Upload browser-only images before publishing.');

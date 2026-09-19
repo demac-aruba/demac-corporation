@@ -6,7 +6,7 @@ import type { PublicVrfContent } from '@/lib/public-vrf-content';
 import { applyChanges, isReviewBuild, type EditorialChange } from './contract';
 import { verifyPublishedWebsiteVersion } from './publication-check';
 
-export type EditorSnapshot = { content: PublicVrfContent; revision: number; savedAt: string; publicationId?: string; pendingPublicationId?: string; seedToken?: string; publishedContent?: PublicVrfContent; legacyDraftChanged?: boolean };
+export type EditorSnapshot = { content: PublicVrfContent; revision: number; savedAt: string; publicationId?: string; pendingPublicationId?: string; seedToken?: string; publishedContent?: PublicVrfContent; legacyDraftChanged?: boolean; legacyConflictToken?: string };
 export type RevisionEntry = { id: string; savedAt: string; content: PublicVrfContent };
 export interface EditorialRepository {
   mode: 'review' | 'live';
@@ -38,6 +38,7 @@ function copy<T>(value: T): T { return structuredClone(value); }
 function validSnapshot(result: EditorSnapshot) {
   if (!result || !Number.isSafeInteger(result.revision) || result.revision < 0 || !result.content?.hero?.title || !Array.isArray(result.content.indoorUnits)) throw new Error('The saved draft response is invalid. Reload before editing further.');
   if (result.seedToken !== undefined && !/^[0-9a-f]{64}$/.test(result.seedToken)) throw new Error('Invalid draft import version. Reload the draft.');
+  if (result.legacyConflictToken !== undefined && !/^[0-9a-f]{64}$/.test(result.legacyConflictToken)) throw new Error('Invalid legacy draft revision. Reload before reconciling it.');
   return result;
 }
 
@@ -46,12 +47,12 @@ export function createEditorialRepository(actorId: string): EditorialRepository 
   const review = isReviewBuild();
   let snapshot: EditorSnapshot | null = null, published: PublicVrfContent | null = null;
   const revisions: RevisionEntry[] = [], urls = new Set<string>(), requests = new Map<string, EditorSnapshot>();
-  let seedToken: string | undefined;
+  let seedToken: string | undefined, legacyConflictToken: string | undefined;
   let pendingRequest: { requestId: string; expectedRevision: number; expectedSeedToken?: string } | undefined;
   const writable = () => { if (pendingRequest) throw new PublicationRecoveryRequired('Recover or reload the pending publication before changing this draft.', pendingRequest.requestId, pendingRequest.expectedRevision); };
   const ready = (revision: number) => { if (!snapshot || snapshot.revision !== revision) throw new Error('This draft changed in another operation. Reload it before saving.'); return snapshot; };
-  const seed = () => seedToken ? { expectedSeedToken: seedToken } : {};
-  const accepted = (result: EditorSnapshot) => { validSnapshot(result); seedToken = result.seedToken; return result; };
+  const seed = () => ({ ...(seedToken ? { expectedSeedToken: seedToken } : {}), ...(legacyConflictToken ? { expectedLegacyFingerprint: legacyConflictToken } : {}) });
+  const accepted = (result: EditorSnapshot) => { validSnapshot(result); seedToken = result.seedToken; legacyConflictToken = result.legacyConflictToken; return result; };
   async function call<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
     await owner(actorId);
     const session = await requireFirebaseWebSession();
@@ -112,6 +113,6 @@ export function createEditorialRepository(actorId: string): EditorialRepository 
       if (result.persistence !== 'firebase-storage') throw new Error('The image was not uploaded to cloud storage. Nothing was published.');
       return result.mediaUrl;
     },
-    dispose() { urls.forEach((url) => URL.revokeObjectURL(url)); urls.clear(); snapshot = null; published = null; pendingRequest = undefined; seedToken = undefined; revisions.length = 0; requests.clear(); },
+    dispose() { urls.forEach((url) => URL.revokeObjectURL(url)); urls.clear(); snapshot = null; published = null; pendingRequest = undefined; seedToken = undefined; legacyConflictToken = undefined; revisions.length = 0; requests.clear(); },
   };
 }

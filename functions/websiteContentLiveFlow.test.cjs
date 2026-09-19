@@ -144,3 +144,31 @@ test('protected fields, stale versions, disabled writer and operational isolatio
   assert.deepEqual((await db.doc('businessSettings/business-calendar').get()).data(), { closedWeekdays: [0], preserved: true });
   assert.deepEqual((await db.doc(`businessSettings/${C.PAGE.draftId}`).get()).data(), legacyBefore);
 });
+
+
+test('a late legacy-tab edit blocks silent publication and reset archives the exact reviewed revision', async () => {
+  const client = liveClient(), legacyRef = db.doc(`businessSettings/${C.PAGE.draftId}`);
+  const beforePublic = await (await fetch(publicURL)).json();
+  const beforePrivate = (await db.doc(PATHS.draft).get()).data();
+  await legacyRef.update({ 'hero.title': 'Late legacy tab edit, preserved' });
+  const loaded = await client.load(initial);
+  assert.equal(loaded.legacyDraftChanged, true); assert.match(loaded.legacyConflictToken, /^[a-f0-9]{64}$/);
+  await assert.rejects(client.save([{ key: 'hero.title', value: 'Must not override' }], loaded.revision), /older Website Manager/);
+  await assert.rejects(client.publish(loaded.revision, randomUUID()), /older Website Manager/);
+  assert.deepEqual((await db.doc(PATHS.draft).get()).data(), beforePrivate);
+  assert.deepEqual(await (await fetch(publicURL)).json(), beforePublic);
+  // A reset acknowledges only what was read. Concurrent legacy changes require
+  // another explicit load; they cannot be silently marked as already reviewed.
+  await client.load(initial);
+  await legacyRef.update({ 'hero.title': 'Second late legacy edit, also preserved' });
+  await assert.rejects(client.reset(loaded.revision), /changed again/);
+  const reviewed = await client.load(initial), legacy = (await legacyRef.get()).data();
+  const reset = await client.reset(reviewed.revision);
+  assert.equal(reset.content.hero.title, beforePublic.hero.title);
+  assert.equal(reset.publishedContent.hero.title, beforePublic.hero.title);
+  assert.deepEqual((await legacyRef.get()).data(), legacy);
+  const archivePath = PATHS.draft.replace(/\/draft$/, `/legacy-reviewed-${reviewed.legacyConflictToken}`);
+  assert.deepEqual((await db.doc(archivePath).get()).data().content, legacy);
+  assert.equal((await client.load(initial)).legacyDraftChanged, false);
+  assert.deepEqual(await (await fetch(publicURL)).json(), beforePublic);
+});

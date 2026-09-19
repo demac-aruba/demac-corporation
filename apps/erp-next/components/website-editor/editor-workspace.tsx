@@ -12,7 +12,7 @@ const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Th
 function delta(base: PublicVrfContent, next: PublicVrfContent): EditorialChange[] {
   const before = values(base); return Object.entries(values(next)).filter(([key, value]) => before[key] !== value).map(([key, value]) => ({ key, value }));
 }
-type DocumentState = { original: PublicVrfContent; saved: PublicVrfContent; working: PublicVrfContent; revision: number; savedAt: string; pendingPublicationId?: string };
+type DocumentState = { original: PublicVrfContent; saved: PublicVrfContent; working: PublicVrfContent; revision: number; savedAt: string; pendingPublicationId?: string; legacyDraftChanged?: boolean };
 
 export default function WebsiteEditorWorkspace() {
   const { principal, mode, status } = useAuth();
@@ -110,7 +110,7 @@ export default function WebsiteEditorWorkspace() {
         if (loading.current || !repo.current) return;
         loading.current = true;
         void repo.current.load(event.data.content).then((snapshot) => {
-          setDocumentState({ original: event.data.content, saved: snapshot.content, working: snapshot.content, revision: snapshot.revision, savedAt: snapshot.savedAt, pendingPublicationId: snapshot.pendingPublicationId });
+          setDocumentState({ original: snapshot.publishedContent || event.data.content, legacyDraftChanged: snapshot.legacyDraftChanged, saved: snapshot.content, working: snapshot.content, revision: snapshot.revision, savedAt: snapshot.savedAt, pendingPublicationId: snapshot.pendingPublicationId });
         }).catch((cause) => setError(message(cause))).finally(() => { loading.current = false; });
       }
       if (event.data.type === 'navigation-blocked') setNotice('Staff pages and external actions are outside this website editor. Exit editing to use them.');
@@ -152,7 +152,7 @@ export default function WebsiteEditorWorkspace() {
     saving.current = true; setBusy('Saving draft…'); setError('');
     try {
       const result = await repository.save(pending, state.revision);
-      setDocumentState((latest) => latest ? { ...latest, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : latest);
+      setDocumentState((latest) => latest ? { ...latest, original: result.publishedContent || latest.original, legacyDraftChanged: result.legacyDraftChanged, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : latest);
       setNotice(review ? 'Draft saved in this review tab. Your live site is unchanged.' : 'Draft saved in the cloud. Not published.');
       return true;
     } catch (cause) { setError(message(cause)); return false; }
@@ -161,9 +161,9 @@ export default function WebsiteEditorWorkspace() {
   // Do not auto-retry failed writes indefinitely. A manual retry preserves the
   // same draft and visibly reports conflicts, offline state or permission errors.
   useEffect(() => {
-    if (!active || !unsaved || busy || error || documentState?.pendingPublicationId) return;
+    if (!active || !unsaved || busy || error || documentState?.pendingPublicationId || documentState?.legacyDraftChanged) return;
     const timer = setTimeout(() => void save(), 1400); return () => clearTimeout(timer);
-  }, [active, unsaved, busy, error, save, documentState?.pendingPublicationId]);
+  }, [active, unsaved, busy, error, save, documentState?.pendingPublicationId, documentState?.legacyDraftChanged]);
 
   function apply(key: string, value: string) {
     if (!documentState || documentState.pendingPublicationId) return;
@@ -201,7 +201,7 @@ export default function WebsiteEditorWorkspace() {
     setBusy(review ? 'Publishing review version…' : 'Publishing and verifying…'); setError('');
     try {
       const result = await repo.current.publish(documentState.revision, crypto.randomUUID());
-      setDocumentState((state) => state ? { ...state, original: result.content, saved: result.content, working: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state);
+      setDocumentState((state) => state ? { ...state, original: result.content, legacyDraftChanged: false, saved: result.content, working: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state);
       setReviewOpen(false); setNotice(review ? 'Review version published in this tab only. No production data was written.' : 'Published version verified.');
     } catch (cause) {
       if (cause instanceof PublicationRecoveryRequired) {
@@ -220,17 +220,17 @@ export default function WebsiteEditorWorkspace() {
     if (!documentState || !repo.current || busy) return;
     if (unsaved && !window.confirm('Replace your unsaved changes with this revision?')) return;
     setBusy('Restoring draft…');
-    try { const result = await repo.current.restore(entry.id, documentState.revision); setDocumentState((state) => state ? { ...state, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state); setHistory(null); setNotice('Previous version restored to draft, not published.'); }
+    try { const result = await repo.current.restore(entry.id, documentState.revision); setDocumentState((state) => state ? { ...state, original: result.publishedContent || state.original, legacyDraftChanged: result.legacyDraftChanged, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId } : state); setHistory(null); setNotice('Previous version restored to draft, not published.'); }
     catch (cause) { setError(message(cause)); } finally { setBusy(''); }
   }
 
   async function reloadDraft(reset = false) {
     if (!repo.current || busy || (!documentState && !renderedPublic)) return;
-    if (documentState && !window.confirm(reset ? 'Replace this draft with the current published content? No public content is changed.' : 'Reload the shared draft? Unsaved edits in this tab will be replaced.')) return;
+    if (documentState && !window.confirm(reset ? 'Replace this editing draft with the current published content? Any older Website Manager draft is preserved and archived, not imported or deleted. No public content is changed.' : 'Reload the shared draft? Unsaved edits in this tab will be replaced.')) return;
     setBusy('Loading draft…'); setError('');
     try {
       const result = reset && documentState ? await repo.current.reset(documentState.revision) : await repo.current.load(documentState?.original || renderedPublic!);
-      setDocumentState((state) => ({ original: state?.original || renderedPublic!, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId }));
+      setDocumentState((state) => ({ original: result.publishedContent || (reset ? result.content : state?.original || renderedPublic!), legacyDraftChanged: result.legacyDraftChanged, working: result.content, saved: result.content, revision: result.revision, savedAt: result.savedAt, pendingPublicationId: result.pendingPublicationId }));
       setUndo([]); setNotice(reset ? 'Draft reset to published content. The public page was not changed.' : 'Shared draft reloaded.');
     } catch (cause) { setError(message(cause)); } finally { setBusy(''); }
   }
@@ -241,10 +241,10 @@ export default function WebsiteEditorWorkspace() {
     <header className={styles.toolbar}>
       <div className={styles.brand}><span>✎</span><div><strong>Edit Front End</strong><small>{isVrf ? 'VRF Systems' : path.startsWith('/careers') ? 'Careers · managed in Settings' : 'Page not yet connected'}</small></div><b className={styles.draftTag}>{review ? 'REVIEW' : 'DRAFT'}</b></div>
       <div className={styles.devices} aria-label="Preview width">{(['desktop','tablet','phone'] as const).map((size) => <button key={size} type="button" aria-pressed={device === size} onClick={() => setDevice(size)}>{size === 'desktop' ? 'Desktop' : size === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
-      <div className={styles.tools}><span role="status" className={styles.saveState}>{busy || (unsaved ? 'Unsaved changes' : documentState?.savedAt ? review ? 'Saved in review tab' : 'Saved in cloud' : 'No changes')}</span><button type="button" disabled={!isVrf || !unsaved || Boolean(busy)} onClick={() => void save()}>Save Draft</button><button type="button" aria-pressed={!editing} onClick={() => setEditing((value) => !value)}>{editing ? 'Preview' : 'Back to edit'}</button><button type="button" className={styles.publish} disabled={!isVrf || (!changes.length && !documentState?.pendingPublicationId) || Boolean(busy) || Boolean(unsaved)} onClick={() => setReviewOpen(true)}>{documentState?.pendingPublicationId ? 'Recover publication' : review ? 'Publish preview' : 'Publish page'}</button><button type="button" onClick={exit}>Exit</button></div>
+      <div className={styles.tools}><span role="status" className={styles.saveState}>{busy || (unsaved ? 'Unsaved changes' : documentState?.savedAt ? review ? 'Saved in review tab' : 'Saved in cloud' : 'No changes')}</span><button type="button" disabled={!isVrf || !unsaved || Boolean(busy)} onClick={() => void save()}>Save Draft</button><button type="button" aria-pressed={!editing} onClick={() => setEditing((value) => !value)}>{editing ? 'Preview' : 'Back to edit'}</button><button type="button" className={styles.publish} disabled={!isVrf || (!changes.length && !documentState?.pendingPublicationId) || Boolean(documentState?.legacyDraftChanged) || Boolean(busy) || Boolean(unsaved)} onClick={() => setReviewOpen(true)}>{documentState?.pendingPublicationId ? 'Recover publication' : review ? 'Publish preview' : 'Publish page'}</button><button type="button" onClick={exit}>Exit</button></div>
     </header>
     <div className={styles.reviewRibbon}>{review ? 'Private review · Drafts, image uploads and publishing are isolated to this editing tab. The live website is unchanged.' : 'Editing a private draft · Changes are not public until you publish this page.'}</div>
-    {!isVrf ? <div className={styles.readOnlyNotice}>This page is view-only here. {path.startsWith('/careers') ? 'Careers remains managed by its existing recruitment module.' : 'New commercial pages will connect to this editor after design approval.'}<button type="button" onClick={() => post({ type: 'navigate', path: PAGE.route })}>Return to VRF</button></div> : null}
+    {!isVrf ? <div className={styles.readOnlyNotice}>This page is view-only here. {path.startsWith('/careers') ? 'Careers remains managed by its existing recruitment module.' : 'New commercial pages will connect to this editor after design approval.'}<button type="button" onClick={() => post({ type: 'navigate', href: PAGE.route })}>Return to VRF</button></div> : null}
     {documentState?.pendingPublicationId && isVrf ? <div className={styles.readOnlyNotice}>A previous publication needs verification. Recover it before editing more content.</div> : null}
     <div className={styles.canvas} data-device={device} inert={Boolean(reviewOpen || history)}>
       <iframe sandbox="allow-scripts allow-same-origin" ref={frameRef} src={PAGE.route} title="Actual DEMAC website editing canvas" onLoad={initializeFrame} className={styles.frame} />
@@ -252,6 +252,7 @@ export default function WebsiteEditorWorkspace() {
     {editing && isVrf ? <aside className={styles.panel} role="region" aria-label="Content editing panel">
       <header><div><small>EDITING CONTENT</small><h2>{selected?.label || 'Choose an element'}</h2></div>{selected ? <button type="button" aria-label="Close selected element" onClick={() => setSelectedKey('')}>×</button> : null}</header>
       <div className={styles.panelBody}>
+      {documentState?.legacyDraftChanged ? <p role="alert">An older Website Manager tab changed its draft. Saving and publishing are paused. Use Reset draft to published to reconcile after review; the older draft remains preserved.</p> : null}
       {!documentState ? <p role="status">{error ? 'Draft loading failed. Use Reload shared draft to try again.' : 'Loading the draft. Editing starts only after it is available.'}</p> : null}
       {selected ? <>
         <div className={styles.contentOnly}>Content only · Layout and behavior are protected</div>

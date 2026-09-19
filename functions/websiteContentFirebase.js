@@ -32,6 +32,11 @@ function createWebsiteContentFirebase({ db, bucket, deleteField, deploymentEnabl
         const receipt = requestId ? await tx.get(releases.doc(requestId)) : null;
         const state = stateOf(draft, published, control, legacy);
         const outcome = await work({ ...state, profile: profile.data(), release: receipt?.exists ? receipt.data() : null });
+        // An explicit reset acknowledges the observed legacy revision, but never
+        // deletes that draft. Retain each acknowledged revision immutably too.
+        const legacyReviewRef = db.doc(`${PRIVATE}/legacy-reviewed-${state.legacyFingerprint}`);
+        const priorLegacyReview = outcome.acknowledgeLegacy && state.legacyDraftChanged ? await tx.get(legacyReviewRef) : null;
+        if (priorLegacyReview && !priorLegacyReview.exists) tx.create(legacyReviewRef, { content: state.legacyDraft, fingerprint: state.legacyFingerprint, reviewedBy: uid, reviewedAt: new Date().toISOString() });
         if (outcome.draft) {
           tx.set(draftRef, outcome.draft);
           if (!draft.exists) {
