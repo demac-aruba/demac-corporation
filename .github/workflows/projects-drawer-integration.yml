@@ -1,0 +1,63 @@
+name: Projects Scheduling drawer integration
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/scheduling/**'
+      - 'apps/erp-next/components/projects/central/**'
+      - 'apps/erp-next/lib/projects/**'
+      - 'apps/erp-next/lib/office-booking*'
+      - 'apps/erp-next/scripts/projects-drawer*'
+      - 'apps/erp-next/scripts/projects-booking-recovery*'
+      - '.github/workflows/projects-drawer-integration.yml'
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - 'apps/erp-next/components/scheduling/**'
+      - 'apps/erp-next/lib/projects/booking-recovery.ts'
+      - '.github/workflows/projects-drawer-integration.yml'
+permissions:
+  contents: read
+concurrency:
+  group: projects-drawer-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  drawer-auth-firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-drawer-tools" >> "$GITHUB_ENV"
+      - name: Install isolated test dependencies
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0 esbuild@0.25.9
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Types and actual client recovery contracts
+        run: |
+          npm run typecheck --prefix apps/erp-next
+          node --test apps/erp-next/scripts/projects-booking-recovery.test.cjs
+      - name: Real drawer to authenticated Office and Firestore
+        run: >-
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node apps/erp-next/scripts/projects-drawer-browser.cjs'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: projects-drawer-evidence
+          path: projects-drawer-evidence/
+          if-no-files-found: warn
+          retention-days: 7
