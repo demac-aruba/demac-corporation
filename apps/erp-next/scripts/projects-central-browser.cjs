@@ -83,10 +83,37 @@ async function contextFor(browser,who='admin') {
   const actor=actors[who];
   await context.addInitScript(session=>{
     sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session));
+    // Observe without preventing events, catching promises or altering cancellation.
+    // Only synthetic test URLs are recorded; never request bodies or authorization.
+    const documentId=crypto.randomUUID();
+    let lifecycle='active';
+    let ordinal=0;
+    const emit=(kind,data={})=>console.debug('__DEMAC_NAV__'+JSON.stringify({
+      kind,documentId,lifecycle,ordinal:++ordinal,time:performance.timeOrigin+performance.now(),...data,
+    }));
+    emit('document-start');
+    addEventListener('beforeunload',()=>{lifecycle='beforeunload';emit('beforeunload');});
+    addEventListener('pagehide',event=>{lifecycle='pagehide';emit('pagehide',{persisted:event.persisted});});
+    addEventListener('pageshow',event=>{lifecycle='active';emit('pageshow',{persisted:event.persisted});});
+    addEventListener('error',event=>emit('dom-error',{
+      message:String(event.message||'Resource error'),filename:event.filename||'',
+      stack:String(event.error?.stack||''),resource:event.target instanceof Element?event.target.tagName:null,
+    }),true);
+    addEventListener('unhandledrejection',event=>emit('dom-unhandledrejection',{
+      message:String(event.reason?.message||event.reason),stack:String(event.reason?.stack||''),
+    }));
     const nativeFetch=window.fetch.bind(window);
     window.fetch=async(input,init)=>{
       const target=new URL(input instanceof Request?input.url:String(input),location.href);
-      if(target.origin===location.origin)return nativeFetch(input,init);
+      if(target.origin===location.origin){
+        const headers=new Headers(init?.headers||(input instanceof Request?input.headers:undefined));
+        emit('same-origin-fetch',{
+          url:target.href,method:init?.method||(input instanceof Request?input.method:'GET'),
+          rsc:headers.get('rsc'),prefetch:headers.get('next-router-prefetch'),
+          segment:headers.get('next-router-segment-prefetch'),
+        });
+        return nativeFetch(input,init);
+      }
       const request=new Request(input,init);
       if(request.signal.aborted)throw new DOMException('The request was aborted.','AbortError');
       const body=['GET','HEAD'].includes(request.method)?undefined:await request.arrayBuffer();
@@ -111,7 +138,8 @@ async function main(){
  for(const [engineName,engine]of[['chromium',chromium],['webkit',webkit]]){
   const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];const network=[];const externalNetwork=[];let stage='load';
   page.on('request',request=>{const url=new URL(request.url());if(url.origin!==origin)externalNetwork.push(url.origin);});
-  page.on('pageerror',error=>{errors.push(error.message);network.push({stage,event:'pageerror',message:error.message});});
+  page.on('console',event=>{const text=event.text();if(text.startsWith('__DEMAC_NAV__'))network.push({stage,event:'lifecycle',...JSON.parse(text.slice('__DEMAC_NAV__'.length))});});
+  page.on('pageerror',error=>{errors.push(error.message);network.push({stage,event:'pageerror',message:error.message,stack:error.stack});});
   page.on('requestfailed',request=>{const url=new URL(request.url());network.push({stage,event:'requestfailed',path:url.origin===origin?url.pathname:url.origin,reason:request.failure()?.errorText});});
   page.on('response',response=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.includes('__next.'))network.push({stage,event:'rsc-response',path:url.pathname,status:response.status()});});
   try{
