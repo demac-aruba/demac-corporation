@@ -2,10 +2,11 @@
 const d = require('./registry-domain');
 const { loadProjectActivity } = require('./registry-activity');
 const { loadProjectExecution } = require('./registry-execution');
+const { recordedPhaseReview, previewPhaseCompletion, preparePhaseCompletion } = require('./phase-completion');
 const { prepareImportTransaction, readImportSource } = require('./registry-import-transaction');
 const COLLECTIONS = Object.freeze({ records: 'projectRecords', numbers: 'projectNumbers', links: 'projectAppointmentLinks', events: 'projectEvents', receipts: 'projectCommandReceipts', settings: 'businessSettings' });
-const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan']);
-const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'preview_legacy_import', 'get_import_source']);
+const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase']);
+const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'get_phase_completion', 'preview_legacy_import', 'get_import_source']);
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
 
@@ -54,7 +55,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         const rows = snapshot.docs.slice(0, limit).map(snapshotRecord).map(d.requireRecord);
         return { source: 'project_registry_v1', projects: rows, nextCursor: snapshot.docs.length > limit ? rows[rows.length - 1].id : null };
       }
-      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null; let archiveWrite = null; let importAudit = null;
+      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null; let archiveWrite = null; let importAudit = null; let phaseCompletion = null;
       if (input.action === 'preview_legacy_import' || input.action === 'import_legacy_plan') {
         const prepared = await prepareImportTransaction({ db, transaction, input, principal, occurredAt, collections: COLLECTIONS });
         if (prepared.preview) return prepared.preview;
@@ -85,6 +86,10 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
           d.allowedKeys(data, ['projectId']);
           return readImportSource({ db, transaction, project, principal });
         }
+        if (input.action === 'get_phase_completion') {
+          d.allowedKeys(data, ['projectId', 'phaseId']);
+          return previewPhaseCompletion({ db, transaction, project, phaseId: data.phaseId });
+        }
         if (input.action === 'get_execution') {
           d.allowedKeys(data, ['projectId', 'afterId'], ['projectId']);
           return loadProjectExecution({ db, transaction, project, afterId: data.afterId });
@@ -95,7 +100,10 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         }
         d.requireVersion(project, data.expectedVersion);
         if (project.version >= Number.MAX_SAFE_INTEGER - 1) throw d.fault('project_version_exhausted', 'The project revision cannot advance safely.', 409);
-        if (input.action === 'edit_metadata') {
+        if (['approve_phase_completion', 'reopen_phase'].includes(input.action)) {
+          const prepared = await preparePhaseCompletion({ db, transaction, project, input, principal, occurredAt, eventId: commandId });
+          next = prepared.next; phaseCompletion = prepared.evidence;
+        } else if (input.action === 'edit_metadata') {
           d.allowedKeys(data, ['projectId', 'expectedVersion', 'patch']);
           next = { ...project, ...d.applyMetadata(project, data.patch) };
         } else if (input.action === 'revise_estimate') {
@@ -111,6 +119,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
           if (phases.reduce((sum, phase) => sum + phase.plannedVanMinutes, 0) > project.budget.currentMinutes) throw d.fault('phase_budget_allocation', 'Phase estimates exceed the project planning baseline.');
           const wanted = new Set(phases.map((phase) => phase.id));
           const removed = project.phases.filter((phase) => !wanted.has(phase.id));
+          if (removed.some(phase => recordedPhaseReview(project, phase.id))) throw d.fault('phase_has_history', 'A phase with scope approval history cannot be removed.', 409);
           // Bounded existence checks, batched across changed phases rather than N per-row reads.
           for (let offset = 0; offset < removed.length; offset += 10) {
             const phaseIds = removed.slice(offset, offset + 10).map((phase) => phase.id);
@@ -139,6 +148,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
           const actualOrderIds = new Set(orders.docs.map((order) => order.id));
           const expectedOrderIds = [...(Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : []), ...(appointment.workOrderId ? [appointment.workOrderId] : [])];
           if (expectedOrderIds.some((id) => !actualOrderIds.has(id))) throw d.fault('work_order_missing', 'An appointment Work Order is missing. Reconcile before linking.', 409);
+          if (!existingLink.exists && phaseId !== null && recordedPhaseReview(project, phaseId)?.status === 'approved') throw d.fault('project_phase_closed', 'Reopen the phase before adding another appointment.', 409);
           // Relation only; capacity, statuses, messages, visit actuals and stock are never written here.
           linkWrite = existingLink.exists ? null : { ref: linkRef, data: { schemaVersion: 1, appointmentId, projectId: project.id, phaseId, customerId: project.customerId, propertyId: project.propertyId, source: 'explicit_reconciliation', reason: data.reason.trim(), workOrderIdsAtLink: orders.docs.map((order) => order.id).sort(), createdAt: occurredAt, createdBy: principal.uid } };
           next = existingLink.exists ? project : { ...project };
@@ -155,7 +165,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
       if (numberWrite) transaction.create(numberWrite.ref, numberWrite.data);
       if (linkWrite) transaction.create(linkWrite.ref, linkWrite.data);
       if (archiveWrite) transaction.create(archiveWrite.ref, archiveWrite.data);
-      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
+      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(phaseCompletion ? { phaseCompletion } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
       transaction.create(receiptRef, { actorId: principal.uid, requestHash, projectId: next.id, occurredAt, result });
       return { ...result, replayed: false };
     }, write ? { maxAttempts: 5 } : { readOnly: true });

@@ -3,6 +3,7 @@
 // Projects validates planning identity; Booking Authority still owns availability and commit.
 // This adapter has no independent booking writer, SDK initialization or deployment export.
 const d = require('./registry-domain');
+const { requirePhasePrerequisites } = require('./phase-completion');
 const { BookingAuthorityError, BOOKING_ERROR_CODES } = require('../bookingAuthorityCore');
 // Preserve the existing Scheduling eligibility of a draft/open Project plan.
 const ACTIVE_PLAN_STATES = new Set(['Draft', 'Planned']);
@@ -47,7 +48,7 @@ function checkPlan(project, selection, request) {
   }
   // No preview report or local percentage may satisfy phase execution prerequisites.
   // The canonical completion projection is a required activation prerequisite, not fabricated here.
-  if (phase && (phase.dependencies.length || project.migration?.status === 'pending_reconciliation')) {
+  if (phase && project.migration?.status === 'pending_reconciliation') {
     throw d.fault('project_phase_reconciliation_required', 'Phase completion and prerequisites must be reconciled before booking this phase.', 409);
   }
   // A captured legacy terminal status must not be silently reopened by importing its plan.
@@ -84,7 +85,10 @@ function createProjectBookingIntegration({ db, enabled = false } = {}) {
       throw d.fault('project_booking_not_active', 'Central project booking is not activated.', 503);
     }
     const project = d.requireRecord(snapshot(plan));
-    if (!replay) checkPlan(project, selection, request);
+    if (!replay) {
+      checkPlan(project, selection, request);
+      await requirePhasePrerequisites({ db, transaction, project, phaseId: selection.phaseId });
+    }
     else if (project.customerId !== request.customerId || project.propertyId !== request.propertyId) {
       throw d.fault('project_booking_identity_conflict', 'Project booking identity requires reconciliation.', 409);
     }

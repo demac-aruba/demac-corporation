@@ -88,7 +88,7 @@ export function createRegistryTransport({ endpoint, identity, fetcher = fetch, t
 
 const WRITE_ACTIONS = new Set([
   'create_plan', 'edit_metadata', 'set_phases', 'revise_estimate',
-  'attach_existing_appointment', 'import_legacy_plan',
+  'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase',
 ]);
 function intentText(command: RegistryCommand) {
   if (!WRITE_ACTIONS.has(command?.action) || typeof command.requestId !== 'string'

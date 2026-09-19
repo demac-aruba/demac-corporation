@@ -12,12 +12,15 @@ const record = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapsho
 function groups(items, size = 10) { const result = []; for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size)); return result; }
 
 /** Consistent, bounded canonical read. Never writes counters, capacity or field actuals. */
-async function loadProjectActivity({ db, transaction, project, afterId }) {
-  let query = db.collection('projectAppointmentLinks').where('projectId', '==', project.id).orderBy('__name__');
+async function loadProjectActivity({ db, transaction, project, afterId, phaseId, observeSource }) {
+  const readRecord = snapshot => { if (observeSource && snapshot.exists) observeSource(snapshot); return record(snapshot); };
+  let query = db.collection('projectAppointmentLinks').where('projectId', '==', project.id);
+  if (phaseId !== undefined) query = query.where('phaseId', '==', d.id(phaseId));
+  query = query.orderBy('__name__');
   if (afterId !== undefined) query = query.startAfter(d.id(afterId, 'activity cursor'));
   const linkSnapshot = await transaction.get(query.limit(PAGE_SIZE + 1));
   const linkDocs = linkSnapshot.docs.slice(0, PAGE_SIZE);
-  const links = linkDocs.map(record);
+  const links = linkDocs.map(readRecord);
   const importReviewPending = project.migration?.status === 'pending_reconciliation';
   const issues = importReviewPending ? [{ code: 'legacy_import_requires_reconciliation' }] : [];
   const more = linkSnapshot.docs.length > PAGE_SIZE;
@@ -27,13 +30,13 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
       throw d.fault('project_link_conflict', 'Project association requires reconciliation.', 409);
     }
   }
-  const appointments = selectedIds.length ? (await transaction.getAll(...selectedIds.map((id) => db.collection('appointments').doc(id)))).map(record) : [];
+  const appointments = selectedIds.length ? (await transaction.getAll(...selectedIds.map((id) => db.collection('appointments').doc(id)))).map(readRecord) : [];
   const byAppointment = new Map(appointments.filter(Boolean).map((row) => [row.id, row]));
   let orders = []; let visits = [];
   if (selectedIds.length) {
     const snapshot = await transaction.get(db.collection('workOrders').where('appointmentId', 'in', selectedIds).limit(MAX_ORDERS + 1));
     if (snapshot.docs.length > MAX_ORDERS) issues.push({ code: 'work_order_read_truncated' });
-    orders = snapshot.docs.slice(0, MAX_ORDERS).map(record);
+    orders = snapshot.docs.slice(0, MAX_ORDERS).map(readRecord);
   }
   // Reject identity-conflicting parents before reading any of their Field children.
   const eligibleOrders = orders.filter((order) => {
@@ -47,16 +50,16 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
   for (const ids of groups(eligibleOrders.map((order) => order.id))) {
     const remaining = MAX_VISITS - visits.length;
     const snapshot = await transaction.get(db.collection('workVisits').where('workOrderId', 'in', ids).limit(remaining + 1));
-    if (snapshot.docs.length > remaining) { issues.push({ code: 'work_visit_read_truncated' }); visits.push(...snapshot.docs.slice(0, remaining).map(record)); break; }
-    visits.push(...snapshot.docs.map(record));
+    if (snapshot.docs.length > remaining) { issues.push({ code: 'work_visit_read_truncated' }); visits.push(...snapshot.docs.slice(0, remaining).map(readRecord)); break; }
+    visits.push(...snapshot.docs.map(readRecord));
   }
   const reviewSnapshots = eligibleOrders.length ? await transaction.getAll(...eligibleOrders.map((order) => db.collection('fieldOfficeReviews').doc(officeReviewDocumentId(order.id)))) : [];
-  const rawReviews = reviewSnapshots.filter((item) => item.exists).map(record);
+  const rawReviews = reviewSnapshots.filter((item) => item.exists).map(readRecord);
   const orderIds = new Set(orders.map((item) => item.id));
   for (const review of rawReviews) if (!orderIds.has(review.workOrderId) || review.id !== officeReviewDocumentId(review.workOrderId)) issues.push({ code: 'office_review_identity_conflict' });
   const revisionIds = [...new Set(rawReviews.map((review) => review.currentRevisionId).filter((value) => typeof value === 'string'))];
   const revisions = revisionIds.length ? await transaction.getAll(...revisionIds.map((id) => db.collection('fieldOfficeReviewRevisions').doc(d.id(id, 'review revision')))) : [];
-  const byRevision = new Map(revisions.filter((item) => item.exists).map((item) => [item.id, record(item)]));
+  const byRevision = new Map(revisions.filter((item) => item.exists).map((item) => [item.id, readRecord(item)]));
   const byReview = new Map(rawReviews.map((item) => [item.workOrderId, item]));
   const visitsByOrder = new Map();
   for (const raw of visits) { const list = visitsByOrder.get(raw.workOrderId) || []; list.push(raw); visitsByOrder.set(raw.workOrderId, list); }
@@ -94,7 +97,7 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
         if ((rawRevision?.clientId !== undefined && rawRevision.clientId !== project.customerId) || (rawRevision?.customerId !== undefined && rawRevision.customerId !== project.customerId)) throw new Error('conflicting revision identity');
         const revision = projectOfficeReviewRevision(rawRevision, { ...expected, reviewId: validated.id, visitId: validated.visitId });
         if (revision.revisionNumber !== validated.currentRevisionNumber || !fieldVisits.some((visit) => visit.id === validated.visitId)) throw new Error('revision mismatch');
-        review = { status: validated.status, source: `fieldOfficeReviews/${validated.id}`, revisionId: revision.id, reviewedAt: validated.reviewedAt || null };
+        review = { status: validated.status, source: `fieldOfficeReviews/${validated.id}`, revisionId: revision.id, reviewedAt: validated.reviewedAt || null, ...(observeSource ? { visitId: validated.visitId } : {}) };
       } catch { issues.push({ code: 'office_review_reconciliation_required', workOrderId: order.id }); }
     }
     rows.push({ workOrderId: order.id, appointmentId: appointment.id, phaseId: link.phaseId, vanId: order.vanId || null, date: order.date || null, start: order.time || null, status: order.status, cancelled, temporaryHold: appointment.status === 'temporary_hold', plannedVanMinutes, scheduledSlots: slots, visits: fieldVisits, review, source: `workOrders/${order.id}` });
@@ -109,7 +112,7 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
   const pageIsValid = issues.length === 0;
   const activeRows = rows.filter((row) => !row.cancelled);
   const planned = activeRows.reduce((sum, row) => sum + (row.plannedVanMinutes || 0), 0);
-  const allProjectLinksIncluded = afterId === undefined && !more && pageIsValid;
+  const allProjectLinksIncluded = phaseId === undefined && afterId === undefined && !more && pageIsValid;
   return {
     projectId: project.id, projectVersion: project.version, source: 'canonical_work_orders_and_field',
     rows, issues, nextCursor: more ? linkDocs[linkDocs.length - 1].id : null,
