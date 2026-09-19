@@ -6,6 +6,7 @@ on:
       - 'apps/erp-next/app/(erp)/projects/central/**'
       - 'apps/erp-next/lib/projects/**'
       - 'apps/erp-next/scripts/projects-central*'
+      - 'apps/erp-next/scripts/projects-navigation*'
       - 'functions/projects/**'
       - '.github/workflows/projects-central-ui.yml'
   push:
@@ -15,6 +16,7 @@ on:
       - 'apps/erp-next/app/(erp)/projects/central/**'
       - 'apps/erp-next/lib/projects/**'
       - 'apps/erp-next/scripts/projects-central*'
+      - 'apps/erp-next/scripts/projects-navigation*'
       - 'functions/projects/**'
       - '.github/workflows/projects-central-ui.yml'
 permissions:
@@ -36,6 +38,8 @@ jobs:
           package-manager-cache: false
       - run: npm install --prefix apps/erp-next --no-audit --no-fund
       - run: node --test functions/projects/registry-http.test.js
+      - name: Verify navigation diagnostic classification and rejection controls
+        run: node --test apps/erp-next/scripts/projects-navigation-diagnostics.test.cjs
       - name: Verify deterministic lost-response fault injection
         run: node --test apps/erp-next/scripts/projects-central-response-fault.test.cjs
       - name: Client transport and exact-intent recovery

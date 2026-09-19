@@ -1,6 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const http=require('node:http');
 const {createCommittedResponseFault,interruptResponse}=require('./projects-central-response-fault.cjs');
+const {verifyNavigationEvidence,verifyBrowserErrorControls}=require('./projects-navigation-diagnostics.cjs');
 const ROOT=path.resolve(__dirname,'../../..');const PROJECT='demo-demac-projects';
 for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env[key]||''))throw Error('Only loopback emulators are allowed.');
 if(process.env.GCLOUD_PROJECT!==PROJECT||process.env.GOOGLE_APPLICATION_CREDENTIALS)throw Error('Demo-only browser test; production credentials forbidden.');
@@ -147,6 +148,8 @@ async function main(){
   page.on('requestfailed',request=>{const url=new URL(request.url());network.push({stage,event:'requestfailed',path:url.origin===origin?url.pathname:url.origin,reason:request.failure()?.errorText});});
   page.on('response',response=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.includes('__next.'))network.push({stage,event:'rsc-response',path:url.pathname,status:response.status()});});
   try{
+    const controls=await verifyBrowserErrorControls(browser,origin,engineName);
+    fs.writeFileSync(path.join(ART,`${engineName}-exception-controls.json`),JSON.stringify(controls,null,2));
     const name=`Synthetic shared ${engineName}`;await page.goto(origin+'/projects/central/');await page.getByRole('button',{name:/Create Project/}).waitFor();
     stage='create';await page.getByRole('button',{name:/Create Project/}).click();const dialog=page.getByRole('dialog',{name:'Create shared project'});
     await dialog.getByRole('button',{name:'Synthetic CRM customer',exact:true}).click();await dialog.getByLabel('Service property',{exact:true}).selectOption(PROPERTY);
@@ -196,7 +199,10 @@ async function main(){
       const file=JSON.stringify(await captureLocalBackup({getItem:key=>key===STORAGE_KEYS[0]?JSON.stringify({version:1,projects:[source]}):'[]'},{capturedAt:'2026-09-18T12:00:00.000Z',origin:'https://erp.example.test'}));const priorPreviewCount=previewRequests;
       await page.getByLabel('Saved backup file',{exact:true}).setInputFiles({name:'synthetic-projects.json',mimeType:'application/json',buffer:Buffer.from(file)});await page.getByRole('combobox',{name:/^Select backed-up project/}).selectOption(source.id);assert.equal(previewRequests,priorPreviewCount);await page.getByRole('button',{name:'Review import — no writes',exact:true}).click();await page.getByText('Read-only preview',{exact:true}).waitFor();assert.equal((await db.collection('projectRecords').doc(source.id).get()).exists,false);await page.screenshot({path:path.join(ART,'central-import-preview.png'),fullPage:true});
     }
-    assert.deepEqual(errors,[]);assert.deepEqual(externalNetwork,[],'No native request may reach an external service');console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
+    assert.equal(network.filter(row=>row.event==='pageerror').length,errors.length,'Every raw error must remain in the evidence ledger');
+    const diagnostics=await verifyNavigationEvidence(page,network,{engine:engineName,origin});
+    fs.writeFileSync(path.join(ART,`${engineName}-navigation-verdict.json`),JSON.stringify(diagnostics,null,2));
+    assert.deepEqual(externalNetwork,[],'No native request may reach an external service');console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
   }catch(error){console.error('CENTRAL_UI_FAILURE',engineName,stage,JSON.stringify({errors,text:(await page.locator('body').innerText().catch(()=>'' )).slice(0,6000)}));await page.screenshot({path:path.join(ART,`${engineName}-failure.png`),fullPage:true}).catch(()=>{});throw error;}
   finally{fs.writeFileSync(path.join(ART,`${engineName}-network.json`),JSON.stringify(network,null,2));await context.close();await browser.close();}
  }
