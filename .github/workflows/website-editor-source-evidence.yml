@@ -1,0 +1,45 @@
+name: Website editor source evidence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/website-editor-source-evidence.yml'
+
+permissions:
+  contents: read
+jobs:
+  source-evidence:
+    if: github.event.pull_request.number == 513
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export committed review sources only
+        run: |
+          python3 - <<'PY'
+          import io, pathlib, subprocess, tarfile
+          roots = {'AGENTS.md','package.json','package-lock.json','firebase.json','firestore.rules','storage.rules','vercel.json','website-editor.emulator.json','firebase.website-content.json'}
+          prefixes = ('apps/erp-next/', 'functions/', 'docs/ai/', '.github/workflows/')
+          extensions = {'.ts','.tsx','.js','.cjs','.mjs','.json','.css','.md','.yml','.yaml','.rules','.patch'}
+          files = subprocess.check_output(['git','ls-files','-z']).decode().split('\0')
+          with tarfile.open('/tmp/website-editor-reviewed-source.tar.gz','w:gz') as archive:
+              for name in files:
+                  if not name or not (name in roots or name.startswith(prefixes)): continue
+                  if any(part.startswith('.env') for part in name.split('/')): continue
+                  if any(part in name.lower() for part in ['credential','service-account','serviceaccount','private-key']): continue
+                  p = pathlib.Path(name)
+                  image = name.startswith('apps/erp-next/public/') and p.suffix in {'.png','.jpg','.jpeg','.webp','.svg'}
+                  if p.suffix not in extensions and not image: continue
+                  data = subprocess.check_output(['git','show','HEAD:'+name])
+                  info = tarfile.TarInfo(name); info.size=len(data); archive.addfile(info,io.BytesIO(data))
+          pathlib.Path('/tmp/website-editor-source-ref.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD']).decode())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-editor-reviewed-source
+          path: |
+            /tmp/website-editor-reviewed-source.tar.gz
+            /tmp/website-editor-source-ref.txt
+          retention-days: 2
