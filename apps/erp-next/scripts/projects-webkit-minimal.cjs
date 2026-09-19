@@ -35,7 +35,7 @@ window.runDiagnostic = mode => {
     return;
   }
   if(mode === 'pending-reload') {
-    for(let i = 0; i < 16; i++) fetch('/delayed?i='+i).then(r => r.text()).catch(e => record('caught', e.message));
+    for(let i = 0; i < 2; i++) fetch('/delayed?i='+i).then(r => r.text()).catch(e => record('caught', e.message));
     return;
   }
   throw Error('Unknown diagnostic case');
@@ -46,7 +46,10 @@ const secondary = http.createServer((req, res) => res.writeHead(200, {'Content-T
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if(url.pathname === '/delayed') {
-    held.add(res); res.on('close', () => held.delete(res)); return;
+    // Leave a connection available for navigation; delayed responses are always bounded.
+    held.add(res);
+    const timer = setTimeout(() => { if(!res.destroyed)res.writeHead(200, {'Content-Type':'text/plain'}).end('Delayed response'); }, 2000);
+    res.on('close', () => { clearTimeout(timer); held.delete(res); }); return;
   }
   if(url.pathname === '/asset') return res.writeHead(200, {'Content-Type':'text/plain'}).end('Same-origin asset');
   res.writeHead(200, {'Content-Type':'text/html', 'Cache-Control':'no-store',
@@ -72,7 +75,7 @@ async function main() {
           await page.evaluate(mode => window.runDiagnostic(mode), mode);
           if(mode === 'pending-reload') {
             await new Promise((resolve,reject) => {
-              const start = Date.now(); const wait = () => held.size >= 6 ? resolve() : Date.now()-start > 3000 ? reject(Error('Expected pending native requests')) : setTimeout(wait,10); wait();
+              const start = Date.now(); const wait = () => held.size >= 2 ? resolve() : Date.now()-start > 3000 ? reject(Error('Expected pending native requests')) : setTimeout(wait,10); wait();
             });
             await page.reload();
           } else if(mode === 'pagehide-fetch') await page.goto(origin+'/replacement');
@@ -90,6 +93,11 @@ async function main() {
           evidence.push(row);
           console.log(JSON.stringify({engine,mode,playwrightPageErrors:pageErrors.length,trueUncaught:uncaught.length,caught:domEvents.filter(e=>e.type==='caught').length,diagnostics:pageErrors.map(e=>e.message)}));
           fs.writeFileSync(path.join(output,'observations.json'),JSON.stringify(evidence,null,2));
+        } catch(error) {
+          const domEvents = await page.evaluate(() => JSON.parse(sessionStorage.getItem('diagnostic-events')||'[]')).catch(() => null);
+          evidence.push({engine,mode,pageErrors,failedRequests,domEvents,externalRequests:outside.length,diagnosticFailure:String(error)});
+          fs.writeFileSync(path.join(output,'observations.json'),JSON.stringify(evidence,null,2));
+          throw error;
         } finally { for(const res of held)res.destroy(); held.clear(); await context.close(); }
       }
     } finally { await browser.close(); }
