@@ -1,0 +1,64 @@
+name: Projects reviewed flow isolated source validation
+on:
+  push:
+    branches: ['chore/projects-reviewed-flow-validation']
+permissions:
+  contents: write
+concurrency:
+  group: projects-reviewed-flow-isolated-source
+  cancel-in-progress: false
+jobs:
+  validate-and-propose:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/chore/projects-reviewed-flow-validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare exact locally reviewed source in disposable checkout
+        run: python3 .github/projects-reviewed-workbench.py apply
+      - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/reviewed-flow-tools" >> "$GITHUB_ENV"
+      - name: Install isolated test tooling without production credentials
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0 esbuild@0.25.9
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: All Project unit contracts
+        run: node --test functions/projects/*.test.js
+      - name: Full ERP typecheck
+        run: npm run typecheck --prefix apps/erp-next
+      - name: Real Auth Firestore progress lifecycle templates contention and pause
+        run: >-
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node --test functions/projects/progress-lifecycle.emulator.cjs'
+      - name: Actual dialogs in Chromium and WebKit with isolated transport
+        run: node apps/erp-next/scripts/projects-central-reviewed-flow-browser.cjs
+      - name: Full ERP production build with existing prebuild gates intact
+        run: npm run build --prefix apps/erp-next
+      - name: Create reviewed Git objects only, no ref update or deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/projects-reviewed-workbench.py propose
+      - name: Retain proposed source manifest and synthetic UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projects-reviewed-proposed-source
+          path: |
+            reviewed-proposed-commit.json
+            projects-reviewed-flow-evidence/
+          if-no-files-found: warn
+          retention-days: 3
