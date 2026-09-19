@@ -13,12 +13,14 @@ on:
       - 'src/services/firebase.ts'
       - 'scripts/patchAppointmentSettingsV11.cjs'
       - 'website-editor.emulator.json'
+      - 'firebase.website-content.json'
+      - 'services/website-content/**'
       - 'docs/ai/website-editor/**'
       - '.github/workflows/website-visual-editor-review.yml'
+      - '.github/workflows/website-content-release.yml'
 
 permissions:
   contents: read
-
 concurrency:
   group: website-editor-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -33,7 +35,7 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - run: node --check functions/websiteContentApi.js && node --check functions/websiteContentFirebase.js && node --test functions/websiteContentService.test.js
+      - run: node --check functions/websiteContentApi.js && node --check functions/websiteContentHttp.js && node --check functions/websiteContentFirebase.js && node --test functions/websiteContentService.test.js
 
   browser-review:
     runs-on: ubuntu-latest
@@ -92,6 +94,23 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Install isolated emulator test tools
-        run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 firebase-admin@13.4.0 --no-audit --no-fund
-      - name: Validate candidate rules and real persistence against local demo emulators only
-        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs && node functions/websiteContentPersistence.test.cjs"
+        run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 firebase-admin@13.4.0 typescript@6.0.0 --no-audit --no-fund
+      - name: Verify candidate regressions, real persistence, unchanged production rules and live HTTP client
+        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only auth,firestore,storage "node functions/websiteContentRules.test.cjs && node functions/websiteContentPersistence.test.cjs && node functions/websiteContentLiveFlow.test.cjs"
+
+  release-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Build the isolated codebase and verify its only export
+        env:
+          FIREBASE_CONFIG: '{"projectId":"demo-demac-website","storageBucket":"demo-demac-website.appspot.com"}'
+        run: |
+          node services/website-content/build.cjs
+          npm install --prefix .website-content-build --no-audit --no-fund
+          node -e "const a=require('node:assert/strict'); a.deepEqual(Object.keys(require('./.website-content-build/websiteContentApi')), ['websiteContentApi']); console.log('Website-only export verified; no deployment executed.');"
