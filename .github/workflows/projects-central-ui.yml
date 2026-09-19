@@ -80,6 +80,8 @@ jobs:
           "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
       - name: Build exact ERP with isolated central UI activation
         run: npm run build --prefix apps/erp-next
+      - name: Native teardown reproduction must trigger and verify active reads
+        run: node apps/erp-next/scripts/projects-navigation-native-control.cjs
       - name: Field component states in Chromium and WebKit with synthetic transport
         run: node apps/erp-next/scripts/projects-central-field-browser.cjs
       - name: Actual ERP browser to authenticated handler to Firestore emulators
