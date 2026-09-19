@@ -1,3 +1,4 @@
+import { OfficeBookingResponseError } from './office-booking-errors';
 import type {
   AppointmentRecipientSelection,
   BookingContact,
@@ -331,7 +332,7 @@ async function callOfficeBookingAuthority<T>(
     }) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
+      throw new OfficeBookingResponseError(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`, response.status, payload.error?.code ?? '', typeof payload.error?.details?.reason === 'string' ? payload.error.details.reason : '');
     }
     return payload;
   } catch (error) {
