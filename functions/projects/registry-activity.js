@@ -80,7 +80,7 @@ async function loadProjectActivity({ db, transaction, project, afterId }) {
         const visit = projectCanonicalWorkVisit(raw);
         if ([visit.startedAt, visit.completedAt].some((value) => value !== undefined && !Number.isFinite(Date.parse(value)))) throw new Error('invalid visit timestamp');
         if (visit.workOrderId !== order.id || visit.appointmentId !== appointment.id || visit.customerId !== project.customerId || visit.propertyId !== project.propertyId) throw new Error('identity conflict');
-        fieldVisits.push({ id: visit.id, status: visit.status, startedAt: visit.startedAt || null, completedAt: visit.completedAt || null, source: `workVisits/${visit.id}` });
+        fieldVisits.push({ id: visit.id, status: visit.status, previousVisitId: visit.previousVisitId || null, startedAt: visit.startedAt || null, completedAt: visit.completedAt || null, source: `workVisits/${visit.id}` });
       } catch { issues.push({ code: 'field_visit_reconciliation_required', workOrderId: order.id, visitId: raw.id }); }
     }
     let review = null;

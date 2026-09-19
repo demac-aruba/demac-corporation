@@ -59,7 +59,7 @@ jobs:
         run: >-
           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
-          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs && node --experimental-strip-types --test functions/projects/booking-client-handoff.emulator.cjs'
+          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs && node --experimental-strip-types --test functions/projects/booking-client-handoff.emulator.cjs && node --test functions/projects/registry-execution.emulator.cjs'
 
   combined-budget-regression:
     # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.

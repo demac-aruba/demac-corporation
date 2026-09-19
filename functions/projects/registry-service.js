@@ -1,10 +1,11 @@
 'use strict';
 const d = require('./registry-domain');
 const { loadProjectActivity } = require('./registry-activity');
+const { loadProjectExecution } = require('./registry-execution');
 const { prepareImportTransaction, readImportSource } = require('./registry-import-transaction');
 const COLLECTIONS = Object.freeze({ records: 'projectRecords', numbers: 'projectNumbers', links: 'projectAppointmentLinks', events: 'projectEvents', receipts: 'projectCommandReceipts', settings: 'businessSettings' });
 const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan']);
-const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'preview_legacy_import', 'get_import_source']);
+const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'preview_legacy_import', 'get_import_source']);
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
 
@@ -83,6 +84,10 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         if (input.action === 'get_import_source') {
           d.allowedKeys(data, ['projectId']);
           return readImportSource({ db, transaction, project, principal });
+        }
+        if (input.action === 'get_execution') {
+          d.allowedKeys(data, ['projectId', 'afterId'], ['projectId']);
+          return loadProjectExecution({ db, transaction, project, afterId: data.afterId });
         }
         if (input.action === 'get_activity') {
           d.allowedKeys(data, ['projectId', 'afterId'], ['projectId']);
