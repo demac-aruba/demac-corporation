@@ -1,0 +1,112 @@
+name: Projects isolated resume checkpoint
+on:
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths: ['.github/workflows/projects-resume-checkpoint.yml']
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/projects-canonical-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export tracked source only for exact-head local review
+        run: |
+          python3 - <<'PY'
+          import subprocess, zipfile, pathlib, json
+          paths=subprocess.check_output(['git','ls-files','-z'],text=True).split('\0')
+          roots=('apps/erp-next/','functions/','docs/ai/','.github/workflows/')
+          extensions={'.ts','.tsx','.js','.cjs','.mjs','.css','.json','.md','.yml','.yaml'}
+          manifest={}
+          with zipfile.ZipFile('projects-resume-source.zip','w',zipfile.ZIP_DEFLATED) as out:
+              for name in paths:
+                  if not name: continue
+                  p=pathlib.Path(name)
+                  if not (name.startswith(roots) or name in ['AGENTS.md','firebase.projects-emulator.json']): continue
+                  if p.suffix not in extensions or any(part.startswith('.env') or part in ['node_modules','secrets','credentials'] for part in p.parts): continue
+                  if p.is_symlink() or not p.is_file(): continue
+                  out.write(p,name)
+                  manifest[name]=subprocess.check_output(['git','hash-object',name],text=True).strip()
+              out.writestr('SOURCE-MANIFEST.json',json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'blobs':manifest},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: projects-resume-source
+          path: projects-resume-source.zip
+          retention-days: 1
+  webkit-differential:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/projects-canonical-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+      NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true'
+      NEXT_PUBLIC_PROJECTS_LEGACY_IMPORT_ENABLED: 'false'
+      NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-ui-tools" >> "$GITHUB_ENV"
+      - name: Install only isolated test dependencies
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - run: npm run build --prefix apps/erp-next
+      - name: Record unchanged baseline, then test transparent same-origin promise identity
+        run: |
+          mkdir -p projects-differential-evidence
+          set +e
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth 'node apps/erp-next/scripts/projects-central-browser.cjs' > projects-differential-evidence/baseline.log 2>&1
+          echo "$?" > projects-differential-evidence/baseline.exit
+          set -e
+          cp -r projects-central-ui-evidence projects-differential-evidence/baseline
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          p=Path('apps/erp-next/scripts/projects-central-browser.cjs')
+          assert subprocess.check_output(['git','hash-object',str(p)],text=True).strip()=='bf14414d8a9f226235f6e8373553cd93da015b61'
+          s=p.read_text()
+          assert s.count('window.fetch=async(input,init)=>{')==1
+          s=s.replace('window.fetch=async(input,init)=>{','window.fetch=(input,init)=>{')
+          needle='if(target.origin===location.origin)return nativeFetch(input,init);\n'
+          assert s.count(needle)==1
+          s=s.replace(needle,needle+'      return (async () => {\n')
+          needle='    };\n  },{uid:actor.localId'
+          assert s.count(needle)==1
+          s=s.replace(needle,'      })();\n'+needle)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- apps/erp-next/scripts/projects-central-browser.cjs > projects-differential-evidence/candidate.patch
+          for attempt in 1 2 3; do
+            rm -rf projects-central-ui-evidence
+            set +e
+            "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth 'node apps/erp-next/scripts/projects-central-browser.cjs' > "projects-differential-evidence/candidate-$attempt.log" 2>&1
+            result=$?
+            set -e
+            echo "$result" > "projects-differential-evidence/candidate-$attempt.exit"
+            cp -r projects-central-ui-evidence "projects-differential-evidence/candidate-$attempt"
+            if [ "$result" != 0 ]; then tail -80 "projects-differential-evidence/candidate-$attempt.log"; exit "$result"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: projects-native-fetch-differential
+          path: projects-differential-evidence/
+          retention-days: 3
+          if-no-files-found: error
