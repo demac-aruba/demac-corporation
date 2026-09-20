@@ -31,6 +31,17 @@ expenses, stock, appointments and accounting state are not changed by this comma
 The local evidence view is read-only, exposes provenance and missing currency, and does
 not add potentially duplicate expense/cost rows or certify an unknown balance as zero.
 
+The combined review found one further P2: #515's strict budget arithmetic throws on
+incomplete legacy hours accepted by the earlier shallow storage validator. The validator
+now requires finite non-negative estimated/actual/scheduled hours, preserving malformed
+originals behind recovery instead of crashing. Acceptance and browser scenarios include
+missing hours; no historical value is defaulted or rewritten. The standalone #515 browser
+harness also lacked compile-time environment values for current clients. A separate local
+companion commit `530b7cb0` on #515 supplies explicit synthetic/default-off flags; it changes
+no product behavior or assertion. Combined CI pins that reviewed successor and runs its
+browser contract. Publish the companion before the dependent #514 continuation only after
+release authorization; neither branch was pushed in this task.
+
 Builder checks are recorded with exact candidate/combined provenance in
 [merge readiness](../tasks/projects-merge-readiness-20260920.md). Initial browser harness
 failures were retained: the response-loss injector needed explicit support for the new

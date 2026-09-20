@@ -375,7 +375,9 @@ export function isStoredBrowserProject(value: unknown): value is BrowserProject 
   return typeof project.id === 'string' && project.id.trim().length > 0
     && typeof project.projectNumber === 'string' && typeof project.name === 'string'
     && Array.isArray(project.phases) && Array.isArray(project.assignments)
-    && Array.isArray(project.materials) && Array.isArray(project.expenses) && Array.isArray(project.costEntries);
+    && Array.isArray(project.materials) && Array.isArray(project.expenses) && Array.isArray(project.costEntries)
+    && [project.estimatedLaborHours, project.actualLaborHours, project.scheduledFutureHours]
+      .every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0);
 }
 
 export function readOriginalBrowserProjects(fallback: unknown): unknown {

@@ -101,7 +101,7 @@ async function verifyLocalCostEvidence(page, engineName) {
   await page.waitForFunction(()=>{const sidebar=document.querySelector('.erp-sidebar');return !sidebar||sidebar.getBoundingClientRect().right<=1||getComputedStyle(sidebar).display==='none';});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'Local evidence fits mobile');
   await page.screenshot({path:path.join(ART,`${engineName}-local-cost-evidence-mobile.png`),fullPage:true});
-  for(const original of ['{"projects":invalid-json',JSON.stringify({version:1,selectedProjectId:'DEMO-PRJ-VRF-001',projects:[{...source,id:'DEMO-PRJ-VRF-001'}]})]) {
+  for(const original of ['{"projects":invalid-json',JSON.stringify({version:1,selectedProjectId:'DEMO-PRJ-VRF-001',projects:[{...source,id:'DEMO-PRJ-VRF-001'}]}),JSON.stringify({version:1,selectedProjectId:source.id,projects:[{...source,estimatedLaborHours:undefined}]})]) {
     // Let this route finish its sidebar availability/prefetch reads before the next
     // independent storage-load scenario. All DOM/page errors remain fatal below.
     await page.waitForLoadState('networkidle');

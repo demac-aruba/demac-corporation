@@ -37,7 +37,7 @@ not a dependency on QBO or a newly invented expense service.
 
 | Source | Verified capability | Boundary |
 |---|---|---|
-| `projectRegistry` / `projectActivityEvents` | Governed budgets, reasons, versions, original/current and audit; existing Projects authority | No expense ledger or accounting balance created |
+| `projectRecords` / `projectEvents` / `projectCommandReceipts` | Governed budgets, reasons, versions, original/current, audit and exact retries; existing Projects authority | No expense ledger or accounting balance created |
 | `demac.erp-next.projects.preview.v1` | Existing `expenses` and `costEntries`, including local approved/manual evidence | Browser only; incomplete currency, actor, attachment and allocation contracts; original must be backed up/reconciled before central adoption |
 | `vanMaintenanceLogs` / `saveCanonicalVanMaintenanceLog` | Real manual operating costs tied to a Van, date, category, vendor, actor and timestamps | No Project/WO/phase/currency/approval/evidence allocation contract; do not distribute to Projects automatically |
 | `inventoryMovements` | Existing Inventory quantities and traceable identity | Does not provide historical valuation; issue is not proof of consumption, current catalog price is not historical cost |

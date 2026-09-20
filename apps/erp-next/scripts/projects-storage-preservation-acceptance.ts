@@ -17,6 +17,8 @@ async function main() {
     { ...good, projects: [normal, { ...normal, description: 'Duplicate with different manual data' }] },
     { ...good, projects: [normal, { id: 'LEGACY', expenses: [{ amount: 99 }] }] },
     { version: 2, projects: [normal] },
+    ...(['estimatedLaborHours', 'actualLaborHours', 'scheduledFutureHours'] as const).flatMap(field =>
+      [undefined, null, -1, 'unknown'].map(value => ({ ...good, projects: [{ ...normal, [field]: value }] }))),
   ];
   for (const source of [...originals.map(value => JSON.stringify(value)), '{"projects":invalid-json']) {
     records.set(BROWSER_PROJECTS_PREVIEW_KEY, source); writes = 0;

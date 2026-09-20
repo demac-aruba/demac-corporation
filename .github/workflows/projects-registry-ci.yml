@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      BUDGET_FIX_SHA: 3622bc5a4871b6ce7019af02f7354a5cc23171ee
+      BUDGET_FIX_SHA: 530b7cb0fbe433cd96525b737cb54617d0d9bf44
       GCLOUD_PROJECT: demo-demac-projects
       NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true'
       NEXT_PUBLIC_PROJECTS_LEGACY_IMPORT_ENABLED: 'false'
@@ -135,6 +135,8 @@ jobs:
           "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
           'node --test functions/projects/booking-public.emulator.cjs && node apps/erp-next/scripts/projects-central-browser.cjs && node apps/erp-next/scripts/projects-drawer-browser.cjs && node apps/erp-next/scripts/office-lifecycle-browser.cjs'
+      - name: Combined legacy budget warning browser contract with synthetic authority
+        run: BUDGET_TEST_TOOLS="$PROJECTS_UI_TOOLS" node apps/erp-next/scripts/project-budget-browser.cjs
       - name: Combined real Projects Functions entrypoint, HTTP, Auth and Firestore
         run: node functions/projects/run-http-emulator.cjs
       - uses: actions/upload-artifact@v4
