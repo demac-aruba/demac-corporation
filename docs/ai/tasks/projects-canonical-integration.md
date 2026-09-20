@@ -3,7 +3,11 @@
 ## Current checkpoint — 2026-09-20
 
 See [the final continuation and merge-readiness record](projects-merge-readiness-20260920.md).
-Application HEAD is `0fd500fbe2363fcfc091688d7432aa8fd1a53ba0`; actual combined #515 tree
+Application HEAD is `376cf709654545208b4f64957b582e5e5117c40b`; candidate with corrected
+benchmark is `632e2498e19df6f544eb25233a2f0c75678a4e3f`, combined tree
+`7b7880ed2f2b8293bde7650b4c16a4383775f4ab`. Real bootstrap endpoint is prepared/default-off,
+9 Functions HTTP cases and226 combined focused contracts passed. Benchmark v2 preserves
+readOnly and supersedes the previous measurement. Prior build/UI tree
 `e464d4dc138a94aaeea75d3fbc955b5651e58b0c` passed Node22/24 builds,70 Auth/Firestore cases,
 central Chromium/WebKit,18 drawer and20 lifecycle scenarios. Lifecycle stale-intent,
 lost-response recovery, atomic Project follow-ups and caller text-preservation defects are

@@ -2,8 +2,16 @@
 
 ## Final continuation review — 2026-09-20
 
-Current application HEAD `0fd500fbe2363fcfc091688d7432aa8fd1a53ba0`; independent read-only
-Laplace reviewed lifecycle intent/receipts, transactional follow-ups and actual UI callers.
+Current application HEAD `376cf709654545208b4f64957b582e5e5117c40b`, benchmark candidate
+`632e2498e19df6f544eb25233a2f0c75678a4e3f`; independent read-only Laplace reviewed the
+default-off registry endpoint, actual bootstrap, explicit CORS, revocation and emulator/CI
+isolation. Its Node PATH finding was corrected; no pending scoped findings. Builder ran
+9 actual Functions HTTP cases on candidate and combined #515, 206 Projects units and 226
+combined focused cases. Epicurus reviewed the transaction-options benchmark correction
+and the 2,670-request v2 output, with old measurements explicitly superseded. Reviews were static
+plus evidence inspection, not independent emulator runs.
+
+Earlier Laplace review at 0fd500fb covered lifecycle intent/receipts, transactional follow-ups and actual UI callers.
 Its cleared-text, mixed-line and generated-description findings were corrected and covered
 by the builder's20 Chromium/WebKit cases. Final scoped static verdict: no pending findings.
 Epicurus verified that existing sources do not yet provide integrated historical Project

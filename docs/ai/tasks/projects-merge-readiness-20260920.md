@@ -9,15 +9,19 @@ merge, deployment, activation, permission change, migration or real-data write o
 
 - Continuation: `feature/projects-completion-audit-20260919`, based on #514 at
   `a99402ece30f7042105daea1feac8d34174b1453`.
-- Application HEAD: `0fd500fbe2363fcfc091688d7432aa8fd1a53ba0`.
-- New commits: `56795766` (lifecycle intent, recovery, atomic remaining-work association)
-  and `0fd500fb` (preserve per-line text when editing scope).
+- Application HEAD: `376cf709654545208b4f64957b582e5e5117c40b` (real registry entrypoint).
+- Candidate including corrected benchmark: `632e2498e19df6f544eb25233a2f0c75678a4e3f`.
+- Earlier application commits: `56795766` (lifecycle intent, recovery, atomic remaining-work
+  association) and `0fd500fb` (preserve per-line text when editing scope).
 - Previous application commits `9ab34aae`, `70a83eef`, `27458a10` remain included.
 - #515 stays separate at `3622bc5a4871b6ce7019af02f7354a5cc23171ee`.
 - Disposable local integration used `git merge --no-commit --no-ff` of #515 into
-  application HEAD; no conflicts. Exact combined tree:
-  `e464d4dc138a94aaeea75d3fbc955b5651e58b0c`. This is an actual checkout/build/runtime
-  verification, not only merge-tree analysis. No remote branch was advanced.
+  candidate HEAD; no conflicts. Final actual combined tree:
+  `7b7880ed2f2b8293bde7650b4c16a4383775f4ab`. Endpoint verification ran on the immediately
+  preceding tree `9fdc0ccc5ad91d4c00703df70e09213578116c86`; their only difference is the
+  benchmark correction. The prior full-build/browser tree is
+  `e464d4dc138a94aaeea75d3fbc955b5651e58b0c`; its entire apps/erp-next tree is unchanged.
+  These are actual checkouts/runtime tests, not only merge-tree analysis. No remote advanced.
 - Main reference remains `cb01c4696a3a35dbc23c9989bc54473fa67356b5`. Remote #514/#515
   were still draft/open/unmerged. The 15 passing remote workflows at a99402e are historical;
   local continuation checks must not be represented as new GitHub check runs.
@@ -56,10 +60,14 @@ Projects off. Exact replay verifies source/link provenance and current authoriza
 legacy incomplete provenance fails closed for reconciliation. No historical repair ran.
 
 The production Office facade and partial wrapper share the same Booking instance and
-Project adapter. PROJECTS_REGISTRY_ENABLED still defaults off. Projects HTTP/registry
-remains intentionally unexported from Firebase bootstrap/index; deployment integration,
-explicit origins and activation must be completed under the release gate, not inferred
-from emulator adapters. No claim of deployed central adoption is made.
+Project adapter. PROJECTS_REGISTRY_ENABLED still defaults off. Firebase bootstrap now
+exports projectsRegistry through the existing HTTP adapter/service, with bounded resources,
+lazy initialization and revocation-aware Firebase authentication. New PROJECTS_ALLOWED_ORIGINS
+configuration defaults empty and permits only explicit origins. Invalid configuration fails
+closed without breaking bootstrap discovery. No real origin or flag was configured.
+The deployment adapter keeps allowLegacyImport:false; existing import safeguards were not
+weakened. See [the prepared endpoint/release contract](projects-registry-endpoint.md).
+Deployment, real import/recovery and central adoption remain unverified/unapproved.
 
 Operational move now updates appointment/assignment/Work Order capacity-end fields to
 the actual owned slots, including lunch gaps. Recorded work end remains separate.
@@ -71,7 +79,7 @@ optional AWG planning-budget fixes remain in force.
 
 Node 22.23.2 is the Functions target. Next 16.2.11, Playwright 1.57.0,
 firebase-tools 15.30.0 and Java 21 stayed unchanged. Combined ERP builds also passed on
-Node 24.18.0, matching the current Vercel ERP build setting. No manifest/lock update.
+Node 24.18.0, matching the current Vercel ERP build setting. No dependency or lockfile update.
 Both task-installed binaries removed during the previous disk incident were restored.
 
 | Check | Result and boundary |
@@ -79,7 +87,9 @@ Both task-installed binaries removed during the previous disk incident were rest
 | Full ERP build | PASS on combined tree, Node 22 and 24, including all six existing prebuild suites |
 | ERP typecheck | PASS; generated Next config restored after builds |
 | Firebase source validation | PASS on Node 22 |
-| Projects units | 202/202 PASS on combined checkout |
+| Projects units | 206/206 PASS after adding actual bootstrap/default-off/configuration cases |
+| Latest combined focused contracts | 226/226 PASS: Projects, lifecycle, partial, facade-partial and Field bootstrap |
+| Actual Firebase Functions HTTP | 9/9 PASS on candidate and #515 combination, real Node22/Auth/Firestore; protected operational collections unchanged |
 | Projects + affected lifecycle/partial/facade contracts | 290/290 PASS on Node 22 |
 | Booking Authority regression | 163/163 PASS |
 | Field Authority | 354/354 plus 47 pretest scenarios PASS |
@@ -99,6 +109,14 @@ appointment/Work Orders/locks. The mixed-text and generated-description regressi
 real browser-to-server cases. Prior Field UI 16/16 evidence uses explicit synthetic transport.
 No physical device, deployed TLS/CORS/index or real WhatsApp execution was certified.
 
+The broad build/browser/regression rows above were executed at 0fd500fb/e464d4dc and are
+retained with that provenance. The new endpoint changes no ERP source or Booking/Field
+implementation. Its affected bootstrap/transport gates were rerun at 376cf709/9fdc0ccc;
+the benchmark alone was rerun at 632e2498/7b7880ed. These are not remote CI runs on a new SHA.
+The Functions emulator loaded only projectsRegistry, selected from the actual bootstrap,
+so no operational trigger could react to fixtures. An initial harness invocation rejected
+rules outside its temporary project; copying the current rules unchanged fixed packaging.
+
 One initial combined build rejected an external dependency junction; the checkout received
 a real copy of the same installed ERP dependencies and both full builds passed. One budget
 script invocation used the wrong working directory; rerunning from apps/erp-next passed
@@ -111,28 +129,41 @@ identified and verified fixes for cleared text, distinct line text and legacy ge
 description handling. Final scoped verdict: no pending findings; static review, not an
 independent emulator run. Epicurus audited actual cost/time sources, identified automatic
 release effects and required the combined and target-runtime checks now completed.
+Laplace then independently reviewed the actual endpoint/runner/CI. A PATH reproducibility
+finding was fixed by pinning child Node to the runner's Node22 and asserting the test runtime;
+the final combined HTTP run passed. No pending scoped findings. Epicurus independently
+reviewed the benchmark correction and output; neither reviewer ran those emulator suites.
 
 ## Performance evidence and limits
 
+Methodology v2 supersedes the earlier Node22 and Node24 results: the old instrumentation
+discarded transaction options and accidentally measured read-write transactions. The wrapper
+now forwards the service's readOnly option and asserts it for every measured request. The
+new run is tied to 632e2498/combined tree 7b7880ed, generated 2026-09-20T04:47:42Z.
 Repeated the same baseline a99402e/current benchmark on Node 22 with 50 distinct synthetic
 users, concurrency 4/10/25/50, three alternating batches per route, 2,670 measured requests,
 zero errors, unchanged protected collections. SDK query/snapshot counts did not increase.
 
 | Route, concurrency 50 | Baseline/current p95 ms | Queries / max document snapshots |
 |---|---|---|
-| list_plans | 359.2 / 353.6 | 1 / 22 |
-| get_plan | 129.7 / 159.9 | 0 / 3 |
-| get_activity | 280.2 / 360.8 | 3 / 23 |
-| get_execution | 356.8 / 339.9 | 4 / 39 |
-| get_materials | 304.7 / 288.6 | 1 / 47 |
+| list_plans | 128.5 / 145.0 | 1 / 22 |
+| get_plan | 64.9 / 84.6 | 0 / 3 |
+| get_activity | 187.2 / 204.1 | 3 / 23 |
+| get_execution | 335.8 / 302.1 | 4 / 39 |
+| get_materials | 256.7 / 275.2 | 1 / 47 |
 
-The detail and activity tails increased in this run; this is not claimed as an overall
-speed improvement. Registry service/domain source is byte-identical to baseline; activity
+Four of five p95 values increased in this run; this is neither a global speed improvement
+nor sufficient evidence to attribute the differences to code. Registry service/domain logic
+is unchanged from baseline (only the deployment comment changed); activity
 has the scheduledSlots-array compatibility change. In-process warm emulator results do not
 establish a production SLA or visual selector latency. Current lifecycle timings are in its
 browser evidence, but controlled before/after visual selector, HTTP availability/confirmation
-and deployed performance validation remain part of B. Earlier Node 24 results are preserved
-separately, not presented as measurements of this final combined run.
+and deployed performance validation remain part of B. Earlier Node22/24 outputs are preserved
+as superseded methodology-v1 evidence, not current service-latency measurements. At concurrency
+4, p95 and p99 both equal the maximum of only 12 samples. The fixture repeatedly reads one
+Project, has one user role, no concurrent writes and no complete pagination traversal.
+Counters describe instrumented SDK snapshots, not billing; one transaction attempt does not
+exclude internal RPC retries. The lower absolute times versus v1 do not prove product optimization.
 
 ## Deployment mapping and automatic effects
 
@@ -172,7 +203,7 @@ unsafe writers over adopted central data without a reviewed compatibility decisi
 | Gate | Status / concrete closure |
 |---|---|
 | A: agreed implementation/review | Corrected slice and combined source reviewed. Full scope still lacks approved historical material valuation, project expenses and individual approved project time. Identify authorized system/file plus stable document/line/currency/status and Project/WO keys, or owner explicitly changes this delivery's scope. Catalog prices, demo expenses and attendance are not substitutes. |
-| B: integration and staging | Local combined PASS. Need named isolated Firebase/staging project, authorized access, deployment entrypoint/origins/flags/index verification and controlled browser/HTTP performance evidence. No live activation is authorized. |
+| B: integration and staging | Local combined and actual Functions HTTP PASS; deployment entrypoint prepared. Need named isolated Firebase/staging project, authorized access, deployed origins/flags/IAM/index verification and controlled browser/HTTP performance evidence. No live activation is authorized. |
 | C: data and recovery | Need original Projects/templates browser origin/profile, Matthijs canonical IDs, protected DB/Storage/source exports, relational reconciliation and isolated restore exercise. Synthetic dry-run/recovery is not a real backup certificate. |
 | D: publication authority | Not granted. Present exact candidate, environment, staged operations and automatic migration/deployment effects for owner approval only after preceding applicable gates close. |
 
