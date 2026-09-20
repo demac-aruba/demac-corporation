@@ -776,12 +776,20 @@ export function ProjectsPhaseWorkspaceV2() {
       <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Clean phase-planning branch</strong><p>Project plans, expenses and cost entries on this page belong to this browser. They are not shared or reconciled central totals. Customer selection uses canonical CRM. Original hidden records are preserved.</p></div></div>
       {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
+      {storageIssue ? <div className={styles.metrics}>
+        <Metric code="PR" label="Project records" value="Not verified" note="Original browser source requires review" tone="amber" />
+        <Metric code="AR" label="At risk" value="Not verified" note="Incomplete original source" tone="amber" />
+        <Metric code="HR" label="Recorded local hours" value="Unknown" note="Browser snapshot · not reconciled" tone="purple" />
+        <Metric code="AF" label="Recorded local material costs" value="Unknown" note="Browser snapshot · not shared or reconciled" tone="amber" />
+      </div> : <>
+      <p className={customerStyles.inlineNote}>The following metrics are recorded browser values, not verified shared totals. A recorded zero does not certify zero Project spending or work.</p>
       <div className={styles.metrics}>
-        <Metric code="PR" label="Project records" value={storageIssue ? 'Not verified' : String(state.projects.length)} note="Visible browser records only" tone="blue" />
-        <Metric code="AR" label="At risk" value={storageIssue ? 'Not verified' : String(atRisk)} note="Based on local recorded values" tone={atRisk ? 'amber' : 'green'} />
-        <Metric code="HR" label="Recorded local hours" value={storageIssue ? 'Unknown' : `${number(portfolioHours, 1)}h`} note="Browser snapshot · not reconciled" tone="purple" />
-        <Metric code="AF" label="Recorded local material costs" value={storageIssue ? 'Unknown' : money(portfolioSpend)} note="Browser snapshot · not shared or reconciled" tone="green" />
+        <Metric code="PR" label="Project records" value={String(state.projects.length)} note="No seeded samples" tone="blue" />
+        <Metric code="AR" label="At risk" value={String(atRisk)} note="Based on recorded project actuals" tone={atRisk ? 'amber' : 'green'} />
+        <Metric code="HR" label="Actual project hours" value={`${number(portfolioHours, 1)}h`} note="Across visible Project records" tone="purple" />
+        <Metric code="AF" label="Material actuals" value={money(portfolioSpend)} note="Recorded Project consumption" tone="green" />
       </div>
+      </>}
       <article className={styles.panel}>
         <div className={styles.portfolioToolbar}><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Project number, customer, location…" /></label><strong>{filtered.length} project{filtered.length === 1 ? '' : 's'}</strong></div>
         {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>{storageIssue ? 'Project records require recovery review' : 'No Project records found in this browser'}</h2><p>A Vercel preview cannot read browser storage belonging to demac-aruba.com. Nothing was copied, deleted, or changed in CRM or Scheduling. Create a Project here by selecting an actual CRM customer to validate the workflow.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
