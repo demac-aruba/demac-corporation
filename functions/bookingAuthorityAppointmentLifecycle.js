@@ -76,6 +76,17 @@ function isTemporaryHoldAppointment(appointment) {
   return cleanText(appointment?.status, 40).toLowerCase() === BOOKING_CREATE_MODES.TEMPORARY_HOLD;
 }
 
+function assertUnfinishedSchedulingRecord(record, appointmentId, workOrderId) {
+  const status = cleanText(record?.status, 40).toLowerCase();
+  if (["completed", "completada", "completado", "facturada", "invoiced", "pagada", "paid"].includes(status)
+      || record?.actualCompletedAt
+      || (Array.isArray(record?.lifecycleHistory) && record.lifecycleHistory.some(event => event.kind === "technician_complete"))) {
+    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Completed work requires review and cannot be edited or rescheduled as unfinished work.",
+      { reason: "completed_work_requires_reconciliation", appointmentId, ...(workOrderId ? { workOrderId } : {}) });
+  }
+}
+
 function primaryAssignment(value = {}) {
   const assignments = Array.isArray(value.assignments) ? value.assignments : [];
   return assignments.find((item) => cleanText(item?.role, 40) !== "support")
@@ -505,6 +516,23 @@ function createBookingAppointmentLifecycle({
       }
       const currentTemporaryHold = isTemporaryHoldAppointment(current);
       const appointmentState = currentTemporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED;
+      assertUnfinishedSchedulingRecord(current, id);
+      const oldWorkOrderIds = [...new Set([
+        ...(Array.isArray(current.workOrderIds) ? current.workOrderIds : []),
+        ...(current.workOrderId ? [current.workOrderId] : []),
+      ])];
+      // Read every affected primary/support before any write. A completed support
+      // must not be silently cancelled when a replacement option has fewer rows.
+      for (const workOrderId of oldWorkOrderIds) {
+        const snapshot = await transaction.get(db.collection(collections.workOrders).doc(workOrderId));
+        const order = snapshot.exists ? snapshot.data() : null;
+        if (!order || order.appointmentId !== id) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "The appointment Work Order history requires reconciliation before changing its schedule.",
+            { reason: "work_order_identity_conflict", appointmentId: id, workOrderId });
+        }
+        assertUnfinishedSchedulingRecord(order, id, workOrderId);
+      }
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
@@ -609,7 +637,6 @@ function createBookingAppointmentLifecycle({
       }), id);
       const workOrderIds = workOrders.map((item) => item.id);
       const newWorkOrderIds = new Set(workOrderIds);
-      const oldWorkOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds : [];
       const oldLockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [];
       const actorInfo = actorFields(actor);
       const previousSchedule = scheduleSnapshot(current);

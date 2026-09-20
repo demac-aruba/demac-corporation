@@ -179,6 +179,42 @@ function fixture(extra = {}) {
   return { db, lifecycle, provider };
 }
 
+test("rescheduling cannot reset completed primary/support history, including completion before the transaction", async () => {
+  const command = { appointmentId: "APT-LIVE-1", offerId: "OFR-RESCHEDULE-1", offerVersion: 1,
+    optionId: "OPT-NEW", reason: "Synthetic review", actor: { id: "office-test" } };
+  for (const terminal of [{ status: "Completada" }, { status: "Facturada" }, { status: "Pagada" },
+    { actualCompletedAt: "2098-12-01T11:00:00.000Z" }, { lifecycleHistory: [{ kind: "technician_complete" }] }]) {
+    for (const support of [false, true]) {
+      const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+        "workVisits/visit-untouched": { status: "completed" },
+        "inventoryMovements/movement-untouched": { quantity: 1 },
+      });
+      const appointment = db.read("appointments/APT-LIVE-1");
+      const workOrderId = support ? "WO-SUPPORT" : appointment.workOrderIds[0];
+      if (support) {
+        appointment.workOrderIds.push(workOrderId);
+        db.store.set(`workOrders/${workOrderId}`, { appointmentId: appointment.appointmentId, status: "Confirmada" });
+      }
+      // Another authority completes after the preflight read, before commit validation.
+      let before;
+      provider.revalidateSelection = async ({ option }) => {
+        Object.assign(db.read(`workOrders/${workOrderId}`), terminal);
+        before = structuredClone([...db.store]);
+        return { available: true, option };
+      };
+      await assert.rejects(lifecycle.rescheduleAppointment(command), error =>
+        error.details?.reason === "completed_work_requires_reconciliation");
+      assert.deepEqual([...db.store], before, "No appointment, WO, offer, lock or evidence changes on rejection");
+    }
+  }
+  const { db, lifecycle } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+    "appointments/APT-LIVE-1": { ...appointmentSeed(), status: "completed" },
+  });
+  const before = structuredClone([...db.store]);
+  await assert.rejects(lifecycle.rescheduleAppointment(command), error => error.details?.reason === "completed_work_requires_reconciliation");
+  assert.deepEqual([...db.store], before);
+});
+
 test("operational move and details edit classification preserve their lifecycle semantics", () => {
   assert.equal(normalizeChangeKind("operational_move"), "operational_move");
   assert.equal(normalizeChangeKind("details_edited"), "details_edited");
