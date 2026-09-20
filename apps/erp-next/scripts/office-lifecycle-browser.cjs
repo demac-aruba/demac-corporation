@@ -80,7 +80,7 @@ async function main() {
   for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]]) {
     const browser = await engine.launch({ headless: true });
     try {
-      for (const scenario of ['edit', 'cancel', 'reschedule', 'stale', 'cancel-stale', 'invalid-ack', 'edit-cleared', 'reschedule-cleared', 'edit-generated']) {
+      for (const scenario of ['edit', 'cancel', 'reschedule', 'stale', 'cancel-stale', 'invalid-ack', 'edit-cleared', 'reschedule-cleared', 'edit-generated', 'edit-generated-add']) {
         current = await fixture(scenario); const context = await browser.newContext({ viewport: { width: scenario === 'edit' ? 390 : 1280, height: 900 }, serviceWorkers: 'block' });
         await context.addInitScript(({ fixture, session }) => {
           window.__fixture = fixture; sessionStorage.setItem('demac.erp-next.firebase.session.v1', JSON.stringify(session));
@@ -100,7 +100,7 @@ async function main() {
           // The board still contains the old text; the GET must own both display and input.
           await db.collection('appointments').doc(current.appointmentId).set({ workLines: current.expectedLines }, { merge: true });
         }
-        if (scenario === 'edit-generated') {
+        if (scenario.startsWith('edit-generated')) {
           const state = await readState(current.appointmentId);
           const preset = success(await call('list_presets', {})).presets.find(row => row.id === state.appointment.workLines[0].presetId);
           assert.ok(preset);
@@ -108,6 +108,10 @@ async function main() {
           const line = { ...state.appointment.workLines[0], customerFacingDescription: current.legacyDescription };
           await db.collection('appointments').doc(current.appointmentId).set({ workLines: [line] }, { merge: true });
           current.expectedLines = [{ ...line, quantity: 3, customerFacingDescription: `Scheduled work: 3 × ${preset.label}.` }];
+          if (scenario === 'edit-generated-add') {
+            delete current.expectedLines;
+            current.expectedGeneratedText = `Scheduled work: 2 × ${preset.label}; 1 × Check Up.`;
+          }
         }
         await page.goto(origin); const baseline = await readState(current.appointmentId);
         if (scenario.startsWith('cancel')) {
@@ -133,10 +137,11 @@ async function main() {
             await page.getByRole('region', { name: 'Current canonical appointment' }).waitFor();
             assert.equal(await page.getByLabel('Customer-facing work description').inputValue(), '');
             assert.equal(await page.getByLabel('Technician instructions', { exact: true }).inputValue(), '');
-          } else if (scenario === 'edit-generated') {
+          } else if (scenario.startsWith('edit-generated')) {
             await page.getByRole('region', { name: 'Current canonical appointment' }).waitFor();
             assert.equal(await page.getByLabel('Customer-facing work description').inputValue(), current.legacyDescription);
-            await page.getByRole('button', { name: '＋', exact: true }).click();
+            if (scenario === 'edit-generated-add') await page.getByRole('button', { name: /^Check Up/ }).click();
+            else await page.getByRole('button', { name: '＋', exact: true }).click();
           } else await page.getByLabel('Customer-facing work description').fill('Synthetic revised scope');
           const save = page.getByRole('button', { name: 'Save changes', exact: true }); await save.waitFor();
           await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Save changes' && !button.disabled));
@@ -155,6 +160,13 @@ async function main() {
         if (current.expectedLines) {
           const textOnly = rows => rows.map(row => ({ id: row.id, quantity: row.quantity, description: row.customerFacingDescription || '', instructions: row.technicianInstructions || '' }));
           assert.deepEqual(textOnly(committed.appointment.workLines), textOnly(current.expectedLines), 'Canonical cleared/mixed text survives edit and reschedule');
+        }
+        if (current.expectedGeneratedText) {
+          const lines = committed.appointment.workLines;
+          assert.deepEqual(lines.map(line => [line.presetId, line.quantity]), [['standard_service', 2], ['check_up', 1]]);
+          assert.ok(lines.every(line => line.customerFacingDescription === current.expectedGeneratedText));
+          assert.equal(lines[0].technicianInstructions, 'Synthetic original instructions');
+          assert.equal(lines[1].technicianInstructions || '', '');
         }
         const raw = await page.evaluate(() => sessionStorage.getItem(Object.keys(sessionStorage).find(key => key.startsWith('demac.booking.lifecycle.pending')))); assert.ok(raw);
         await page.reload(); await recovery.waitFor(); current.release = true; await recovery.click();

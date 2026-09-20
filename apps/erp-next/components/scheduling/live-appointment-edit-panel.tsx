@@ -136,6 +136,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   const [instructions, setInstructions] = useState(appointment.technicianInstructions || '');
   const [descriptionChanged, setDescriptionChanged] = useState(false);
   const [instructionsChanged, setInstructionsChanged] = useState(false);
+  const [preserveLineDescriptions, setPreserveLineDescriptions] = useState(false);
   const [loading, setLoading] = useState(true);
   const [appointmentToken, setAppointmentToken] = useState('');
   const [canonicalAppointment, setCanonicalAppointment] = useState<Record<string, unknown> | null>(null);
@@ -220,6 +221,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         setInstructions(canonicalInstructions);
         setDescriptionChanged(false);
         setInstructionsChanged(false);
+        setPreserveLineDescriptions(new Set(rawLines.map(line => text(line.customerFacingDescription))).size > 1);
         const byId = new Map(activePresets.map((preset) => [preset.id, preset]));
         lastAutoRef.current = isGeneratedDescription(canonicalDescription, nextLines, byId)
           ? canonicalDescription
@@ -243,7 +245,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     // may regenerate the suggested description.
     if (!draftDirtyRef.current) return;
     // Distinct line descriptions remain independent until the shared field is edited.
-    if (!descriptionChanged && new Set(lines.map(line => text(line.customerFacingDescription))).size > 1) return;
+    if (!descriptionChanged && preserveLineDescriptions) return;
     const previousAuto = lastAutoRef.current;
     let nextDescription = description;
     if (!description.trim() || description.trim() === previousAuto.trim()) nextDescription = generatedDescription;
