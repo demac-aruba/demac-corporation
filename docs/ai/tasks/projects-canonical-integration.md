@@ -1,6 +1,27 @@
 # Task: finish Projects without replacing Scheduling or Field authority
 
-## Current checkpoint — 2026-09-20
+## Current checkpoint — operational clarification, 2026-09-20
+
+The [owner's clarified scope](projects-operational-cost-scope-20260920.md) permits confirmed
+manual operational costs without QuickBooks. Future photo/audio/AI capture and QBO sync
+are documented future work, not blockers for this delivery. Existing budgets/revisions,
+manual records and raw browser originals are preserved. Candidate `cf7b141d` adds audited
+material revisions and read-only local expense/cost provenance; unavailable shared balances
+stay unknown. Existing recovery/import contracts are reused. No general expense writer,
+new accounting/Inventory/payroll authority or AI processing was created.
+
+Independent source and caller review found/fixed two active preservation paths and a
+client action allowlist omission. The real disposable #515 combination is conflict-free
+at final tree `966b0d2e9102c15a7da474444fa251e72a7de711`, using the separate test-only
+companion `530b7cb0` on #515. Its synthetic/default-off browser flags repair an inherited
+harness incompatibility; CI pins that successor. The companion must be published first
+if release is later authorized. Node22/24 combined builds, current central browsers,
+real Functions HTTP and legacy budget browser passed. See the current
+[merge-readiness record](projects-merge-readiness-20260920.md) for exact verification.
+Isolated deployed staging, original/protected backups, identity reconciliation, restoration
+and release authorization remain pending. No publication or real data write occurred.
+
+## Previous endpoint checkpoint — historical, 2026-09-20
 
 See [the final continuation and merge-readiness record](projects-merge-readiness-20260920.md).
 Application HEAD is `376cf709654545208b4f64957b582e5e5117c40b`; candidate with corrected
@@ -13,7 +34,7 @@ central Chromium/WebKit,18 drawer and20 lifecycle scenarios. Lifecycle stale-int
 lost-response recovery, atomic Project follow-ups and caller text-preservation defects are
 closed. Target Node22 and disk/dependency recovery are complete. Vercel mapping is now
 verified read-only; previews share production Firebase configuration and main triggers
-production deployments plus WhatsApp migrations. Source/scope, isolated staging, real
+production deployments plus WhatsApp migrations. At that checkpoint source/scope, isolated staging, real
 backup/reconciliation and publication approval remain open. Full delivery is not ready.
 
 ## Previous checkpoint — 2026-09-19 local / 2026-09-20 UTC (historical)

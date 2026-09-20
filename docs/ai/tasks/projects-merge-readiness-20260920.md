@@ -1,10 +1,85 @@
 # Projects merge readiness — 2026-09-20
 
-## Decision and exact source
+## Current operational-cost scope — owner clarification
+
+QuickBooks and the future photo/audio expense assistant are **not prerequisites** for
+operational Projects. The [2026-09-20 scope](projects-operational-cost-scope-20260920.md)
+supersedes earlier source/scope requests that made accounting integration a blocker.
+Confirmed manual expenses are valid operational evidence; paid/accounted/reconciled/synced
+states are separate. No new expense ledger or AI capture was implemented.
+
+Current application candidate: `cf7b141d63b09d7c36236cee2506318224c6afc2`, including
+`625704e8` (audited monetary revisions and original-source preservation). Material budget
+creation/revision retains original/current, exact AWG cents, provenance and reason/actor/time.
+Older unknown originals remain unknown; imported baselines identify the captured snapshot.
+Metadata cannot silently change the amount. Expenses do not inflate budgets; Van/slot/time
+planning remains separate. Existing local expense/cost rows are visible read-only with
+provenance, missing currency and local-only status. Unverified allocations do not yield
+certified balances or zero spending. Inventory's absent historical valuation is no longer
+described as a dependency on QBO.
+
+Loading the active browser planner no longer deletes filtered originals. Both local writers
+preserve raw source and reject malformed/duplicate storage; selection rereads current data.
+Scheduling's legacy bridge preflights the original before booking. Shared locking and
+post-network revalidation preserve later costs, while the existing pending-link limitation
+remains explicit. Raw-backup/import tooling is reused; no real migration occurred.
+
+Independent reviewers audited actual sources and active write callers. Two P1 findings
+(client action allowlist and remaining legacy destructive writer) were fixed and rechecked.
+See [review evidence and residual limits](../reviews/projects-operational-cost-preservation.md).
+
+The initial combined source attempt conflicted only in the portfolio risk-label area.
+The follow-up keeps recovery metrics outside the unchanged shared metric block, preserving
+both semantics. Further combined review found incomplete local hour records could crash
+#515's strict arithmetic. Those sources now enter recovery without writes; 18 invalid
+variants were independently checked in memory and missing-hours recovery ran in browsers.
+The companion #515 commit `530b7cb0fbe433cd96525b737cb54617d0d9bf44`, based on remote
+`3622bc5a`, fixes only its browser harness's explicit synthetic/default-off environment.
+Combined CI pins that successor and includes its browser suite. Publish the companion first
+only after release authorization; no remote has been advanced. Final actual combined tree:
+`966b0d2e9102c15a7da474444fa251e72a7de711`, conflict-free and not committed as a merge.
+
+| Current verification | Evidence and exact boundary |
+|---|---|
+| Final combined ERP | Full Node22.23.2 and Node24.18.0 builds PASS, all seven prebuild suites; generated config restored; Node22 typecheck PASS |
+| Projects / affected contracts | 210 Projects and 230 overlapping focused contracts PASS; includes lifecycle/partial/facade/Field bootstrap; Firebase source validation PASS |
+| Booking / Field | 163 Booking; 354 Field plus 47 pretest PASS on ca8bc3d1; relevant Functions code is identical in final candidate |
+| Auth/Firestore | 72 PASS: registry26/import18/bridge11/public3/handoff3/execution11 at 625704e8; relevant backend/client contracts unchanged in final candidate |
+| Real Functions HTTP | Final tree: 9/9 PASS, actual bootstrap export selected alone; Node22/Auth/Firestore, protected collections unchanged |
+| Central client journal | 19 PASS, including exact monetary amount/reason across reload; six response-loss-injector controls PASS |
+| Budget / phase / original storage | 20 budget acceptance cases, phase planner and raw-storage preservation PASS; final build runs preservation including invalid time sources |
+| Final central browser | Chromium/WebKit PASS on Node22 build: material/time revisions, original/current, explicit clearing, lost response/reload/exact retry, local expense provenance, malformed/modified-sample/missing-hours originals, 390px |
+| Central drawer / lifecycle browser | 18 / 20 PASS on ca8bc3d1; later local storage-shape guard is separately exercised by final local recovery and budget browser |
+| Legacy budget browser | 10/10 PASS on final combination, Node22; companion standalone 10/10 PASS on Node24. Real drawer/local writer with explicitly synthetic authority; actual capacity conflicts still reject |
+
+Independent review of the final combined fixes reports no remaining scoped findings.
+Historical results below retain their original SHA; the current ERP source has changed
+and does not inherit the older endpoint-era build/browser certificate. All reported runs
+are local; no new remote CI checks, real backup, staging deployment or production validation
+are implied. `pruebas-costos-operativos.json` and the output manifest record final provenance.
+
+Final benchmark v2 on `966b0d2e`, generated 2026-09-20T11:40:22.051Z: Node22, 50 distinct
+synthetic users, concurrency4/10/25/50, three alternating batches, 2,670 measured reads,
+zero errors and unchanged protected collections. At concurrency50, p95 base/current ms:
+list163.8/149.3, detail82.4/79.0, activity259.2/266.5, execution363.5/335.9,
+materials214.3/207.3. Query/max-snapshot counts remain 1/22,0/3,3/23,4/39,1/47.
+This is a warm in-process emulator measurement, not a causal speedup claim or HTTP/visual/
+production SLA. Small fixtures, one role, no concurrent writes/pagination and limited tail
+sample size remain constraints. Prior endpoint v2 is retained as historical; v1 remains
+superseded because its wrapper dropped transaction options.
+
+**Publication remains gated by isolated deployed staging, real-source backups,
+identity/relationship reconciliation, isolated restoration and final owner authorization.**
+The owner clarification preserves these gates. Available manual Van maintenance costs do
+not have verified Project allocations and cannot be arbitrarily distributed. Individual
+approved time coverage remains limited; neither QBO nor a future expense assistant is a
+dependency for accurately presenting that limitation in the current operational scope.
+
+## Previous endpoint checkpoint — historical exact source
 
 **Full requested delivery is not ready for merge/publication.** The authorized local
 implementation and isolated integration work below is complete and reviewable; missing
-source decisions, staging and real recovery gates have not been waived. No push, main/PR
+staging and real recovery gates have not been waived. No push, main/PR
 merge, deployment, activation, permission change, migration or real-data write occurred.
 
 - Continuation: `feature/projects-completion-audit-20260919`, based on #514 at
@@ -198,11 +273,11 @@ remain rejected. Routine cancellation/rescheduling may be temporarily unavailabl
 an uncoordinated rollout. Preserve previous code/config artifacts, but do not restore old
 unsafe writers over adopted central data without a reviewed compatibility decision.
 
-## Remaining gates and required owner input
+## Remaining gates after the scope clarification
 
 | Gate | Status / concrete closure |
 |---|---|
-| A: agreed implementation/review | Corrected slice and combined source reviewed. Full scope still lacks approved historical material valuation, project expenses and individual approved project time. Identify authorized system/file plus stable document/line/currency/status and Project/WO keys, or owner explicitly changes this delivery's scope. Catalog prices, demo expenses and attendance are not substitutes. |
+| A: agreed implementation/review | Operational scope is now explicit: preserve and expose available budgets/manual evidence with source limitations; QBO and AI capture are future work. Audited revisions and preservation fixes reviewed. Shared expense allocation/valuation and full individual time are not fabricated. See current-candidate verification above; no new expense authority was invented. |
 | B: integration and staging | Local combined and actual Functions HTTP PASS; deployment entrypoint prepared. Need named isolated Firebase/staging project, authorized access, deployed origins/flags/IAM/index verification and controlled browser/HTTP performance evidence. No live activation is authorized. |
 | C: data and recovery | Need original Projects/templates browser origin/profile, Matthijs canonical IDs, protected DB/Storage/source exports, relational reconciliation and isolated restore exercise. Synthetic dry-run/recovery is not a real backup certificate. |
 | D: publication authority | Not granted. Present exact candidate, environment, staged operations and automatic migration/deployment effects for owner approval only after preceding applicable gates close. |
@@ -217,7 +292,7 @@ Existing employeeTimesheets.workOrderAttendanceSegments includes partial after-h
 segments; the finding is insufficient integrated coverage, not an absence of every time
 record. Those segments do not establish complete approved person/project execution.
 
-Next work depends on the source/scope decision and isolated environment access. Keep the
+Next release work depends on isolated environment access and original-source recovery evidence. Keep the
 commits and evidence; transfer reviewed continuation commits to #514 only after push effects
 and release scope are approved. Recheck both PR heads immediately before publishing. #515
 remains separate; the combined tree records compatibility, not a remote merge decision.
