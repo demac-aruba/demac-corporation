@@ -20,8 +20,12 @@ const { getFirestore } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
 const app = initializeApp({ projectId: PROJECT }, 'projects-performance');
 const db = getFirestore(app), auth = getAuth(app), measurements = new AsyncLocalStorage();
-const measuredDb = { collection: db.collection.bind(db), runTransaction: callback => db.runTransaction(transaction => {
-  const stats = measurements.getStore(); if (stats) stats.transactionAttempts++;
+const measuredDb = { collection: db.collection.bind(db), runTransaction: (callback, options) => db.runTransaction(transaction => {
+  const stats = measurements.getStore();
+  if (stats) {
+    assert.equal(options?.readOnly, true, 'Measured reads must preserve the service transaction mode');
+    stats.transactionAttempts++;
+  }
   const read = async (method, targets) => {
     const result = await transaction[method](...targets);
     if (stats) {
@@ -37,7 +41,7 @@ const measuredDb = { collection: db.collection.bind(db), runTransaction: callbac
     if (name === 'get' || name === 'getAll') return (...targets) => read(name, targets);
     const value = Reflect.get(target, name); return typeof value === 'function' ? value.bind(target) : value;
   } }));
-}) };
+}, options) };
 const make = source => require(source).createProjectRegistryService({ db: measuredDb, enabled: true,
   verifyIdToken: (token, revoked) => auth.verifyIdToken(token, revoked) });
 const services = { baseline: make(path.join(baseline, 'functions/projects/registry-service.js')), current: make('./registry-service') };
@@ -128,6 +132,7 @@ async function main() {
   }
   assert.deepEqual(await snapshot(), before, 'All measured requests are read-only');
   fs.writeFileSync(output, JSON.stringify({ project: PROJECT, generatedAt: new Date().toISOString(), baseline: 'a99402ece30f7042105daea1feac8d34174b1453',
+    methodologyVersion: 2, transactionOptionsForwarded: true, nodeVersion: process.version,
     scope: 'Warm in-process registry service with real Auth/Firestore emulators; 50 distinct synthetic users; no browser/network/production SLA inference.',
     limitations: 'Three batches per concurrency; p99 at small N is descriptive maximum, not a stable tail estimate. Read counts are observed SDK snapshots, not billed production reads.',
     fixture: { projects: 20, appointments: 4, orders: 4, visits: 4, events: 16, materials: 45 }, protectedCollectionsUnchanged: true, results }, null, 2));
