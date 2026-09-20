@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
-import { BROWSER_PROJECTS_PREVIEW_KEY, createProjectsPreviewState, commitBrowserProjectsPreviewMutation, requireStoredProjectForBooking } from '../lib/browser-projects';
+import { BROWSER_PROJECTS_PREVIEW_KEY, BROWSER_PROJECTS_PREVIEW_WRITE_LOCK, createProjectsPreviewState, commitBrowserProjectsPreviewMutation, requireStoredProjectForBooking } from '../lib/browser-projects';
 import { loadProjectsWithoutSamples, saveProjectsWithoutSamples, commitProjectsWithoutSamples, sanitizeProjectsState } from '../lib/project-record-sanitizer';
 
 async function main() {
   const records = new Map<string, string>(); let writes = 0;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let lockRequests = 0; let queued: Promise<unknown> = Promise.resolve();
+  // This is a synthetic browser, not Node24's process-local Web Locks implementation.
+  // Model the shared browser lock explicitly; real browser coverage uses native locks.
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: {
+    request: (name: string, operation: () => unknown) => {
+      assert.equal(name, BROWSER_PROJECTS_PREVIEW_WRITE_LOCK); lockRequests++;
+      const result = queued.then(operation); queued = result.catch(() => undefined); return result;
+    },
+  } } });
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: {
     getItem: (key: string) => records.get(key) ?? null,
     setItem: (key: string, value: string) => { writes++; records.set(key, value); },
@@ -62,6 +72,10 @@ async function main() {
   const unavailable = loadProjectsWithoutSamples();
   assert.equal(unavailable.recoveryRequired, true); assert.match(unavailable.sourceError!, /not an empty/);
   delete (globalThis as { window?: unknown }).window;
+  assert.ok(lockRequests > 0, 'Both writer families exercise the same browser lock');
+  if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+  else Reflect.deleteProperty(globalThis, 'navigator');
   console.log('PASS: originals preserved on reads and writes; malformed, duplicate, modified sample and unavailable storage fail closed; valid updates and stale selection preserve evidence.');
 }
-void main().catch(error => { console.error(error); process.exitCode = 1; });
+const completionDeadline = setTimeout(() => { console.error('FAIL: storage acceptance did not complete'); process.exitCode = 1; }, 10000);
+void main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => clearTimeout(completionDeadline));

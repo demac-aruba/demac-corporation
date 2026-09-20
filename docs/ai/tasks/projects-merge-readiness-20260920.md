@@ -41,7 +41,7 @@ only after release authorization; no remote has been advanced. Final actual comb
 
 | Current verification | Evidence and exact boundary |
 |---|---|
-| Final combined ERP | Full Node22.23.2 and Node24.18.0 builds PASS, all seven prebuild suites; generated config restored; Node22 typecheck PASS |
+| Final combined ERP | Full Node22.23.2 and Node24.18.0 builds PASS; generated config restored; Node22 typecheck PASS. Node24's storage test initially lacked a completion sentinel despite exit0: its test-only lock fixture/deadline was corrected and complete acceptance rerun on both runtimes. All seven prebuild suites are required; the incomplete first storage invocation is not counted as proof. |
 | Projects / affected contracts | 210 Projects and 230 overlapping focused contracts PASS; includes lifecycle/partial/facade/Field bootstrap; Firebase source validation PASS |
 | Booking / Field | 163 Booking; 354 Field plus 47 pretest PASS on ca8bc3d1; relevant Functions code is identical in final candidate |
 | Auth/Firestore | 72 PASS: registry26/import18/bridge11/public3/handoff3/execution11 at 625704e8; relevant backend/client contracts unchanged in final candidate |
@@ -57,6 +57,8 @@ Historical results below retain their original SHA; the current ERP source has c
 and does not inherit the older endpoint-era build/browser certificate. All reported runs
 are local; no new remote CI checks, real backup, staging deployment or production validation
 are implied. `pruebas-costos-operativos.json` and the output manifest record final provenance.
+The final evidence commit additionally fixes that storage test harness; shipping application
+code remains identical to the application candidate. Native browser lock behavior is unchanged.
 
 Final benchmark v2 on `966b0d2e`, generated 2026-09-20T11:40:22.051Z: Node22, 50 distinct
 synthetic users, concurrency4/10/25/50, three alternating batches, 2,670 measured reads,

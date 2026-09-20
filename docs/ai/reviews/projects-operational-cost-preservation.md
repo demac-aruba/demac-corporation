@@ -50,6 +50,13 @@ requests. The injector's exact-payload/single-commit assertions and the browser 
 fatal DOM/unclassified-error controls remain in force. Storage scenarios wait for the
 preceding route's network reads to settle before the next reload.
 
+Evidence packaging also rejected the Node24 build log because the storage acceptance
+had no completion sentinel, despite a zero process exit. Node24's native Web Locks were
+not a valid lock implementation for its fake browser fixture. The test now supplies an
+explicit serialized shared-lock fixture and a completion deadline that fails an unfinished
+run. Full acceptance passed on Node22 and Node24. This test-only correction does not alter
+shipping storage/lock behavior; actual browser tests continue to use native browser locks.
+
 Residual limits: legacy Booking plus browser link is still a two-stage flow and can report
 pending after a concurrent source change; the central bridge is the atomic path. Local
 records do not establish shared approval/currency/history. A Project source lacking verified
