@@ -36,6 +36,9 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# Isolated Projects Functions emulator source and private local debug logs
+/.projects-http-emulator-*/
+
 # generated native folders
 /ios
 /android

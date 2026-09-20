@@ -15,7 +15,7 @@ const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_exe
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
 
-/** Not exported by bootstrap/index; creation requires explicit deployment AND server activation. */
+/** Planning authority; the deployment adapter defaults off and requires server activation. */
 function createProjectRegistryService({ db, verifyIdToken, enabled = false, allowLegacyImport = false, clock = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.runTransaction !== 'function' || typeof db.collection !== 'function' || typeof verifyIdToken !== 'function') throw new Error('Trusted Firestore and token verifier required.');
   function ref(collection, identifier) { return db.collection(collection).doc(identifier); }

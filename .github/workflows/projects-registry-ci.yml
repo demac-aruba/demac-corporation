@@ -3,6 +3,9 @@ on:
   pull_request:
     paths:
       - 'functions/projects/**'
+      - 'functions/projectsRegistry.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package*.json'
       - 'apps/erp-next/lib/projects/booking-handoff.ts'
       - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
       - 'functions/bookingAuthorityFirestore.js'
@@ -21,6 +24,9 @@ on:
     branches: ['feature/projects-canonical-integration']
     paths:
       - 'functions/projects/**'
+      - 'functions/projectsRegistry.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package*.json'
       - 'apps/erp-next/lib/projects/booking-handoff.ts'
       - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
       - 'functions/bookingAuthorityFirestore.js'
@@ -69,6 +75,10 @@ jobs:
           "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
           'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs && node --test functions/projects/booking-public.emulator.cjs && node --experimental-strip-types --test functions/projects/booking-client-handoff.emulator.cjs && node --test functions/projects/registry-execution.emulator.cjs'
+      - name: Actual Firebase Functions bootstrap and HTTP transport against demo Auth and Firestore
+        env:
+          PROJECTS_UI_TOOLS: ${{ runner.temp }}/projects-tools
+        run: node functions/projects/run-http-emulator.cjs
 
   combined-budget-regression:
     # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
@@ -125,6 +135,8 @@ jobs:
           "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
           'node --test functions/projects/booking-public.emulator.cjs && node apps/erp-next/scripts/projects-central-browser.cjs && node apps/erp-next/scripts/projects-drawer-browser.cjs && node apps/erp-next/scripts/office-lifecycle-browser.cjs'
+      - name: Combined real Projects Functions entrypoint, HTTP, Auth and Firestore
+        run: node functions/projects/run-http-emulator.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

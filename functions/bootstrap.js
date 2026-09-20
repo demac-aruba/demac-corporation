@@ -2,6 +2,7 @@ const core = require("./index");
 const officeBookingAuthorityFacade = require("./officeBookingAuthorityFacade");
 const fieldOperationsAuthority = require("./fieldOperationsAuthority");
 const workOrderApplicationService = require("./workOrderApplicationService");
+const projectsRegistry = require("./projectsRegistry");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
@@ -42,6 +43,7 @@ module.exports = {
   ...officeBookingAuthorityFacade,
   ...fieldOperationsAuthority,
   ...workOrderApplicationService,
+  ...projectsRegistry,
   ...wacliGateway,
   ...wacliOutboundMediaUpload,
   ...customerAgentCommunication,
