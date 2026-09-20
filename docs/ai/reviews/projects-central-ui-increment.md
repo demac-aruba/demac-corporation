@@ -1,5 +1,23 @@
 # Review: central Projects workspace and transport
 
+## Independent continuation review — 2026-09-19
+
+Builder: root Codex. Read-only independent reviewers: Epicurus (sources/UI) and Laplace
+(Booking/Field), application commits9ab34aae/70a83eef/27458a10 based on #514/a99402e.
+Corrected: P1 mutable historical Van attribution; P2 exact cent loss; P2 General Work
+blocked after phase creation; P2 completed primary/support reset (builder-tested guard).
+Epicurus reviewed final UI/helper/recovery/gates with no further material defects and
+ran25 focused tests PASS/0skipped. Laplace reviewed Field source/callers; its warning on
+unknown VAN-looking aliases was corrected. Neither reviewer repeated emulators/browsers.
+Builder evidence is listed in the canonical task. Do not describe terminal guard tests
+as independently executed by Laplace.
+
+Decision: focused corrections reviewed; FULL RELEASE BLOCKED. Remaining inherited
+reschedule replay/stale-intent/cancel preconditions, absent cost/person-hour sources,
+staging/combined validation and real backup/restore/Matthijs are not waived. Disk exhausted;
+see canonical checkpoint for recovery/next steps. No production approval. Earlier solo
+review below is historical and remains explicitly distinct.
+
 ## Mode and scope
 
 Solo Maintainer Adversarial Review by the implementation author, ChatGPT. This is NOT an

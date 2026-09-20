@@ -1,5 +1,96 @@
 # Task: finish Projects without replacing Scheduling or Field authority
 
+## Current checkpoint — 2026-09-19 local / 2026-09-20 UTC
+
+The older increment below is historical. Live verification: #514 draft/open/unmerged at
+a99402ece30f7042105daea1feac8d34174b1453; #515 draft/open/unmerged at
+3622bc5a4871b6ce7019af02f7354a5cc23171ee; main cb01c4696a3a35dbc23c9989bc54473fa67356b5.
+All15 returned #514 PR workflows succeeded, run_attempt1. Not proof of deployed adoption.
+
+Continuation branch `feature/projects-completion-audit-20260919`, isolated from existing
+worktrees. Local application commits:
+- 9ab34aae: existing estimate-revision UI/recovery, exact optional AWG cents, Service
+  preservation, General Project Work even with phases, browser acceptance/portable assets.
+- 70a83eef: immutable Field start/resume Van captured inside assignment transaction from
+  known catalog alias; per-interval attribution never uses today's WO Van. Historical
+  missing evidence preserves visit minutes but leaves aggregate unknown. No backfill.
+- 27458a105de6f7e9368a1afb48697103a2bb4f31: reject rescheduling completed/invoiced/paid
+  primary/support work before writes, including concurrent completion. No history reset.
+
+No push, PR merge, deployment, activation, permission change, migration or real-data write.
+Return reviewed commits to #514 after release gates close. #515 remains separate.
+`git merge-tree --write-tree 27458a10 3622bc5a4871b6ce7019af02f7354a5cc23171ee` has no
+conflicts: tree f0dd9310eea9b2688c1fe0328ef7d75d000e7ba4. Final combined build/runtime was
+blocked by disk exhaustion before disposable checkout creation; prior CI is not a substitute.
+
+Deep Review: independent read-only Epicurus (sources/UI) and Laplace (Booking/Field).
+Epicurus found MAX_SAFE_INTEGER cent precision issue (fixed with BigInt) and ran25 focused
+unit contracts PASS. Laplace found mutable historical Van attribution (fixed), completed
+WO reset (guard added), reschedule replay and stale-offer gaps (still open). Known alias
+requirement addresses reviewer warning about VAN-looking physical IDs. Final terminal guard
+has builder adversarial tests, not an independently executed test by Laplace.
+
+Verified synthetic evidence:
+- Typecheck and full ERP build including all6 prebuild suites PASS. Generated Next config
+  changes restored; final typecheck after restoration PASS.
+- Central browser -> real handler -> Auth/Firestore: Chromium/WebKit PASS,390px mobile,
+  original66h/current70h15m, Service metadata preservation, stale version, lost response,
+  reload/exact retry during writesPaused, cross-user read and unchanged protected stores.
+- Drawer18/18; Field component16/16 (explicit synthetic read transport); execution
+  Auth/Firestore11/11; Projects units198/198; Booking157/157; Field354+47 pretest PASS.
+- Focused Field audit/mutation/execution52/52; independent UI/asset/recovery controls25/25.
+- Windows Next export produced nested segments for dotted requested URLs. Test-only index
+  serves only existing exact assets, rejects ambiguity/missing files. Navigation oracle,
+  active-read proof and DOM/pageerror controls are unchanged; no weakened assertions.
+
+Node24.18.0/npm11.16.0, Next16.2.11, Playwright1.57.0, firebase-tools15.30.0, Java21.
+Functions targetNode22 still needs target validation. No dependency manifest/lock changes;
+child locks untracked, followed existing CI install with package-lock=false. No physical
+devices, deployed CORS/TLS/indexes or real WhatsApp tested.
+
+Performance script `functions/projects/performance.emulator.cjs`: same synthetic data,
+50 distinct identities, concurrency4/10/25/50,3 batches/route, alternating base/current,
+2670 reads,0 errors, unchanged protected stores. At50 users p95 base/current ms:
+list175.2/160.4; detail115.8/113.2; activity330.5/292.3; Field454.0/519.2;
+materials379.6/385.6. Query/snapshot counts unchanged; Field response+64 bytes for4 IDs.
+Warm emulator in-process timing, not visual/HTTP/production SLA. Field tail increase is
+recorded, not claimed as improvement. Selector/availability/confirmation latency pending.
+Existing Performance & Health histogram instrumentation preserved, not activated.
+
+Frozen remaining work / NOT READY:
+1. No functioning QuickBooks adapter/historical valuation/project-expense source found.
+   Attendance/after-hours/crew do not supply full approved person/project time. Asked
+   Christian for actual systems/files and explicit WO/project keys; do not invent authorities.
+2. Inherited Booking defects: lost-response reschedule retry rejects closed offer; UI
+   creates new request/discards validation. Two stale offers can revert quantity4->2.
+   Cancel lacks expected-state token. Finish existing bookingIdempotency actor/payload
+   receipts, canonical snapshot preconditions and actual edit/picker/cancel recovery callers.
+   Terminal guard does not close these distinct contracts. Isolated development authorized.
+3. C: exhausted. Clean task baseline worktree removed via Git; recursive cache cleanup
+   auto-review rejected ('blocked by policy'), not bypassed. Exact single task-installed
+   files removed safely to save checkpoint: functions/node_modules/@img/sharp-win32-x64/lib/
+   libvips-42.dll and apps/erp-next/node_modules/@next/swc-win32-x64-msvc/
+   next-swc.win32-x64-msvc.node. REINSTALL BOTH after space recovery before further tests.
+   Failed document write restored from HEAD before this checkpoint. Asked for>=2GB or
+   another drive; preserve previous worktrees/browser data. Original application commits safe.
+4. Vercel project detail fails internal idOrName validation; effective root/env/flags and
+   Firebase backend/indexes unverified. READY Git previews a99402e, production cb01c
+   confirmed. No push because preview isolation unknown. Need isolated staging project/base.
+5. Original browser origin/profile/raw Projects+templates and Matthijs IDs unavailable.
+   No real DB/Storage export or restore drill. Need protected backups, isolated relational
+   restore validation and approved reconciliation; checksum/fixtures are not certification.
+6. A partial; B incomplete; C incomplete; D not granted. No publication recommendation.
+
+Rollback: code, writesPaused and data restore are distinct authorized operations. Pausing
+in emulator preserved reads/exact committed recovery/ordinary Booking. Do not revert adopted
+central data to stale browser copies. Verify old-code compatibility or forward-correct;
+preserve incident/post-backup work; never restore a whole old database over newer bookings.
+Actual RTO/RPO remain unmeasured.
+
+Next: restore disk/reinstall2 binaries, finish Booking receipts/preconditions/UI recovery,
+recreate isolated final combined checkout and run affected gates. In parallel obtain real
+cost/time source, isolated staging identity and original browser/Matthijs canonical IDs.
+
 ## Context
 
 Christian approved implementation after the Projects audit, requesting clean, efficient
