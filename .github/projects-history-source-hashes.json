@@ -1,0 +1,17 @@
+{
+  "functions/projects/history-reconciliation.emulator.cjs": "cc5f4a17852738aaa1dea3d1b01ee9dd8e6c4fce",
+  "functions/projects/history-reconciliation.js": "d1257e1c9752aedbd7af58b62622a44a75634207",
+  "functions/projects/history-reconciliation.test.js": "94b7d504acdb56c8dc5edd2e9124dce5e6128215",
+  "functions/projects/registry-http.js": "4800aa0f730631e5992855448f303fb99d1422a3",
+  "functions/projects/registry-materials.js": "15a8137f9e8f27f194ce10316ed35aaf2415194f",
+  "functions/projects/registry-materials.test.js": "f6c83f227b0b7180b5f3bfbc2315384214bc6c50",
+  "functions/projects/registry-service.js": "f064f14d09317b9ef5babef2fc9fa4175cd203c9",
+  "apps/erp-next/components/projects/central/history-reconciliation-dialog.tsx": "d20b0cb66a1f6811c1035c5cc74f4cc9e61bc1e7",
+  "apps/erp-next/components/projects/central/project-materials-panel.tsx": "34a3cd7996b289830bcd2c5743acca0ec683ecc2",
+  "apps/erp-next/components/projects/central/projects-central-workspace.tsx": "a2df57d38a23bd6638cd29cff8bc4682d355e49f",
+  "apps/erp-next/lib/projects/registry-client-core.ts": "3e25ffcf98976587bcc026ed351e099ebb7408d9",
+  "apps/erp-next/scripts/projects-history-browser.cjs": "053f0a636c1e9c8ba96fb2254fad999d686b94a1",
+  ".github/workflows/projects-history-reconciliation.yml": "780824d3f2dbc23dd410e984828c8965270e7d45",
+  "docs/ai/tasks/projects-history-materials.md": "1d9812dbcd75d26ccf154f3fe9983b773b66e6ac",
+  "docs/ai/reviews/projects-history-materials.md": "651bf1cd24364df7c23a703a49d6fcf92c39fa3e"
+}
