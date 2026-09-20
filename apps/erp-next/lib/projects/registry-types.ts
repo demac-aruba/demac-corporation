@@ -32,7 +32,7 @@ export type ProjectActivity = {
   actualLabor: { personMinutes: number | null; vanMinutes: number | null; status: string };
   physicalProgress: { percent: number | null; status: string };
 };
-export type ProjectList = { source: 'project_registry_v1'; projects: CentralProject[]; nextCursor: string | null };
+export type ProjectList = { source: 'project_registry_v1'; writeMode?: 'enabled' | 'paused'; projects: CentralProject[]; nextCursor: string | null };
 export type MutationResult = { success: true; projectId: string; version: number; changed: boolean; replayed: boolean };
 export type ImportPreview = {
   mode: 'dry_run'; writesPerformed: 0; projectId: string; projectNumber: string;

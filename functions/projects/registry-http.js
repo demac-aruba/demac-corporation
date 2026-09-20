@@ -5,6 +5,7 @@
 const MAX_BODY_BYTES = 128 * 1024;
 const PUBLIC_ERRORS = Object.freeze({
   projects_not_active: 'Central Projects is not activated.',
+  projects_writes_paused: 'New Project changes are paused. Existing records and exact-request recovery remain available.',
   unauthenticated: 'Your session cannot be verified. Sign in again before continuing.',
   forbidden: 'Your account does not have permission for this operation.',
   import_owner_required: 'Owner authorization is required for legacy recovery.',

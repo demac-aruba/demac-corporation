@@ -194,3 +194,26 @@ test('unreconciled phase prerequisites cannot be overridden by local/preview pro
   await assert.rejects(f.check({ ...selection(), phaseId: 'PH-2' }), error => error.details?.reason === 'project_phase_reconciliation_required');
   assert.equal((await f.check({ ...selection(), phaseId: 'PH-1' })).available, true);
 });
+
+test('operational Active and Near Completion plans retain advisory over-budget booking eligibility', async () => {
+  for (const planningStatus of ['Active', 'Near Completion']) {
+    const f = fixture(); f.db.store.set('projectRecords/PROJECT-P', { ...plan(), planningStatus });
+    const offered = await f.check(); assert.equal(offered.available, true);
+    const result = await f.commit(offered.offer); assert.ok(result.appointmentId);
+    assert.equal(f.db.store.get('projectRecords/PROJECT-P').planningStatus, planningStatus);
+  }
+});
+test('write pause rejects a new Project reservation but preserves exact committed booking replay', async () => {
+  const f = fixture(); const offer = (await f.check()).offer; const committed = await f.commit(offer);
+  const before = bookings(f.db);
+  f.db.store.set('businessSettings/projects-registry', { backendEnabled: true, bookingEnabled: true, writesPaused: true });
+  await assert.rejects(f.check(), error => error.details?.reason === 'project_booking_not_active');
+  const replay = await f.commit(offer); assert.equal(replay.replayed, true); assert.equal(replay.appointmentId, committed.appointmentId);
+  assert.deepEqual(bookings(f.db), before);
+});
+test('malformed write-pause settings fail closed rather than permit a new Project booking', async () => {
+  const f = fixture();
+  f.db.store.set('businessSettings/projects-registry', { backendEnabled: true, bookingEnabled: true, writesPaused: 'false' });
+  await assert.rejects(f.check(), error => error.details?.reason === 'project_booking_not_active');
+  assert.deepEqual(bookings(f.db), []);
+});

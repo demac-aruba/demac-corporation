@@ -6,7 +6,7 @@ const d = require('./registry-domain');
 const { requirePhasePrerequisites } = require('./phase-completion');
 const { BookingAuthorityError, BOOKING_ERROR_CODES } = require('../bookingAuthorityCore');
 // Preserve the existing Scheduling eligibility of a draft/open Project plan.
-const ACTIVE_PLAN_STATES = new Set(['Draft', 'Planned']);
+const ACTIVE_PLAN_STATES = d.PROJECT_OPEN_STATES;
 const ACTIVE_LEGACY_STATES = new Set(['Draft', 'Planned', 'Active', 'Near Completion']);
 const snapshot = (value) => value.exists ? { ...value.data(), id: value.id } : null;
 
@@ -81,7 +81,8 @@ function createProjectBookingIntegration({ db, enabled = false } = {}) {
     // Turning new booking integration off must not turn a completed retry into a new booking.
     // Replay below is read-only and remains subject to current provisioned authorization.
     if (!replay && (enabled !== true || !settings.exists
-        || settings.data().backendEnabled !== true || settings.data().bookingEnabled !== true)) {
+        || settings.data().backendEnabled !== true || settings.data().bookingEnabled !== true
+        || (settings.data().writesPaused !== undefined && settings.data().writesPaused !== false))) {
       throw d.fault('project_booking_not_active', 'Central project booking is not activated.', 503);
     }
     const project = d.requireRecord(snapshot(plan));

@@ -1,0 +1,66 @@
+name: Projects reviewed progress templates and lifecycle
+on:
+  pull_request:
+    paths:
+      - 'functions/projects/**'
+      - 'apps/erp-next/components/projects/central/**'
+      - 'apps/erp-next/lib/projects/**'
+      - 'apps/erp-next/scripts/projects-central-reviewed-flow-browser.cjs'
+      - '.github/workflows/projects-reviewed-flow.yml'
+permissions:
+  contents: read
+concurrency:
+  group: projects-reviewed-flow-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/reviewed-tools" --no-audit --no-fund firebase-tools@15.30.0
+      - run: node --test functions/projects/*.test.js
+      - name: Real Auth Firestore cumulative corrections templates lifecycle and rollback-pause
+        run: >-
+          "$RUNNER_TEMP/reviewed-tools/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node --test functions/projects/progress-lifecycle.emulator.cjs'
+  dialogs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/reviewed-ui-tools" >> "$GITHUB_ENV"
+      - run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - run: npm run typecheck --prefix apps/erp-next
+      - run: node apps/erp-next/scripts/projects-central-reviewed-flow-browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: projects-reviewed-flow-evidence
+          path: projects-reviewed-flow-evidence/
+          retention-days: 7
+          if-no-files-found: error

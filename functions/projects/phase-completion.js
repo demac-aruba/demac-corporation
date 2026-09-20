@@ -29,7 +29,7 @@ function recordedPhaseReview(project, phaseId) {
   for (const row of reviews) {
     d.allowedKeys(row, ['phaseId', 'status', 'eventId', 'definitionHash', 'reviewedAt', 'reviewedBy']);
     phaseFor(project, row.phaseId);
-    if (!['approved', 'reopened'].includes(row.status) || !/^[a-f0-9]{64}$/.test(row.definitionHash)) {
+    if (!['approved', 'reopened', 'progress_recorded'].includes(row.status) || !/^[a-f0-9]{64}$/.test(row.definitionHash)) {
       throw d.fault('phase_review_conflict', 'Phase review history requires reconciliation.', 409);
     }
     d.id(row.eventId); d.id(row.reviewedBy); d.stamp(row.reviewedAt);
@@ -149,17 +149,8 @@ function completionReader({ db, transaction, project }) {
   return { validate };
 }
 
-async function previewPhaseCompletion({ db, transaction, project, phaseId }) {
-  const phase = phaseFor(project, phaseId);
-  const saved = recordedPhaseReview(project, phaseId);
-  const reader = completionReader({ db, transaction, project });
-  if (saved?.status === 'approved') {
-    const current = await reader.validate(phaseId);
-    return { mode: 'phase_completion_review', projectId: project.id, projectVersion: project.version,
-      phaseId, phase, status: current.valid ? 'approved' : 'needs_review', canApprove: false,
-      blockers: current.valid ? [] : [current.reason], digest: null, saved, sources: [],
-      label: 'Scope approval; not payroll or an inferred percentage of labor.' };
-  }
+/** Collect the same canonical evidence once for scope closure or a partial checkpoint. */
+async function loadPhaseEvidence({ db, transaction, project, phaseId }) {
   const proofs = new Map(); const rows = []; const issues = []; let cursor; let complete = false;
   for (let page = 0; page < MAX_PAGES; page++) {
     const activity = await loadProjectActivity({ db, transaction, project, afterId: cursor, phaseId,
@@ -171,6 +162,21 @@ async function previewPhaseCompletion({ db, transaction, project, phaseId }) {
     if (!activity.nextCursor) { complete = true; break; }
     cursor = activity.nextCursor;
   }
+  return { proofs, rows, issues, complete };
+}
+
+async function previewPhaseCompletion({ db, transaction, project, phaseId }) {
+  const phase = phaseFor(project, phaseId);
+  const saved = recordedPhaseReview(project, phaseId);
+  const reader = completionReader({ db, transaction, project });
+  if (saved?.status === 'approved') {
+    const current = await reader.validate(phaseId);
+    return { mode: 'phase_completion_review', projectId: project.id, projectVersion: project.version,
+      phaseId, phase, status: current.valid ? 'approved' : 'needs_review', canApprove: false,
+      blockers: current.valid ? [] : [current.reason], digest: null, saved, sources: [],
+      label: 'Scope approval; not payroll or an inferred percentage of labor.' };
+  }
+  const { proofs, rows, issues, complete } = await loadPhaseEvidence({ db, transaction, project, phaseId });
   const blockers = evidenceIssues(rows, issues, complete);
   const prerequisites = [];
   for (const id of phase.dependencies) {
@@ -178,10 +184,10 @@ async function previewPhaseCompletion({ db, transaction, project, phaseId }) {
     if (!result.valid) blockers.push('phase_prerequisite_not_current');
     else prerequisites.push({ phaseId: id, eventId: result.eventId });
   }
-  if (!['Draft','Planned'].includes(project.planningStatus)) blockers.push('project_not_open');
+  if (!d.PROJECT_OPEN_STATES.has(project.planningStatus)) blockers.push('project_not_open');
   const orderedProofs = [...proofs.values()].sort((a,b)=>a.path.localeCompare(b.path));
   return { mode: 'phase_completion_review', projectId: project.id, projectVersion: project.version,
-    phaseId, phase, status: saved?.status || 'open', canApprove: blockers.length === 0,
+    phaseId, phase, status: saved?.status === 'progress_recorded' ? 'open' : saved?.status || 'open', canApprove: blockers.length === 0,
     blockers: [...new Set(blockers)], digest: signature(phase, orderedProofs, prerequisites), saved,
     sources: rows.filter(row=>!row.cancelled).map(row=>({ workOrderId:row.workOrderId, appointmentId:row.appointmentId, vanId:row.vanId, reviewStatus:row.review?.status||null, revisionId:row.review?.revisionId||null })),
     // Proofs are database metadata, never raw Field snapshots or credentials.
@@ -223,4 +229,4 @@ async function requirePhasePrerequisites({ db, transaction, project, phaseId }) 
   }
 }
 module.exports = { MAX_PROOFS, phaseFor, recordedPhaseReview, sourceVersion, signature, completionConfirmation,
-  evidenceIssues, completionReader, previewPhaseCompletion, preparePhaseCompletion, requirePhasePrerequisites };
+  evidenceIssues, completionReader, loadPhaseEvidence, previewPhaseCompletion, preparePhaseCompletion, requirePhasePrerequisites };

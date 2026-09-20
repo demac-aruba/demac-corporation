@@ -3,10 +3,13 @@ const d = require('./registry-domain');
 const { loadProjectActivity } = require('./registry-activity');
 const { loadProjectExecution } = require('./registry-execution');
 const { recordedPhaseReview, previewPhaseCompletion, preparePhaseCompletion } = require('./phase-completion');
+const { previewPhaseProgress, preparePhaseProgress } = require('./phase-progress');
+const { previewProjectLifecycle, prepareProjectLifecycle } = require('./project-lifecycle');
+const { readTemplateLibrary, listTemplates, previewTemplateApplication, prepareTemplateCommand } = require('./phase-templates');
 const { prepareImportTransaction, readImportSource } = require('./registry-import-transaction');
 const COLLECTIONS = Object.freeze({ records: 'projectRecords', numbers: 'projectNumbers', links: 'projectAppointmentLinks', events: 'projectEvents', receipts: 'projectCommandReceipts', settings: 'businessSettings' });
-const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase']);
-const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'get_phase_completion', 'preview_legacy_import', 'get_import_source']);
+const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase', 'record_phase_progress', 'transition_project_status', 'save_phase_template', 'apply_phase_template', 'set_phase_template_active']);
+const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'get_phase_completion', 'get_phase_progress', 'preview_project_status', 'list_phase_templates', 'preview_phase_template', 'preview_legacy_import', 'get_import_source']);
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
 
@@ -45,7 +48,19 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
           return { ...receipt.result, replayed: true };
         }
       }
+      // Operational rollback can stop NEW writes while retaining central reads and exact receipts.
+      // This flag is server-only; ordinary Project forms cannot modify it.
+      if (activation.data().writesPaused !== undefined && typeof activation.data().writesPaused !== 'boolean') {
+        throw d.fault('project_settings_conflict', 'The Project write-control setting requires review.', 503);
+      }
+      if (write && activation.data().writesPaused === true) {
+        throw d.fault('projects_writes_paused', 'New Project changes are paused. Existing records and completed-request recovery remain available.', 503);
+      }
       const data = d.plain(input.data);
+      if (input.action === 'list_phase_templates') {
+        d.allowedKeys(data, []);
+        return listTemplates((await readTemplateLibrary({ db, transaction })).library);
+      }
       if (input.action === 'list_plans') {
         d.allowedKeys(data, ['limit', 'afterId'], []);
         const limit = data.limit === undefined ? 30 : d.integer(data.limit, 'page limit', 1, 50);
@@ -53,9 +68,9 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         if (data.afterId !== undefined) query = query.startAfter(d.id(data.afterId));
         const snapshot = await transaction.get(query.limit(limit + 1));
         const rows = snapshot.docs.slice(0, limit).map(snapshotRecord).map(d.requireRecord);
-        return { source: 'project_registry_v1', projects: rows, nextCursor: snapshot.docs.length > limit ? rows[rows.length - 1].id : null };
+        return { source: 'project_registry_v1', writeMode: activation.data().writesPaused === true ? 'paused' : 'enabled', projects: rows, nextCursor: snapshot.docs.length > limit ? rows[rows.length - 1].id : null };
       }
-      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null; let archiveWrite = null; let importAudit = null; let phaseCompletion = null;
+      let project; let recordRef; let before; let next; let linkWrite = null; let numberWrite = null; let archiveWrite = null; let importAudit = null; let phaseCompletion = null; let phaseProgress = null; let lifecycle = null; let templateEvidence = null; let templateWrite = null;
       if (input.action === 'preview_legacy_import' || input.action === 'import_legacy_plan') {
         const prepared = await prepareImportTransaction({ db, transaction, input, principal, occurredAt, collections: COLLECTIONS });
         if (prepared.preview) return prepared.preview;
@@ -86,6 +101,17 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
           d.allowedKeys(data, ['projectId']);
           return readImportSource({ db, transaction, project, principal });
         }
+        if (input.action === 'preview_phase_template') {
+          return previewTemplateApplication({ db, transaction, project, data });
+        }
+        if (input.action === 'get_phase_progress') {
+          d.allowedKeys(data, ['projectId', 'phaseId']);
+          return previewPhaseProgress({ db, transaction, project, phaseId: data.phaseId });
+        }
+        if (input.action === 'preview_project_status') {
+          d.allowedKeys(data, ['projectId', 'targetStatus']);
+          return previewProjectLifecycle({ db, transaction, project, targetStatus: data.targetStatus });
+        }
         if (input.action === 'get_phase_completion') {
           d.allowedKeys(data, ['projectId', 'phaseId']);
           return previewPhaseCompletion({ db, transaction, project, phaseId: data.phaseId });
@@ -100,7 +126,19 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         }
         d.requireVersion(project, data.expectedVersion);
         if (project.version >= Number.MAX_SAFE_INTEGER - 1) throw d.fault('project_version_exhausted', 'The project revision cannot advance safely.', 409);
-        if (['approve_phase_completion', 'reopen_phase'].includes(input.action)) {
+        if (['Completed', 'Cancelled'].includes(project.planningStatus) && !['transition_project_status', 'save_phase_template', 'set_phase_template_active'].includes(input.action)) {
+          throw d.fault('project_closed', 'Explicitly reopen the Project before changing its planning or scope records.', 409);
+        }
+        if (['save_phase_template', 'apply_phase_template', 'set_phase_template_active'].includes(input.action)) {
+          const prepared = await prepareTemplateCommand({ db, transaction, project, input, principal, occurredAt, eventId: commandId });
+          next = prepared.next; templateEvidence = prepared.evidence; templateWrite = prepared.settingsWrite;
+        } else if (input.action === 'record_phase_progress') {
+          const prepared = await preparePhaseProgress({ db, transaction, project, input, principal, occurredAt, eventId: commandId });
+          next = prepared.next; phaseProgress = prepared.evidence;
+        } else if (input.action === 'transition_project_status') {
+          const prepared = await prepareProjectLifecycle({ db, transaction, project, input, principal, occurredAt, eventId: commandId });
+          next = prepared.next; lifecycle = prepared.evidence;
+        } else if (['approve_phase_completion', 'reopen_phase'].includes(input.action)) {
           const prepared = await preparePhaseCompletion({ db, transaction, project, input, principal, occurredAt, eventId: commandId });
           next = prepared.next; phaseCompletion = prepared.evidence;
         } else if (input.action === 'edit_metadata') {
@@ -165,7 +203,8 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
       if (numberWrite) transaction.create(numberWrite.ref, numberWrite.data);
       if (linkWrite) transaction.create(linkWrite.ref, linkWrite.data);
       if (archiveWrite) transaction.create(archiveWrite.ref, archiveWrite.data);
-      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(phaseCompletion ? { phaseCompletion } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
+      if (templateWrite) transaction.set(templateWrite.ref, templateWrite.data);
+      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(phaseCompletion ? { phaseCompletion } : {}), ...(phaseProgress ? { phaseProgress } : {}), ...(lifecycle ? { lifecycle } : {}), ...(templateEvidence ? { template: templateEvidence } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
       transaction.create(receiptRef, { actorId: principal.uid, requestHash, projectId: next.id, occurredAt, result });
       return { ...result, replayed: false };
     }, write ? { maxAttempts: 5 } : { readOnly: true });

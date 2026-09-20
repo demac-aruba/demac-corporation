@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 const SCHEMA_VERSION = 1;
 const MAX_PHASES = 100;
 const MAX_COMMAND_BYTES = 128 * 1024;
+const PROJECT_STATES = new Set(['Draft', 'Planned', 'Active', 'On Hold', 'Near Completion', 'Completed', 'Cancelled']);
+const PROJECT_OPEN_STATES = new Set(['Draft', 'Planned', 'Active', 'Near Completion']);
 const READ_ROLES = new Set(['super_admin', 'operations', 'project_manager', 'finance']);
 const WRITE_ROLES = new Set(['super_admin', 'operations', 'project_manager']);
 const PROJECT_TYPES = new Set(['VRF Project', 'Installation Project', 'Service Project', 'Maintenance Contract', 'Other Project']);
@@ -185,7 +187,7 @@ function applyMetadata(plan, patch) {
 }
 function requireRecord(record) {
   if (!record) throw fault('project_not_found', 'Project not found.', 404);
-  if (record.schemaVersion !== SCHEMA_VERSION || !Number.isSafeInteger(record.version) || record.version < 1 || record.version >= Number.MAX_SAFE_INTEGER || record.budget?.unit !== 'van_minutes' || !['Draft', 'Planned', 'On Hold', 'Cancelled'].includes(record.planningStatus)) throw fault('project_schema_conflict', 'Project data requires reconciliation.', 409);
+  if (record.schemaVersion !== SCHEMA_VERSION || !Number.isSafeInteger(record.version) || record.version < 1 || record.version >= Number.MAX_SAFE_INTEGER || record.budget?.unit !== 'van_minutes' || !PROJECT_STATES.has(record.planningStatus)) throw fault('project_schema_conflict', 'Project data requires reconciliation.', 409);
   id(record.id); id(record.customerId); id(record.propertyId);
   integer(record.budget.originalMinutes, 'original estimate', 1); integer(record.budget.currentMinutes, 'current estimate', 1);
   integer(record.budget.revision, 'budget revision', 1, Number.MAX_SAFE_INTEGER - 1);
@@ -202,4 +204,4 @@ function forecast(budgetMinutes, plannedMinutes) {
   integer(budgetMinutes, 'budgeted Van minutes', 1); integer(plannedMinutes, 'planned Van minutes');
   return { unit: 'van_minutes', budgetMinutes, plannedMinutes, remainingMinutes: Math.max(0, budgetMinutes - plannedMinutes), overBudgetMinutes: Math.max(0, plannedMinutes - budgetMinutes), blocksBooking: false };
 }
-module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast, normalizeDetails };
+module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, PROJECT_STATES, PROJECT_OPEN_STATES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast, normalizeDetails };
