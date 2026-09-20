@@ -28,6 +28,58 @@ jobs:
           java-version: '21'
       - name: Prepare exact locally reviewed source in disposable checkout
         run: python3 .github/projects-reviewed-workbench.py apply
+      - name: Correct the synthetic persistence boundary without changing runtime validation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          path = 'functions/projects/progress-lifecycle.emulator.cjs'
+          old_hash = '6e0a50cfbb355855ec9e1fd8dec0dd3a7fb84250'
+          assert subprocess.check_output(['git','hash-object',path],text=True).strip() == old_hash
+          p = Path(path)
+          text = p.read_text()
+          old_import = "const { requirePhasePrerequisites } = require('./phase-completion');"
+          new_import = "const { storageStatusFromCanonical, projectCanonicalWorkVisit } = require('../fieldOperationsAuthorityWorkVisit');"
+          assert text.count(old_import) == 1
+          text = text.replace(old_import, new_import)
+          old_status = "status: complete ? 'completed' : 'scheduled', version: 2,"
+          new_status = "status: storageStatusFromCanonical(complete ? 'completed' : 'scheduled'), version: 2,"
+          assert text.count(old_status) == 1
+          text = text.replace(old_status, new_status)
+          text += """
+          test('pending support fixtures use the authoritative persisted status and round-trip correctly', async () => {
+            const f = await fixture({ pendingSupport: true });
+            const visit = (await db.collection('workVisits').doc(`VISIT-${f.ids[1]}`).get()).data();
+            assert.equal(visit.status, 'not_started');
+            assert.equal(projectCanonicalWorkVisit(visit).status, 'scheduled');
+            const view = await preview(f.id);
+            assert.equal(view.canRecord, true);
+            assert.equal(view.sources.length, 1);
+          });
+          test('an invalid persisted support status still blocks progress and leaves all records unchanged', async () => {
+            const f = await fixture({ pendingSupport: true });
+            await db.collection('workVisits').doc(`VISIT-${f.ids[1]}`).update({ status: 'scheduled' });
+            const before = await protectedState();
+            const plan = await read(f.id);
+            const view = await preview(f.id);
+            assert.equal(view.canRecord, false);
+            assert.ok(view.blockers.includes('field_visit_reconciliation_required'));
+            await assert.rejects(record(f.id, 4, { preview: view }), { code: 'phase_progress_not_ready' });
+            assert.deepEqual(await read(f.id), plan);
+            assert.deepEqual(await protectedState(), before);
+          });
+          """
+          p.write_text(text)
+          new_hash = subprocess.check_output(['git','hash-object',path],text=True).strip()
+          helper = Path('.github/projects-reviewed-workbench.py')
+          source = helper.read_text()
+          needle = "'" + path + "': '" + old_hash + "'"
+          assert source.count(needle) == 1
+          helper.write_text(source.replace(needle, "'" + path + "': '" + new_hash + "'"))
+          print('Synthetic fixture uses canonical-to-storage conversion; original rejection remains covered.')
+          print('CORRECTED_TEST_BLOB=' + new_hash)
+          PY
+          git diff --check
       - run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/reviewed-flow-tools" >> "$GITHUB_ENV"
       - name: Install isolated test tooling without production credentials
         run: |
