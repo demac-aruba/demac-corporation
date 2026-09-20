@@ -1,6 +1,18 @@
 # Task: finish Projects without replacing Scheduling or Field authority
 
-## Current checkpoint — 2026-09-19 local / 2026-09-20 UTC
+## Current checkpoint — 2026-09-20
+
+See [the final continuation and merge-readiness record](projects-merge-readiness-20260920.md).
+Application HEAD is `0fd500fbe2363fcfc091688d7432aa8fd1a53ba0`; actual combined #515 tree
+`e464d4dc138a94aaeea75d3fbc955b5651e58b0c` passed Node22/24 builds,70 Auth/Firestore cases,
+central Chromium/WebKit,18 drawer and20 lifecycle scenarios. Lifecycle stale-intent,
+lost-response recovery, atomic Project follow-ups and caller text-preservation defects are
+closed. Target Node22 and disk/dependency recovery are complete. Vercel mapping is now
+verified read-only; previews share production Firebase configuration and main triggers
+production deployments plus WhatsApp migrations. Source/scope, isolated staging, real
+backup/reconciliation and publication approval remain open. Full delivery is not ready.
+
+## Previous checkpoint — 2026-09-19 local / 2026-09-20 UTC (historical)
 
 The older increment below is historical. Live verification: #514 draft/open/unmerged at
 a99402ece30f7042105daea1feac8d34174b1453; #515 draft/open/unmerged at

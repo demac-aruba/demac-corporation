@@ -1,6 +1,21 @@
 # Review: central Projects workspace and transport
 
-## Independent continuation review — 2026-09-19
+## Final continuation review — 2026-09-20
+
+Current application HEAD `0fd500fbe2363fcfc091688d7432aa8fd1a53ba0`; independent read-only
+Laplace reviewed lifecycle intent/receipts, transactional follow-ups and actual UI callers.
+Its cleared-text, mixed-line and generated-description findings were corrected and covered
+by the builder's20 Chromium/WebKit cases. Final scoped static verdict: no pending findings.
+Epicurus verified that existing sources do not yet provide integrated historical Project
+costs or complete approved person-time allocation, and flagged automatic deployments and
+migrations. Partial after-hours attendance segments are not a complete project-time source.
+Combined #515 tree, Node22/24 builds and70 emulator cases now PASS.
+The complete evidence, deployment mapping, protocol rollout risk and remaining A–D gates
+are in [the current task record](../tasks/projects-merge-readiness-20260920.md).
+**No full merge/publication recommendation:** missing source decision, isolated staging,
+real backups/reconciliation and explicit release authorization have not been waived.
+
+## Independent continuation review — 2026-09-19 (historical)
 
 Builder: root Codex. Read-only independent reviewers: Epicurus (sources/UI) and Laplace
 (Booking/Field), application commits9ab34aae/70a83eef/27458a10 based on #514/a99402e.
