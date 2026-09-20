@@ -29,7 +29,7 @@ type ExecutionPage = {
       closedRecordedMinutes: number | null;
       hasOpenInterval: boolean;
       complete: boolean;
-      intervals: Array<{ startedAt: string; stoppedAt: string; startEventId: string; stopEventId: string }>;
+      intervals: Array<{ startedAt: string; stoppedAt: string; startEventId: string; stopEventId: string; vanId?: string | null }>;
     }>;
   }>;
 };
@@ -47,6 +47,7 @@ const reason: Record<string, string> = {
   field_event_invalid: 'A Field event has inconsistent identity, time or version information.',
   field_event_visit_missing: 'The event refers to a visit not present in this page’s validated history.',
   overlapping_van_execution: 'Recorded visits overlap for the same Van; reconcile them before comparing total time.',
+  execution_van_unresolved: 'The recorded interval has no historical Van assignment. Visit time is preserved; the current booking Van cannot certify the project total.',
   legacy_import_requires_reconciliation: 'Imported project history still needs reconciliation with canonical records.',
 };
 
@@ -108,7 +109,7 @@ export function ProjectFieldExecution({ request, projectId, projectVersion, refr
       </details>}
       {!page.rows.length && <p className={s.empty}>No linked work on this page. This does not prove that no work has taken place.</p>}
       {page.rows.map(row => <article className={s.card} key={row.workOrderId}>
-        <div className={s.sectionTitle}><h3>{row.date || 'Date not recorded'} · {row.vanId || 'Van unresolved'}</h3>
+        <div className={s.sectionTitle}><h3>Current booking: {row.date || 'Date not recorded'} · {row.vanId || 'Van unresolved'}</h3>
           <span className={s.badge}>{row.reviewStatus ? `Office: ${row.reviewStatus}` : 'Not submitted to office'}</span></div>
         <p>{row.workOrderId} · {row.scheduledSlots ?? 'Unknown'} scheduled slots · {minutesLabel(row.plannedVanMinutes)} planned</p>
         {row.cancelled && <p className={s.warning}>Booking cancelled. Any recorded execution remains visible; cancellation does not erase work already performed.</p>}
@@ -119,7 +120,7 @@ export function ProjectFieldExecution({ request, projectId, projectVersion, refr
           {visit.closedRecordedMinutes !== null && visit.intervals.length > 0 && <details>
             <summary>Source intervals ({visit.intervals.length})</summary>
             {visit.intervals.map(interval => <p key={interval.startEventId}>
-              {interval.startedAt} → {interval.stoppedAt}<br />
+              {interval.startedAt} → {interval.stoppedAt} · Recorded Van: {interval.vanId || 'Unknown'}<br />
               <small>Field events: {interval.startEventId} / {interval.stopEventId}</small>
             </p>)}
           </details>}

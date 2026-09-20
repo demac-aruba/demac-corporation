@@ -8,6 +8,7 @@ on:
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/fieldOperationsAuthorityWorkVisit.js'
+      - 'functions/fieldOperationsVisitMutation*'
       - 'functions/fieldOperationsOfficeReview.js'
       - 'firebase.projects-emulator.json'
       - '.github/workflows/projects-registry-ci.yml'
@@ -20,6 +21,7 @@ on:
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/officeBookingAuthority.js'
       - 'firebase.projects-emulator.json'
+      - 'functions/fieldOperationsVisitMutation*'
       - '.github/workflows/projects-registry-ci.yml'
 permissions:
   contents: read
@@ -53,6 +55,7 @@ jobs:
           node --check functions/projects/registry-service.js
           node --check functions/projects/registry-activity.js
           node --test functions/projects/*.test.js
+          node --test functions/fieldOperationsVisitMutation.test.js functions/fieldOperationsAudit.test.js
       - name: Real client Project selection and commit-receipt contracts
         run: node --experimental-strip-types --test apps/erp-next/scripts/projects-booking-handoff.test.cjs
       - name: Real Auth and Firestore; atomicity, contention, permissions and read-only activity

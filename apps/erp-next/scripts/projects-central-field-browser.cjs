@@ -25,7 +25,7 @@ const fixture = {
     date: '2026-09-18', cancelled: false, scheduledSlots: 6, plannedVanMinutes: 360, reviewStatus: null,
     visits: [{ visitId: 'SYNTHETIC-VISIT', status: 'pending', closedRecordedMinutes: 60,
       hasOpenInterval: false, complete: true, intervals: [{ startedAt: '2026-09-18T08:00:00.000Z',
-        stoppedAt: '2026-09-18T09:00:00.000Z', startEventId: 'SYNTHETIC-START', stopEventId: 'SYNTHETIC-STOP' }] }],
+        stoppedAt: '2026-09-18T09:00:00.000Z', startEventId: 'SYNTHETIC-START', stopEventId: 'SYNTHETIC-STOP', vanId: 'VAN-2' }] }],
   }],
 };
 const entry = `
@@ -48,6 +48,12 @@ function request(command,signal){
     result.pageTotals.openIntervals=1;result.projectRecordedMinutes=null;
     result.rows[0].visits[0].hasOpenInterval=true;result.rows[0].visits[0].complete=false;
     result.rows[0].visits[0].status='in_progress';
+  }
+  if(window.__scenario==='historical-van'){
+    result.issues=[{code:'execution_van_unresolved',visitId:'SYNTHETIC-VISIT'}];
+    result.coverage.pageComplete=false;result.coverage.allProjectLinksIncluded=false;
+    result.pageTotals.closedRecordedMinutes=null;result.projectRecordedMinutes=null;
+    result.rows[0].visits[0].intervals[0].vanId=null;
   }
   if(window.__scenario==='pagination'){
     result.projectRecordedMinutes=null;result.coverage.allProjectLinksIncluded=false;
@@ -87,7 +93,7 @@ async function main() {
     for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]]) {
       const browser = await engine.launch({ headless: true });
       try {
-        for (const scenario of ['recorded', 'failure', 'unknown', 'open', 'pagination', 'version', 'stale']) {
+        for (const scenario of ['recorded', 'failure', 'unknown', 'historical-van', 'open', 'pagination', 'version', 'stale']) {
           const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
           const page = await context.newPage(); page.setDefaultTimeout(10000);
           const errors = [], external = [];
@@ -119,6 +125,13 @@ async function main() {
             } else if (scenario === 'unknown') {
               await panel.getByText(/There is no complete recorded timeline/).waitFor();
               assert.ok(await panel.getByText('Not reconciled', { exact: true }).count() >= 1);
+              assert.equal(await panel.getByText('0h', { exact: true }).count(), 0);
+            } else if (scenario === 'historical-van') {
+              await panel.getByText(/no historical Van assignment/).waitFor();
+              assert.equal(await panel.getByText(/across all linked visits/).count(), 0);
+              await panel.getByText('Source intervals (1)', { exact: true }).click();
+              await panel.getByText(/Recorded Van: Unknown/).waitFor();
+              assert.equal(await panel.getByText('1h', { exact: true }).count(), 1);
               assert.equal(await panel.getByText('0h', { exact: true }).count(), 0);
             } else if (scenario === 'pagination') {
               await panel.getByText(/PAGE-ONE-WO/).waitFor();

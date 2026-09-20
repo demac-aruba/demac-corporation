@@ -193,6 +193,30 @@ test('scheduled visit transitions to en route atomically with first timestamp, v
   assert.deepEqual(auditEvents[0].after, { status: 'en_route', version: 2 });
 });
 
+test('starting physical work captures the transaction assignment once; later reassignment does not rewrite its event', async () => {
+  const { store, auditEvents, transition } = fixture({
+    visit: baseVisit({ status: 'on_site', version: 3 }),
+    order: baseOrder({ vanId: 'historical-document-id' }),
+    resolveAssignment: async () => assignment({ context: { vanAliases: new Map([['historical-document-id', 'VAN-2']]) } }),
+  });
+  const command = { identity: identity(), visitId: 'visit-WO-1', to: 'in_progress', expectedVersion: 3, requestId: 'execution-van-capture-001' };
+  await transition(command);
+  assert.deepEqual(auditEvents[0].metadata, { executionAssignment: { version: 1, vanId: 'VAN-2' } });
+  store.get('workOrders', 'WO-1').vanId = 'VAN-3';
+  assert.equal((await transition(command)).replayed, true);
+  assert.equal(auditEvents.length, 1);
+  assert.equal(auditEvents[0].metadata.executionAssignment.vanId, 'VAN-2');
+});
+
+test('Field can record work with unresolved Van identity without inventing a lane', async () => {
+  const { auditEvents, transition } = fixture({ visit: baseVisit({ status: 'on_site', version: 3 }),
+    order: baseOrder({ vanId: 'VAN-1783801335935' }),
+    resolveAssignment: async () => assignment({ context: { vanAliases: new Map() } }),
+  });
+  await transition({ identity: identity(), visitId: 'visit-WO-1', to: 'in_progress', expectedVersion: 3, requestId: 'execution-van-unresolved' });
+  assert.equal(auditEvents[0].metadata.executionAssignment.vanId, null);
+});
+
 test('visit progresses en route -> on site -> in progress without overwriting first timestamps', async () => {
   const { store, transition } = fixture();
   await transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' });

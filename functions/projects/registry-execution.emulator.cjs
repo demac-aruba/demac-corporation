@@ -30,22 +30,23 @@ async function snapshot() {
   }
   return data;
 }
-async function seed({ visits = 1, sameVan = false, returnVisit = false } = {}) {
+async function seed({ visits = 1, sameVan = false, returnVisit = false, historicalAssignment = true } = {}) {
   const plan = await run('create_plan', { name: 'Synthetic execution project', type: 'VRF Project', customerId, propertyId,
     startsOn: '2026-09-01', estimatedCompletionOn: '2026-10-01', budgetedVanMinutes: 66 * 60, phases: [] });
   const appointmentId = next('EXECUTION-APT'), orderIds = [];
   for (let i = 0; i < visits; i++) {
     const orderId = next('EXECUTION-WO'); orderIds.push(orderId);
     await db.collection('workOrders').doc(orderId).set({ appointmentId, clientId: customerId, propertyId,
-      status: 'Confirmada', vanId: sameVan ? 'EXECUTION-VAN' : `EXECUTION-VAN-${i}`, date: '2026-09-18', time: '08:00', scheduledSlots: 6, appointmentDurationMinutes: 360 });
-    await seedVisit({ orderId, appointmentId, status: returnVisit ? 'requires_return_visit' : 'pending' });
+      status: 'Confirmada', vanId: sameVan ? 'VAN-1' : `VAN-${i + 1}`, date: '2026-09-18', time: '08:00', scheduledSlots: 6, appointmentDurationMinutes: 360 });
+    await seedVisit({ orderId, appointmentId, status: returnVisit ? 'requires_return_visit' : 'pending',
+      vanId: historicalAssignment ? (sameVan ? 'VAN-1' : `VAN-${i + 1}`) : undefined });
   }
   await db.collection('appointments').doc(appointmentId).set({ appointmentId, customerId, propertyId, status: 'confirmed', workOrderIds: orderIds });
   await run('attach_existing_appointment', { projectId: plan.projectId, expectedVersion: 1, appointmentId,
     phaseId: null, reason: 'Reviewed synthetic test', confirmedAssociation: true });
   return { projectId: plan.projectId, orderIds, appointmentId };
 }
-async function seedVisit({ orderId, appointmentId, status = 'pending', previousVisitId, startOffset = 0 }) {
+async function seedVisit({ orderId, appointmentId, status = 'pending', previousVisitId, startOffset = 0, vanId }) {
   const visitId = next('EXECUTION-VISIT');
   await db.collection('workVisits').doc(visitId).set({ workOrderId: orderId, appointmentId, clientId: customerId, propertyId,
     status, startedAt: when(startOffset + 10), version: 5, ...(previousVisitId ? { previousVisitId } : {}) });
@@ -55,7 +56,8 @@ async function seedVisit({ orderId, appointmentId, status = 'pending', previousV
     await db.collection('fieldOperationEvents').doc(id).set({ id, fieldEventVersion: 1, type: 'work_visit_status_changed',
       entityType: 'WorkVisit', entityId: visitId, visitId, workOrderId: orderId, appointmentId, customerId, propertyId,
       requestId: next('FIELD-REQUEST'), performedByUserId: 'SYNTHETIC-FIELD-USER', occurredAt: when(startOffset + minute),
-      before: { status: from, version: i + 1 }, after: { status: to, version: i + 2 } });
+      before: { status: from, version: i + 1 }, after: { status: to, version: i + 2 },
+      ...(to === 'in_progress' && vanId ? { metadata: { executionAssignment: { version: 1, vanId } } } : {}) });
   }
   return visitId;
 }
@@ -100,7 +102,7 @@ test('overlapping same-Van visits do not become duplicated project time', async 
 test('explicit physical return remains a separate visit without duplicating the reservation', async () => {
   const data = await seed({ returnVisit: true });
   const visits = await db.collection('workVisits').where('workOrderId', '==', data.orderIds[0]).get();
-  await seedVisit({ orderId: data.orderIds[0], appointmentId: data.appointmentId, previousVisitId: visits.docs[0].id, startOffset: 120 });
+  await seedVisit({ orderId: data.orderIds[0], appointmentId: data.appointmentId, previousVisitId: visits.docs[0].id, startOffset: 120, vanId: 'VAN-2' });
   const result = await run('get_execution', { projectId: data.projectId });
   assert.equal(result.pageTotals.visits, 2); assert.equal(result.projectRecordedMinutes, 120);
   assert.equal(result.rows.length, 1); assert.equal(result.rows[0].scheduledSlots, 6);
@@ -140,4 +142,33 @@ test('an unknown action payload cannot write local claimed hours and requires cu
   await db.collection('businessSettings').doc('projects-registry').set({ backendEnabled: false });
   try { await assert.rejects(run('get_execution', { projectId: data.projectId }), { code: 'projects_not_active' }); }
   finally { await db.collection('businessSettings').doc('projects-registry').set({ backendEnabled: true }); }
+});
+
+test('reassigning a Work Order cannot invent an overlap between historically separate Vans', async () => {
+  const data = await seed({ visits: 2 });
+  await db.collection('workOrders').doc(data.orderIds[0]).update({ vanId: 'VAN-2' });
+  const before = await snapshot();
+  const result = await run('get_execution', { projectId: data.projectId });
+  assert.equal(result.projectRecordedMinutes, 120);
+  assert.equal(result.rows.find(row => row.workOrderId === data.orderIds[0]).visits[0].intervals[0].vanId, 'VAN-1');
+  assert.deepEqual(await snapshot(), before);
+});
+
+test('reassigning a Work Order cannot hide a historical same-Van overlap', async () => {
+  const data = await seed({ visits: 2, sameVan: true });
+  await db.collection('workOrders').doc(data.orderIds[0]).update({ vanId: 'VAN-2' });
+  const result = await run('get_execution', { projectId: data.projectId });
+  assert.equal(result.projectRecordedMinutes, null);
+  assert.ok(result.issues.some(issue => issue.code === 'overlapping_van_execution'));
+});
+
+test('older events preserve visit minutes but cannot certify historical Van totals from a current assignment', async () => {
+  const data = await seed({ visits: 2, historicalAssignment: false });
+  const before = await snapshot();
+  const result = await run('get_execution', { projectId: data.projectId });
+  assert.equal(result.projectRecordedMinutes, null);
+  assert.equal(result.pageTotals.closedRecordedMinutes, null);
+  assert.deepEqual(result.rows.map(row => row.visits[0].closedRecordedMinutes), [60, 60]);
+  assert.equal(result.issues.filter(issue => issue.code === 'execution_van_unresolved').length, 2);
+  assert.deepEqual(await snapshot(), before);
 });

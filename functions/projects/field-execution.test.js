@@ -36,6 +36,19 @@ function fixture() {
 }
 function has(result, code) { return result.issues.some(row => row.code === code); }
 
+test('intervals use only the immutable Field start assignment, including a different Van after a pause', () => {
+  const data = fixture(); data.visit.vanId = 'VAN-99';
+  data.events[2].metadata = { executionAssignment: { version: 1, vanId: 'VAN-1' } };
+  data.events[4].metadata = { executionAssignment: { version: 1, vanId: 'VAN-2' } };
+  const result = deriveVisitExecution(data);
+  assert.equal(result.closedRecordedMinutes, 150);
+  assert.deepEqual(result.intervals.map(interval => interval.vanId), ['VAN-1', 'VAN-2']);
+  delete data.events[2].metadata;
+  assert.equal(deriveVisitExecution(data).intervals[0].vanId, null);
+  data.events[2].metadata = { executionAssignment: { version: 2, vanId: 'VAN-1' } };
+  assert.ok(has(deriveVisitExecution(data), 'field_event_invalid'));
+});
+
 test('records 150 closed active minutes, excluding travel, pause and office waiting', () => {
   const result = deriveVisitExecution(fixture());
   assert.equal(result.closedRecordedMinutes, 150);

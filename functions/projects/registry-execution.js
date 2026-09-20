@@ -67,14 +67,17 @@ async function loadProjectExecution({ db, transaction, project, afterId }) {
   // Two overlapping visits for one Van are not two independent Van-time charges.
   const perVan = new Map();
   for (const row of rows) {
-    if (!row.vanId && row.visits.some(visit => visit.intervals.length)) {
-      issues.push({ code: 'execution_van_unresolved', workOrderId: row.workOrderId });
-    }
-    const intervals = perVan.get(row.vanId) || [];
     for (const visit of row.visits) for (const interval of visit.intervals) {
+      if (!interval.vanId) {
+        if (!issues.some(issue => issue.code === 'execution_van_unresolved' && issue.visitId === visit.visitId)) {
+          issues.push({ code: 'execution_van_unresolved', workOrderId: row.workOrderId, visitId: visit.visitId });
+        }
+        continue;
+      }
+      const intervals = perVan.get(interval.vanId) || [];
       intervals.push({ start: Date.parse(interval.startedAt), end: Date.parse(interval.stoppedAt) });
+      perVan.set(interval.vanId, intervals);
     }
-    perVan.set(row.vanId, intervals);
   }
   for (const intervals of perVan.values()) {
     intervals.sort((a, b) => a.start - b.start);

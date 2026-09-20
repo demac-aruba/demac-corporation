@@ -50,7 +50,16 @@ function normalizeEvent(event, visit) {
         : ['ready_for_office_review', 'pending'];
     if (to !== expected[0] || event.after.reviewStatus !== expected[1]) throw new Error('Invalid review transition');
   }
-  return { id: event.id, type: event.type, at: event.occurredAt, time: millis(event.occurredAt), from, to };
+  const assignment = event.metadata?.executionAssignment;
+  let vanId = null;
+  if (isStatus && to === 'in_progress' && assignment !== undefined) {
+    if (!assignment || assignment.version !== 1 || (assignment.vanId !== null
+        && (typeof assignment.vanId !== 'string' || !/^VAN-[1-9]\d*$/.test(assignment.vanId)))) {
+      throw new Error('Invalid recorded execution assignment');
+    }
+    vanId = assignment.vanId;
+  }
+  return { id: event.id, type: event.type, at: event.occurredAt, time: millis(event.occurredAt), from, to, vanId };
 }
 
 /**
@@ -118,7 +127,8 @@ function deriveVisitExecution({ visit, events, sourceComplete }) {
           return result;
         }
         durationMs += event.time - open.time;
-        result.intervals.push({ startedAt: open.at, stoppedAt: event.at, startEventId: open.id, stopEventId: event.id });
+        result.intervals.push({ startedAt: open.at, stoppedAt: event.at, startEventId: open.id, stopEventId: event.id,
+          vanId: open.vanId });
         open = null;
       }
       if (event.to === 'in_progress' && !correction) {
