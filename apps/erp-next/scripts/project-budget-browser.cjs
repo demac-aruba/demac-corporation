@@ -60,7 +60,7 @@ createRoot(document.getElementById('app')).render(<Harness/>);`;
 async function main() {
   await build({
     absWorkingDir: APP, stdin: {contents:entry,loader:'tsx',resolveDir:APP}, outfile:path.join(output,'app.js'),
-    bundle:true, platform:'browser', format:'iife', jsx:'automatic', define:{'process.env.NODE_ENV':'"production"'},
+    bundle:true, platform:'browser', format:'iife', jsx:'automatic', define:{'process.env':JSON.stringify({NODE_ENV:'production',NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED:'false',NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED:'false',NEXT_PUBLIC_FIREBASE_PROJECT_ID:'demo-demac-projects'})},
     plugins:[{name:'synthetic-authority-boundary',setup(builder){
       builder.onResolve({filter:/.*/}, args=>{
         if(!args.importer.endsWith('live-appointment-create-drawer.tsx'))return;
