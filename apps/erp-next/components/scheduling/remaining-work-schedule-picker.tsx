@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { CanonicalAppointmentSummary } from './canonical-appointment-summary';
 import {
   checkOfficeCreateAvailability,
   checkOfficeRescheduleAvailability,
@@ -179,10 +180,6 @@ function canonicalWorkLines(value: unknown): OfficeBookingWorkLine[] {
       ...(text(item.technicianInstructions) ? { technicianInstructions: text(item.technicianInstructions) } : {}),
     };
   }).filter((line) => Boolean(line.presetId));
-}
-
-function sharedWorkText(lines: OfficeBookingWorkLine[], field: 'customerFacingDescription' | 'technicianInstructions') {
-  return [...new Set(lines.map((line) => text(line[field])).filter(Boolean))].join('; ');
 }
 
 function VisualCapacitySchedulePicker({
@@ -582,6 +579,8 @@ export function RemainingWorkSchedulePicker({ appointment, canonical, outcome, o
       if (!customerId || !propertyId || !workLines.length) return Promise.reject(new Error('The remaining work is missing its canonical customer, property, or work definition.'));
       return checkOfficeCreateAvailability({
         requestId: createPartialOutcomeRequestId('remaining-visual-availability'),
+        sourcePartialAppointmentId: appointment.id,
+        sourcePartialOutcomeRevision: outcome.revision,
         customerId,
         propertyId,
         workLines,
@@ -612,6 +611,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
   const today = currentArubaDateKey();
   const [canonical, setCanonical] = useState<CanonicalAppointment | null>(null);
   const [canonicalError, setCanonicalError] = useState('');
+  const [saved, setSaved] = useState(false);
   const [reason, setReason] = useState('Customer requested another date');
   const [note, setNote] = useState('');
 
@@ -638,21 +638,21 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
   const inputStyle = { width: '100%', boxSizing: 'border-box' as const, border: '1px solid var(--border)', borderRadius: 8, padding: 8, color: 'var(--text)', background: 'var(--surface-2)', font: 'inherit', fontSize: 12 };
 
   return <VisualCapacitySchedulePicker
-    appointment={appointment}
+    appointment={{ ...appointment, dateKey: text(canonical.date), primaryVanId: text(canonical.primaryVanId) || appointment.primaryVanId }}
     title={appointment.status === 'temporary_hold' ? 'Move Temporary Hold' : 'Reschedule Appointment'}
     subtitle={`${appointment.customer} · move the existing appointment without recreating it`}
     quantity={quantity}
     workLabel={appointment.workLabel || 'scheduled work'}
     workLines={workLines}
-    initialDate={laterDate(today, appointment.dateKey)}
+    initialDate={laterDate(today, text(canonical.date))}
     minDate={today}
     originalJobNote="Current appointment"
     fallbackRequiredMinutes={fallbackRequiredMinutes}
-    controls={<section style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, .7fr) minmax(320px, 1.3fr)', gap: 10, marginBottom: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)' }}>
+    controls={<><CanonicalAppointmentSummary appointment={canonical} /><section style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, .7fr) minmax(320px, 1.3fr)', gap: 10, marginBottom: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)' }}>
       <label style={{ display: 'grid', gap: 5 }}><span style={{ color: 'var(--muted)', fontSize: 10, fontWeight: 850, letterSpacing: '.05em' }}>RESCHEDULE REASON</span><select value={reason} onChange={(event) => setReason(event.target.value)} style={inputStyle}><option value="">Select reason</option>{rescheduleReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
       <label style={{ display: 'grid', gap: 5 }}><span style={{ color: 'var(--muted)', fontSize: 10, fontWeight: 850, letterSpacing: '.05em' }}>INTERNAL NOTE</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional operational context" style={inputStyle} /></label>
-    </section>}
-    canConfirm={Boolean(reason)}
+    </section></>}
+    canConfirm={Boolean(reason) && !saved}
     confirmLabel={appointment.status === 'temporary_hold' ? 'Confirm Hold Move' : 'Confirm Reschedule'}
     confirmingLabel="Rescheduling…"
     footerNote="The same appointment and Work Order relationship will be preserved."
@@ -662,17 +662,17 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
       return checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
         requestId: createOfficeLifecycleRequestId('visual-reschedule-availability'),
+        expectedAppointmentToken: text(canonical.lifecycleToken),
         customerId,
         propertyId,
         workLines,
         requestedDate: target,
         includeRequestedDateAlternatives: true,
-        customerFacingDescription: sharedWorkText(workLines, 'customerFacingDescription') || appointment.customerFacingDescription,
-        technicianInstructions: sharedWorkText(workLines, 'technicianInstructions') || appointment.technicianInstructions,
         changeKind: 'customer_reschedule',
       });
     }}
     confirmSelection={async (availability, option) => {
+      if (saved) return;
       if (!availability.offer) throw new Error('Booking Authority did not return a valid reschedule offer.');
       await rescheduleOfficeAppointment({
         appointmentId: appointment.id,
@@ -684,7 +684,8 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
         note,
         changeKind: 'customer_reschedule',
       });
-      await onRescheduled();
+      setSaved(true);
+      try { await onRescheduled(); } catch { throw new Error('The appointment was rescheduled. Reload Scheduling to see the current appointment.'); }
     }}
     onClose={onClose}
   />;

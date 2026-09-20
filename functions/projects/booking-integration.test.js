@@ -217,3 +217,68 @@ test('malformed write-pause settings fail closed rather than permit a new Projec
   await assert.rejects(f.check(), error => error.details?.reason === 'project_booking_not_active');
   assert.deepEqual(bookings(f.db), []);
 });
+
+function followUpFixture(options = {}) {
+  const f = fixture(options);
+  const source = { sourcePartialAppointmentId: 'ORIGINAL', sourcePartialOutcomeRevision: 1 };
+  f.db.store.set('appointments/ORIGINAL', { appointmentId: 'ORIGINAL', customerId: 'PROJECT-C', propertyId: 'PROJECT-S',
+    status: 'completed', executionOutcome: { status: 'partial', revision: 1, remainingQuantity: 1,
+      remainingWorkStatus: 'pending', remainingWorkLines: request().workLines } });
+  f.db.store.set('projectAppointmentLinks/ORIGINAL', { schemaVersion: 1, appointmentId: 'ORIGINAL', projectId: 'PROJECT-P',
+    phaseId: null, customerId: 'PROJECT-C', propertyId: 'PROJECT-S' });
+  f.offerFollowUp = () => f.authority.checkAvailability({ request: request(), actor,
+    context: { channel: 'office', requestKey: 'FOLLOW-UP-OFFER', ...source } });
+  f.commitFollowUp = offer => f.commit(offer, { context: { channel: 'office', ...source } });
+  return f;
+}
+test('remaining work derives its Project and General phase from the original link in the atomic booking transaction', async () => {
+  const f = followUpFixture(); const offer = (await f.offerFollowUp()).offer;
+  assert.equal(offer.projectContext.phaseId, null); assert.equal(offer.projectContext.actorId, actor.id);
+  const created = await f.commitFollowUp(offer);
+  const link = f.db.store.get(`projectAppointmentLinks/${created.appointmentId}`);
+  assert.equal(link.projectId, 'PROJECT-P'); assert.equal(link.phaseId, null);
+  assert.equal(link.sourcePartialAppointmentId, 'ORIGINAL'); assert.equal(link.sourcePartialOutcomeRevision, 1);
+  assert.equal(created.appointment.sourcePartialAppointmentId, 'ORIGINAL');
+  assert.equal(link.createdBy, actor.id); assert.equal(link.workOrderIdsAtLink.length, 2);
+  assert.equal(f.db.store.get('appointments/ORIGINAL').executionOutcome.followUpAppointmentId, created.appointmentId);
+  assert.equal(f.db.store.get('appointments/ORIGINAL').executionOutcome.remainingWorkStatus, 'scheduled');
+  const before = structuredClone([...f.db.store]);
+  assert.equal((await f.commitFollowUp(offer)).replayed, true); assert.deepEqual([...f.db.store], before);
+  f.db.store.get('appointments/ORIGINAL').executionOutcome.followUpAppointmentId = 'FOREIGN';
+  const conflict = structuredClone([...f.db.store]);
+  await assert.rejects(f.commitFollowUp(offer), error => error.details?.reason === 'remaining_work_reconciliation_required');
+  assert.deepEqual([...f.db.store], conflict);
+  assert.deepEqual(f.db.store.get('projectRecords/PROJECT-P'), plan());
+});
+test('remaining work cannot silently downgrade a conflicting Project association or change the plan after its offer', async () => {
+  for (const mutation of [
+    f => f.db.store.set('projectRecords/PROJECT-P', { ...plan(), version: 2 }),
+    f => f.db.store.set('projectRecords/PROJECT-P', { ...plan(), planningStatus: 'Completed' }),
+    f => f.db.store.get('appointments/ORIGINAL').executionOutcome.revision++,
+    f => f.db.store.get('appointments/ORIGINAL').executionOutcome.remainingWorkLines[0].quantity++,
+    f => f.db.store.get('projectAppointmentLinks/ORIGINAL').phaseId = 'MISSING',
+    f => f.db.store.delete('projectAppointmentLinks/ORIGINAL'),
+    f => f.db.store.set('businessSettings/projects-registry', { backendEnabled: true, bookingEnabled: true, writesPaused: true }),
+  ]) {
+    const f = followUpFixture(); const offer = (await f.offerFollowUp()).offer; mutation(f);
+    const before = structuredClone([...f.db.store]);
+    await assert.rejects(f.commitFollowUp(offer));
+    assert.deepEqual([...f.db.store], before);
+  }
+});
+test('follow-up offers cannot create ordinary bookings/holds, be retagged, or bypass an inactive Projects integration', async () => {
+  const f = followUpFixture(); const offer = (await f.offerFollowUp()).offer;
+  const before = structuredClone([...f.db.store]);
+  for (const createMode of ['confirmed', 'temporary_hold']) await assert.rejects(f.commit(offer, { createMode }), e => e.details?.reason === 'remaining_work_offer_conflict');
+  assert.deepEqual([...f.db.store], before);
+  await assert.rejects(f.check(false, 'FOLLOW-UP-OFFER'), e => e.code === 'idempotency_conflict');
+  await assert.rejects(followUpFixture({ enabled: false }).offerFollowUp(), e => e.details?.reason === 'project_booking_not_active');
+});
+test('ordinary remaining work stays ordinary, while orphaned Project context fails closed', async () => {
+  const f = followUpFixture({ enabled: false }); f.db.store.delete('projectAppointmentLinks/ORIGINAL');
+  const offer = (await f.offerFollowUp()).offer; assert.equal(offer.projectContext, undefined);
+  const result = await f.commitFollowUp(offer); assert.equal(result.appointment.projectContext, undefined);
+  const orphan = followUpFixture(); orphan.db.store.delete('projectAppointmentLinks/ORIGINAL');
+  orphan.db.store.get('appointments/ORIGINAL').projectContext = { projectId: 'PROJECT-P', phaseId: null };
+  await assert.rejects(orphan.offerFollowUp(), e => e.details?.reason === 'project_booking_link_conflict');
+});

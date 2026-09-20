@@ -163,7 +163,8 @@ test('temporary hold confirmation and cancellation keep history while excluding 
   const appointmentId = held.body.appointmentId;
   const beforeLink = (await db.collection('projectAppointmentLinks').doc(appointmentId).get()).data();
   const confirmed = await f.call('confirm_temporary_hold', { appointmentId, requestId: id('confirm-hold') }); assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
-  const cancelled = await f.call('cancel_appointment', { appointmentId, requestId: id('cancel'), reason: 'Synthetic customer request' }); assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+  const observed = await f.call('get_appointment', { appointmentId });
+  const cancelled = await f.call('cancel_appointment', { appointmentId, expectedAppointmentToken: observed.body.appointment.lifecycleToken, requestId: id('cancel'), reason: 'Synthetic customer request' }); assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
   const retry = await f.commit(offer, requestId, 'create_temporary_hold'); assert.equal(retry.status, 200, JSON.stringify(retry.body)); assert.equal(retry.body.replayed, true);
   assert.deepEqual((await db.collection('projectAppointmentLinks').doc(appointmentId).get()).data(), beforeLink);
   const activity = await registryCommand('get_activity', { projectId: f.plan.projectId });

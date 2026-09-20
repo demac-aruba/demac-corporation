@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { requireObservedAppointment } from '../../lib/office-appointment-observation';
+import { CanonicalAppointmentSummary } from './canonical-appointment-summary';
 import {
   appointmentDraftHydrationAllowed,
   fixedAppointmentOptions,
@@ -132,7 +134,12 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   const [lines, setLines] = useState<EditLine[]>([]);
   const [description, setDescription] = useState(appointment.customerFacingDescription || '');
   const [instructions, setInstructions] = useState(appointment.technicianInstructions || '');
+  const [descriptionChanged, setDescriptionChanged] = useState(false);
+  const [instructionsChanged, setInstructionsChanged] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [appointmentToken, setAppointmentToken] = useState('');
+  const [canonicalAppointment, setCanonicalAppointment] = useState<Record<string, unknown> | null>(null);
+  const [saved, setSaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -150,7 +157,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   const presetById = useMemo(() => new Map(presets.map((preset) => [preset.id, preset])), [presets]);
   const generatedDescription = useMemo(() => autoDescription(lines, presetById), [lines, presetById]);
   const hydrationRevision = appointmentDraftRevision(appointment);
-  const workSignature = lines.map((line) => `${line.presetId}:${line.serviceId ?? ''}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
+  const workSignature = JSON.stringify(lines);
   const signature = [
     appointment.id,
     appointment.customerId,
@@ -161,6 +168,8 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     workSignature,
     description.trim(),
     instructions.trim(),
+    descriptionChanged,
+    instructionsChanged,
   ].join('|');
   validationSignatureRef.current = signature;
   const activeValidation = validated?.signature === signature ? validated : null;
@@ -191,6 +200,8 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         const activePresets = presetResult.presets.filter((preset) => preset.active !== false);
         setPresets(activePresets);
         const rawLines = normalizeCanonicalLines(canonical.appointment.workLines);
+        setAppointmentToken(requireObservedAppointment(sourceAppointment, canonical.appointment));
+        setCanonicalAppointment(canonical.appointment);
         const fallbackPresetId = sourceAppointment.workTypeId || sourceAppointment.presetId;
         const fallbackPreset = activePresets.find((preset) => preset.id === fallbackPresetId);
         const fallback: EditLine[] = fallbackPresetId ? [{
@@ -203,10 +214,12 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         const nextLines = rawLines.length ? rawLines : fallback;
         setLines(nextLines);
         const first = rawLines[0];
-        const canonicalDescription = text(first?.customerFacingDescription) || sourceAppointment.customerFacingDescription || '';
-        const canonicalInstructions = text(first?.technicianInstructions) || sourceAppointment.technicianInstructions || '';
+        const canonicalDescription = rawLines.length ? text(first?.customerFacingDescription) : sourceAppointment.customerFacingDescription || '';
+        const canonicalInstructions = rawLines.length ? text(first?.technicianInstructions) : sourceAppointment.technicianInstructions || '';
         setDescription(canonicalDescription);
         setInstructions(canonicalInstructions);
+        setDescriptionChanged(false);
+        setInstructionsChanged(false);
         const byId = new Map(activePresets.map((preset) => [preset.id, preset]));
         lastAutoRef.current = isGeneratedDescription(canonicalDescription, nextLines, byId)
           ? canonicalDescription
@@ -226,12 +239,19 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   }, [hydrationRevision]);
 
   useEffect(() => {
+    // Hydration preserves intentionally cleared canonical text. Only a user scope edit
+    // may regenerate the suggested description.
+    if (!draftDirtyRef.current) return;
+    // Distinct line descriptions remain independent until the shared field is edited.
+    if (!descriptionChanged && new Set(lines.map(line => text(line.customerFacingDescription))).size > 1) return;
     const previousAuto = lastAutoRef.current;
-    setDescription((current) => {
-      if (!current.trim() || current.trim() === previousAuto.trim()) return generatedDescription;
-      if (previousAuto && current.startsWith(previousAuto)) return `${generatedDescription}${current.slice(previousAuto.length)}`;
-      return current;
-    });
+    let nextDescription = description;
+    if (!description.trim() || description.trim() === previousAuto.trim()) nextDescription = generatedDescription;
+    else if (previousAuto && description.startsWith(previousAuto)) nextDescription = `${generatedDescription}${description.slice(previousAuto.length)}`;
+    if (nextDescription !== description) {
+      setDescription(nextDescription);
+      setDescriptionChanged(true);
+    }
     lastAutoRef.current = generatedDescription;
   }, [generatedDescription]);
 
@@ -310,19 +330,18 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     try {
       const result = await checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
+        expectedAppointmentToken: appointmentToken,
         requestId: createOfficeLifecycleRequestId('details-edit-check'),
         customerId: appointment.customerId,
         propertyId: appointment.siteId,
         workLines: lines.map((line) => ({
           ...line,
-          customerFacingDescription: description.trim(),
-          technicianInstructions: instructions.trim(),
+          customerFacingDescription: descriptionChanged ? description.trim() : line.customerFacingDescription || '',
+          technicianInstructions: instructionsChanged ? instructions.trim() : line.technicianInstructions || '',
         })),
         requestedDate: appointment.dateKey,
         requestedTime: primary.start,
         requiredVanId: primary.vanId,
-        customerFacingDescription: description.trim(),
-        technicianInstructions: instructions.trim(),
         notes: `Edited from LIVE Scheduling appointment ${appointment.id}.`,
         changeKind: 'details_edited',
       });
@@ -344,20 +363,20 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     } finally {
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [appointment.customerId, appointment.dateKey, appointment.id, appointment.siteId, description, instructions, lines, primary?.start, primary?.vanId, signature, workValid]);
+  }, [appointment.customerId, appointment.dateKey, appointment.id, appointment.siteId, appointmentToken, description, descriptionChanged, instructions, instructionsChanged, lines, primary?.start, primary?.vanId, signature, workValid]);
 
   useEffect(() => {
-    if (loading || saving || !appointment.customerId || !appointment.siteId || !primary?.vanId || !primary.start || !workValid) return;
+    if (loading || saving || saved || !appointmentToken || !appointment.customerId || !appointment.siteId || !primary?.vanId || !primary.start || !workValid) return;
     const timer = window.setTimeout(() => { void validateChanges(true); }, 350);
     validationTimerRef.current = timer;
     return () => {
       window.clearTimeout(timer);
       if (validationTimerRef.current === timer) validationTimerRef.current = null;
     };
-  }, [appointment.customerId, appointment.siteId, loading, primary?.start, primary?.vanId, saving, validateChanges, workValid]);
+  }, [appointment.customerId, appointment.siteId, appointmentToken, loading, primary?.start, primary?.vanId, saving, saved, validateChanges, workValid]);
 
   const saveChanges = async () => {
-    if (!activeValidation?.result.offer || !selectedOption || saving || checking) return;
+    if (!activeValidation?.result.offer || !selectedOption || saving || saved || checking) return;
     setSaving(true);
     setError('');
     try {
@@ -371,7 +390,9 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         note: 'Edited from Live Scheduling appointment details.',
         changeKind: 'details_edited',
       });
-      await onSaved();
+      setSaved(true);
+      setValidated(null);
+      try { await onSaved(); } catch { setError('The changes were saved. Reload Scheduling to see the current appointment.'); }
     } catch (cause) {
       validationEpochRef.current += 1;
       setValidated(null);
@@ -384,6 +405,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   return <section className={styles.formSection}>
     <header><strong>Edit appointment</strong><span>Work details may change; date, start time and primary Van stay fixed.</span></header>
     <div style={{ padding: 11, display: 'grid', gap: 10 }}>
+      {canonicalAppointment ? <CanonicalAppointmentSummary appointment={canonicalAppointment} /> : null}
       {loading ? <div className={styles.descriptionPreview}><span>LOADING</span><strong>Loading canonical appointment…</strong></div> : null}
       {!loading ? <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 6 }}>
@@ -412,8 +434,9 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         })}
 
         <div className={styles.formGrid}>
-          <label className={styles.wide}><span>Customer-facing work description</span><textarea rows={3} disabled={saving} value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} /></label>
-          <label className={styles.wide}><span>Technician instructions</span><textarea rows={3} disabled={saving} value={instructions} onChange={(event) => { setInstructions(event.target.value); resetValidation(); }} /></label>
+          <label className={styles.wide}><span>Customer-facing work description</span><textarea rows={3} disabled={saving} value={description} onChange={(event) => { setDescription(event.target.value); setDescriptionChanged(true); resetValidation(); }} /></label>
+          <label className={styles.wide}><span>Technician instructions</span><textarea rows={3} disabled={saving} value={instructions} onChange={(event) => { setInstructions(event.target.value); setInstructionsChanged(true); resetValidation(); }} /></label>
+          {lines.length > 1 ? <p className={styles.wide}>Each work line keeps its recorded text. Editing either text field above applies that field to all work lines.</p> : null}
         </div>
 
         {checking ? <div className={styles.descriptionPreview}><span>CHECKING LIVE CAPACITY</span><strong>Booking Authority is validating this draft in the background. You can keep editing.</strong></div> : null}

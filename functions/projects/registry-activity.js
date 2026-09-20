@@ -74,7 +74,11 @@ async function loadProjectActivity({ db, transaction, project, afterId, phaseId,
     if (appointment.status === 'cancelled' && !CANCELLED.has(order.status)) issues.push({ code: 'appointment_lifecycle_mismatch', workOrderId: order.id });
     if (!['confirmed', 'temporary_hold', 'cancelled', 'completed'].includes(appointment.status) || !KNOWN.has(order.status)) issues.push({ code: 'unknown_scheduling_status', workOrderId: order.id });
     const plannedVanMinutes = Number.isSafeInteger(order.appointmentDurationMinutes) && order.appointmentDurationMinutes >= 0 ? order.appointmentDurationMinutes : null;
-    const slots = Number.isSafeInteger(order.scheduledSlots) && order.scheduledSlots >= 0 ? order.scheduledSlots : null;
+    const allocation = order.scheduledSlots;
+    const slots = Number.isSafeInteger(allocation) && allocation >= 0 ? allocation
+      : Array.isArray(allocation) && allocation.length <= 1440
+        && allocation.every(value => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
+        && new Set(allocation).size === allocation.length ? allocation.length : null;
     if (!cancelled && (plannedVanMinutes === null || slots === null)) issues.push({ code: 'missing_allocation_measurement', workOrderId: order.id });
     const fieldVisits = [];
     for (const raw of visitsByOrder.get(order.id) || []) {

@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { appointmentStateToken } = require('./bookingLifecycleIntent');
 const {
   appointmentStillOwnsLock,
   assertDetailsEditKeepsPlacement,
@@ -101,7 +102,7 @@ function request(requestedDate = "2098-12-22") {
   };
 }
 
-function openOffer(selectedOption = option()) {
+function openOffer(selectedOption = option(), changeKind = 'customer_reschedule') {
   return {
     id: "OFR-RESCHEDULE-1",
     version: 1,
@@ -109,11 +110,13 @@ function openOffer(selectedOption = option()) {
     expiresAt: "2098-12-31T23:59:59.000Z",
     request: request(selectedOption.date),
     options: [selectedOption],
+    lifecycleContext: { version: 1, appointmentId: 'APT-LIVE-1', actorId: 'owner-1', changeKind,
+      expectedAppointmentToken: appointmentStateToken(appointmentSeed()) },
   };
 }
 
 function operationalOffer() {
-  return openOffer(option({ date: "2098-12-20" }));
+  return openOffer(option({ date: "2098-12-20" }), 'operational_move');
 }
 
 function fixture(extra = {}) {
@@ -170,6 +173,8 @@ function fixture(extra = {}) {
       }];
     },
   };
+  const seededOffer = db.read('bookingOffers/OFR-RESCHEDULE-1');
+  if (seededOffer) seededOffer.lifecycleContext.expectedAppointmentToken = appointmentStateToken(db.read('appointments/APT-LIVE-1'));
   const lifecycle = createBookingAppointmentLifecycle({
     db,
     schedulingProvider: provider,
@@ -181,7 +186,7 @@ function fixture(extra = {}) {
 
 test("rescheduling cannot reset completed primary/support history, including completion before the transaction", async () => {
   const command = { appointmentId: "APT-LIVE-1", offerId: "OFR-RESCHEDULE-1", offerVersion: 1,
-    optionId: "OPT-NEW", reason: "Synthetic review", actor: { id: "office-test" } };
+    requestId: 'synthetic-change-1', optionId: "OPT-NEW", reason: "Synthetic review", actor: { id: "owner-1" } };
   for (const terminal of [{ status: "Completada" }, { status: "Facturada" }, { status: "Pagada" },
     { actualCompletedAt: "2098-12-01T11:00:00.000Z" }, { lifecycleHistory: [{ kind: "technician_complete" }] }]) {
     for (const support of [false, true]) {
@@ -195,6 +200,7 @@ test("rescheduling cannot reset completed primary/support history, including com
         appointment.workOrderIds.push(workOrderId);
         db.store.set(`workOrders/${workOrderId}`, { appointmentId: appointment.appointmentId, status: "Confirmada" });
       }
+      db.read('bookingOffers/OFR-RESCHEDULE-1').lifecycleContext.expectedAppointmentToken = appointmentStateToken(appointment);
       // Another authority completes after the preflight read, before commit validation.
       let before;
       provider.revalidateSelection = async ({ option }) => {
@@ -271,6 +277,7 @@ test("cancelling an appointment releases capacity and cancels linked work orders
   const { db, lifecycle } = fixture();
   const result = await lifecycle.cancelAppointment({
     appointmentId: "APT-LIVE-1",
+    requestId: 'cancel-test-1', expectedAppointmentToken: appointmentStateToken(db.read('appointments/APT-LIVE-1')),
     reason: "Customer cancelled service",
     actor: { id: "owner-1", name: "Owner" },
   });
@@ -284,6 +291,7 @@ test("cancelling an appointment releases capacity and cancels linked work orders
 test("customer reschedule revalidates capacity and preserves Work Order fields owned by other domains", async () => {
   const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
   const result = await lifecycle.rescheduleAppointment({
+    requestId: 'reschedule-test-1',
     appointmentId: "APT-LIVE-1",
     offerId: "OFR-RESCHEDULE-1",
     offerVersion: 1,
@@ -322,6 +330,7 @@ test("customer reschedule revalidates capacity and preserves Work Order fields o
 test("operational drag uses its server-created offer directly and skips duplicate provider revalidation", async () => {
   const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": operationalOffer() });
   const result = await lifecycle.rescheduleAppointment({
+    requestId: 'reschedule-test-1',
     appointmentId: "APT-LIVE-1",
     offerId: "OFR-RESCHEDULE-1",
     offerVersion: 1,
@@ -338,9 +347,10 @@ test("operational drag uses its server-created offer directly and skips duplicat
 });
 
 test("operational drag refuses an offer whose date no longer matches the canonical appointment date", async () => {
-  const { lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
+  const { lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer(option(), 'operational_move') });
   await assert.rejects(
     () => lifecycle.rescheduleAppointment({
+    requestId: 'reschedule-test-1',
       appointmentId: "APT-LIVE-1",
       offerId: "OFR-RESCHEDULE-1",
       offerVersion: 1,
@@ -361,6 +371,7 @@ test("rescheduling heals an active capacity lock detached from its previous appo
     "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-STALE", active: true, date: "2098-12-20", vanId: "VAN-2", slot: "13:30" },
   });
   const result = await lifecycle.rescheduleAppointment({
+    requestId: 'reschedule-test-1',
     appointmentId: "APT-LIVE-1",
     offerId: "OFR-RESCHEDULE-1",
     offerVersion: 1,
@@ -383,6 +394,7 @@ test("rescheduling still blocks capacity genuinely owned by another active appoi
   });
   await assert.rejects(
     () => lifecycle.rescheduleAppointment({
+    requestId: 'reschedule-test-1',
       appointmentId: "APT-LIVE-1",
       offerId: "OFR-RESCHEDULE-1",
       offerVersion: 1,
@@ -393,4 +405,68 @@ test("rescheduling still blocks capacity genuinely owned by another active appoi
     }),
     /owned by another active appointment/i,
   );
+});
+
+function changeCommand(extra = {}) {
+  return { appointmentId: 'APT-LIVE-1', requestId: 'intent-recovery-1', offerId: 'OFR-RESCHEDULE-1', offerVersion: 1,
+    optionId: 'OPT-NEW', reason: 'Synthetic change', actor: { id: 'owner-1' }, ...extra };
+}
+test('lost response replay reads the receipt before closed offers and later partial/completed history', async () => {
+  const { db, lifecycle, provider } = fixture({ 'bookingOffers/OFR-RESCHEDULE-1': openOffer() });
+  const command = changeCommand();
+  await lifecycle.rescheduleAppointment(command);
+  Object.assign(db.read('appointments/APT-LIVE-1'), { status: 'completed', executionOutcome: { status: 'partial' } });
+  const before = structuredClone([...db.store]);
+  const result = await lifecycle.rescheduleAppointment(command);
+  assert.equal(result.replayed, true); assert.equal(result.appointment.status, 'completed');
+  assert.equal(result.customerNotificationRecommended, false); assert.equal(provider.revalidationCalls, 1);
+  assert.deepEqual([...db.store], before);
+  await assert.rejects(lifecycle.rescheduleAppointment({ ...command, note: 'changed after timeout' }), e => e.code === 'idempotency_conflict');
+  assert.deepEqual([...db.store], before);
+});
+test('stale offer cannot overwrite a concurrent edit, including changes between preflight and commit', async () => {
+  for (const duringValidation of [false, true]) {
+    const { db, lifecycle, provider } = fixture({ 'bookingOffers/OFR-RESCHEDULE-1': openOffer() });
+    let before;
+    const concurrentEdit = () => { db.read('appointments/APT-LIVE-1').notes = 'Second operator scope'; before = structuredClone([...db.store]); };
+    if (duringValidation) provider.revalidateSelection = async ({ option }) => { concurrentEdit(); return { available: true, option }; };
+    else concurrentEdit();
+    await assert.rejects(lifecycle.rescheduleAppointment(changeCommand()), e => e.details?.reason === 'appointment_version_conflict');
+    assert.deepEqual([...db.store], before);
+  }
+});
+test('an offer cannot be moved to another actor, appointment or lifecycle operation', async () => {
+  for (const patch of [{ actor: { id: 'other-office' } }, { changeKind: 'details_edited' }, { appointmentId: 'APT-OTHER' }]) {
+    const { db, lifecycle } = fixture({ 'bookingOffers/OFR-RESCHEDULE-1': openOffer(),
+      'appointments/APT-OTHER': { ...appointmentSeed(), id: 'APT-OTHER', appointmentId: 'APT-OTHER' } });
+    const before = structuredClone([...db.store]);
+    await assert.rejects(lifecycle.rescheduleAppointment(changeCommand(patch)), e => e.details?.reason === 'lifecycle_offer_mismatch');
+    assert.deepEqual([...db.store], before);
+  }
+});
+test('cancellation requires the observed snapshot and exact receipt protects reason and scope', async () => {
+  const { db, lifecycle } = fixture();
+  const original = structuredClone([...db.store]);
+  const command = { appointmentId: 'APT-LIVE-1', requestId: 'cancel-recovery-1', reason: 'Synthetic cancellation', actor: { id: 'owner-1' },
+    expectedAppointmentToken: appointmentStateToken(db.read('appointments/APT-LIVE-1')) };
+  await assert.rejects(lifecycle.cancelAppointment({ ...command, expectedAppointmentToken: undefined }), e => e.details?.reason === 'appointment_token_required');
+  assert.deepEqual([...db.store], original);
+  await lifecycle.cancelAppointment(command);
+  const before = structuredClone([...db.store]);
+  assert.equal((await lifecycle.cancelAppointment(command)).replayed, true);
+  await assert.rejects(lifecycle.cancelAppointment({ ...command, reason: 'Different cancellation' }), e => e.code === 'idempotency_conflict');
+  assert.deepEqual([...db.store], before);
+});
+test('partial and completed support history cannot be cancelled by a new command', async () => {
+  for (const partial of [false, true]) {
+    const { db, lifecycle } = fixture();
+    const appointment = db.read('appointments/APT-LIVE-1');
+    if (partial) appointment.executionOutcome = { status: 'partial' };
+    else { appointment.workOrderIds.push('WO-SUPPORT'); db.store.set('workOrders/WO-SUPPORT', { appointmentId: appointment.id, status: 'Completada' }); }
+    const before = structuredClone([...db.store]);
+    await assert.rejects(lifecycle.cancelAppointment({ appointmentId: appointment.id, requestId: 'cancel-completed-1', reason: 'Synthetic cancellation',
+      actor: { id: 'owner-1' }, expectedAppointmentToken: appointmentStateToken(appointment) }), e =>
+      e.details?.reason === (partial ? 'partial-completion-history-locked' : 'completed_work_requires_reconciliation'));
+    assert.deepEqual([...db.store], before);
+  }
 });

@@ -28,7 +28,8 @@ function officeUser(actor, context) {
   return d.id(actor.id, 'authenticated office user');
 }
 function validateBoundContext(bound, actor, context) {
-  d.allowedKeys(bound, ['schemaVersion', 'projectId', 'phaseId', 'expectedVersion', 'actorId']);
+  d.allowedKeys(bound, ['schemaVersion', 'projectId', 'phaseId', 'expectedVersion', 'actorId', 'sourcePartialAppointmentId', 'sourcePartialOutcomeRevision'],
+    ['schemaVersion', 'projectId', 'phaseId', 'expectedVersion', 'actorId']);
   if (bound.schemaVersion !== 1 || bound.actorId !== officeUser(actor, context)) {
     throw projectError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The selected Project offer belongs to another operator or contract.', 'project_offer_identity_conflict');
   }
@@ -106,6 +107,69 @@ function createProjectBookingIntegration({ db, enabled = false } = {}) {
     } catch (error) { throw mapFailure(error); }
   }
 
+  async function readFollowUp(transaction, request, source, actor, context) {
+    officeUser(actor, context);
+    const id = d.id(source.sourcePartialAppointmentId, 'source appointment');
+    const revision = d.integer(source.sourcePartialOutcomeRevision, 'partial outcome revision', 1);
+    const [originalSnapshot, linkSnapshot] = await transaction.getAll(ref('appointments', id), ref('projectAppointmentLinks', id));
+    const original = snapshot(originalSnapshot);
+    const link = snapshot(linkSnapshot);
+    const outcome = original?.executionOutcome;
+    const { sameWorkLines } = require('../bookingPartialCompletion');
+    if (!original || (original.appointmentId && original.appointmentId !== id)
+        || original.customerId !== request.customerId || original.propertyId !== request.propertyId
+        || outcome?.status !== 'partial' || outcome.revision !== revision || !(outcome.remainingQuantity > 0)
+        || outcome.remainingWorkStatus === 'scheduled' || outcome.followUpAppointmentId
+        || !sameWorkLines(request.workLines, outcome.remainingWorkLines)) {
+      throw d.fault('remaining_work_source_conflict', 'Reload the original appointment and its current remaining work.', 409);
+    }
+    const bound = original.projectContext;
+    if ((!link && bound) || (link && (link.schemaVersion !== 1 || link.appointmentId !== id
+        || link.customerId !== original.customerId || link.propertyId !== original.propertyId
+        || (bound && (bound.projectId !== link.projectId || bound.phaseId !== link.phaseId))))) {
+      throw d.fault('project_booking_link_conflict', 'The original Project association requires reconciliation.', 409);
+    }
+    return { original, link };
+  }
+
+  async function prepareFollowUpOffer({ request, actor, context }) {
+    try {
+      if (context.projectSelection !== undefined) throw d.fault('project_booking_identity_conflict', 'Remaining work derives its Project from the original appointment.', 409);
+      const provenance = { sourcePartialAppointmentId: d.id(context.sourcePartialAppointmentId),
+        sourcePartialOutcomeRevision: d.integer(context.sourcePartialOutcomeRevision, 'partial outcome revision', 1) };
+      return await db.runTransaction(async transaction => {
+        const { link } = await readFollowUp(transaction, request, provenance, actor, context);
+        let projectContext = null;
+        if (link) {
+          const project = d.requireRecord(snapshot(await transaction.get(ref('projectRecords', d.id(link.projectId)))));
+          const selection = normalizeSelection({ projectId: link.projectId, phaseId: link.phaseId, expectedVersion: project.version });
+          await readScope(transaction, actor, context, selection, request);
+          projectContext = { schemaVersion: 1, ...selection, actorId: officeUser(actor, context), ...provenance };
+        }
+        return { projectContext, followUpContext: { schemaVersion: 1, ...provenance, actorId: officeUser(actor, context) } };
+      }, { readOnly: true });
+    } catch (error) { throw mapFailure(error); }
+  }
+
+  async function validateFollowUpCommit({ transaction, offer, appointment, actor, context }) {
+    try {
+      const bound = offer.followUpContext;
+      if (!bound || bound.schemaVersion !== 1 || bound.actorId !== officeUser(actor, context)
+          || bound.sourcePartialAppointmentId !== context.sourcePartialAppointmentId
+          || bound.sourcePartialOutcomeRevision !== context.sourcePartialOutcomeRevision) {
+        throw d.fault('remaining_work_offer_conflict', 'Obtain a new offer from the original remaining work.', 409);
+      }
+      const { original, link } = await readFollowUp(transaction, appointment, bound, actor, context);
+      const plan = offer.projectContext;
+      if (Boolean(link) !== Boolean(plan) || (link && (link.projectId !== plan.projectId || link.phaseId !== plan.phaseId
+          || plan.sourcePartialAppointmentId !== bound.sourcePartialAppointmentId
+          || plan.sourcePartialOutcomeRevision !== bound.sourcePartialOutcomeRevision))) {
+        throw d.fault('project_booking_link_conflict', 'The remaining-work Project association changed. Reload before booking.', 409);
+      }
+      return original;
+    } catch (error) { throw mapFailure(error); }
+  }
+
   async function prepareCommit({ transaction, appointment, workOrders, boundContext, actor, context, now }) {
     try {
       const selection = validateBoundContext(boundContext, actor, context);
@@ -143,6 +207,12 @@ function createProjectBookingIntegration({ db, enabled = false } = {}) {
         workOrderIds: [...ids].sort(), plannedVanMinutes, budgetAtBooking: { ...project.budget },
         source: 'booking_authority',
       };
+      if (boundContext.sourcePartialAppointmentId) {
+        const provenance = { sourcePartialAppointmentId: d.id(boundContext.sourcePartialAppointmentId),
+          sourcePartialOutcomeRevision: d.integer(boundContext.sourcePartialOutcomeRevision, 'partial outcome revision', 1) };
+        Object.assign(linkData, provenance);
+        Object.assign(eventData, provenance);
+      }
       // Return prepared writes. Only Booking Authority applies them in its existing transaction.
       // Never add scheduled time to actual labor or mutate the approved planning estimate.
       return { linkRef, linkData, eventRef, eventData };
@@ -164,6 +234,28 @@ function createProjectBookingIntegration({ db, enabled = false } = {}) {
     try { return transaction ? await read(transaction) : await db.runTransaction(read, { readOnly: true }); }
     catch (error) { throw mapFailure(error); }
   }
-  return { prepareOffer, prepareCommit, validateReplay };
+  async function validateFollowUpReplay({ transaction, appointment, actor, context }) {
+    const read = async tx => {
+      officeUser(actor, context);
+      const sourceId = d.id(context.sourcePartialAppointmentId, 'source appointment');
+      const revision = d.integer(context.sourcePartialOutcomeRevision, 'partial outcome revision', 1);
+      const [source, linked] = await tx.getAll(ref('appointments', sourceId), ref('projectAppointmentLinks', sourceId));
+      const original = snapshot(source), link = snapshot(linked), outcome = original?.executionOutcome;
+      if (!original || appointment.sourcePartialAppointmentId !== sourceId || appointment.sourcePartialOutcomeRevision !== revision
+          || original.customerId !== appointment.customerId || original.propertyId !== appointment.propertyId
+          || outcome?.status !== 'partial' || outcome.revision !== revision || outcome.remainingWorkStatus !== 'scheduled'
+          || outcome.followUpAppointmentId !== appointment.appointmentId
+          || Boolean(link) !== Boolean(appointment.projectContext)
+          || (original.projectContext && !link)
+          || (link && (link.schemaVersion !== 1 || link.appointmentId !== sourceId || link.customerId !== appointment.customerId
+            || link.propertyId !== appointment.propertyId || link.projectId !== appointment.projectContext.projectId
+            || link.phaseId !== appointment.projectContext.phaseId))) {
+        throw d.fault('remaining_work_reconciliation_required', 'The existing follow-up association requires reconciliation. Do not create a replacement.', 409);
+      }
+    };
+    try { return transaction ? await read(transaction) : await db.runTransaction(read, { readOnly: true }); }
+    catch (error) { throw mapFailure(error); }
+  }
+  return { prepareOffer, prepareFollowUpOffer, validateFollowUpCommit, validateFollowUpReplay, prepareCommit, validateReplay };
 }
 module.exports = { createProjectBookingIntegration, normalizeSelection, checkPlan };

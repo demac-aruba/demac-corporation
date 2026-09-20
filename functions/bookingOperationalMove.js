@@ -379,6 +379,8 @@ function createOperationalMoveAuthority({
       const crew = targetCrew(targetVan, dailyAssignment);
       const targetStartMinutes = timeToMinutes(targetTime);
       const targetEnd = targetStartMinutes === null ? "" : minutesToTime(targetStartMinutes + durationMinutes);
+      const targetCapacityEnd = minutesToTime(Math.max(timeToMinutes(targetEnd),
+        ...requestedSlots.map(slot => timeToMinutes(slot) + 60)));
       const nextAssignment = compactObject({
         ...assignment,
         vanId: requiredVanId,
@@ -388,6 +390,7 @@ function createOperationalMoveAuthority({
         helperStaffId: crew.helperStaffId,
         time: targetTime,
         endTime: targetEnd,
+        capacityEndTime: targetCapacityEnd,
         slots: slotCount,
         role: assignment.role || "primary",
       });
@@ -416,6 +419,7 @@ function createOperationalMoveAuthority({
         date: targetDate,
         startTime: targetTime,
         endTime: targetEnd,
+        capacityEndTime: targetCapacityEnd,
         assignments: [nextAssignment],
         primaryVanId: requiredVanId,
         capacityLockIds: newLocks.map((lock) => lock.id),
@@ -441,6 +445,7 @@ function createOperationalMoveAuthority({
           date: targetDate,
           time: targetTime,
           appointmentEndTime: targetEnd,
+          appointmentCapacityEndTime: targetCapacityEnd,
           vanId: requiredVanId,
           technicianIds: crew.technicianIds,
           scheduledSlots: slotCount,

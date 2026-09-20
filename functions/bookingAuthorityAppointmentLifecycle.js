@@ -15,6 +15,8 @@ const {
   validateCapacityLocks,
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
+const { assertAppointmentToken, assertLifecycleContext, lifecycleIntent,
+  replayLifecycle, lifecycleReceipt } = require('./bookingLifecycleIntent');
 
 const APPOINTMENT_LIFECYCLE_VERSION = 8;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
@@ -84,6 +86,14 @@ function assertUnfinishedSchedulingRecord(record, appointmentId, workOrderId) {
     throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
       "Completed work requires review and cannot be edited or rescheduled as unfinished work.",
       { reason: "completed_work_requires_reconciliation", appointmentId, ...(workOrderId ? { workOrderId } : {}) });
+  }
+}
+
+function assertPartialHistoryUnlocked(appointment) {
+  if (appointment.executionOutcome?.status === 'partial') {
+    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+      'This partially completed appointment is locked; schedule its remaining work from Actual Outcome.',
+      { reason: 'partial-completion-history-locked', appointmentId: appointment.id });
   }
 }
 
@@ -223,7 +233,7 @@ function createBookingAppointmentLifecycle({
   }
   if (!schedulingProvider) throw new Error("A schedulingProvider is required.");
 
-  async function cancelAppointment({ appointmentId, reason, note = "", actor = {} } = {}) {
+  async function cancelAppointment({ appointmentId, requestId, expectedAppointmentToken, reason, note = "", actor = {} } = {}) {
     const id = cleanText(appointmentId, 180);
     if (!id) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "appointmentId is required.", { field: "appointmentId" });
@@ -231,12 +241,29 @@ function createBookingAppointmentLifecycle({
     const cancellationReason = requireReason(reason, "Cancellation");
     const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
+    const intent = lifecycleIntent({ action: 'cancel_appointment', requestId, actor,
+      data: { appointmentId, expectedAppointmentToken, reason, note } });
+    const receiptRef = db.collection(collections.idempotency).doc(intent.id);
 
     return db.runTransaction(async (transaction) => {
+      const receiptSnapshot = await transaction.get(receiptRef);
       const snapshot = await transaction.get(appointmentRef);
       const appointment = activeAppointment(snapshot, id);
+      const replay = replayLifecycle(receiptSnapshot.exists ? receiptSnapshot.data() : null, intent, appointment);
+      if (replay) return replay;
+      assertAppointmentToken(appointment, expectedAppointmentToken);
+      assertPartialHistoryUnlocked(appointment);
+      assertUnfinishedSchedulingRecord(appointment, id);
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(appointment.status, 40).toLowerCase())) {
-        return { success: true, replayed: true, appointmentId: id, appointment };
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'This appointment is already cancelled.', { reason: 'appointment_already_cancelled' });
+      }
+
+      const linkedIds = [...new Set([...(appointment.workOrderIds || []), ...(appointment.workOrderId ? [appointment.workOrderId] : [])])];
+      for (const workOrderId of linkedIds) {
+        const work = await transaction.get(db.collection(collections.workOrders).doc(workOrderId));
+        if (!work.exists || work.data().appointmentId !== id) throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST, 'Work Order identity requires reconciliation.', { reason: 'work_order_identity_conflict' });
+        assertUnfinishedSchedulingRecord(work.data(), id, workOrderId);
       }
 
       const actorInfo = actorFields(actor);
@@ -264,7 +291,7 @@ function createBookingAppointmentLifecycle({
       });
       transaction.set(appointmentRef, patch, { merge: true });
 
-      for (const workOrderId of Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : []) {
+      for (const workOrderId of linkedIds) {
         transaction.set(db.collection(collections.workOrders).doc(workOrderId), compactObject({
           status: "Cancelada",
           cancellationReason,
@@ -282,7 +309,10 @@ function createBookingAppointmentLifecycle({
         }), { merge: true });
       }
 
-      return { success: true, replayed: false, appointmentId: id, appointment: { ...appointment, ...patch } };
+      const result = { success: true, replayed: false, appointmentId: id, requestId,
+        operation: 'cancel_appointment', appointment: { ...appointment, ...patch } };
+      transaction.set(receiptRef, lifecycleReceipt(intent, result, now.toISOString()));
+      return result;
     });
   }
 
@@ -437,6 +467,7 @@ function createBookingAppointmentLifecycle({
 
   async function rescheduleAppointment({
     appointmentId,
+    requestId,
     offerId,
     offerVersion,
     optionId,
@@ -460,13 +491,27 @@ function createBookingAppointmentLifecycle({
     const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
-
-    const [appointmentSnapshot, offerSnapshot] = await Promise.all([appointmentRef.get(), offerRef.get()]);
-    const existing = activeAppointment(appointmentSnapshot, id);
+    const intent = lifecycleIntent({ action: 'reschedule_appointment', requestId, actor,
+      data: { appointmentId, offerId, offerVersion, optionId, reason, note, changeKind: normalizedChangeKind } });
+    const receiptRef = db.collection(collections.idempotency).doc(intent.id);
+    // A consistent receipt/appointment/offer snapshot prevents a completed retry from
+    // being rejected by a closed offer or by later execution changes.
+    const preflight = await db.runTransaction(async transaction => {
+      const receiptSnapshot = await transaction.get(receiptRef);
+      const appointmentSnapshot = await transaction.get(appointmentRef);
+      const existing = activeAppointment(appointmentSnapshot, id);
+      const replay = replayLifecycle(receiptSnapshot.exists ? receiptSnapshot.data() : null, intent, existing);
+      if (replay) return { replay };
+      const offerSnapshot = await transaction.get(offerRef);
+      return { existing, offer: offerSnapshot.exists ? { id: offerSnapshot.id, ...offerSnapshot.data() } : null };
+    }, { readOnly: true });
+    if (preflight.replay) return preflight.replay;
+    const { existing, offer } = preflight;
+    assertPartialHistoryUnlocked(existing);
+    assertLifecycleContext(offer, existing, actor, normalizedChangeKind);
     if (["cancelled", "canceled", "cancelada"].includes(cleanText(existing.status, 40).toLowerCase())) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be changed.", { appointmentId: id });
     }
-    const offer = offerSnapshot.exists ? { id: offerSnapshot.id, ...offerSnapshot.data() } : null;
     const selected = validateOfferSelection({ offer, offerVersion, optionId, now });
     const request = normalizeBookingRequest(offer.request);
     if (request.customerId !== cleanText(existing.customerId, 160) || request.propertyId !== cleanText(existing.propertyId, 160)) {
@@ -506,11 +551,17 @@ function createBookingAppointmentLifecycle({
     const refreshedCapacityEndTime = capacityEndTime(refreshedOption);
 
     return db.runTransaction(async (transaction) => {
+      const receiptSnapshot = await transaction.get(receiptRef);
       const [currentAppointmentSnapshot, currentOfferSnapshot] = await Promise.all([
         transaction.get(appointmentRef),
         transaction.get(offerRef),
       ]);
       const current = activeAppointment(currentAppointmentSnapshot, id);
+      const replay = replayLifecycle(receiptSnapshot.exists ? receiptSnapshot.data() : null, intent, current);
+      if (replay) return replay;
+      assertPartialHistoryUnlocked(current);
+      const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
+      assertLifecycleContext(currentOffer, current, actor, normalizedChangeKind);
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(current.status, 40).toLowerCase())) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be changed.", { appointmentId: id });
       }
@@ -533,7 +584,6 @@ function createBookingAppointmentLifecycle({
         }
         assertUnfinishedSchedulingRecord(order, id, workOrderId);
       }
-      const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
       if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)) {
@@ -760,9 +810,12 @@ function createBookingAppointmentLifecycle({
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
-      return {
+      const result = {
         success: true,
         appointmentId: id,
+        requestId,
+        operation: 'reschedule_appointment',
+        replayed: false,
         changeKind: normalizedChangeKind,
         customerNotificationRecommended,
         appointment: {
@@ -784,6 +837,8 @@ function createBookingAppointmentLifecycle({
         },
         workOrderIds,
       };
+      transaction.set(receiptRef, lifecycleReceipt(intent, result, now.toISOString()));
+      return result;
     });
   }
 

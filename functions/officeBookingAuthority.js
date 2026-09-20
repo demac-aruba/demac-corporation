@@ -1169,7 +1169,10 @@ function createOfficeBookingApi({
           requestKey: `office:${identity.uid}:${requestId}:availability${backdated ? ":backdated" : ""}`,
           officeRequestId: requestId,
           ...(data.projectSelection !== undefined ? { projectSelection: data.projectSelection } : {}),
+          ...(data.sourcePartialAppointmentId !== undefined ? { sourcePartialAppointmentId: data.sourcePartialAppointmentId,
+            sourcePartialOutcomeRevision: data.sourcePartialOutcomeRevision } : {}),
           excludeAppointmentId,
+          ...(excludeAppointmentId ? { expectedAppointmentToken: data.expectedAppointmentToken } : {}),
           requiredPrimaryVanId,
           requestedSupportSlotIds,
           changeKind,
@@ -1216,9 +1219,11 @@ function createOfficeBookingApi({
       return { success: true, appointmentId: appointment.appointmentId || appointment.id, appointment };
     }
     if (action === OFFICE_BOOKING_ACTIONS.CANCEL_APPOINTMENT) {
-      officeRequestId(data.requestId);
+      const requestId = officeRequestId(data.requestId);
       return getLifecycle().cancelAppointment({
         appointmentId: data.appointmentId,
+        requestId,
+        expectedAppointmentToken: data.expectedAppointmentToken,
         reason: data.reason,
         note: data.note,
         actor,
@@ -1229,6 +1234,7 @@ function createOfficeBookingApi({
       const changeKind = lifecycleChangeKind(data.changeKind);
       return getLifecycle().rescheduleAppointment({
         appointmentId: data.appointmentId,
+        requestId,
         offerId: data.offerId,
         offerVersion: data.offerVersion,
         optionId: data.optionId,

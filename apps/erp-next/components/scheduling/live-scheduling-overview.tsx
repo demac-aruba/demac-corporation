@@ -45,6 +45,7 @@ import { AfterHoursEmergencyDrawer } from './after-hours-emergency-panel';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
+import { OfficeLifecycleRecovery } from './office-lifecycle-recovery';
 import laneStyles from './live-scheduling-lane-actions.module.css';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -650,6 +651,7 @@ export function LiveSchedulingOverview() {
 
   return (
     <section className={`${styles.page} ${laneStyles.mobileSchedule}`} data-live-schedule>
+      <OfficeLifecycleRecovery onRecovered={async () => { setSelectedAppointmentId(''); await refresh(); }} />
       <header className={styles.pageHeader}>
         <div>
           <span className={styles.eyebrow}>Operations · Aruba · Live</span>

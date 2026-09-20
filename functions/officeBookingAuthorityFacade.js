@@ -31,7 +31,7 @@ function officeActor(identity = {}) {
   };
 }
 
-function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
+function createOfficeBookingAuthorityFacade({ db, verifyIdToken, projectsEnabled = false } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
 
@@ -39,7 +39,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   // It handles ordinary booking/lifecycle actions plus record_partial_completion and
   // schedule_remaining_work, while this facade continues to own specialized
   // communication, van-schedule communication, and after-hours actions.
-  const partialWrapper = createOfficeBookingPartialWrapper({ db, verifyIdToken });
+  const partialWrapper = createOfficeBookingPartialWrapper({ db, verifyIdToken, projectsEnabled });
   const baseApi = partialWrapper.api;
   const communication = createAppointmentCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
   const vanSchedules = createVanScheduleCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
@@ -105,6 +105,7 @@ function getDefaultFacade() {
   if (!defaultFacade) {
     defaultFacade = createOfficeBookingAuthorityFacade({
       db: getFirestore(),
+      projectsEnabled: process.env.PROJECTS_REGISTRY_ENABLED === 'true',
       verifyIdToken: (token) => getAuth().verifyIdToken(token),
     });
   }

@@ -7,6 +7,7 @@ const {
   cleanText,
 } = require("./bookingAuthorityCore");
 const { createBookingAuthority } = require("./bookingAuthorityFirestore");
+const { createProjectBookingIntegration } = require('./projects/booking-integration');
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 const { createOfficeBookingApi } = require("./officeBookingAuthority");
 const { createPartialCompletionAuthority } = require("./bookingPartialCompletion");
@@ -14,8 +15,6 @@ const { createPartialCompletionAuthority } = require("./bookingPartialCompletion
 const RECORD_PARTIAL_COMPLETION = "record_partial_completion";
 const SCHEDULE_REMAINING_WORK = "schedule_remaining_work";
 const PARTIAL_PROTECTED_ACTIONS = new Set([
-  "cancel_appointment",
-  "reschedule_appointment",
   "move_appointment",
 ]);
 
@@ -57,12 +56,13 @@ function partialOutcomeRecorded(appointment) {
   return cleanText(appointment?.executionOutcome?.status, 40) === "partial";
 }
 
-function createOfficeBookingPartialWrapper({ db, verifyIdToken } = {}) {
+function createOfficeBookingPartialWrapper({ db, verifyIdToken, projectsEnabled = false } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
 
   const provider = createSchedulingProvider({ db });
-  const bookingAuthority = createBookingAuthority({ db, availabilityProvider: provider });
+  const bookingAuthority = createBookingAuthority({ db, availabilityProvider: provider,
+    projectIntegration: createProjectBookingIntegration({ db, enabled: projectsEnabled }) });
   const api = createOfficeBookingApi({
     db,
     verifyIdToken,
@@ -144,6 +144,7 @@ function getDefaultWrapper() {
   if (!defaultWrapper) {
     defaultWrapper = createOfficeBookingPartialWrapper({
       db: getFirestore(),
+      projectsEnabled: process.env.PROJECTS_REGISTRY_ENABLED === 'true',
       verifyIdToken: (token) => getAuth().verifyIdToken(token),
     });
   }

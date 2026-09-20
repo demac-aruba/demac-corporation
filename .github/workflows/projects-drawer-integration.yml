@@ -6,6 +6,14 @@ on:
       - 'apps/erp-next/components/projects/central/**'
       - 'apps/erp-next/lib/projects/**'
       - 'apps/erp-next/lib/office-booking*'
+      - 'apps/erp-next/lib/office-lifecycle*'
+      - 'apps/erp-next/lib/office-appointment-observation.ts'
+      - 'apps/erp-next/lib/firebase/session.ts'
+      - 'apps/erp-next/scripts/office-lifecycle*'
+      - 'functions/bookingLifecycleIntent.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle*'
+      - 'functions/bookingPartialCompletion*'
+      - 'functions/officeBookingAuthority*'
       - 'apps/erp-next/scripts/projects-drawer*'
       - 'apps/erp-next/scripts/projects-booking-recovery*'
       - '.github/workflows/projects-drawer-integration.yml'
@@ -32,7 +40,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '22'
           package-manager-cache: false
       - uses: actions/setup-java@v4
         with:
@@ -49,15 +57,22 @@ jobs:
         run: |
           npm run typecheck --prefix apps/erp-next
           node --test apps/erp-next/scripts/projects-booking-recovery.test.cjs
+      - name: Lifecycle recovery contracts
+        working-directory: apps/erp-next
+        run: |
+          npx tsc --ignoreConfig scripts/office-lifecycle-recovery-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .office-lifecycle-test --rootDir . --lib ES2022,DOM
+          node .office-lifecycle-test/scripts/office-lifecycle-recovery-acceptance.js
       - name: Real drawer to authenticated Office and Firestore
         run: >-
           "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
           --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
-          'node apps/erp-next/scripts/projects-drawer-browser.cjs'
+          'node apps/erp-next/scripts/projects-drawer-browser.cjs && node apps/erp-next/scripts/office-lifecycle-browser.cjs'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: projects-drawer-evidence
-          path: projects-drawer-evidence/
+          path: |
+            projects-drawer-evidence/
+            office-lifecycle-evidence/
           if-no-files-found: warn
           retention-days: 7
