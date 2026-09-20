@@ -13,6 +13,8 @@ export type CentralProject = {
   planningStatus: string; phases: ProjectPhasePlan[];
   details?: Record<string, unknown> & { materialBudget?: { currency: 'AWG'; amountMinor: number } | null };
   budget: { unit: 'van_minutes'; originalMinutes: number; currentMinutes: number; revision: number };
+  materialBudgetBaseline?: { currency: 'AWG'; originalAmountMinor: number | null; revision: number;
+    provenance: 'created_plan' | 'imported_snapshot' | 'not_recorded' };
   migration?: { status: string; importId: string; sourceDigest: string; capturedBaselineOnly: boolean; sourceDeclaredStatus: string };
   updatedAt: string;
 };

@@ -6,7 +6,7 @@ import { MetadataDialog, PhaseDialog, PlanDialog } from './project-plan-dialog';
 import { ProjectImportPanel } from './project-import-panel';
 import { ProjectMaterialsPanel } from './project-materials-panel';
 import { ProjectEstimateDialog } from './project-estimate-dialog';
-import { materialBudgetLabel } from '@/lib/projects/material-budget';
+import { ProjectMaterialBudget, MaterialBudgetDialog } from './project-material-budget';
 import { ProjectFieldExecution } from './project-field-execution';
 import { PhaseCompletionDialog } from './phase-completion-dialog';
 import { HistoryReconciliationDialog } from './history-reconciliation-dialog';
@@ -26,7 +26,7 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
   const [selected,setSelected]=useState('');const [detail,setDetail]=useState<PageState<{project:CentralProject;activity:ProjectActivity}>>({data:null,loading:false,error:''});
   const [activityCursor,setActivityCursor]=useState<string|undefined>();const [activityCursors,setActivityCursors]=useState<Array<string|undefined>>([]);
   const [tab,setTab]=useState('Overview');const [busy,setBusy]=useState(false);const [notice,setNotice]=useState('');const [error,setError]=useState('');
-  const [modal,setModal]=useState<'create'|'metadata'|'estimate'|'phase'|'associate'|'completion'|'progress'|'lifecycle'|'templates'|'history'|null>(null);const [phase,setPhase]=useState<ProjectPhasePlan|undefined>();
+  const [modal,setModal]=useState<'create'|'metadata'|'estimate'|'material-budget'|'phase'|'associate'|'completion'|'progress'|'lifecycle'|'templates'|'history'|null>(null);const [phase,setPhase]=useState<ProjectPhasePlan|undefined>();
   const locked=busy||writer.hasPending();
   useEffect(()=>{const controller=new AbortController();let current=true;setList(previous=>({...previous,loading:true,error:''}));void request<ProjectList>({action:'list_plans',data:{limit:20,...(cursor?{afterId:cursor}:{})}},controller.signal).then(data=>{
     if(data.source!=='project_registry_v1'||!Array.isArray(data.projects)||data.projects.some(project=>project.schemaVersion!==1||!project.id||!project.budget))throw Error('The server returned an unsupported project list.');
@@ -71,9 +71,7 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
           <button type="button" className={s.button} disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)||['Completed','Cancelled'].includes(project.planningStatus)} onClick={()=>setModal('estimate')}>Revise estimate</button>
         </div>
         <p>Van estimate revision {project.budget.revision}. The original estimate remains {minutesLabel(project.budget.originalMinutes)}.</p>
-        {project.type!=='Service Project'&&<p>Material budget: {project.details?.materialBudget
-          ? materialBudgetLabel(project.details.materialBudget)
-          : 'Not estimated'}. Planning only; actual material cost requires historical source evidence.</p>}
+        <ProjectMaterialBudget project={project} disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)||['Completed','Cancelled'].includes(project.planningStatus)} onRevise={()=>setModal('material-budget')}/>
       </section>}
       {tab==='Materials'&&<ProjectMaterialsPanel key={`${project.id}:${project.version}:${activityCursor||'first'}`} project={project} activity={activity} request={request}/>}
       {tab==='Field execution'&&<ProjectFieldExecution key={project.id} request={request} projectId={project.id} projectVersion={project.version} refreshToken={refresh}/>}
@@ -87,6 +85,7 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
     {modal==='history'&&project&&isOwner&&<HistoryReconciliationDialog key={`${project.id}:${project.version}`} project={project} request={request} busy={locked} canManage={writeAllowed} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='create'&&<MetadataDialog busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='metadata'&&project&&<MetadataDialog key={`${project.id}:${project.version}`} project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
+    {modal==='material-budget'&&project&&<MaterialBudgetDialog key={`${project.id}:${project.version}`} project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='estimate'&&project&&<ProjectEstimateDialog key={`${project.id}:${project.version}`} project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='phase'&&project&&<PhaseDialog project={project} phase={phase} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='completion'&&project&&phase&&<PhaseCompletionDialog project={project} phase={phase} request={request} canManage={writeAllowed} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}

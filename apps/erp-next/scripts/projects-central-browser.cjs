@@ -81,36 +81,97 @@ async function externalResponse(url,request,rawBody) {
   if(url.hostname.endsWith('.cloudfunctions.net'))return json({error:{code:'test_isolated',message:'No external operational functions in this test'}},503);
   throw Error('Unmocked external service; no request forwarded.');
 }
+async function verifyLocalCostEvidence(page, engineName) {
+  const key=STORAGE_KEYS[0];
+  const expense={id:'LOCAL-EXPENSE',date:'2026-09-01',vendor:'Synthetic vendor',description:'Synthetic approved manual materials',amount:123.45,costType:'Purchased Material',phaseId:'',source:'Invoice',status:'Approved'};
+  const source={id:'LOCAL-USER-PROJECT',projectNumber:'PRJ-LOCAL',name:'Synthetic local cost evidence',customerId:CUSTOMER,customerName:'Synthetic customer',siteId:PROPERTY,location:'Synthetic property',contactPerson:'Synthetic contact',type:'Service Project',description:'Scope',status:'Planned',priority:'High',managerId:'',managerName:'Not assigned',startsOn:'2026-09-01',estimatedCompletionOn:'2026-10-01',totalUnits:10,completedUnits:0,unitType:'Units',estimatedWorkDays:11,slotsPerWorkDay:6,slotDurationMinutes:60,estimatedSlots:66,estimatedLaborHours:66,actualLaborHours:0,scheduledFutureHours:0,materialBudget:500,materialActual:123.45,assignedVans:[],phases:[],assignments:[],materials:[],expenses:[expense],costEntries:[{id:'CE-LOCAL-EXPENSE',date:expense.date,costType:expense.costType,sourceType:'Expense',sourceId:expense.id,description:expense.description,amount:expense.amount,phaseId:'',vendorOrEmployee:expense.vendor}]};
+  const raw=JSON.stringify({version:1,selectedProjectId:source.id,projects:[source],preservedExtension:'Synthetic original'});
+  await page.evaluate(({key,raw})=>localStorage.setItem(key,raw),{key,raw});
+  await page.goto(origin+'/projects/');
+  await page.getByRole('button',{name:'Open Phases',exact:true}).click();
+  const evidence=page.getByRole('region',{name:'Browser-only cost evidence',exact:true});
+  await evidence.getByText(/Current recorded material budget: AWG 500/).waitFor();
+  for(const label of ['Expense records (1 local rows)','Cost entries (1 local rows)']) await evidence.getByText(label,{exact:true}).click();
+  assert.equal(await evidence.getByText('123.45 · currency not recorded',{exact:true}).count(),2);
+  await evidence.getByText(/source ID: LOCAL-EXPENSE/).waitFor();
+  await evidence.getByText(/local status: Approved/).waitFor();
+  await evidence.getByText(/Available balance and overrun: unknown/).waitFor();
+  assert.deepEqual(JSON.parse(await page.evaluate(key=>localStorage.getItem(key),key)),JSON.parse(raw));
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>{const sidebar=document.querySelector('.erp-sidebar');return !sidebar||sidebar.getBoundingClientRect().right<=1||getComputedStyle(sidebar).display==='none';});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'Local evidence fits mobile');
+  await page.screenshot({path:path.join(ART,`${engineName}-local-cost-evidence-mobile.png`),fullPage:true});
+  for(const original of ['{"projects":invalid-json',JSON.stringify({version:1,selectedProjectId:'DEMO-PRJ-VRF-001',projects:[{...source,id:'DEMO-PRJ-VRF-001'}]})]) {
+    // Let this route finish its sidebar availability/prefetch reads before the next
+    // independent storage-load scenario. All DOM/page errors remain fatal below.
+    await page.waitForLoadState('networkidle');
+    await page.evaluate(({key,original})=>localStorage.setItem(key,original),{key,original});
+    await page.reload();
+    await page.getByRole('heading',{name:'Project records require recovery review',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Create Project from CRM',exact:true}).isDisabled(),true);
+    assert.equal(await page.evaluate(key=>localStorage.getItem(key),key),original,'Loading cannot erase malformed or modified sample originals');
+  }
+  await page.waitForLoadState('networkidle');
+}
 async function verifyPlanningBudgets(page, projectId, engineName) {
   const read = async () => (await api('get_plan', { projectId })).project;
   const original = await read();
   assert.equal(original.details.materialBudget, null, 'Blank optional material budget remains unknown');
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
-  let edit = page.getByRole('dialog', { name: 'Edit project plan' });
-  await edit.getByLabel('Material budget (optional)', { exact: true }).fill('1200.35');
-  await edit.getByRole('button', { name: 'Save project', exact: true }).click();
-  await edit.waitFor({ state: 'hidden' });
+  const costs = page.getByRole('region', { name: 'Material budget and operational costs', exact: true });
+  await costs.getByText('Not connected to this shared record', { exact: true }).waitFor();
+  assert.equal(await costs.getByText('Unknown — verified allocations required', { exact: true }).count(), 2);
+  await page.getByRole('button', { name: 'Revise material budget', exact: true }).click();
+  let material = page.getByRole('dialog', { name: 'Revise material budget', exact: true });
+  await material.getByLabel('Revised material budget (AWG)', { exact: true }).fill('1200.35');
+  await material.getByLabel('Reason for material budget revision', { exact: true }).fill('Approved synthetic material scope');
+  await material.getByRole('checkbox').check();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2), 'Monetary revision fits mobile');
+  await page.screenshot({ path: path.join(ART, `${engineName}-material-budget-mobile.png`), fullPage: true });
+  responseFault.arm(projectId, 'revise_material_budget');
+  await material.getByRole('button', { name: 'Save material budget revision', exact: true }).click();
+  await page.getByText(/An earlier operation needs confirmation/).waitFor();
   assert.deepEqual((await read()).details.materialBudget, { currency: 'AWG', amountMinor: 120035 });
-  await page.getByText(/Material budget: AWG/).waitFor();
+  const pendingMaterial = responseFault.pendingCommand();
+  await material.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  page.once('dialog', event => event.accept()); await page.reload();
+  await page.getByText(/An earlier operation needs confirmation/).waitFor();
+  responseFault.releaseForExactRetry();
+  await page.getByRole('button', { name: 'Retry the exact request', exact: true }).click();
+  await page.getByText(/original request recovered/).waitFor();
+  recoveryEvidence.push({ browser: engineName, ...responseFault.finish() });
+  const monetaryEvents = (await db.collection('projectEvents').where('projectId', '==', projectId).get()).docs.map(doc => doc.data()).filter(row => row.action === 'revise_material_budget');
+  assert.equal(monetaryEvents.length, 1); assert.equal(monetaryEvents[0].reason, pendingMaterial.data.reason);
+  assert.equal(monetaryEvents[0].beforeMaterialBudget.currentAmountMinor, null);
+  assert.equal(monetaryEvents[0].afterMaterialBudget.currentAmountMinor, 120035);
+  assert.equal((await read()).materialBudgetBaseline.originalAmountMinor, null);
+  await costs.getByText('AWG 1,200.35', { exact: true }).waitFor();
 
   await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
-  edit = page.getByRole('dialog', { name: 'Edit project plan' });
+  let edit = page.getByRole('dialog', { name: 'Edit project plan' });
   await edit.getByLabel('Project type', { exact: true }).selectOption('Service Project');
   assert.equal(await edit.getByLabel('Material budget (optional)', { exact: true }).count(), 0);
   await edit.getByRole('button', { name: 'Save project', exact: true }).click();
   await edit.waitFor({ state: 'hidden' });
   assert.deepEqual((await read()).details.materialBudget, { currency: 'AWG', amountMinor: 120035 }, 'Hiding Service budget must preserve historical data');
   await page.getByText('Service Project · Planned', { exact: true }).waitFor();
-  assert.equal(await page.getByText(/Material budget:/).count(), 0);
+  await costs.getByText('AWG 1,200.35', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
   edit = page.getByRole('dialog', { name: 'Edit project plan' });
   await edit.getByLabel('Project type', { exact: true }).selectOption('VRF Project');
-  await edit.getByLabel('Material budget (optional)', { exact: true }).fill('');
+  assert.equal(await edit.getByLabel('Material budget (optional)', { exact: true }).count(), 0);
   await edit.getByRole('button', { name: 'Save project', exact: true }).click();
   await edit.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Revise material budget', exact: true }).click();
+  material = page.getByRole('dialog', { name: 'Revise material budget', exact: true });
+  await material.getByLabel('Revised material budget (AWG)', { exact: true }).fill('');
+  await material.getByLabel('Reason for material budget revision', { exact: true }).fill('Explicitly withdraw the unverified current estimate');
+  await material.getByRole('checkbox').check();
+  await material.getByRole('button', { name: 'Save material budget revision', exact: true }).click();
+  await material.waitFor({ state: 'hidden' });
   assert.equal((await read()).details.materialBudget, null);
+  assert.equal((await read()).materialBudgetBaseline.revision, 3);
   assert.deepEqual((await read()).budget, original.budget);
 
   await page.getByRole('button', { name: 'Revise estimate', exact: true }).click();
@@ -290,6 +351,7 @@ async function main(){
       const file=JSON.stringify(await captureLocalBackup({getItem:key=>key===STORAGE_KEYS[0]?JSON.stringify({version:1,projects:[source]}):'[]'},{capturedAt:'2026-09-18T12:00:00.000Z',origin:'https://erp.example.test'}));const priorPreviewCount=previewRequests;
       await page.getByLabel('Saved backup file',{exact:true}).setInputFiles({name:'synthetic-projects.json',mimeType:'application/json',buffer:Buffer.from(file)});await page.getByRole('combobox',{name:/^Select backed-up project/}).selectOption(source.id);assert.equal(previewRequests,priorPreviewCount);await page.getByRole('button',{name:'Review import — no writes',exact:true}).click();await page.getByText('Read-only preview',{exact:true}).waitFor();assert.equal((await db.collection('projectRecords').doc(source.id).get()).exists,false);await page.screenshot({path:path.join(ART,'central-import-preview.png'),fullPage:true});
     }
+    stage='preserved local cost evidence';await verifyLocalCostEvidence(page,engineName);
     assert.equal(network.filter(row=>row.event==='pageerror').length,errors.length,'Every raw error must remain in the evidence ledger');
     const diagnostics=await verifyNavigationEvidence(page,network,{engine:engineName,origin});
     fs.writeFileSync(path.join(ART,`${engineName}-navigation-verdict.json`),JSON.stringify(diagnostics,null,2));
@@ -298,6 +360,6 @@ async function main(){
   finally{fs.writeFileSync(path.join(ART,`${engineName}-network.json`),JSON.stringify(network,null,2));await context.close();await browser.close();}
  }
  assert.deepEqual(await snapshotProtected(),before,'Operational customer/appointment/Field/capacity/stock/message data must remain unchanged');
- fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],recoveryEvidence,externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile'}));
+ fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],recoveryEvidence,externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, material and time budget revisions, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile, existing local expense/cost evidence, corrupt and modified sample preservation'}));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{server.close();await deleteApp(app);});

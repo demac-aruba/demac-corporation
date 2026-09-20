@@ -67,6 +67,6 @@ export function ProjectMaterialsPanel({ project, activity, request }: Props) {
         setPrevious(values => [...values, cursor]); setCursor(data.nextCursor!);
       }}>Next issues</button></div>
     </>}
-    <p className={s.warning}>Accounting costs remain with QuickBooks Online. Current catalog prices, receipt previews and unallocated payroll attendance are not substituted for historical Project expenses or person-hours.</p>
+    <p className={s.warning}>These inventory records do not provide historical cost values. Confirmed manual expenses can support operational cost tracking when their amount and Project allocation are verified; accounting, payment and synchronization remain separate states. Current catalog prices are not historical costs, and inventory issues must not count a purchase a second time.</p>
   </section>;
 }

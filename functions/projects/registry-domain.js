@@ -181,6 +181,10 @@ function applyMetadata(plan, patch) {
   if (!Object.keys(patch).length) throw fault('empty_patch', 'Provide at least one planning field.');
   // Metadata patches preserve other recorded details; the planning unit snapshot is not editable here.
   if (patch.details && Object.hasOwn(patch.details, 'scheduleEstimate')) throw fault('estimate_revision_required', 'Revise the estimate explicitly; metadata must not rewrite its unit snapshot.');
+  if (patch.details && Object.hasOwn(patch.details, 'materialBudget')) {
+    const proposed = normalizeDetails({ materialBudget: patch.details.materialBudget }).materialBudget;
+    if (canonical(proposed) !== canonical(plan.details?.materialBudget ?? null)) throw fault('material_budget_revision_required', 'Revise the material budget explicitly with a reason.');
+  }
   const next = metadata({ ...plan, ...patch, ...(patch.details ? { details: { ...plan.details, ...patch.details } } : {}) });
   if (next.estimatedCompletionOn < next.startsOn) throw fault('invalid_date_range', 'Completion cannot precede project start.');
   return next;
@@ -193,6 +197,7 @@ function requireRecord(record) {
   integer(record.budget.revision, 'budget revision', 1, Number.MAX_SAFE_INTEGER - 1);
   normalizePhases(record.phases);
   if (Object.hasOwn(record, 'details')) normalizeDetails(record.details);
+  materialBudgetState(record);
   if (record.details?.scheduleEstimate && record.details.scheduleEstimate.estimatedSlots * record.details.scheduleEstimate.slotMinutes !== record.budget.originalMinutes) throw fault('project_schema_conflict', 'Captured planning units disagree with the originating baseline.', 409);
   return record;
 }
@@ -204,4 +209,34 @@ function forecast(budgetMinutes, plannedMinutes) {
   integer(budgetMinutes, 'budgeted Van minutes', 1); integer(plannedMinutes, 'planned Van minutes');
   return { unit: 'van_minutes', budgetMinutes, plannedMinutes, remainingMinutes: Math.max(0, budgetMinutes - plannedMinutes), overBudgetMinutes: Math.max(0, plannedMinutes - budgetMinutes), blocksBooking: false };
 }
-module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, PROJECT_STATES, PROJECT_OPEN_STATES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast, normalizeDetails };
+function initialMaterialBudgetBaseline(plan, provenance) {
+  if (!['created_plan', 'imported_snapshot'].includes(provenance)) throw fault('invalid_budget_baseline', 'Invalid budget provenance.');
+  return { currency: 'AWG', originalAmountMinor: plan.details?.materialBudget?.amountMinor ?? null, revision: 1, provenance };
+}
+function materialBudgetState(plan) {
+  const current = normalizeDetails({ materialBudget: plan.details?.materialBudget ?? null }).materialBudget;
+  const baseline = plan.materialBudgetBaseline;
+  if (baseline !== undefined) {
+    allowedKeys(baseline, ['currency', 'originalAmountMinor', 'revision', 'provenance']);
+    if (baseline.currency !== 'AWG') throw fault('project_schema_conflict', 'Material budget currency needs review.', 409);
+    if (baseline.originalAmountMinor !== null) integer(baseline.originalAmountMinor, 'original material budget', 1, Number.MAX_SAFE_INTEGER);
+    integer(baseline.revision, 'material budget revision', 1, Number.MAX_SAFE_INTEGER - 1);
+    enumValue(baseline.provenance, new Set(['created_plan', 'imported_snapshot', 'not_recorded']), 'material budget provenance');
+    if (baseline.provenance === 'not_recorded' && baseline.originalAmountMinor !== null) throw fault('project_schema_conflict', 'An unrecorded original budget cannot be inferred.', 409);
+  }
+  return { currency: 'AWG', currentAmountMinor: current?.amountMinor ?? null,
+    originalAmountMinor: baseline?.originalAmountMinor ?? null, revision: baseline?.revision ?? 0,
+    provenance: baseline?.provenance ?? 'not_recorded' };
+}
+function reviseMaterialBudget(plan, data) {
+  allowedKeys(data, ['projectId', 'expectedVersion', 'materialBudget', 'reason']);
+  text(data.reason, 'material budget revision reason', 1000);
+  const value = normalizeDetails({ materialBudget: data.materialBudget }).materialBudget;
+  const before = materialBudgetState(plan);
+  if (before.currentAmountMinor === (value?.amountMinor ?? null)) throw fault('material_budget_unchanged', 'The material budget has not changed.');
+  if (before.revision >= Number.MAX_SAFE_INTEGER - 1) throw fault('budget_revision_exhausted', 'The budget revision cannot advance safely.', 409);
+  return { ...plan, details: { ...plan.details, materialBudget: value }, materialBudgetBaseline: {
+    currency: 'AWG', originalAmountMinor: before.originalAmountMinor, provenance: before.provenance, revision: before.revision + 1,
+  } };
+}
+module.exports = { SCHEMA_VERSION, MAX_COMMAND_BYTES, PROJECT_STATES, PROJECT_OPEN_STATES, META_KEYS, fault, plain, allowedKeys, text, id, integer, date, stamp, digest, canonical, role, actor, normalizePhases, normalizePlanInput, applyMetadata, requireRecord, requireVersion, forecast, normalizeDetails, initialMaterialBudgetBaseline, materialBudgetState, reviseMaterialBudget };

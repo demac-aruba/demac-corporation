@@ -65,6 +65,18 @@ await test('session journals are user scoped and contain no authentication crede
  assert.equal(createIntentJournal(disk,'USER-B').read(),null);
  const saved=[...disk.data.values()].join('');assert.ok(!saved.includes('idToken'));assert.ok(!saved.includes('refreshToken'));
 });
+await test('material budget revision survives reload and retries the exact reviewed amount and reason',async()=>{
+ const disk=storage();const journal=createIntentJournal(disk,'SYNTHETIC-USER');const calls:RegistryCommand[]=[];
+ const first=createRegistryWriter((async(command:RegistryCommand)=>{calls.push(command);throw new RegistryRequestError('network','unknown',true);}) as RegistryRequest,requestId,journal);
+ const data={projectId:result.projectId,expectedVersion:1,materialBudget:{currency:'AWG',amountMinor:12345},reason:'Authorized synthetic revision'};
+ await assert.rejects(first.start('revise_material_budget',data),{code:'network'});
+ data.materialBudget.amountMinor=99999;data.reason='Not the approved request';
+ const next=createRegistryWriter((async(command:RegistryCommand)=>{calls.push(command);return result;}) as RegistryRequest,requestId,journal);
+ assert.equal(next.hasPending(),true);assert.equal(calls.length,1);await next.retry();
+ assert.deepEqual(calls[1],calls[0]);assert.equal(calls[1].action,'revise_material_budget');
+ assert.equal((calls[1].data.materialBudget as {amountMinor:number}).amountMinor,12345);
+ assert.equal(calls[1].data.reason,'Authorized synthetic revision');assert.equal(disk.data.size,0);
+});
 await test('storage unavailable prevents sending, rather than losing retry protection',async()=>{
  let calls=0;const disk=storage();disk.setItem=()=>{throw Error('denied');};const writer=createRegistryWriter((async()=>{calls++;return result;}) as RegistryRequest,requestId,createIntentJournal(disk,'USER-A'));
  await assert.rejects(writer.start('create_plan',{}),{code:'journal_unavailable'});assert.equal(calls,0);assert.equal(writer.hasPending(),false);

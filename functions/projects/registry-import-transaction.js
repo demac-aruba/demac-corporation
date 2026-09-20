@@ -55,6 +55,7 @@ async function prepareImportTransaction({ db, transaction, input, principal, occ
     ...fields, id: prepared.projectId, projectNumber: prepared.projectNumber, schemaVersion: d.SCHEMA_VERSION, version: 1,
     planningStatus: prepared.planningStatus,
     budget: { unit: 'van_minutes', originalMinutes: budgetedVanMinutes, currentMinutes: budgetedVanMinutes, revision: 1 },
+    materialBudgetBaseline: d.initialMaterialBudgetBaseline(prepared.plan, 'imported_snapshot'),
     migration: { status: 'pending_reconciliation', importId, sourceDigest: prepared.sourceDigest, capturedBaselineOnly: true, sourceDeclaredStatus: prepared.sourceDeclaredStatus },
     createdAt: occurredAt, createdBy: principal.uid, updatedAt: occurredAt, updatedBy: principal.uid,
   };

@@ -87,7 +87,7 @@ export function createRegistryTransport({ endpoint, identity, fetcher = fetch, t
 }
 
 const WRITE_ACTIONS = new Set([
-  'create_plan', 'edit_metadata', 'set_phases', 'revise_estimate',
+  'create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'revise_material_budget',
   'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase', 'record_phase_progress', 'transition_project_status', 'save_phase_template', 'apply_phase_template', 'set_phase_template_active', 'finalize_history_reconciliation',
 ]);
 function intentText(command: RegistryCommand) {

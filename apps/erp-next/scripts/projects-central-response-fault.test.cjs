@@ -69,3 +69,12 @@ test('real loopback fetch rejects a truncated body after one synthetic commit', 
     assert.equal(fault.finish().commits, 1);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
+test('material revision response loss cannot be satisfied by another budget action', () => {
+  const fault=createCommittedResponseFault();fault.arm('TEST-PROJECT','revise_material_budget');
+  const revision={action:'revise_material_budget',requestId:'MATERIAL-REQUEST',data:{projectId:'TEST-PROJECT',expectedVersion:3,materialBudget:{currency:'AWG',amountMinor:12345},reason:'Reviewed materials'}};
+  assert.equal(fault.observe({...revision,action:'revise_estimate'},receipt()),false);
+  assert.equal(fault.observe(revision,receipt()),true);
+  fault.releaseForExactRetry();
+  assert.throws(()=>fault.observe({...revision,data:{...revision.data,materialBudget:null}},receipt(true)),/exact command/);
+  assert.equal(fault.observe(revision,receipt(true)),false);assert.equal(fault.finish().commits,1);
+});

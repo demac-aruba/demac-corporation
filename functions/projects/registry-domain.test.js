@@ -19,3 +19,42 @@ test('inactive profiles fail even when the role is administrator',()=>{for(const
 test('path injection and oversized IDs are rejected without trimming to another identity',()=>{for(const value of ['../x','a/b',' ID','__name__','x'.repeat(181)])assert.throws(()=>d.id(value));});
 test('command canonicalization is order stable and rejects non-json or deeply nested input',()=>{assert.equal(d.digest({b:2,a:1}),d.digest({a:1,b:2}));for(const value of [undefined,new Date(),NaN])assert.throws(()=>d.canonical({value}));let x={};for(let n=0;n<15;n++)x={x};assert.throws(()=>d.canonical(x),{code:'payload_too_deep'});});
 test('bounded phases and uniqueness checklists prevent pathological writes',()=>{assert.throws(()=>d.normalizePhases(Array.from({length:101},(_,i)=>phase(`PH-${i}`))));assert.throws(()=>d.normalizePhases([{...phase(),checklist:[{id:'A',label:'a'},{id:'A',label:'b'}]}]),{code:'duplicate_checklist'});});
+
+test('material budget changes require a dedicated revision, including clearing an amount', () => {
+  const plan = { ...base(), details: { materialBudget: { currency: 'AWG', amountMinor: 120035 } } };
+  for (const materialBudget of [null, { currency: 'AWG', amountMinor: 120036 }]) {
+    assert.throws(() => d.applyMetadata(plan, { details: { materialBudget } }), { code: 'material_budget_revision_required' });
+  }
+  assert.deepEqual(d.applyMetadata(plan, { type: 'Service Project' }).details, plan.details);
+  assert.deepEqual(d.applyMetadata(plan, { details: { materialBudget: plan.details.materialBudget } }).details, plan.details);
+});
+
+test('material revisions retain the original, exact cents and time estimate; unknown is not zero', () => {
+  const plan = { ...base(), details: { materialBudget: { currency: 'AWG', amountMinor: 120035 } } };
+  plan.materialBudgetBaseline = d.initialMaterialBudgetBaseline(plan, 'created_plan');
+  const copy = structuredClone(plan);
+  const revised = d.reviseMaterialBudget(plan, { projectId: 'P-TEST', expectedVersion: 1, materialBudget: { currency: 'AWG', amountMinor: 200099 }, reason: 'Approved material scope' });
+  assert.deepEqual(plan, copy);
+  assert.deepEqual(d.materialBudgetState(revised), { currency: 'AWG', currentAmountMinor: 200099, originalAmountMinor: 120035, revision: 2, provenance: 'created_plan' });
+  const cleared = d.reviseMaterialBudget(revised, { projectId: 'P-TEST', expectedVersion: 2, materialBudget: null, reason: 'Estimate requires review' });
+  assert.equal(d.materialBudgetState(cleared).currentAmountMinor, null);
+  assert.equal(d.materialBudgetState(cleared).originalAmountMinor, 120035);
+  assert.equal(cleared.budgetedVanMinutes, plan.budgetedVanMinutes);
+});
+
+test('earlier/imported records do not acquire an invented approved original budget', () => {
+  const plan = { ...base(), details: { materialBudget: { currency: 'AWG', amountMinor: 9500 } } };
+  assert.equal(d.materialBudgetState(plan).provenance, 'not_recorded');
+  const revised = d.reviseMaterialBudget(plan, { projectId: 'P-TEST', expectedVersion: 1, materialBudget: null, reason: 'Reviewed current estimate' });
+  assert.equal(revised.materialBudgetBaseline.originalAmountMinor, null);
+  assert.equal(revised.materialBudgetBaseline.provenance, 'not_recorded');
+  assert.equal(d.initialMaterialBudgetBaseline(plan, 'imported_snapshot').provenance, 'imported_snapshot');
+  assert.throws(() => d.materialBudgetState({ ...plan, materialBudgetBaseline: { ...revised.materialBudgetBaseline, originalAmountMinor: 9500 } }), { code: 'project_schema_conflict' });
+});
+
+test('material revision rejects missing reasons, unchanged amounts, currencies and injected actuals', () => {
+  const data = { projectId: 'P-TEST', expectedVersion: 1, materialBudget: { currency: 'AWG', amountMinor: 100 }, reason: 'Reviewed' };
+  for (const patch of [{ reason: '' }, { materialBudget: { currency: 'USD', amountMinor: 100 } }, { materialBudget: { currency: 'AWG', amountMinor: 1.5 } }, { actualCost: 10 }, { materialBudget: null }]) {
+    assert.throws(() => d.reviseMaterialBudget(base(), { ...data, ...patch }));
+  }
+});

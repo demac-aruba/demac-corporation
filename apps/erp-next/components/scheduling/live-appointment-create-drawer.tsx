@@ -8,6 +8,7 @@ import {
   createProjectsPreviewState,
   linkProjectSchedulingAssignment,
   loadBrowserProjectsPreviewState,
+  requireStoredProjectForBooking,
   planProjectScheduling,
   projectIsSchedulable,
   searchProjectsForScheduling,
@@ -1384,6 +1385,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const { offerId, offerVersion } = activeValidation;
     const option = selectedValidatedOption;
     try {
+      if (projectBookingRequested) requireStoredProjectForBooking(selectedProject?.id ?? '', selectedCustomer.id, selectedProperty.id);
       const result = await confirmOfficeAppointment({
         requestId: `schedule-create:${offerId}:${offerVersion}:${option.id}`,
         offerId,
@@ -1431,6 +1433,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const { offerId, offerVersion } = activeValidation;
     const option = selectedValidatedOption;
     try {
+      if (projectBookingRequested) requireStoredProjectForBooking(selectedProject?.id ?? '', selectedCustomer.id, selectedProperty.id);
       const result = await createOfficeTemporaryHold({
         requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
         offerId,

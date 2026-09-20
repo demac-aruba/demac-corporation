@@ -15,6 +15,8 @@ const PUBLIC_ERRORS = Object.freeze({
   import_owner_required: 'Owner authorization is required for legacy recovery.',
   legacy_import_not_active: 'Import is not activated. The preview did not change any data.',
   version_conflict: 'Another operator changed this project. Refresh and review your edits before saving again.',
+  material_budget_revision_required: 'Use Revise material budget and record the reason for the change.',
+  material_budget_unchanged: 'The material budget has not changed.',
   request_conflict: 'This request identity belongs to a different operation. Do not resubmit altered data.',
   legacy_preview_changed: 'The source changed after preview. Review a new preview before importing.',
   legacy_import_conflict: 'Project identity, history or customer/property data requires reconciliation.',

@@ -48,7 +48,7 @@ async function loadProjectMaterials({ db, transaction, project, workOrderId, aft
     workOrderId: order.id, appointmentId, rows, issues,
     nextCursor: result.docs.length > PAGE_SIZE ? documents.at(-1).id : null,
     coverage: { pageValid: issues.length === 0, wholeProjectTotal: false, importReviewPending: project.migration?.status === 'pending_reconciliation' },
-    costs: { amount: null, status: 'accounting_cost_source_not_integrated', authority: 'QuickBooks Online' },
+    costs: { amount: null, status: 'historical_valuation_not_provided_by_inventory_movements', source: 'inventoryMovements' },
     semantics: 'issued_inventory_evidence_not_current_balance_or_automatic_consumption_reversal' };
 }
 module.exports = { PAGE_SIZE, movementRow, loadProjectMaterials };

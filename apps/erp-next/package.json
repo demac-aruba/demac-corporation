@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "npm run test:employee-schedule && npm run test:employee-attendance && npm run test:employee-attendance-work-orders && npm run test:van-profile && npm run test:projects-preview && npm run test:task-tracker",
+    "prebuild": "npm run test:employee-schedule && npm run test:employee-attendance && npm run test:employee-attendance-work-orders && npm run test:van-profile && npm run test:projects-preview && npm run test:projects-storage-preservation && npm run test:task-tracker",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test:projects-storage-preservation": "tsc --ignoreConfig scripts/projects-storage-preservation-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .projects-storage-test --rootDir . --lib ES2022,DOM && node .projects-storage-test/scripts/projects-storage-preservation-acceptance.js",
     "test:dispatch": "node -e \"require('fs').rmSync('.dispatch-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/dispatch-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .dispatch-test --rootDir . --lib ES2022,DOM && node .dispatch-test/scripts/dispatch-acceptance.js",
     "test:lifecycle": "node -e \"require('fs').rmSync('.lifecycle-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/appointment-lifecycle-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .lifecycle-test --rootDir . --lib ES2022,DOM && node .lifecycle-test/scripts/appointment-lifecycle-acceptance.js",
     "test:booking-intelligence": "node -e \"require('fs').rmSync('.booking-intelligence-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/booking-intelligence-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .booking-intelligence-test --rootDir ../.. --lib ES2022,DOM && node .booking-intelligence-test/apps/erp-next/scripts/booking-intelligence-acceptance.js",

@@ -151,6 +151,24 @@ Production activation remains separately owner-approved through the server-side 
 - `dailyVanAssignments` is a date-scoped temporary crew assignment/override and does not
   redefine recurring schedule ownership.
 
+## Projects operational costs and budget revisions
+
+- Confirmed manual operating expenses can support ERP tracking without QuickBooks. They
+  are not implicitly accounted, paid, reconciled or synchronized. Browser-only evidence
+  remains explicitly local until its original source and canonical allocations are reviewed.
+- Preserve original and current monetary budgets separately. A budget change is an explicit
+  authorized revision with before/after, actor, timestamp and reason; capturing an expense
+  never increases the budget automatically. Missing integration or unreadable evidence is
+  unknown, not certified zero. Slot/Van-time budgets are not monetary amounts.
+- Company expense and Project allocation views must reference one operation. Classification
+  and destination are separate; allocation totals reconcile and the unallocated remainder
+  stays visible. No guessed identities, automatic fuel allocation, current-price historical
+  valuation, purchase-driven stock writes or invoice/inventory double charges.
+- The [2026-09-20 scope clarification](tasks/projects-operational-cost-scope-20260920.md)
+  records available sources, missing approved contracts and future private receipt/audio
+  draft-confirmation requirements. AI capture and QBO synchronization are future work,
+  not current Projects prerequisites or new implementation authority.
+
 ## Current payroll-attendance ownership
 
 - Payroll attendance periods are canonical 27th-through-26th ranges. The selected day is a

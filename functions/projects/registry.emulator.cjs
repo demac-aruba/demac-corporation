@@ -101,6 +101,47 @@ test('estimate revisions preserve original baseline and complete revision eviden
   assert.equal((await read(project.projectId)).budget.originalMinutes,3960);
   await assert.rejects(run('revise_estimate',{projectId:project.projectId,expectedVersion:3,budgetedVanMinutes:4320,reason:'Test'},'finance'),{code:'forbidden'});
 });
+
+test('material budget revisions are authorized, auditable, exact and separate from time/cost records', async () => {
+  const project = await create({ ...PLAN(), details: { materialBudget: { currency: 'AWG', amountMinor: 120035 } } });
+  const original = await read(project.projectId);
+  const requestId = uid('MATERIAL-REVISION');
+  const input = { projectId: project.projectId, expectedVersion: 1, materialBudget: { currency: 'AWG', amountMinor: 145099 }, reason: 'Owner reviewed material scope' };
+  await assert.rejects(run('revise_material_budget', input, 'finance'), { code: 'forbidden' });
+  await assert.rejects(run('edit_metadata', { projectId: project.projectId, expectedVersion: 1, patch: { details: { materialBudget: null } } }), { code: 'material_budget_revision_required' });
+  const results = await Promise.all([run('revise_material_budget', input, 'manager', requestId), run('revise_material_budget', input, 'manager', requestId)]);
+  assert.deepEqual(results.map(value => value.replayed).sort(), [false, true]);
+  const revised = await read(project.projectId);
+  assert.equal(revised.materialBudgetBaseline.originalAmountMinor, 120035);
+  assert.equal(revised.materialBudgetBaseline.revision, 2);
+  assert.deepEqual(revised.budget, original.budget);
+  assert.equal(revised.details.materialBudget.amountMinor, 145099);
+  const events = (await db.collection(COLLECTIONS.events).where('projectId', '==', project.projectId).get()).docs.map(doc => doc.data()).filter(row => row.action === 'revise_material_budget');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].beforeMaterialBudget.currentAmountMinor, 120035);
+  assert.equal(events[0].afterMaterialBudget.currentAmountMinor, 145099);
+  assert.equal(events[0].actorId, actors.manager.uid);
+  assert.equal(events[0].reason, input.reason); assert.ok(events[0].occurredAt);
+  await db.collection('businessSettings').doc('projects-registry').update({ writesPaused: true });
+  try { assert.equal((await run('revise_material_budget', input, 'manager', requestId)).replayed, true); }
+  finally { await db.collection('businessSettings').doc('projects-registry').update({ writesPaused: false }); }
+  await assert.rejects(run('revise_material_budget', { ...input, materialBudget: null }, 'manager', requestId), { code: 'request_conflict' });
+  await assert.rejects(run('revise_material_budget', { ...input, materialBudget: null }), { code: 'version_conflict' });
+  await run('revise_material_budget', { ...input, expectedVersion: 2, materialBudget: null, reason: 'Explicitly withdraw unverified current estimate' });
+  assert.equal((await read(project.projectId)).details.materialBudget, null);
+  assert.equal((await read(project.projectId)).materialBudgetBaseline.originalAmountMinor, 120035);
+});
+
+test('pre-revision records keep unknown original material budgets without a migration', async () => {
+  const project = await create({ ...PLAN(), details: { materialBudget: { currency: 'AWG', amountMinor: 40000 } } });
+  const previous = await read(project.projectId); delete previous.materialBudgetBaseline;
+  await db.collection(COLLECTIONS.records).doc(project.projectId).set(previous);
+  await run('revise_material_budget', { projectId: project.projectId, expectedVersion: 1, materialBudget: { currency: 'AWG', amountMinor: 50000 }, reason: 'First governed revision of an existing record' });
+  const revised = await read(project.projectId);
+  assert.equal(revised.materialBudgetBaseline.originalAmountMinor, null);
+  assert.equal(revised.materialBudgetBaseline.provenance, 'not_recorded');
+  assert.equal(revised.details.materialBudget.amountMinor, 50000);
+});
 test('metadata edits and over-budget existing links do not modify estimates or actual labor',async()=>{
   const project=await create({...PLAN(),budgetedVanMinutes:300});const appointment=await seedAppointment({duration:360});await attach(project,appointment);
   const plan=await read(project.projectId);assert.equal(plan.budget.currentMinutes,300);assert.equal(plan.actualLaborHours,undefined);

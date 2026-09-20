@@ -10,7 +10,7 @@ const { readTemplateLibrary, listTemplates, previewTemplateApplication, prepareT
 const { previewHistoryReconciliation, prepareHistoryReconciliation } = require('./history-reconciliation');
 const { prepareImportTransaction, readImportSource } = require('./registry-import-transaction');
 const COLLECTIONS = Object.freeze({ records: 'projectRecords', numbers: 'projectNumbers', links: 'projectAppointmentLinks', events: 'projectEvents', receipts: 'projectCommandReceipts', settings: 'businessSettings' });
-const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase', 'record_phase_progress', 'transition_project_status', 'save_phase_template', 'apply_phase_template', 'set_phase_template_active', 'finalize_history_reconciliation']);
+const WRITE_ACTIONS = new Set(['create_plan', 'edit_metadata', 'set_phases', 'revise_estimate', 'revise_material_budget', 'attach_existing_appointment', 'import_legacy_plan', 'approve_phase_completion', 'reopen_phase', 'record_phase_progress', 'transition_project_status', 'save_phase_template', 'apply_phase_template', 'set_phase_template_active', 'finalize_history_reconciliation']);
 const READ_ACTIONS = new Set(['get_plan', 'list_plans', 'get_activity', 'get_execution', 'get_phase_completion', 'get_phase_progress', 'preview_project_status', 'list_phase_templates', 'preview_phase_template', 'preview_legacy_import', 'get_import_source', 'preview_history_reconciliation', 'get_materials']);
 const snapshotRecord = (snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
 const MAX_APPOINTMENT_WORK_ORDERS = 60;
@@ -89,6 +89,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         const { budgetedVanMinutes, ...fields } = plan;
         project = { ...fields, id: projectId, projectNumber, schemaVersion: d.SCHEMA_VERSION, version: 1, planningStatus: 'Planned', budget: { unit: 'van_minutes', originalMinutes: budgetedVanMinutes, currentMinutes: budgetedVanMinutes, revision: 1 }, createdAt: occurredAt, createdBy: principal.uid, updatedAt: occurredAt, updatedBy: principal.uid };
         next = project;
+        next.materialBudgetBaseline = d.initialMaterialBudgetBaseline(plan, 'created_plan');
         numberWrite = { ref: numberRef, data: { projectId, createdAt: occurredAt } };
       } else {
         d.id(data.projectId, 'projectId');
@@ -157,6 +158,8 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
         } else if (input.action === 'edit_metadata') {
           d.allowedKeys(data, ['projectId', 'expectedVersion', 'patch']);
           next = { ...project, ...d.applyMetadata(project, data.patch) };
+        } else if (input.action === 'revise_material_budget') {
+          next = d.reviseMaterialBudget(project, data);
         } else if (input.action === 'revise_estimate') {
           d.allowedKeys(data, ['projectId', 'expectedVersion', 'budgetedVanMinutes', 'reason']);
           d.text(data.reason, 'estimate revision reason', 1000);
@@ -217,7 +220,7 @@ function createProjectRegistryService({ db, verifyIdToken, enabled = false, allo
       if (linkWrite) transaction.create(linkWrite.ref, linkWrite.data);
       if (archiveWrite) transaction.create(archiveWrite.ref, archiveWrite.data);
       if (templateWrite) transaction.set(templateWrite.ref, templateWrite.data);
-      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(phaseCompletion ? { phaseCompletion } : {}), ...(phaseProgress ? { phaseProgress } : {}), ...(lifecycle ? { lifecycle } : {}), ...(templateEvidence ? { template: templateEvidence } : {}), ...(historyReconciliation ? { historyReconciliation } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
+      if (changed) transaction.create(ref(COLLECTIONS.events, commandId), { schemaVersion: 1, action: input.action, actorId: principal.uid, actorRole: principal.role, projectId: next.id, requestHash, occurredAt, beforeVersion: before?.version || 0, afterVersion: next.version, beforePlan: before || null, afterPlan: next, ...(importAudit ? { import: importAudit } : {}), ...(phaseCompletion ? { phaseCompletion } : {}), ...(phaseProgress ? { phaseProgress } : {}), ...(lifecycle ? { lifecycle } : {}), ...(templateEvidence ? { template: templateEvidence } : {}), ...(historyReconciliation ? { historyReconciliation } : {}), ...(input.action === 'revise_estimate' ? { beforeBudget: before.budget, afterBudget: next.budget, reason: data.reason.trim() } : {}), ...(input.action === 'revise_material_budget' ? { beforeMaterialBudget: d.materialBudgetState(before), afterMaterialBudget: d.materialBudgetState(next), reason: data.reason.trim() } : {}), ...(input.action === 'attach_existing_appointment' ? { appointmentId: data.appointmentId, phaseId: data.phaseId } : {}) });
       transaction.create(receiptRef, { actorId: principal.uid, requestHash, projectId: next.id, occurredAt, result });
       return { ...result, replayed: false };
     }, write ? { maxAttempts: 5 } : { readOnly: true });

@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { loadBookingMasterReferenceData, type BookingCustomer, type BookingProperty } from '@/lib/live-scheduling-booking-data';
 import type { CentralProject, ProjectPhasePlan } from '@/lib/projects/registry-types';
-import { materialBudgetInput, parseMaterialBudget } from '@/lib/projects/material-budget';
+import { parseMaterialBudget } from '@/lib/projects/material-budget';
 import s from './projects-central.module.css';
 
 type SavePlan = (action: string, data: Record<string, unknown>) => Promise<void>;
@@ -84,13 +84,11 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
       startsOn: value(form, 'startsOn'), estimatedCompletionOn: value(form, 'estimatedCompletionOn'),
     };
     try {
-      const materialBudget = projectType === 'Service Project' ? null : parseMaterialBudget(value(form, 'materialBudget'));
-      // Service Projects do not ask for a material budget. Preserve any historical detail
-      // when editing; hiding a field must never erase an imported planning snapshot.
-      const details = projectType === 'Service Project' && project ? {} : { materialBudget };
       if (project) {
-        await onSave('edit_metadata', { projectId: project.id, expectedVersion: project.version, patch: { ...fields, details } });
+        await onSave('edit_metadata', { projectId: project.id, expectedVersion: project.version, patch: fields });
       } else {
+        const materialBudget = projectType === 'Service Project' ? null : parseMaterialBudget(value(form, 'materialBudget'));
+        const details = { materialBudget };
         const minutes = Number(value(form, 'hours')) * 60;
         if (!Number.isSafeInteger(minutes) || minutes < 1) throw Error('Enter estimated Van time with whole-minute precision.');
         if (!customer || !property) throw Error('Select the canonical customer and property.');
@@ -128,8 +126,8 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
         {!project && <label>Estimated Van hours<input aria-label="Estimated Van hours" name="hours" type="number" min="1" step="1" required/>
           <small className={s.muted}>Planning estimate, not person-hours or a hard booking limit.</small>
         </label>}
-        {projectType !== 'Service Project' && <label>Material budget (optional)<input aria-label="Material budget (optional)" name="materialBudget" type="number" min="0.01" step="0.01"
-          defaultValue={project?.details?.materialBudget ? materialBudgetInput(project.details.materialBudget.amountMinor) : ''}/>
+        {!project && projectType !== 'Service Project' && <label>Material budget (optional)<input aria-label="Material budget (optional)" name="materialBudget" type="number" min="0.01" step="0.01"
+          defaultValue=""/>
           <small className={s.muted}>AWG planning estimate. Leave blank when unknown; this is not actual material cost.</small>
         </label>}
         {/* Explicit labels exclude a populated textarea's content from its accessible name. */}
@@ -141,7 +139,7 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
           <label htmlFor={`${formId}-instructions`}>Technician instructions</label>
           <textarea id={`${formId}-instructions`} name="technicianInstructions" maxLength={2000} defaultValue={project?.technicianInstructions ?? ''}/>
         </div>
-        {project && <p className={s.muted}>Customer, property, original estimate, phases and operational history are not changed by this form.</p>}
+        {project && <p className={s.muted}>Customer, property, budgets, phases and operational history are not changed by this form. Use the separate budget revision actions to change an estimate with a reason.</p>}
         {error && <p role="alert" className={s.error}>{error}</p>}
         <div className={s.actions}>
           <button className={s.button} type="button" onClick={onClose}>Cancel</button>

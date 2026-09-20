@@ -50,7 +50,7 @@ const sanitized = sanitizeProjectsState({
   projects: [exactSeed, userCreatedLegacyId],
 });
 assert.equal(KNOWN_PROJECT_SAMPLE_IDS.has(exactSeed.id), true, 'The exact historical sample ID must be recognized.');
-assert.deepEqual(sanitized.removedIds, [exactSeed.id], 'Only the exact seeded sample record must be removed.');
+assert.deepEqual(sanitized.removedIds, [exactSeed.id], 'The exact sample-ID record is hidden from the display projection, without authorizing deletion.');
 assert.deepEqual(sanitized.state.projects.map((project) => project.id), [userCreatedLegacyId.id], 'A user-created timestamp Project must be preserved even when its legacy ID begins with DEMO-PRJ.');
 assert.equal(sanitized.state.selectedProjectId, userCreatedLegacyId.id, 'Selection must move safely to the preserved user Project.');
 
@@ -126,4 +126,4 @@ assert.equal(companyTemplate.phases.length, templatePhases.length, 'Company temp
 const reordered = reorderProjectPhases(templated, templatePhases.map((phase) => phase.id).reverse());
 assert.deepEqual(projectPhases(reordered).map((phase) => phase.id), templatePhases.map((phase) => phase.id).reverse(), 'Phase reordering must be stable and explicit.');
 
-console.log('Project Phase Planner acceptance passed: canonical CRM customer search, explicit customer creation, property selection, exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
+console.log('Project Phase Planner acceptance passed: canonical CRM customer search, explicit customer creation, property selection, sample display filtering, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');

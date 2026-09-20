@@ -9,7 +9,7 @@ function createCommittedResponseFault() {
     arm(projectId, action = 'edit_metadata') {
       assert.equal(state, null, 'Finish the previous fault scenario before arming another');
       assert.ok(typeof projectId === 'string' && projectId.length > 0);
-      assert.ok(['edit_metadata', 'revise_estimate'].includes(action));
+      assert.ok(['edit_metadata', 'revise_estimate', 'revise_material_budget'].includes(action));
       state = { projectId, action, command: null, requestId: null, version: null, attempts: 0, commits: 0, replays: 0, released: false };
     },
     observe(command, response) {

@@ -351,7 +351,7 @@ export function normalizeBrowserProjectsPreviewState(
     return {
       ...project,
       ...projectCapacityPlan(workDays),
-      materialBudget: projectTypeUsesMaterialBudget(project.type) ? project.materialBudget ?? null : null,
+      materialBudget: project.materialBudget ?? null,
     };
   });
   const selectedProjectId = projects.some((project) => project.id === migrated.selectedProjectId)
@@ -365,6 +365,47 @@ export function loadBrowserProjectsPreviewState(fallback: BrowserProjectsPreview
     loadBrowserValue(BROWSER_PROJECTS_PREVIEW_KEY, fallback),
     fallback,
   );
+}
+
+export const PROJECT_STORAGE_RECOVERY_MESSAGE = 'Original browser Projects need recovery review before saving. Hidden or unreadable records may contain manual expenses. Preserve the original backup; no stored record was removed.';
+
+export function isStoredBrowserProject(value: unknown): value is BrowserProject {
+  if (!value || typeof value !== 'object') return false;
+  const project = value as Partial<BrowserProject>;
+  return typeof project.id === 'string' && project.id.trim().length > 0
+    && typeof project.projectNumber === 'string' && typeof project.name === 'string'
+    && Array.isArray(project.phases) && Array.isArray(project.assignments)
+    && Array.isArray(project.materials) && Array.isArray(project.expenses) && Array.isArray(project.costEntries);
+}
+
+export function readOriginalBrowserProjects(fallback: unknown): unknown {
+  if (typeof window === 'undefined') return fallback;
+  // Only a missing key permits a fallback. Parsing/access failures are not empty storage.
+  const raw = window.localStorage.getItem(BROWSER_PROJECTS_PREVIEW_KEY);
+  return raw === null ? fallback : JSON.parse(raw);
+}
+
+export function assertWritableBrowserProjects(source: unknown): asserts source is BrowserProjectsPreviewState {
+  const state = source as Partial<BrowserProjectsPreviewState> | null;
+  const ids = new Set<string>();
+  if (!state || state.version !== 1 || !Array.isArray(state.projects)
+    || state.projects.some(project => {
+      if (!isStoredBrowserProject(project) || ids.has(project.id)) return true;
+      ids.add(project.id); return false;
+    })) throw new Error(PROJECT_STORAGE_RECOVERY_MESSAGE);
+}
+
+export function requireStoredProjectForBooking(projectId: string, customerId: string, propertyId: string) {
+  let source: unknown;
+  try { source = readOriginalBrowserProjects({ version: 1, selectedProjectId: '', projects: [] }); }
+  catch { throw new Error(PROJECT_STORAGE_RECOVERY_MESSAGE); }
+  assertWritableBrowserProjects(source);
+  const project = source.projects.find(row => row.id === projectId);
+  if (!project || project.customerId !== customerId || project.siteId !== propertyId
+    || ['Completed', 'Cancelled'].includes(project.status)) {
+    throw new Error('Review the original stored Project and its customer, Property and status before booking.');
+  }
+  return project;
 }
 
 export function reduceProjectInState(
@@ -394,16 +435,18 @@ export async function commitBrowserProjectsPreviewMutation(
 ): Promise<BrowserProjectsPreviewState> {
   const operation = () => {
     options.authorize?.();
-    const latest = normalizeBrowserProjectsPreviewState(
-      options.read ? options.read() : loadBrowserValue(BROWSER_PROJECTS_PREVIEW_KEY, fallback),
-      fallback,
-    );
-    const next = normalizeBrowserProjectsPreviewState(mutation(latest), latest);
+    let latest: unknown;
+    try { latest = options.read ? options.read() : readOriginalBrowserProjects(fallback); }
+    catch { throw new Error(PROJECT_STORAGE_RECOVERY_MESSAGE); }
+    assertWritableBrowserProjects(latest);
+    // An unrelated Scheduling link must not migrate, seed or normalize stored financial evidence.
+    const next = mutation(latest);
+    assertWritableBrowserProjects(next);
     const saved = options.write
       ? options.write(next)
       : saveBrowserValue(BROWSER_PROJECTS_PREVIEW_KEY, next);
     if (!saved) {
-      throw new Error('Project changes could not be saved in browser preview storage. Nothing was changed in this view.');
+      throw new Error('Project changes could not be saved or verified in this browser. Review the stored original before retrying.');
     }
     return next;
   };

@@ -73,7 +73,8 @@ combination with #515; those workflows have been prepared locally, not run remot
 
 ## Concrete release prerequisites
 
-1. Record the owner-approved source/scope decision, isolated Firebase project ID, database,
+1. Apply the [recorded operational scope](projects-operational-cost-scope-20260920.md),
+   which does not require QuickBooks or future AI capture. Record isolated Firebase project ID, database,
    region, ERP origin and authorized access. Current connected previews target production
    Firebase configuration and cannot substitute for this environment.
 2. Preserve the exact code/configuration rollback artifacts and complete real-source,
