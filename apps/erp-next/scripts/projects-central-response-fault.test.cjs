@@ -29,6 +29,17 @@ test('reads and failed writes do not arm or satisfy the lost-response case', () 
   assert.throws(() => fault.releaseForExactRetry());
   assert.throws(() => fault.finish());
 });
+
+test('estimate response loss is action-scoped and retains the exact revision', () => {
+  const fault = createCommittedResponseFault(); fault.arm('TEST-PROJECT', 'revise_estimate');
+  const revision = { action: 'revise_estimate', requestId: 'REVISION-REQUEST', data: { projectId: 'TEST-PROJECT', expectedVersion: 3, budgetedVanMinutes: 4200, reason: 'Reviewed estimate' } };
+  assert.equal(fault.observe(command, receipt()), false);
+  assert.equal(fault.observe(revision, receipt()), true);
+  assert.deepEqual(fault.pendingCommand(), revision);
+  fault.releaseForExactRetry();
+  assert.equal(fault.observe(revision, receipt(true)), false);
+  assert.equal(fault.finish().commits, 1);
+});
 test('real loopback fetch rejects a truncated body after one synthetic commit', async () => {
   const fault = createCommittedResponseFault(); fault.arm('TEST-PROJECT');
   let commits = 0;

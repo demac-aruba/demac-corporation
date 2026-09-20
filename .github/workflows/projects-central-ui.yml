@@ -7,6 +7,7 @@ on:
       - 'apps/erp-next/lib/projects/**'
       - 'apps/erp-next/scripts/projects-central*'
       - 'apps/erp-next/scripts/projects-navigation*'
+      - 'apps/erp-next/scripts/projects-material-budget*'
       - 'functions/projects/**'
       - '.github/workflows/projects-central-ui.yml'
   push:
@@ -17,6 +18,7 @@ on:
       - 'apps/erp-next/lib/projects/**'
       - 'apps/erp-next/scripts/projects-central*'
       - 'apps/erp-next/scripts/projects-navigation*'
+      - 'apps/erp-next/scripts/projects-material-budget*'
       - 'functions/projects/**'
       - '.github/workflows/projects-central-ui.yml'
 permissions:
@@ -42,6 +44,10 @@ jobs:
         run: node --test apps/erp-next/scripts/projects-navigation-diagnostics.test.cjs
       - name: Verify deterministic lost-response fault injection
         run: node --test apps/erp-next/scripts/projects-central-response-fault.test.cjs
+      - name: Verify portable exported asset resolution
+        run: node --test apps/erp-next/scripts/projects-central-static-assets.test.cjs
+      - name: Preserve exact optional material-budget cents
+        run: node --experimental-strip-types --test apps/erp-next/scripts/projects-material-budget.test.cjs
       - name: Client transport and exact-intent recovery
         working-directory: apps/erp-next
         run: >-

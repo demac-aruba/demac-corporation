@@ -85,6 +85,13 @@ async function fixture(name, scenario) {
     const plan = (await command('get_plan', { projectId: created.projectId })).project;
     await command('attach_existing_appointment', { projectId: plan.id, expectedVersion: plan.version, appointmentId, phaseId: null, confirmedAssociation: true, reason: 'Reviewed synthetic prior allocation' });
   }
+  if (scenario === 'general-with-phases') {
+    const plan = (await command('get_plan', { projectId: created.projectId })).project;
+    await command('set_phases', { projectId: plan.id, expectedVersion: plan.version, phases: [{
+      id: 'OPTIONAL-PHASE', name: 'Optional later phase', scopeOfWork: 'Synthetic scope', completionCriteria: 'Reviewed completion',
+      plannedVanMinutes: 60, dependencies: [], progressMethod: 'approval', unitsPlanned: 0, checklist: [],
+    }] });
+  }
   const project = (await command('get_plan', { projectId: created.projectId })).project;
   const support = scenario === 'support';
   const option = { id: `${prefix}-OPTION`, date: '2099-09-18', time: '08:30', endTime: '15:30', capacityEndTime: '15:30', presetId: 'other', quantity: 1, durationMode: 'manual', durationMinutes: 360,
@@ -123,7 +130,7 @@ async function main() {
   for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]]) {
     const browser = await engine.launch({ headless: true });
     try {
-      for (const scenario of ['confirmed', 'hold', 'support', 'version', 'capacity', 'recovery', 'outage', 'read-only']) {
+      for (const scenario of ['confirmed', 'general-with-phases', 'hold', 'support', 'version', 'capacity', 'recovery', 'outage', 'read-only']) {
         const name = `${engineName}-${scenario}`; current = await fixture(name, scenario);
         const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
         await context.addInitScript(({ f, session }) => {
@@ -149,6 +156,10 @@ async function main() {
             await page.getByLabel('Search Project', { exact: true }).fill(name);
             await page.getByRole('button', { name: new RegExp(name) }).click();
             const slots = page.getByLabel(/Planned Project slots/); await slots.fill('6');
+            if (scenario === 'general-with-phases') {
+              await page.getByLabel('Project phase', { exact: true }).selectOption('');
+              assert.equal(await page.getByLabel('Project phase', { exact: true }).inputValue(), '');
+            }
             const confirm = page.getByRole('button', { name: 'Confirm appointment', exact: true });
             await page.locator('[data-central-budget-warning]').waitFor();
             if (scenario === 'capacity') {
@@ -187,6 +198,12 @@ async function main() {
                 assert.equal(created.workOrderIds.length, scenario === 'support' ? 2 : 1);
                 const link = (await db.collection('projectAppointmentLinks').doc(created.appointmentId).get()).data();
                 assert.equal(link.projectId, current.project.id); assert.deepEqual(link.workOrderIdsAtLink, [...created.workOrderIds].sort());
+                if (scenario === 'general-with-phases') {
+                  assert.equal(link.phaseId, null);
+                  const links = await db.collection('projectAppointmentLinks').where('projectId', '==', current.project.id).get();
+                  assert.equal(links.size, 8);
+                  assert.ok(links.docs.every(doc => doc.data().phaseId === null), 'Creating phases does not reclassify any general work');
+                }
               }
             }
           }

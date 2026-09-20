@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { loadBookingMasterReferenceData, type BookingCustomer, type BookingProperty } from '@/lib/live-scheduling-booking-data';
 import type { CentralProject, ProjectPhasePlan } from '@/lib/projects/registry-types';
+import { materialBudgetInput, parseMaterialBudget } from '@/lib/projects/material-budget';
 import s from './projects-central.module.css';
 
 type SavePlan = (action: string, data: Record<string, unknown>) => Promise<void>;
@@ -58,6 +59,7 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
   const [property, setProperty] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(!project);
+  const [projectType, setProjectType] = useState(project?.type ?? 'VRF Project');
 
   useEffect(() => {
     if (project) return;
@@ -82,13 +84,17 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
       startsOn: value(form, 'startsOn'), estimatedCompletionOn: value(form, 'estimatedCompletionOn'),
     };
     try {
+      const materialBudget = projectType === 'Service Project' ? null : parseMaterialBudget(value(form, 'materialBudget'));
+      // Service Projects do not ask for a material budget. Preserve any historical detail
+      // when editing; hiding a field must never erase an imported planning snapshot.
+      const details = projectType === 'Service Project' && project ? {} : { materialBudget };
       if (project) {
-        await onSave('edit_metadata', { projectId: project.id, expectedVersion: project.version, patch: fields });
+        await onSave('edit_metadata', { projectId: project.id, expectedVersion: project.version, patch: { ...fields, details } });
       } else {
         const minutes = Number(value(form, 'hours')) * 60;
         if (!Number.isSafeInteger(minutes) || minutes < 1) throw Error('Enter estimated Van time with whole-minute precision.');
         if (!customer || !property) throw Error('Select the canonical customer and property.');
-        await onSave('create_plan', { ...fields, customerId: customer, propertyId: property, budgetedVanMinutes: minutes, phases: [] });
+        await onSave('create_plan', { ...fields, details, customerId: customer, propertyId: property, budgetedVanMinutes: minutes, phases: [] });
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The plan could not be saved.');
@@ -113,7 +119,7 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
         </>}
         <div className={s.formGrid}>
           <label>Project name<input name="name" defaultValue={project?.name} maxLength={160} required/></label>
-          <label>Project type<select aria-label="Project type" name="type" defaultValue={project?.type ?? 'VRF Project'}>
+          <label>Project type<select aria-label="Project type" name="type" value={projectType} onChange={event => setProjectType(event.target.value)}>
             {['VRF Project', 'Installation Project', 'Service Project', 'Maintenance Contract', 'Other Project'].map(type => <option key={type}>{type}</option>)}
           </select></label>
           <label>Start date<input name="startsOn" type="date" defaultValue={project?.startsOn} required/></label>
@@ -121,6 +127,10 @@ export function MetadataDialog({ project, busy, onClose, onSave }: {
         </div>
         {!project && <label>Estimated Van hours<input aria-label="Estimated Van hours" name="hours" type="number" min="1" step="1" required/>
           <small className={s.muted}>Planning estimate, not person-hours or a hard booking limit.</small>
+        </label>}
+        {projectType !== 'Service Project' && <label>Material budget (optional)<input aria-label="Material budget (optional)" name="materialBudget" type="number" min="0.01" step="0.01"
+          defaultValue={project?.details?.materialBudget ? materialBudgetInput(project.details.materialBudget.amountMinor) : ''}/>
+          <small className={s.muted}>AWG planning estimate. Leave blank when unknown; this is not actual material cost.</small>
         </label>}
         {/* Explicit labels exclude a populated textarea's content from its accessible name. */}
         <div className={s.form}>

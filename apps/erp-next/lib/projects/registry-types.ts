@@ -10,7 +10,8 @@ export type CentralProject = {
   id: string; projectNumber: string; schemaVersion: 1; version: number;
   name: string; type: string; customerId: string; propertyId: string;
   description: string; technicianInstructions: string; startsOn: string; estimatedCompletionOn: string;
-  planningStatus: string; phases: ProjectPhasePlan[]; details?: Record<string, unknown>;
+  planningStatus: string; phases: ProjectPhasePlan[];
+  details?: Record<string, unknown> & { materialBudget?: { currency: 'AWG'; amountMinor: number } | null };
   budget: { unit: 'van_minutes'; originalMinutes: number; currentMinutes: number; revision: number };
   migration?: { status: string; importId: string; sourceDigest: string; capturedBaselineOnly: boolean; sourceDeclaredStatus: string };
   updatedAt: string;

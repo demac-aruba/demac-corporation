@@ -6,13 +6,14 @@ const assert = require('node:assert/strict');
 function createCommittedResponseFault() {
   let state = null;
   return {
-    arm(projectId) {
+    arm(projectId, action = 'edit_metadata') {
       assert.equal(state, null, 'Finish the previous fault scenario before arming another');
       assert.ok(typeof projectId === 'string' && projectId.length > 0);
-      state = { projectId, command: null, requestId: null, version: null, attempts: 0, commits: 0, replays: 0, released: false };
+      assert.ok(['edit_metadata', 'revise_estimate'].includes(action));
+      state = { projectId, action, command: null, requestId: null, version: null, attempts: 0, commits: 0, replays: 0, released: false };
     },
     observe(command, response) {
-      if (!state || command?.action !== 'edit_metadata' || command.data?.projectId !== state.projectId) return false;
+      if (!state || command?.action !== state.action || command.data?.projectId !== state.projectId) return false;
       if (response.status !== 200) return false;
       const receipt = response.body?.data;
       assert.equal(response.body?.success, true);

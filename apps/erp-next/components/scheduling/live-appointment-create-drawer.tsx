@@ -678,10 +678,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const projectPlan = legacyProjectPlanState.plan;
   const centralPlanState = useMemo(() => {
     if (!selectedProject || !isCentralChoice(selectedProject) || !projectSlots.trim()) return { plan: null, error: '' };
-    if (selectedProject.phases.length && !selectedProjectPhase) return { plan: null, error: 'Select the Project phase to schedule.' };
+    if (projectPhaseId && !selectedProjectPhase) return { plan: null, error: 'Select an available Project phase or General Project Work.' };
     try { return { plan: centralSlotPlan(selectedProject, Number(projectSlots)), error: '' }; }
     catch (error) { return { plan: null, error: error instanceof Error ? error.message : 'Invalid Project slots.' }; }
-  }, [selectedProject, selectedProjectPhase, projectSlots]);
+  }, [selectedProject, selectedProjectPhase, projectPhaseId, projectSlots]);
   const workPlan = centralProject ? centralPlanState.plan : projectPlan;
   const projectPlanState = centralProject ? centralPlanState : legacyProjectPlanState;
 
@@ -825,7 +825,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       && selectedCustomer?.id === selectedProject.customerId
       && selectedProject.siteId
       && selectedProperty?.id === selectedProject.siteId
-      && (!selectedProject.phases.length || selectedProjectPhase))
+      && (centralProject ? !projectPhaseId || selectedProjectPhase : !selectedProject.phases.length || selectedProjectPhase))
     : workLines.length > 0 && workLines.every((line) => {
       const preset = presetById.get(line.presetId);
       if (!preset || line.quantity < 1) return false;
@@ -1667,9 +1667,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     <div className={styles.formGrid}>
                       {selectedProject.phases.length ? (
                         <label>
-                          <span>Project phase *</span>
-                          <select value={projectPhaseId} onChange={(event) => { setProjectPhaseId(event.target.value); resetCapacityValidation(); }}>
-                            <option value="">Select phase</option>
+                          <span>{centralProject ? 'Project phase' : 'Project phase *'}</span>
+                          <select aria-label={centralProject ? 'Project phase' : 'Project phase *'} value={projectPhaseId} onChange={(event) => { setProjectPhaseId(event.target.value); resetCapacityValidation(); }}>
+                            <option value="">{centralProject ? 'General Project Work' : 'Select phase'}</option>
                             {schedulableProjectPhases.map((phase) => <option key={phase.id} value={phase.id}>{phase.name} · {phase.status}</option>)}
                           </select>
                         </label>

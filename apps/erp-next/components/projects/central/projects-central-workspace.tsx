@@ -5,6 +5,8 @@ import type { CentralProject, ProjectList, ProjectActivity, MutationResult, Proj
 import { MetadataDialog, PhaseDialog, PlanDialog } from './project-plan-dialog';
 import { ProjectImportPanel } from './project-import-panel';
 import { ProjectMaterialsPanel } from './project-materials-panel';
+import { ProjectEstimateDialog } from './project-estimate-dialog';
+import { materialBudgetLabel } from '@/lib/projects/material-budget';
 import { ProjectFieldExecution } from './project-field-execution';
 import { PhaseCompletionDialog } from './phase-completion-dialog';
 import { HistoryReconciliationDialog } from './history-reconciliation-dialog';
@@ -24,7 +26,7 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
   const [selected,setSelected]=useState('');const [detail,setDetail]=useState<PageState<{project:CentralProject;activity:ProjectActivity}>>({data:null,loading:false,error:''});
   const [activityCursor,setActivityCursor]=useState<string|undefined>();const [activityCursors,setActivityCursors]=useState<Array<string|undefined>>([]);
   const [tab,setTab]=useState('Overview');const [busy,setBusy]=useState(false);const [notice,setNotice]=useState('');const [error,setError]=useState('');
-  const [modal,setModal]=useState<'create'|'metadata'|'phase'|'associate'|'completion'|'progress'|'lifecycle'|'templates'|'history'|null>(null);const [phase,setPhase]=useState<ProjectPhasePlan|undefined>();
+  const [modal,setModal]=useState<'create'|'metadata'|'estimate'|'phase'|'associate'|'completion'|'progress'|'lifecycle'|'templates'|'history'|null>(null);const [phase,setPhase]=useState<ProjectPhasePlan|undefined>();
   const locked=busy||writer.hasPending();
   useEffect(()=>{const controller=new AbortController();let current=true;setList(previous=>({...previous,loading:true,error:''}));void request<ProjectList>({action:'list_plans',data:{limit:20,...(cursor?{afterId:cursor}:{})}},controller.signal).then(data=>{
     if(data.source!=='project_registry_v1'||!Array.isArray(data.projects)||data.projects.some(project=>project.schemaVersion!==1||!project.id||!project.budget))throw Error('The server returned an unsupported project list.');
@@ -64,6 +66,15 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
       {activity.projectForecast?<p className={activity.projectForecast.overBudgetMinutes>0?s.warning:s.notice}>Recorded allocation against estimate: {minutesLabel(activity.projectForecast.plannedMinutes)} / {minutesLabel(activity.projectForecast.budgetMinutes)}. Forecast over budget: +{minutesLabel(activity.projectForecast.overBudgetMinutes)}. <strong>Budget never blocks an otherwise valid booking.</strong></p>:<p className={s.notice}>No full-project allocation total is certified from this page. All linked appointments and reconciliation checks must be included before a project-wide comparison is displayed.</p>}
       <section className={s.card}><h2>Scope and identity</h2><dl className={s.detailList}><dt>Customer ID</dt><dd>{project.customerId}</dd><dt>Property ID</dt><dd>{project.propertyId}</dd><dt>Start / estimated completion</dt><dd>{project.startsOn} → {project.estimatedCompletionOn}</dd></dl><p className={s.prewrap}>{project.description||'No description recorded.'}</p><h3>Technician instructions</h3><p className={s.prewrap}>{project.technicianInstructions||'No instructions recorded.'}</p></section></>}
       {tab==='Plan & phases'&&<section className={s.card}><div className={s.sectionTitle}><h2>Custom project phases</h2><button type="button" className={s.button} disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)} onClick={()=>{setPhase(undefined);setModal('phase');}}>Add phase</button><button type="button" className={s.button} disabled={locked||detail.loading||Boolean(detail.error)} onClick={()=>setModal('templates')}>Company templates</button></div>{!project.phases.length&&<p className={s.empty}>General Project Work — no phases defined. Existing linked general work remains visible.</p>}{project.phases.map(item=><article className={s.card} key={item.id}><div className={s.sectionTitle}><h3>{item.name}</h3><button className={s.button} type="button" disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)} onClick={()=>{setPhase(item);setModal('phase');}}>Edit phase</button><button className={s.button} type="button" disabled={locked||detail.loading||Boolean(detail.error)} onClick={()=>{setPhase(item);setModal('completion');}}>Review completion</button><button className={s.button} type="button" disabled={locked||detail.loading||Boolean(detail.error)} onClick={()=>{setPhase(item);setModal('progress');}}>Review partial progress</button></div><p>{minutesLabel(item.plannedVanMinutes)} planned · Completion method: {item.progressMethod}</p><p className={s.prewrap}>{item.scopeOfWork}</p><p><strong>Completion criteria:</strong> {item.completionCriteria}</p><p className={s.muted}>Prerequisites: {item.dependencies.map(id=>project.phases.find(row=>row.id===id)?.name??id).join(', ')||'None'}</p></article>)}</section>}
+      {tab==='Overview'&&<section className={s.card}>
+        <div className={s.sectionTitle}><h2>Planning budgets</h2>
+          <button type="button" className={s.button} disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)||['Completed','Cancelled'].includes(project.planningStatus)} onClick={()=>setModal('estimate')}>Revise estimate</button>
+        </div>
+        <p>Van estimate revision {project.budget.revision}. The original estimate remains {minutesLabel(project.budget.originalMinutes)}.</p>
+        {project.type!=='Service Project'&&<p>Material budget: {project.details?.materialBudget
+          ? materialBudgetLabel(project.details.materialBudget)
+          : 'Not estimated'}. Planning only; actual material cost requires historical source evidence.</p>}
+      </section>}
       {tab==='Materials'&&<ProjectMaterialsPanel key={`${project.id}:${project.version}:${activityCursor||'first'}`} project={project} activity={activity} request={request}/>}
       {tab==='Field execution'&&<ProjectFieldExecution key={project.id} request={request} projectId={project.id} projectVersion={project.version} refreshToken={refresh}/>}
       {tab==='Scheduling activity'&&<section className={s.card}><div className={s.sectionTitle}><h2>Canonical activity · current page</h2><button type="button" className={s.button} disabled={!writeAllowed||locked||detail.loading||Boolean(detail.error)} onClick={()=>setModal('associate')}>Associate existing appointment</button></div><p className={s.muted}>This is a read of existing Work Orders and Field visits. Associating history does not reserve new capacity or change a technician report.</p>{activity.issues.length>0&&<div className={s.warning}>{activity.issues.map((issue,index)=><p key={`${issue.code}-${index}`}>{issue.code.replaceAll('_',' ')} {issue.workOrderId??issue.appointmentId??''}</p>)}</div>}
@@ -75,7 +86,8 @@ export function ProjectsCentralWorkspace({request,journal,canManage,isOwner,impo
     {tab==='Import & recovery'&&isOwner&&<ProjectImportPanel request={request} enabled={importEnabled} locked={locked} onApply={save}/>}
     {modal==='history'&&project&&isOwner&&<HistoryReconciliationDialog key={`${project.id}:${project.version}`} project={project} request={request} busy={locked} canManage={writeAllowed} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='create'&&<MetadataDialog busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
-    {modal==='metadata'&&project&&<MetadataDialog project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
+    {modal==='metadata'&&project&&<MetadataDialog key={`${project.id}:${project.version}`} project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
+    {modal==='estimate'&&project&&<ProjectEstimateDialog key={`${project.id}:${project.version}`} project={project} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='phase'&&project&&<PhaseDialog project={project} phase={phase} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='completion'&&project&&phase&&<PhaseCompletionDialog project={project} phase={phase} request={request} canManage={writeAllowed} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}
     {modal==='progress'&&project&&phase&&<PhaseProgressDialog key={`${project.id}:${project.version}:${phase.id}`} project={project} phase={phase} request={request} canManage={writeAllowed} busy={locked} onClose={()=>setModal(null)} onSave={save}/>}

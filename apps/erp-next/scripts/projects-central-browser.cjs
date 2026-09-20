@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const http=require('node:http');
 const {createCommittedResponseFault,interruptResponse}=require('./projects-central-response-fault.cjs');
 const {verifyNavigationEvidence,verifyBrowserErrorControls}=require('./projects-navigation-diagnostics.cjs');
+const {indexStaticAssets}=require('./projects-central-static-assets.cjs');
 const ROOT=path.resolve(__dirname,'../../..');const PROJECT='demo-demac-projects';
 for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env[key]||''))throw Error('Only loopback emulators are allowed.');
 if(process.env.GCLOUD_PROJECT!==PROJECT||process.env.GOOGLE_APPLICATION_CREDENTIALS)throw Error('Demo-only browser test; production credentials forbidden.');
@@ -14,6 +15,7 @@ const {chromium,webkit}=require(path.join(process.env.PROJECTS_UI_TOOLS,'node_mo
 const app=initializeApp({projectId:PROJECT},'projects-central-browser');const db=getFirestore(app),auth=getAuth(app);
 const service=createProjectRegistryService({db,verifyIdToken:(token,revoked)=>auth.verifyIdToken(token,revoked),enabled:true,allowLegacyImport:true});
 const OUT=path.join(ROOT,'apps/erp-next/out');const ART=path.join(ROOT,'projects-central-ui-evidence');fs.mkdirSync(ART,{recursive:true});
+const staticAssets=indexStaticAssets(OUT,fs);
 const protectedCollections=['clients','properties','appointments','workOrders','workVisits','bookingCapacityLocks','whatsappOutboundQueue','warehouseInventory'];
 let sequence=0;const actors={};let origin='';let handler;let previewRequests=0;
 const responseFault=createCommittedResponseFault();const recoveryEvidence=[];
@@ -37,7 +39,7 @@ const server=http.createServer(async(request,response)=>{
   }
   let pathname;
   try{pathname=decodeURIComponent(requested.pathname);}catch{response.writeHead(400).end();return;}
-  let file=path.resolve(OUT,`.${pathname}`);
+  let file=staticAssets.get(pathname)||path.resolve(OUT,`.${pathname}`);
   if(!file.startsWith(OUT+path.sep)){response.writeHead(403).end();return;}
   try{
     if(fs.statSync(file).isDirectory())file=path.join(file,'index.html');
@@ -78,6 +80,94 @@ async function externalResponse(url,request,rawBody) {
   }
   if(url.hostname.endsWith('.cloudfunctions.net'))return json({error:{code:'test_isolated',message:'No external operational functions in this test'}},503);
   throw Error('Unmocked external service; no request forwarded.');
+}
+async function verifyPlanningBudgets(page, projectId, engineName) {
+  const read = async () => (await api('get_plan', { projectId })).project;
+  const original = await read();
+  assert.equal(original.details.materialBudget, null, 'Blank optional material budget remains unknown');
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
+  let edit = page.getByRole('dialog', { name: 'Edit project plan' });
+  await edit.getByLabel('Material budget (optional)', { exact: true }).fill('1200.35');
+  await edit.getByRole('button', { name: 'Save project', exact: true }).click();
+  await edit.waitFor({ state: 'hidden' });
+  assert.deepEqual((await read()).details.materialBudget, { currency: 'AWG', amountMinor: 120035 });
+  await page.getByText(/Material budget: AWG/).waitFor();
+
+  await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
+  edit = page.getByRole('dialog', { name: 'Edit project plan' });
+  await edit.getByLabel('Project type', { exact: true }).selectOption('Service Project');
+  assert.equal(await edit.getByLabel('Material budget (optional)', { exact: true }).count(), 0);
+  await edit.getByRole('button', { name: 'Save project', exact: true }).click();
+  await edit.waitFor({ state: 'hidden' });
+  assert.deepEqual((await read()).details.materialBudget, { currency: 'AWG', amountMinor: 120035 }, 'Hiding Service budget must preserve historical data');
+  await page.getByText('Service Project · Planned', { exact: true }).waitFor();
+  assert.equal(await page.getByText(/Material budget:/).count(), 0);
+  await page.getByRole('button', { name: 'Edit plan', exact: true }).click();
+  edit = page.getByRole('dialog', { name: 'Edit project plan' });
+  await edit.getByLabel('Project type', { exact: true }).selectOption('VRF Project');
+  await edit.getByLabel('Material budget (optional)', { exact: true }).fill('');
+  await edit.getByRole('button', { name: 'Save project', exact: true }).click();
+  await edit.waitFor({ state: 'hidden' });
+  assert.equal((await read()).details.materialBudget, null);
+  assert.deepEqual((await read()).budget, original.budget);
+
+  await page.getByRole('button', { name: 'Revise estimate', exact: true }).click();
+  let revision = page.getByRole('dialog', { name: 'Revise project estimate' });
+  await revision.getByLabel('Revised Van hours', { exact: true }).fill('70');
+  await revision.getByLabel('Additional minutes', { exact: true }).fill('15');
+  await revision.getByLabel('Reason for estimate revision', { exact: true }).fill('Reviewed synthetic scope adjustment');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2), 'Revision dialog fits mobile');
+  await page.screenshot({ path: path.join(ART, `${engineName}-estimate-mobile.png`), fullPage: true });
+  const before = await read();
+  responseFault.arm(projectId, 'revise_estimate');
+  await revision.getByRole('button', { name: 'Save estimate revision', exact: true }).click();
+  await page.getByText(/An earlier operation needs confirmation/).waitFor();
+  assert.deepEqual((await read()).budget, { unit: 'van_minutes', originalMinutes: 3960, currentMinutes: 4215, revision: 2 });
+  const pending = responseFault.pendingCommand();
+  assert.equal(pending.data.expectedVersion, before.version);
+  assert.equal(pending.data.reason, 'Reviewed synthetic scope adjustment');
+  await revision.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await db.collection('businessSettings').doc('projects-registry').update({ writesPaused: true });
+  try {
+    page.once('dialog', event => event.accept());
+    await page.reload();
+    await page.getByText(/Project changes are paused/).waitFor();
+    const key = `demac.projects.pending.v1:${actors.admin.localId}`;
+    assert.deepEqual(await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)).command, key), pending);
+    assert.equal(await page.getByRole('button', { name: /Create Project/ }).isDisabled(), true);
+    responseFault.releaseForExactRetry();
+    await page.getByRole('button', { name: 'Retry the exact request', exact: true }).click();
+    await page.getByText(/original request recovered/).waitFor();
+    assert.equal((await read()).version, before.version + 1);
+    assert.equal((await read()).budget.revision, 2);
+    assert.equal(await page.getByRole('button', { name: 'Revise estimate', exact: true }).isDisabled(), true);
+    recoveryEvidence.push({ browser: engineName, ...responseFault.finish() });
+    const events = await db.collection('projectEvents').where('projectId', '==', projectId).get();
+    const revisions = events.docs.map(doc => doc.data()).filter(event => event.action === 'revise_estimate');
+    assert.equal(revisions.length, 1);
+    assert.equal(revisions[0].beforeBudget.currentMinutes, 3960);
+    assert.equal(revisions[0].afterBudget.currentMinutes, 4215);
+    assert.equal(revisions[0].reason, pending.data.reason);
+  } finally {
+    await db.collection('businessSettings').doc('projects-registry').update({ writesPaused: false });
+  }
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Revise estimate' && !b.disabled));
+  await page.getByRole('button', { name: 'Revise estimate', exact: true }).click();
+  revision = page.getByRole('dialog', { name: 'Revise project estimate' });
+  await revision.getByLabel('Revised Van hours', { exact: true }).fill('71');
+  await revision.getByLabel('Reason for estimate revision', { exact: true }).fill('Stale revision must fail');
+  const current = await read();
+  await api('edit_metadata', { projectId, expectedVersion: current.version, patch: { description: 'Second operator budget review' } }, 'operations');
+  await revision.getByRole('button', { name: 'Save estimate revision', exact: true }).click();
+  await revision.getByRole('alert').filter({ hasText: /Another operator changed/ }).waitFor();
+  assert.equal((await read()).budget.currentMinutes, 4215);
+  await revision.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.getByText('Second operator budget review', { exact: true }).waitFor();
+  await page.setViewportSize({ width: 1600, height: 1050 });
 }
 async function contextFor(browser,who='admin') {
   const context=await browser.newContext({viewport:{width:1600,height:1050},serviceWorkers:'block'});
@@ -157,6 +247,7 @@ async function main(){
     await page.getByRole('heading',{name,exact:true}).waitFor();const created=(await api('list_plans',{limit:50})).projects.find(project=>project.name===name);assert.ok(created);
     stage='phase';await page.getByRole('tab',{name:'Plan & phases',exact:true}).click();await page.getByRole('button',{name:'Add phase',exact:true}).click();const phase=page.getByRole('dialog',{name:'Add custom phase'});await phase.getByLabel('Phase name',{exact:true}).fill('Install and test');await phase.getByLabel('Estimated Van hours',{exact:true}).fill('4');await phase.getByLabel('Scope of work',{exact:true}).fill('Synthetic scope');await phase.getByLabel('Completion criteria',{exact:true}).fill('Review the verified installation');await phase.getByRole('button',{name:'Save phase',exact:true}).click();await phase.waitFor({state:'hidden'});
     assert.equal((await api('get_plan',{projectId:created.id})).project.phases.length,1);
+    stage='planning budgets and exact revision recovery';await verifyPlanningBudgets(page,created.id,engineName);
     if(engineName==='chromium'){
       stage='associate existing';await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByRole('button',{name:'Associate existing appointment',exact:true}).click();const assoc=page.getByRole('dialog',{name:'Associate existing appointment'});await assoc.getByLabel('Canonical appointment ID',{exact:true}).fill('UI-EXISTING-APT');await assoc.getByLabel('Reason for this association',{exact:true}).fill('Verified synthetic link');await assoc.getByRole('checkbox').check();await assoc.getByRole('button',{name:'Save reviewed association',exact:true}).click();await assoc.waitFor({state:'hidden'});await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByText(/UI-WO-SUPPORT/).waitFor();await page.getByText(/UI-VISIT/).waitFor();await page.screenshot({path:path.join(ART,'central-activity.png'),fullPage:true});
     }
