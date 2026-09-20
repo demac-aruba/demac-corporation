@@ -4,6 +4,10 @@
 // No Firebase initialization, deployment export, operational writer or activation here.
 const MAX_BODY_BYTES = 128 * 1024;
 const PUBLIC_ERRORS = Object.freeze({
+  history_reconciliation_not_ready: 'Resolve every known source reference before finalizing the imported Project review.',
+  history_preview_changed: 'The source or its links changed. Review the current evidence again.',
+  history_unlinked_review_required: 'Explain each unlinked source row. Known references cannot be excluded.',
+  history_limitations_required: 'Review every limitation before accepting the scheduling history.',
   projects_not_active: 'Central Projects is not activated.',
   projects_writes_paused: 'New Project changes are paused. Existing records and exact-request recovery remain available.',
   unauthenticated: 'Your session cannot be verified. Sign in again before continuing.',
