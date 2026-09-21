@@ -32,6 +32,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - name: Install Functions dependencies for the real endpoint bootstrap contracts
+        run: npm install --prefix functions --no-audit --no-fund
       - name: Validate isolated recovery syntax
         run: |
           node --check functions/projects/recovery.js

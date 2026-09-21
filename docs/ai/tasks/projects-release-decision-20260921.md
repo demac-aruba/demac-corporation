@@ -46,6 +46,23 @@ push to fix/projects-budget-soft-warning. Publish this documentation and the pre
 #514 continuation next, and inspect checks on both actual remote heads before merge.
 Do not treat historical CI or local test results as current remote CI completion.
 
+Both fast-forward pushes completed: #514 reached 50fa743e and #515 reached 530b7cb0.
+The current PR descriptions were updated. #515's three PR workflows and both Vercel
+checks passed. The first #514 recovery workflow (35600204573) exposed missing Functions
+dependency installation: all four actual-bootstrap contracts could not load
+firebase-admin/app on clean Node 22/24 runners. Add the same Functions dependency install
+used by the other integration workflows; retain the complete test glob and matrix.
+The four bootstrap contracts pass locally on both runtimes with those dependencies.
+The workflow correction requires fresh remote CI before the release gate is satisfied.
+
+Additional existing main-triggered effects were confirmed: Customer/Marketing agents,
+Workforce, the wacli connector and Task Tracker also deploy from the affected paths;
+Task Tracker executes taskTrackerProductionActivation.js activate. In the PR runs all
+production deploy/activation jobs are correctly skipped by their existing main-only
+conditions. No workflow guards, tests or production configuration were weakened.
+Firebase CLI has no authorized default account; the browser control tool failed to
+initialize before page access. No authenticated Cloud access or real backup is certified.
+
 QuickBooks connectivity and future photo/audio/AI expense capture are not prerequisites.
 There is no new general expense, accounting, payroll or Inventory implementation to finish
 as part of this agreed operational scope. Do not restart the audit or rerun unchanged
