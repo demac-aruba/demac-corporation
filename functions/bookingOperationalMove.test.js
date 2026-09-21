@@ -147,7 +147,7 @@ function moveInput(overrides = {}) {
 }
 
 test("manual dispatch capacity preserves owned spots across lunch", () => {
-  assert.equal(OPERATIONAL_MOVE_VERSION, 4);
+  assert.equal(OPERATIONAL_MOVE_VERSION, 5);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "08:30", 3), ["08:30", "09:30", "10:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "13:30", 3), ["13:30", "14:30", "15:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), ["09:30", "10:30", "13:30"]);
@@ -277,4 +277,197 @@ test("same request id is idempotent and does not append duplicate lifecycle hist
   assert.equal(second.success, true);
   assert.equal(second.replayed, true);
   assert.equal(db.read("appointments/APT-1").lifecycleHistory.length, 1);
+});
+
+function overtimeFixture(extra = {}) {
+  return fixture({
+    ...Object.fromEntries(['tech-1', 'tech-2', 'tech-3', 'tech-4'].map((id) => [`staffProfiles/${id}`, { id, active: true, availability: 'Disponible', canDriveVan: true }])),
+    ...extra,
+  });
+}
+async function prepareOvertime(authority, overrides = {}) {
+  const input = moveInput({ requestedTime: '14:30', ...overrides });
+  const { proposal } = await authority.prepareMove(input);
+  return { input: { ...input, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } }, proposal };
+}
+
+test('possible overtime preparation and cancellation perform zero writes', async () => {
+  const { db, authority } = overtimeFixture();
+  const before = structuredClone([...db.store]);
+  const { proposal } = await prepareOvertime(authority);
+  assert.equal(proposal.requiredSlots, 3);
+  assert.equal(proposal.ordinarySlots, 2);
+  assert.equal(proposal.estimatedEnd, '17:30');
+  assert.equal(proposal.capacityEnd, '17:30');
+  assert.deepEqual([...db.store], before);
+});
+
+test('acceptance preserves identity, duration, all three locks, crew and audit; duplicate receipt replays', async () => {
+  const { db, authority } = overtimeFixture();
+  const { input } = await prepareOvertime(authority);
+  const result = await authority.moveAppointment(input);
+  const appointment = db.read('appointments/APT-1');
+  const order = db.read('workOrders/WO-1');
+  assert.deepEqual(result.workOrderIds, ['WO-1']);
+  assert.equal(order.appointmentId, 'APT-1');
+  assert.equal(order.appointmentDurationMinutes, 180);
+  assert.equal(order.scheduledSlots, 3);
+  assert.equal(order.airConditionerCount, 3);
+  assert.equal(order.appointmentEndTime, '17:30');
+  assert.deepEqual(appointment.capacityLockIds.map((id) => db.read(`bookingCapacityLocks/${id}`).slot), ['14:30', '15:30', '16:30']);
+  assert.equal(db.read('bookingCapacityLocks/OLD-1').active, false);
+  assert.equal(appointment.lifecycleHistory[0].possibleOvertime.acceptedBy, 'owner-1');
+  assert.equal(appointment.lifecycleHistory[0].possibleOvertime.accepted, true);
+  assert.equal(appointment.lifecycleHistory[0].possibleOvertime.from.primaryVanId, 'VAN-1');
+  assert.equal(appointment.lifecycleHistory[0].possibleOvertime.to.primaryVanId, 'VAN-2');
+  assert.equal(order.afterHoursOpenEnded, undefined);
+  assert.equal(order.actualCompletedAt, undefined);
+  assert.equal((await authority.moveAppointment(input)).replayed, true);
+  assert.equal(db.read('appointments/APT-1').lifecycleHistory.length, 1);
+  await assert.rejects(() => authority.moveAppointment({ ...input, targetVanId: 'VAN-1' }), { code: BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT });
+});
+
+test('stale or absent consent and changed duration preserve the source atomically', async () => {
+  for (const change of ['false', 'token', 'source']) {
+    const { db, authority } = overtimeFixture();
+    const { input } = await prepareOvertime(authority);
+    if (change === 'false') input.overtimeConsent.accepted = false;
+    if (change === 'token') input.overtimeConsent.confirmationToken = 'forged';
+    if (change === 'source') db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), appointmentDurationMinutes: 200 });
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => authority.moveAppointment(input), { code: BOOKING_ERROR_CODES.AVAILABILITY_CHANGED });
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('overtime rejects ordinary-tail and additional-interval work and staff conflicts', async () => {
+  for (const [time, vanId, technicianIds] of [['15:30', 'VAN-2', []], ['16:45', 'VAN-2', []], ['17:00', 'VAN-3', ['tech-3']]]) {
+    const { db, authority } = overtimeFixture({ 'workOrders/BLOCKER': { id: 'BLOCKER', appointmentId: 'OTHER', date: '2026-08-18', time, vanId, technicianIds, appointmentDurationMinutes: 60, status: 'Confirmada' } });
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => prepareOvertime(authority), { code: BOOKING_ERROR_CODES.SLOT_CONFLICT });
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('overtime revalidates Van, crew, closures and absence at confirmation', async () => {
+  for (const [path, value] of [
+    ['vans/VAN-2', { id: 'VAN-2', active: true, status: 'Mantenimiento', responsibleStaffId: 'tech-3' }],
+    ['staffAbsences/ABSENCE', { staffId: 'tech-3', fromDate: '2026-08-18', toDate: '2026-08-18', active: true }],
+    ['calendarClosures/CLOSED', { date: '2026-08-18', active: true }],
+    ['dailyVanAssignments/DA', { vanId: 'VAN-2', date: '2026-08-18', status: 'Sin personal' }],
+  ]) {
+    const { db, authority } = overtimeFixture();
+    const { input } = await prepareOvertime(authority);
+    db.store.set(path, value);
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => authority.moveAppointment(input), { code: BOOKING_ERROR_CODES.AVAILABILITY_CHANGED });
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('active destination locks and the shared after-hours guard cannot be stolen', async () => {
+  const { hashId } = require('./bookingSchedulingPrimitives');
+  const { afterHoursGuard } = require('./bookingAfterHours');
+  for (const lockId of [`BAL-${hashId('2026-08-18|VAN-2|16:30', 32).toUpperCase()}`, afterHoursGuard('2026-08-18', 'VAN-2').id]) {
+    const { db, authority } = overtimeFixture();
+    const { input } = await prepareOvertime(authority);
+    db.store.set(`bookingCapacityLocks/${lockId}`, { active: true, appointmentId: 'OTHER' });
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => authority.moveAppointment(input), { code: BOOKING_ERROR_CODES.SLOT_CONFLICT });
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('support bookings remain protected by their existing coordinated move boundary', async () => {
+  const { db, authority } = overtimeFixture();
+  const appointment = structuredClone(db.read('appointments/APT-1'));
+  appointment.assignments.push({ vanId: 'VAN-3', role: 'support', time: '09:30', slots: 1 });
+  appointment.workOrderIds.push('SUPPORT-1');
+  db.store.set('appointments/APT-1', appointment);
+  const before = structuredClone([...db.store]);
+  await assert.rejects(() => prepareOvertime(authority), (error) => error.details.reason === 'multi-van-booking-requires-reschedule');
+  assert.deepEqual([...db.store], before);
+});
+
+test('half-day tail uses canonical ordinary capacity without compressing work', async () => {
+  const { authority } = overtimeFixture({ 'vanHalfDaySchedules/TUE': { active: true, vanId: 'VAN-2', weekday: 2, workdayStart: '08:00', workdayEnd: '13:00' } });
+  const { input, proposal } = await prepareOvertime(authority, { requestedTime: '10:30' });
+  assert.equal(proposal.ordinarySlots, 2);
+  assert.equal(proposal.requiredSlots, 3);
+  assert.equal(proposal.estimatedEnd, '13:30');
+  assert.equal((await authority.moveAppointment(input)).appointment.assignments[0].slots, 3);
+});
+
+test('an aborted canonical transaction leaves the entire original store intact', async () => {
+  const { db, authority } = overtimeFixture();
+  const { input } = await prepareOvertime(authority);
+  const before = structuredClone([...db.store]);
+  db.runTransaction = async (callback) => { await callback(new FakeTransaction(db)); throw new Error('injected commit failure'); };
+  await assert.rejects(() => authority.moveAppointment(input), /injected commit failure/);
+  assert.deepEqual([...db.store], before);
+});
+
+test('old retries after a later move return their receipt without moving again', async () => {
+  const { db, authority } = overtimeFixture();
+  const { input } = await prepareOvertime(authority);
+  await authority.moveAppointment(input);
+  await authority.moveAppointment(moveInput({ requestId: 'second-move-12345', targetVanId: 'VAN-1', requestedTime: '08:30' }));
+  assert.equal((await authority.moveAppointment(input)).replayed, true);
+  assert.equal(db.read('appointments/APT-1').primaryVanId, 'VAN-1');
+  assert.equal(db.read('appointments/APT-1').lifecycleHistory.length, 2);
+});
+
+test('same-Van, historical, already executed and discontinuous-tail exceptions fail closed', async () => {
+  for (const scenario of ['same-van', 'history', 'executed', 'lunch']) {
+    const { db, authority } = overtimeFixture();
+    let overrides = {};
+    if (scenario === 'same-van') overrides.targetVanId = 'VAN-1';
+    if (scenario === 'history') {
+      const original = db.read('appointments/APT-1');
+      db.store.set('appointments/APT-1', { ...original, date: '2026-08-17' });
+      db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), date: '2026-08-17' });
+      overrides.requestedDate = '2026-08-17';
+    }
+    if (scenario === 'executed') db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), actualStartedAt: '2026-08-18T12:30:00Z' });
+    if (scenario === 'lunch') {
+      db.store.set('appointments/APT-1', { ...db.read('appointments/APT-1'), assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 6 }] });
+      overrides.requestedTime = '09:30';
+    }
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => prepareOvertime(authority, overrides));
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('source lock ownership and notification history survive a rejected or accepted exception', async () => {
+  const { db, authority } = overtimeFixture();
+  const notifications = { queueIds: ['SYNTHETIC-EXISTING'] };
+  db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), confirmationNotifications: notifications, customerCommunicationOwner: true });
+  const { input } = await prepareOvertime(authority);
+  db.store.set('bookingCapacityLocks/OLD-1', { active: true, appointmentId: 'OTHER' });
+  const before = structuredClone([...db.store]);
+  await assert.rejects(() => authority.moveAppointment(input), { code: BOOKING_ERROR_CODES.SLOT_CONFLICT });
+  assert.deepEqual([...db.store], before);
+  db.store.set('bookingCapacityLocks/OLD-1', { active: true, appointmentId: 'APT-1' });
+  await authority.moveAppointment(input);
+  assert.deepEqual(db.read('workOrders/WO-1').confirmationNotifications, notifications);
+  assert.equal(db.read('workOrders/WO-1').customerCommunicationOwner, true);
+});
+
+test('ordinary manual moves cannot consume the owned tail of a shorter bounded overtime job', async () => {
+  const seed = baseSeed();
+  seed['appointments/APT-1'].assignments[0].slots = 1;
+  seed['workOrders/WO-1'].scheduledSlots = 1;
+  seed['workOrders/WO-1'].appointmentDurationMinutes = 60;
+  const { db, authority } = fixture({
+    ...seed,
+    'workOrders/BOUNDED': {
+      id: 'BOUNDED', appointmentId: 'OTHER', date: '2026-08-18', status: 'Confirmada',
+      vanId: 'VAN-2', time: '14:30', scheduledSlots: 3, appointmentDurationMinutes: 30,
+      operationalMoveOvertime: { accepted: true, capacityEnd: '17:30' },
+    },
+  });
+  const before = structuredClone([...db.store]);
+  await assert.rejects(() => authority.moveAppointment(moveInput({ requestedTime: '15:30' })), { code: BOOKING_ERROR_CODES.SLOT_CONFLICT });
+  assert.deepEqual([...db.store], before);
 });
