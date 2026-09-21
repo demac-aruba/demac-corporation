@@ -1,5 +1,9 @@
 'use client';
 
+import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-budget-status';
+import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-confirmation';
+import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
@@ -30,6 +34,7 @@ import {
   createOfficeLifecycleRequestId,
   createOfficeTemporaryHold,
   listOfficeBookingPresets,
+  officeBookingOutcomeUnknown,
   type OfficeBookingOption,
   type OfficeBookingPreset,
   type OfficeBookingWorkLine,
@@ -346,8 +351,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const { principal } = useAuth();
   const canViewProjects = principal.active && principal.capabilities.has('projects.view');
   const canManageProjects = canViewProjects && principal.capabilities.has('projects.manage');
-  const projectAccessRef = useRef({ canView: canViewProjects, canManage: canManageProjects });
-  projectAccessRef.current = { canView: canViewProjects, canManage: canManageProjects };
+  const projectAccessRef = useRef({ uid: principal.userId, canView: canViewProjects, canManage: canManageProjects });
+  projectAccessRef.current = { uid: principal.userId, canView: canViewProjects, canManage: canManageProjects };
   const isAfterHours = mode === 'after_hours';
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
@@ -393,6 +398,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [holding, setHolding] = useState(false);
+  const bookingInFlight = useRef(false);
+  const [bookingRecovery, setBookingRecovery] = useState<{ retry: () => Promise<void> } | null>(null);
+  const [budgetConfirmation, setBudgetConfirmation] = useState<{ action: 'confirm' | 'hold'; signature: string } | null>(null);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
   const [supportSlotCandidates, setSupportSlotCandidates] = useState<OfficeSupportSlotCandidate[]>([]);
@@ -648,7 +656,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return { plan: null, error: 'Select an active or planned Project phase.' };
     }
     try {
-      return { plan: planProjectScheduling(selectedProject, Number(projectSlots)), error: '' };
+      return { plan: planProjectScheduling(selectedProject, Number(projectSlots), selectedProjectPhase?.id), error: '' };
     } catch (error) {
       return { plan: null, error: error instanceof Error ? error.message : 'Enter a valid whole number of Project slots.' };
     }
@@ -781,6 +789,24 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const displayAllocationOption = activeValidation
     ? selectedValidatedOption
     : supportSlotCandidates.length ? null : selectedCapacityOption;
+  const allocationBudget = useMemo(() => {
+    if (!projectPlan || !selectedProject || !selectedValidatedOption) return { plan: projectPlan, error: '' };
+    try {
+      const scheduledHours = projectAllocationHours(selectedValidatedOption.assignments);
+      const phase = projectPlan.phaseLaborBudget;
+      return { plan: { ...projectPlan, scheduledHours, laborBudget: calculateProjectLaborBudget(selectedProject, scheduledHours),
+        ...(phase ? { phaseLaborBudget: calculateProjectLaborBudget({ estimatedLaborHours: phase.budgetHours,
+          actualLaborHours: phase.recordedActualHours, scheduledFutureHours: phase.scheduledHoursBefore }, scheduledHours) } : {}) }, error: '' };
+    } catch (error) { return { plan: null, error: error instanceof Error ? error.message : 'Invalid Van allocation.' }; }
+  }, [projectPlan, selectedProject, selectedValidatedOption]);
+  const bookingBudgetPlan = allocationBudget.plan;
+  const budgetSignature = projectMode && bookingBudgetPlan && activeValidation && selectedValidatedOption
+    ? JSON.stringify([principal.userId, projectId, projectPhaseId, bookingBudgetPlan.laborBudget, bookingBudgetPlan.phaseLaborBudget,
+      offerSignature, activeValidation.offerId, activeValidation.offerVersion, selectedValidatedOption]) : '';
+  const budgetAcknowledgementRequired = Boolean(bookingBudgetPlan && (bookingBudgetPlan.laborBudget.overBudgetHoursAfter > 0
+    || (bookingBudgetPlan.phaseLaborBudget?.overBudgetHoursAfter ?? 0) > 0));
+  // A selection, offer, actor or forecast change retires the open decision permanently.
+  useEffect(() => { setBudgetConfirmation(null); }, [budgetSignature]);
   const workValid = projectMode
     ? Boolean(selectedProject
       && projectWorkPreset
@@ -1160,7 +1186,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
     automaticValidationCapacityRef.current = capacitySignature;
     if (capacityChanged) validationChangeKindRef.current = 'capacity';
-    if (isAfterHours || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
+    if (bookingRecovery || isAfterHours || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
     const timer = window.setTimeout(() => {
       if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
       validationChangeKindRef.current = 'metadata';
@@ -1171,7 +1197,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       window.clearTimeout(timer);
       if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
     };
-  }, [backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isAfterHours, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+  }, [bookingRecovery, backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isAfterHours, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const saveProjectBookingLink = async (input: {
     appointmentId: string;
@@ -1180,33 +1206,43 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     status: 'confirmed' | 'temporary_hold';
   }) => {
     if (!projectMode) return true;
-    if (!projectAccessRef.current.canManage || !selectedProject || !projectPlan) return false;
+    if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId || !selectedProject || !projectPlan) return false;
     try {
       const nextState = await commitBrowserProjectsPreviewMutation(projectsState, (latestProjectsState) => {
-        const primary = optionPrimaryAssignment(input.option);
         const latestProject = latestProjectsState.projects.find((project) => project.id === selectedProject.id);
         if (!latestProject
           || latestProject.customerId !== selectedCustomer?.id
           || latestProject.siteId !== selectedProperty?.id) {
           throw new Error('The latest Project customer or Service Property no longer matches this appointment.');
         }
-        return linkProjectSchedulingAssignment(latestProjectsState, {
-          projectId: selectedProject.id,
-          customerId: selectedCustomer.id,
-          siteId: selectedProperty.id,
-          phaseId: selectedProjectPhase?.id ?? '',
-          appointmentId: input.appointmentId,
-          workOrderId: input.workOrderIds[0] ?? `appointment:${input.appointmentId}`,
-          bookingStatus: input.status,
-          vanId: primary?.vanId ?? requestTarget.vanId,
-          scheduledSlots: projectPlan.scheduledSlots,
-          scheduledDate: input.option.date,
-          scheduledStart: primary ? optionAssignmentStart(input.option, primary) : input.option.time,
-          scheduledEnd: primary ? optionAssignmentCapacityEnd(input.option, primary) : input.option.capacityEndTime,
-        });
+        if (input.workOrderIds.length !== input.option.assignments.length
+          || new Set(input.workOrderIds).size !== input.workOrderIds.length) throw new Error('Canonical Work Order allocation is incomplete.');
+        // Booking Authority builds Work Orders in option.assignments order. Each
+        // primary/support Work Order is linked once using its existing stable ID.
+        const linkedAllocations = new Set<string>();
+        return input.option.assignments.reduce((state, allocation, index) => {
+          const key = JSON.stringify([allocation.vanId, allocation.time ?? '']);
+          if (linkedAllocations.has(key)) return state;
+          linkedAllocations.add(key);
+          return linkProjectSchedulingAssignment(state, {
+            projectId: selectedProject.id,
+            customerId: selectedCustomer.id,
+            siteId: selectedProperty.id,
+            phaseId: selectedProjectPhase?.id ?? '',
+            appointmentId: input.appointmentId,
+            workOrderId: input.workOrderIds[index],
+            bookingStatus: input.status,
+            vanId: allocation.vanId,
+            technicianIds: allocation.technicianIds,
+            scheduledSlots: projectAllocationHours([allocation]) * 60 / latestProject.slotDurationMinutes,
+            scheduledDate: input.option.date,
+            scheduledStart: optionAssignmentStart(input.option, allocation),
+            scheduledEnd: optionAssignmentCapacityEnd(input.option, allocation),
+          });
+        }, latestProjectsState);
       }, {
         authorize: () => {
-          if (!projectAccessRef.current.canManage) {
+          if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId) {
             throw new Error('Projects management permission changed before the Scheduling link was saved.');
           }
         },
@@ -1224,16 +1260,16 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     name: selectedProject.name,
     phaseId: selectedProjectPhase?.id ?? '',
     phaseName: selectedProjectPhase?.name ?? selectedProject.type,
-    scheduledHours: projectPlan.scheduledHours,
+    scheduledHours: bookingBudgetPlan?.scheduledHours ?? projectPlan.scheduledHours,
   } : undefined;
 
-  const confirmBooking = async () => {
+  const confirmBooking = async (acknowledgedBudget?: string) => {
     const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
-    if (projectBookingRequested && !projectAccessRef.current.canManage) {
+    if (projectBookingRequested && (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId)) {
       setAuthorityError('Projects management permission is required to confirm an appointment linked to a Project.');
       return;
     }
-    if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
+    if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || bookingInFlight.current) return;
     if (backdatedTarget && !backdatingAcknowledged) {
       setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
       return;
@@ -1288,6 +1324,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     }
 
     if (!activeValidation || !selectedValidatedOption) return;
+    if (projectBookingRequested && !bookingBudgetPlan) { setAuthorityError(allocationBudget.error); return; }
+    if (budgetAcknowledgementRequired && acknowledgedBudget !== budgetSignature) {
+      setBudgetConfirmation({ action: 'confirm', signature: budgetSignature });
+      return;
+    }
+    setBudgetConfirmation(null);
+    bookingInFlight.current = true;
     setSaving(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -1300,6 +1343,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         optionId: option.id,
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
+      setBookingRecovery(null);
       const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
         ? await saveProjectBookingLink({
           appointmentId: result.appointmentId,
@@ -1320,20 +1364,35 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
-      setValidated(null);
+      if (projectBookingRequested && officeBookingOutcomeUnknown(error)) {
+        // Keep the original offer, option, acknowledgement and request ID, even if a
+        // storage update changes the current forecast while this response is lost.
+        setBookingRecovery({ retry: () => confirmBooking(acknowledgedBudget) });
+      } else {
+        setBookingRecovery(null);
+        setValidated(null);
+      }
       setAuthorityError(error instanceof Error ? error.message : 'The appointment could not be confirmed.');
     } finally {
+      bookingInFlight.current = false;
       setSaving(false);
     }
   };
 
-  const holdBooking = async () => {
+  const holdBooking = async (acknowledgedBudget?: string) => {
     const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
-    if (projectBookingRequested && !projectAccessRef.current.canManage) {
+    if (projectBookingRequested && (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId)) {
       setAuthorityError('Projects management permission is required to place a Temporary Hold linked to a Project.');
       return;
     }
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding || bookingInFlight.current) return;
+    if (projectBookingRequested && !bookingBudgetPlan) { setAuthorityError(allocationBudget.error); return; }
+    if (budgetAcknowledgementRequired && acknowledgedBudget !== budgetSignature) {
+      setBudgetConfirmation({ action: 'hold', signature: budgetSignature });
+      return;
+    }
+    setBudgetConfirmation(null);
+    bookingInFlight.current = true;
     setHolding(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -1345,6 +1404,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         offerVersion,
         optionId: option.id,
       });
+      setBookingRecovery(null);
       const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
         ? await saveProjectBookingLink({
           appointmentId: result.appointmentId,
@@ -1365,9 +1425,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
-      setValidated(null);
+      if (projectBookingRequested && officeBookingOutcomeUnknown(error)) {
+        setBookingRecovery({ retry: () => holdBooking(acknowledgedBudget) });
+      } else {
+        setBookingRecovery(null);
+        setValidated(null);
+      }
       setAuthorityError(error instanceof Error ? error.message : 'The temporary hold could not be created.');
     } finally {
+      bookingInFlight.current = false;
       setHolding(false);
     }
   };
@@ -1375,7 +1441,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const busy = loading || masterSaving || saving || holding;
 
   return (
-    <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
+      {budgetConfirmation && budgetConfirmation.signature === budgetSignature && bookingBudgetPlan && canManageProjects && !busy && !checking && <ProjectBudgetConfirmation
+        key={budgetConfirmation.signature}
+        budgets={[{ scope: 'Proyecto', budget: bookingBudgetPlan.laborBudget }, ...(bookingBudgetPlan.phaseLaborBudget ? [{ scope: 'Fase', budget: bookingBudgetPlan.phaseLaborBudget }] : [])]}
+        onCancel={() => setBudgetConfirmation(null)}
+        onContinue={() => { void (budgetConfirmation.action === 'hold' ? holdBooking(budgetConfirmation.signature) : confirmBooking(budgetConfirmation.signature)); }}
+      />}
       <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={isAfterHours ? `Create after-hours appointment for ${requestTarget.vanName}` : 'Create appointment'}>
         <header className={styles.header}>
           <div>
@@ -1387,10 +1459,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 ? 'Create a Regular Booking or select an existing Project. Customer, property, work and Van time are validated together before anything is committed.'
                 : 'Create a Regular Booking. Customer, property, work and Van time are validated together before anything is committed.'}</p>
           </div>
-          <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className={styles.close} disabled={busy || Boolean(bookingRecovery)} onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        <div className={styles.body}>
+        <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
@@ -1568,11 +1640,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> enter whole slots only. One slot reserves {selectedProject.slotDurationMinutes} minutes of Van capacity; this Project allows up to {selectedProject.slotsPerWorkDay} slots per workday. Each technician records actual labor time separately in the Technician Portal.</div>
                     </div>
                     {projectPlanState.error ? <div className={styles.projectPlanError} role="alert">{projectPlanState.error}</div> : null}
+                    {bookingBudgetPlan ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.laborBudget} /> : null}
+                    {bookingBudgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.phaseLaborBudget} scope="Phase" /> : null}
                     {projectPlan ? (
                       <div className={styles.projectPlanSummary}>
                         <div><span>PROJECT SLOTS</span><strong>{projectPlan.scheduledSlots}</strong><small>{selectedProject.slotDurationMinutes} min each</small></div>
                         <div><span>EQUIVALENT VAN TIME</span><strong>{durationLabel(projectPlan.scheduledHours * 60)}</strong></div>
-                        <div><span>PROJECT HOURS LEFT</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
+                        <div><span>BUDGET HOURS REMAINING</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
                       </div>
                     ) : null}
                     {!projectWorkPreset && !presetsLoading ? <div className={styles.projectPlanError} role="alert">Scheduling needs the active “Other” work type to reserve manual Project hours. Enable it in Services & Products.</div> : null}
@@ -1763,6 +1837,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         </div>
 
         <footer className={styles.footer}>
+          {bookingRecovery ? <div role="alert">
+            <p>La respuesta de la reserva está pendiente. Recupera la solicitud original antes de cambiar la selección o cerrar esta ventana.</p>
+            <button type="button" className={styles.confirmButton} disabled={busy || projectWriteBlocked}
+              onClick={() => void bookingRecovery.retry()}>Recuperar reserva original</button>
+          </div> : <>
           <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : projectMode ? 'PROJECT PREVIEW + CANONICAL SCHEDULING' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : projectMode ? 'Project → Booking Authority → Appointment + Work Order + Capacity Locks' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
@@ -1771,6 +1850,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               ? busy || !selectedCustomer || !selectedProperty || !workValid || !validAfterHoursStart(requestTarget.start)
               : !selectedValidatedOption || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Projects management permission required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
           </div>
+          </>}
         </footer>
       </aside>
     </div>

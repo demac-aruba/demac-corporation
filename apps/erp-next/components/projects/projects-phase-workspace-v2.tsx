@@ -10,6 +10,7 @@ import {
   type FormEvent,
 } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
+import { ProjectLaborBudgetSummary } from './project-labor-budget-status';
 import {
   loadBookingMasterReferenceData,
   normalizeBookingPhone,
@@ -774,7 +775,7 @@ export function ProjectsPhaseWorkspaceV2() {
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
       <div className={styles.metrics}>
         <Metric code="PR" label="Project records" value={String(state.projects.length)} note="No seeded samples" tone="blue" />
-        <Metric code="AR" label="At risk" value={String(atRisk)} note="Based on recorded project actuals" tone={atRisk ? 'amber' : 'green'} />
+        <Metric code="AR" label="At risk" value={String(atRisk)} note="Recorded actuals and planned overruns" tone={atRisk ? 'amber' : 'green'} />
         <Metric code="HR" label="Actual project hours" value={`${number(portfolioHours, 1)}h`} note="Across visible Project records" tone="purple" />
         <Metric code="AF" label="Material actuals" value={money(portfolioSpend)} note="Recorded Project consumption" tone="green" />
       </div>
@@ -788,7 +789,7 @@ export function ProjectsPhaseWorkspaceV2() {
               <div><strong>{candidate.name}</strong><small>{candidate.projectNumber} · {candidate.type}</small></div>
               <div><strong>{candidate.customerName}</strong><small>{candidate.location}</small></div>
               <div><strong>{percent(candidateMetrics.physicalCompletion)}</strong><Progress value={candidateMetrics.physicalCompletion} /></div>
-              <div><strong>{number(candidate.actualLaborHours, 1)}h / {number(candidate.estimatedLaborHours)}h</strong><Progress value={candidateMetrics.laborConsumption} tone={candidateMetrics.laborConsumption > 100 ? 'red' : 'blue'} /></div>
+              <div><strong>{number(candidate.actualLaborHours, 1)}h / {number(candidate.estimatedLaborHours)}h</strong><small>Recorded actual / estimate</small><Progress value={candidateMetrics.laborConsumption} tone={candidateMetrics.laborConsumption > 100 ? 'red' : 'blue'} /><small>{number(candidate.scheduledFutureHours, 1)}h scheduled · {number(candidateMetrics.laborBudget.committedHoursAfter, 1)}h actual + scheduled</small>{candidateMetrics.laborBudget.overBudgetHoursAfter > 0 ? <Pill label={`Forecast +${number(candidateMetrics.laborBudget.overBudgetHoursAfter, 1)}h over budget`} tone="amber" /> : null}{candidateMetrics.laborBudget.actualOverBudgetHours > 0 ? <small>Recorded actual over budget: +{number(candidateMetrics.laborBudget.actualOverBudgetHours, 1)}h</small> : null}</div>
               <div><strong>{money(candidate.materialActual)}</strong><small>{candidate.materialBudget === null ? 'No baseline' : `of ${money(candidate.materialBudget)}`}</small></div>
               <div><Pill label={candidate.status} tone={projectStatusTone(candidate.status)} /></div>
               <div><button type="button" className={styles.primaryButton} onClick={() => openProject(candidate)}>Open Phases</button></div>
@@ -822,6 +823,8 @@ export function ProjectsPhaseWorkspaceV2() {
       <Metric code="SC" label="Scheduled" value={`${number(summary.scheduled, 1)}h`} note="Phase preview reservations" tone="blue" />
       <Metric code="AC" label="Actual phase labor" value={`${number(summary.actual, 1)}h`} note={`${completedPhases} / ${phases.length} phases complete`} tone="amber" />
     </div>
+
+    <ProjectLaborBudgetSummary project={project} />
 
     <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Only the Phases experience is changed in this isolated branch.</small></div>
 

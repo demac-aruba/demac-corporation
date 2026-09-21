@@ -1,4 +1,5 @@
 import { defaultSchedulingSettings } from './scheduling';
+import { calculateProjectLaborBudget, type ProjectLaborBudgetSnapshot } from './project-labor-budget';
 import { loadBrowserValue, saveBrowserValue } from './browser-store';
 
 export const BROWSER_PROJECTS_PREVIEW_KEY = 'demac.erp-next.projects.preview.v1';
@@ -96,6 +97,9 @@ export type ProjectCostEntry = {
 };
 
 export type ProjectAssignment = {
+  /** Advisory snapshot in existing browser storage; not an immutable server audit. */
+  laborBudgetAtScheduling?: ProjectLaborBudgetSnapshot;
+  phaseLaborBudgetAtScheduling?: ProjectLaborBudgetSnapshot;
   id: string;
   projectId: string;
   phaseId: string;
@@ -171,6 +175,8 @@ export type BrowserProjectsPreviewTransactionOptions = {
 };
 
 export type ProjectSchedulingPlan = {
+  laborBudget: ProjectLaborBudgetSnapshot;
+  phaseLaborBudget?: ProjectLaborBudgetSnapshot;
   scheduledHours: number;
   scheduledSlots: number;
   remainingHoursBefore: number;
@@ -263,16 +269,17 @@ export function createProjectsPreviewState(): BrowserProjectsPreviewState {
 }
 
 export function projectMetrics(project: BrowserProject) {
+  const laborBudget = calculateProjectLaborBudget(project);
   const physicalCompletion = project.totalUnits > 0 ? project.completedUnits / project.totalUnits * 100 : 0;
   const laborConsumption = project.estimatedLaborHours > 0 ? project.actualLaborHours / project.estimatedLaborHours * 100 : 0;
   const materialBudgetSet = project.materialBudget !== null && project.materialBudget > 0;
   const materialConsumption = materialBudgetSet ? project.materialActual / project.materialBudget! * 100 : null;
-  const remainingUnscheduledHours = Math.max(0, project.estimatedLaborHours - project.actualLaborHours - project.scheduledFutureHours);
+  const remainingUnscheduledHours = laborBudget.remainingHoursBefore;
   const materialRemaining = materialBudgetSet ? project.materialBudget! - project.materialActual : null;
   const materialOverBudget = materialConsumption !== null && materialConsumption > 100;
   const materialAtRisk = materialConsumption !== null && materialConsumption >= 80;
-  const health: ProjectHealth = laborConsumption > 100 || materialOverBudget ? 'Over Budget' : laborConsumption >= 90 || materialAtRisk ? 'At Risk' : 'On Track';
-  return { physicalCompletion, laborConsumption, materialBudgetSet, materialConsumption, remainingUnscheduledHours, materialRemaining, health };
+  const health: ProjectHealth = laborConsumption > 100 || materialOverBudget ? 'Over Budget' : laborBudget.overBudgetHoursAfter > 0 || laborConsumption >= 90 || materialAtRisk ? 'At Risk' : 'On Track';
+  return { physicalCompletion, laborConsumption, materialBudgetSet, materialConsumption, remainingUnscheduledHours, materialRemaining, health, laborBudget };
 }
 
 export function projectCompletionBlockers(project: BrowserProject): string[] {
@@ -487,7 +494,8 @@ export function editBrowserProject(
   }
   const capacity = projectCapacityPlan(input.estimatedWorkDays);
   const committedLaborHours = project.actualLaborHours + project.scheduledFutureHours;
-  if (capacity.estimatedLaborHours < committedLaborHours) {
+  // An unchanged estimate must not block an unrelated edit after an allowed overrun.
+  if (capacity.estimatedLaborHours < project.estimatedLaborHours && capacity.estimatedLaborHours < committedLaborHours) {
     throw new Error(`Estimated labor hours cannot be below the ${committedLaborHours} actual and scheduled hours already committed.`);
   }
   const materialBudget = projectTypeUsesMaterialBudget(type)
@@ -586,20 +594,29 @@ function scheduledHoursForSlots(project: BrowserProject, scheduledSlots: number)
   return scheduledSlots * slotDurationMinutes / 60;
 }
 
-export function planProjectScheduling(project: BrowserProject, scheduledSlots: number): ProjectSchedulingPlan {
+export function planProjectScheduling(project: BrowserProject, scheduledSlots: number, phaseId?: string): ProjectSchedulingPlan {
   const scheduledHours = scheduledHoursForSlots(project, scheduledSlots);
   if (!projectIsSchedulable(project)) {
     throw new Error(`Project ${project.projectNumber} is not available for Scheduling while ${project.status}.`);
   }
-  const remainingHoursBefore = projectMetrics(project).remainingUnscheduledHours;
-  if (scheduledHours > remainingHoursBefore) {
-    throw new Error(`This assignment needs ${scheduledHours} hours, but ${remainingHoursBefore} project labor hours remain unscheduled.`);
-  }
+  const laborBudget = calculateProjectLaborBudget(project, scheduledHours);
+  const normalizedPhaseId = phaseId === undefined ? undefined : normalizedProjectPhaseId(project, phaseId);
+  const phase = project.phases.find((candidate) => candidate.id === normalizedPhaseId);
+  const phaseLaborBudget = phase ? calculateProjectLaborBudget({
+    estimatedLaborHours: phase.estimatedLaborHours,
+    actualLaborHours: phase.actualLaborHours,
+    scheduledFutureHours: project.assignments
+      .filter((assignment) => assignment.phaseId === phase.id && !assignment.postedAt)
+      .reduce((sum, assignment) => sum + assignment.scheduledHours, 0),
+  }, scheduledHours) : undefined;
+  // Budget exhaustion is advisory. Only Booking Authority may decide real Van availability.
   return {
     scheduledHours,
     scheduledSlots,
-    remainingHoursBefore,
-    remainingHoursAfter: remainingHoursBefore - scheduledHours,
+    remainingHoursBefore: laborBudget.remainingHoursBefore,
+    remainingHoursAfter: laborBudget.remainingHoursAfter,
+    laborBudget,
+    ...(phaseLaborBudget ? { phaseLaborBudget } : {}),
   };
 }
 
@@ -744,7 +761,7 @@ export function linkProjectSchedulingAssignment(
     };
   }
 
-  const scheduledPlan = planProjectScheduling(project, input.scheduledSlots);
+  const scheduledPlan = planProjectScheduling(project, input.scheduledSlots, phaseId);
   const assignment: ProjectAssignment = {
     id: assignmentId,
     projectId,
@@ -756,6 +773,8 @@ export function linkProjectSchedulingAssignment(
     technicianIds: technicianIds ?? [],
     scheduledHours: scheduledPlan.scheduledHours,
     scheduledSlots: scheduledPlan.scheduledSlots,
+    laborBudgetAtScheduling: scheduledPlan.laborBudget,
+    ...(scheduledPlan.phaseLaborBudget ? { phaseLaborBudgetAtScheduling: scheduledPlan.phaseLaborBudget } : {}),
     scheduledDate: input.scheduledDate,
     scheduledStart: input.scheduledStart,
     scheduledEnd: input.scheduledEnd,

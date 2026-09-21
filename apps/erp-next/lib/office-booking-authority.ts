@@ -273,6 +273,15 @@ export type OfficeContactChanges = Partial<Pick<OfficeContactRecord,
 >>;
 
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+
+export class OfficeBookingRequestError extends Error {
+  constructor(message: string, readonly outcomeUnknown: boolean) { super(message); }
+}
+
+/** Transport/server failures can occur after commit; retry the identical request. */
+export function officeBookingOutcomeUnknown(error: unknown) {
+  return !(error instanceof OfficeBookingRequestError) || error.outcomeUnknown;
+}
 type PresetResponse = {
   success: true;
   version: number;
@@ -331,7 +340,10 @@ async function callOfficeBookingAuthority<T>(
     }) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
+      throw new OfficeBookingRequestError(
+        `${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`,
+        response.status >= 500 || response.status === 408,
+      );
     }
     return payload;
   } catch (error) {
