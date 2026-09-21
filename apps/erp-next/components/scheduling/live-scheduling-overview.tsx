@@ -27,6 +27,7 @@ import {
 import {
   createOfficeLifecycleRequestId,
   moveOfficeAppointment,
+  prepareOfficeAppointmentMove,
   type OfficeAdhocSupportResult,
 } from '../../lib/office-booking-authority';
 import {
@@ -52,7 +53,7 @@ import styles from './scheduling-overview-v2.module.css';
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
 type DisplayVan = { id: string; name: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
-type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
+type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot; requestId: string };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
@@ -74,10 +75,12 @@ function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined,
   return fallback ? fallback.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Scheduled work';
 }
 
-function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
+function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null, jobs: CalendarDispatchJob[] = []): DisplaySlot[] {
   if (!day.isOpen) return [];
   const baseStarts = getRuntimeSchedulingSettings().serviceStartTimes;
-  const starts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
+  const ordinaryStarts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
+  const extension = jobs.filter((job) => job.possibleOvertime && job.vanId === vanId && job.dateKey === day.dateKey).flatMap((job) => job.capacitySlotStarts || []);
+  const starts = [...new Set([...ordinaryStarts, ...extension])].sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
   const halfDay = liveVanHalfDaySchedule(capacityState, vanId, day.dateKey);
   const capacityReady = Boolean(capacityState);
   const vanAvailable = capacityReady && liveVanOperationallyAvailable(capacityState, vanId, day.dateKey);
@@ -85,7 +88,7 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
   return starts.map((start) => {
     const startMinutes = timeToMinutes(start);
     const end = minutesToTime(startMinutes + 60);
-    const operational = vanAvailable && liveOperationalWindowAllows(capacityState, vanId, day.dateKey, start, end);
+    const operational = ordinaryStarts.includes(start) && vanAvailable && liveOperationalWindowAllows(capacityState, vanId, day.dateKey, start, end);
     const offReason = operational
       ? undefined
       : !capacityReady
@@ -367,6 +370,8 @@ export function LiveSchedulingOverview() {
     [dragCandidates],
   );
   const validDropTargets = useMemo(() => new Set(dragCandidateMap.keys()), [dragCandidateMap]);
+  const overtimeDropTargets = useMemo(() => new Set(dragCandidates.filter((slot) => slot.possibleOvertime).map((slot) => liveMoveTargetKey(slot.vanId, slot.start))), [dragCandidates]);
+  const moveRequestInFlight = useRef(false);
 
   const vanLanes = () => Array.from(boardScrollRef.current?.querySelectorAll<HTMLElement>('[data-van-lane]') ?? []);
 
@@ -540,11 +545,11 @@ export function LiveSchedulingOverview() {
     refreshSequenceRef.current += 1;
     setSelectedAppointmentId('');
     setMoveArmedJobId(jobId);
-    setMoveNotice(`Move armed for ${link.appointment.customer}. Only destinations inside canonical operating capacity are highlighted.`);
+    setMoveNotice(`Move armed for ${link.appointment.customer}. Amber destinations require confirmation of possible overtime.`);
   };
 
-  const dropMove = (targetVanId: string, targetStart: string) => {
-    if (!moveArmedJobId || moveBusy || pendingDragMove) return;
+  const dropMove = async (targetVanId: string, targetStart: string) => {
+    if (!moveArmedJobId || moveBusy || pendingDragMove || moveRequestInFlight.current) return;
     const movingJobId = moveArmedJobId;
     const link = jobLinks.get(movingJobId);
     const currentJob = jobs.find((job) => job.id === movingJobId);
@@ -558,7 +563,7 @@ export function LiveSchedulingOverview() {
 
     setMoveArmedJobId('');
     setMoveNotice('');
-    setPendingDragMove({
+    const pending: PendingLiveMove = {
       appointmentId: appointment.id,
       assignmentId: currentJob.id,
       jobId: currentJob.id,
@@ -572,7 +577,26 @@ export function LiveSchedulingOverview() {
       targetEnd: candidate.end,
       customerNotificationRecommended: currentJob.start !== targetStart,
       candidate,
-    });
+      requestId: createOfficeLifecycleRequestId('drag-move'),
+    };
+    if (candidate.possibleOvertime) {
+      moveRequestInFlight.current = true;
+      setMoveBusy(true);
+      setMoveNotice('Validando cupos y finalización estimada…');
+      try {
+        const result = await prepareOfficeAppointmentMove({ appointmentId: appointment.id, requestId: pending.requestId, requestedDate: appointment.dateKey, requestedTime: targetStart, requiredVanId: targetVanId, reason: 'Drag-and-drop operational move' });
+        pending.overtime = result.proposal;
+        pending.targetEnd = result.proposal.estimatedEnd;
+      } catch (cause) {
+        setMoveNotice(`${cause instanceof Error ? cause.message : 'No se pudo validar el destino.'} No se ha modificado la cita.`);
+        return;
+      } finally {
+        moveRequestInFlight.current = false;
+        setMoveBusy(false);
+      }
+    }
+    setMoveNotice('');
+    setPendingDragMove(pending);
   };
 
   const cancelPendingMove = () => {
@@ -583,7 +607,7 @@ export function LiveSchedulingOverview() {
 
   const confirmPendingMove = async () => {
     const pending = pendingDragMove;
-    if (!pending || moveBusy) return;
+    if (!pending || moveBusy || moveRequestInFlight.current) return;
     const appointment = appointments.find((item) => item.id === pending.appointmentId);
     const currentJob = appointment?.assignments.find((assignment) => assignment.id === pending.assignmentId) ?? appointment?.assignments[0];
     if (!appointment || !currentJob) {
@@ -592,6 +616,7 @@ export function LiveSchedulingOverview() {
       return;
     }
 
+    moveRequestInFlight.current = true;
     setMoveBusy(true);
     setMoveNotice(`Moving ${appointment.customer} to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}…`);
     refreshSequenceRef.current += 1;
@@ -599,12 +624,13 @@ export function LiveSchedulingOverview() {
     try {
       const result = await moveOfficeAppointment({
         appointmentId: appointment.id,
-        requestId: createOfficeLifecycleRequestId('drag-move'),
+        requestId: pending.requestId,
         requestedDate: appointment.dateKey,
         requestedTime: pending.targetStart,
         requiredVanId: pending.targetVanId,
         reason: 'Drag-and-drop operational move',
         note: `${currentJob.vanId} ${currentJob.start} → ${pending.targetVanId} ${pending.targetStart}`,
+        ...(pending.overtime ? { overtimeConsent: { accepted: true as const, confirmationToken: pending.overtime.confirmationToken } } : {}),
       });
 
       const committedSlot: CandidateSlot = {
@@ -626,6 +652,7 @@ export function LiveSchedulingOverview() {
         dateKey: appointment.dateKey,
         actor,
       });
+      if (pending.overtime) projected.record.assignments = projected.record.assignments.map((job) => ({ ...job, possibleOvertime: true, capacityEnd: pending.overtime!.capacityEnd }));
 
       refreshSequenceRef.current += 1;
       setAppointments((items) => items.map((item) => item.id === appointment.id ? projected.record : item));
@@ -643,8 +670,10 @@ export function LiveSchedulingOverview() {
       }, 350);
     } catch (cause) {
       setPendingDragMove(null);
-      setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} The original appointment was preserved.`);
+      setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} Refreshing the canonical agenda to verify the result.`);
+      void refresh();
     } finally {
+      moveRequestInFlight.current = false;
       setMoveBusy(false);
     }
   };
@@ -705,7 +734,7 @@ export function LiveSchedulingOverview() {
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
         <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
         <article><span>Temporary holds</span><strong style={{ color: 'var(--warning, #b45309)' }}>{temporaryHolds}</strong><small>Canonical capacity reserved · customer not confirmed</small></article>
-        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
+        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} />{activeJobs.some((job) => job.possibleOvertime) ? <small style={{ color: 'var(--warning)' }}>{activeJobs.filter((job) => job.possibleOvertime).length} traslado(s) con posible overtime</small> : null}</article>
       </div>
 
       <div className={styles.board} data-schedule-board>
@@ -735,7 +764,7 @@ export function LiveSchedulingOverview() {
           >
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
-              const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState);
+              const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState, activeJobs);
               const crew = liveVanCrew(capacityState, van.id, activeDay.dateKey);
               const halfDay = liveVanHalfDaySchedule(capacityState, van.id, activeDay.dateKey);
               const operational = liveVanOperationallyAvailable(capacityState, van.id, activeDay.dateKey);
@@ -775,6 +804,7 @@ export function LiveSchedulingOverview() {
                     canCreate={canManage && Boolean(capacityState)}
                     canSupport={canManage && Boolean(capacityState) && activeDay.dateKey === today}
                     validDropTargets={validDropTargets}
+                    overtimeDropTargets={overtimeDropTargets}
                     onCreateAppointment={openCreateAppointment}
                     onSendSupport={openSupportAssignment}
                     onOpenAppointment={scheduleOpenJob}
@@ -851,6 +881,7 @@ function VanScheduleSlots({
   canCreate,
   canSupport,
   validDropTargets,
+  overtimeDropTargets,
   onCreateAppointment,
   onSendSupport,
   onOpenAppointment,
@@ -866,6 +897,7 @@ function VanScheduleSlots({
   canCreate: boolean;
   canSupport: boolean;
   validDropTargets: Set<string>;
+  overtimeDropTargets: Set<string>;
   onCreateAppointment: (vanId: string, start: string, end: string) => void;
   onSendSupport: (vanId: string, start: string, end: string) => void;
   onOpenAppointment: (jobId: string) => void;
@@ -903,6 +935,7 @@ function VanScheduleSlots({
         && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
+      const overtimeTarget = dropEnabled && overtimeDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational;
       const runAvailableAction = (intent: AvailableSlotIntent) => {
         const action = availableSlotAction(intent);
@@ -912,6 +945,7 @@ function VanScheduleSlots({
       rows.push(<div
         className={`${styles.openSlot} ${createEnabled ? laneStyles.slotInteractive : ''}`}
         data-schedule-slot="open"
+        data-possible-overtime={overtimeTarget || undefined}
         key={`open-${slot.start}`}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
@@ -920,12 +954,12 @@ function VanScheduleSlots({
           onDropMove(vanId, slot.start);
         }}
         style={dropEnabled
-          ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' }
+          ? { borderStyle: 'solid', borderColor: overtimeTarget ? 'var(--warning)' : 'var(--brand)', background: overtimeTarget ? 'color-mix(in srgb,var(--warning) 12%,var(--surface))' : 'var(--brand-soft)', cursor: 'copy' }
           : undefined}
       >
         <div className={`${styles.slotTime} ${createEnabled ? laneStyles.slotContent : ''}`}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div className={createEnabled ? laneStyles.slotContent : undefined}><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
-        {dropEnabled ? <b>MOVE</b> : createEnabled || supportEnabled ? <div className={createEnabled ? laneStyles.slotActions : undefined} style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <div className={createEnabled ? laneStyles.slotContent : undefined}><strong>{overtimeTarget ? 'Posible overtime' : dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{overtimeTarget ? 'Requiere confirmación · conserva todos los cupos' : dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
+        {dropEnabled ? <button type="button" className={styles.secondary} onClick={() => onDropMove(vanId, slot.start)}>{overtimeTarget ? 'REVISAR' : 'MOVE'}</button> : createEnabled || supportEnabled ? <div className={createEnabled ? laneStyles.slotActions : undefined} style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('book'); }}>BOOK</button> : null}
           {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('support'); }}>SUPPORT</button> : null}
         </div> : <b>LIVE</b>}
@@ -1017,7 +1051,8 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {!continuation && span > 1 ? <small>{span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
+          {!continuation && span > 1 ? <small>{appointment?.scheduledSlotCount || span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
+          {job.possibleOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
           {!continuation && capacityOutlastsWork ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}

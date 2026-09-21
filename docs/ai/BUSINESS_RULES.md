@@ -169,6 +169,20 @@ Production activation remains separately owner-approved through the server-side 
   draft-confirmation requirements. AI capture and QBO synchronization are future work,
   not current Projects prerequisites or new implementation authority.
 
+## Controlled manual transfer beyond ordinary capacity
+
+- `OPS-SCHED-MOVE-OT-001` — An authorized office operator may explicitly accept possible
+  overtime when manually transferring an existing, unexecuted, fixed-duration Appointment
+  to another Van on the same nonhistorical appointment date. The destination must have a
+  nonempty consecutive ordinary tail. Only the ordinary end boundary may be exceeded;
+  the complete interval must still pass calendar, Van, staff and reservation validation.
+  Booking Authority owns preparation and the atomic Appointment/Work Order/lock swap.
+  Server-bound consent, actor/time/from/to audit and idempotent replay are mandatory.
+  Cancellation of the confirmation writes nothing. Required slots and duration remain
+  intact. The bounded estimate is not actual attendance or payroll overtime and adds no
+  ordinary availability to automated booking or Maya. Multi-Van/support bookings retain
+  their existing coordinated reschedule boundary.
+
 ## Current payroll-attendance ownership
 
 - Payroll attendance periods are canonical 27th-through-26th ranges. The selected day is a

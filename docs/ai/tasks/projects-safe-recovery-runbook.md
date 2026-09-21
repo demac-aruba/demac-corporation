@@ -51,5 +51,9 @@ explicitly authorized operator may clear writesPaused. Keep all incident/restora
 
 ## Current evidence status
 
-This runbook and pause handling are code under test. No original client-browser backup, Cloud
-export, production restore, write pause or migration has been executed in this development.
+The owner supplied evidence of a completed full Firestore export on 2026-09-21:
+111827 documents, SUCCESSFUL, and the overall metadata object present. See the
+[integration and recovery checkpoint](../reviews/projects-main-integration-20260921.md).
+Photos/attachments and future scheduled full backups were explicitly deferred. No original
+client-browser backup, restore rehearsal, write pause or migration has been verified here.
+Restoration time and canonical relationship recovery remain unmeasured.

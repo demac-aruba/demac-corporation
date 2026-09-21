@@ -739,6 +739,7 @@ function createBookingAppointmentLifecycle({
         constraints: currentRequest.constraints,
         notes: currentRequest.notes,
         assignments: refreshedOption.assignments,
+        ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
         primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
         workOrderIds,
         capacityLockIds: newLocks.map((lock) => lock.id),
@@ -760,6 +761,7 @@ function createBookingAppointmentLifecycle({
       for (const workOrder of workOrders) {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
+          ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
           status: currentTemporaryHold ? "Reserva temporal" : "Confirmada",
           bookingOfferId: canonicalOfferId,
           updatedAt: now.toISOString(),
@@ -830,6 +832,7 @@ function createBookingAppointmentLifecycle({
           constraints: currentRequest.constraints,
           notes: currentRequest.notes,
           assignments: refreshedOption.assignments,
+          ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
           primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
           workOrderIds,
           capacityLockIds: newLocks.map((lock) => lock.id),

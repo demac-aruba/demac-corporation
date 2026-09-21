@@ -702,7 +702,14 @@ export function officeLifecycleRecovery() {
  * validates the exact van/time, and commits the lifecycle transaction inside one
  * server request so the browser does not pay two sequential network round trips.
  */
-export async function moveOfficeAppointment(input: {
+export type OfficeMoveOvertimeProposal = {
+  vanId: string; vanName: string; start: string;
+  requiredSlots: number; ordinarySlots: number;
+  estimatedEnd: string; ordinaryEnd: string; capacityEnd: string;
+  confirmationToken: string;
+};
+
+export type OfficeMoveInput = {
   appointmentId: string;
   requestId: string;
   requestedDate: string;
@@ -710,7 +717,14 @@ export async function moveOfficeAppointment(input: {
   requiredVanId: string;
   reason: string;
   note?: string;
-}) {
+  overtimeConsent?: { accepted: true; confirmationToken: string };
+};
+
+export async function prepareOfficeAppointmentMove(input: OfficeMoveInput) {
+  return callOfficeBookingAuthority<{ success: true; appointmentId: string; proposal: OfficeMoveOvertimeProposal }>('prepare_appointment_move', input, 12_000);
+}
+
+export async function moveOfficeAppointment(input: OfficeMoveInput) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('move_appointment', input, 12_000);
 }
 
