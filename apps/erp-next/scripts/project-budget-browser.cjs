@@ -23,7 +23,7 @@ const fixture = {
   materialBudget: null, materialActual: 0, assignedVans: [], phases: [], assignments: [], materials: [], expenses: [], costEntries: [],
 };
 const stubs = {
-  'auth-provider': `const principal = {active:true, role:'super_admin', displayName:'Synthetic owner', capabilities:new Set(window.__readOnly ? ['projects.view'] : ['projects.view','projects.manage'])}; export function useAuth(){return {principal};}`,
+  'auth-provider': `const principal = {userId:'SYNTHETIC-ACTOR',active:true, role:'operations', displayName:'Synthetic operator', capabilities:new Set(window.__readOnly ? ['projects.view'] : ['projects.view','projects.manage'])}; export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[{id:'CUSTOMER-BROWSER-TEST',name:'Synthetic customer',active:true}],properties:[{id:'PROPERTY-BROWSER-TEST',clientId:'CUSTOMER-BROWSER-TEST',name:'Synthetic site',address:'Synthetic site',active:true}]};}
     export async function loadBookingContactReferenceData(){return {contacts:[],contactAssignments:[]};}
@@ -34,6 +34,7 @@ const stubs = {
   'property-communication-editor': `export function PropertyCommunicationPanel(){return null;} export function PropertyContactDraftEditor(){return null;}`,
   'after-hours-booking': `export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
   'office-booking-authority': `
+    export function officeBookingOutcomeUnknown(error){return error.message==='Synthetic response lost';}
     export function createOfficeLifecycleRequestId(){return 'synthetic-request-'+(++window.__requests);}
     export async function listOfficeBookingPresets(){return {presets:[{id:'other',label:'Other',active:true,serviceId:'SERVICE-TEST',durationMode:'manual',durationMinutesPerUnit:60}]};}
     export async function checkOfficeCreateAvailability(input){
@@ -41,10 +42,20 @@ const stubs = {
       await new Promise(resolve=>setTimeout(resolve,80));
       if(window.__unavailable) return {available:false,options:[],reason:'required-primary-target-unavailable'};
       const minutes=input.workLines[0].manualDurationMinutes;
+      if(window.__support) return {available:true,offer:{id:'SYNTHETIC-OFFER',version:1},options:[{id:'SYNTHETIC-OPTION',date:input.requestedDate,time:input.requestedTime,assignments:[
+        {role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'13:30',capacityEndTime:'13:30',durationMinutes:240,slots:4,quantity:1},
+        {role:'support',vanId:'SUPPORT-VAN',vanName:'Support Van',time:'08:30',endTime:'10:30',capacityEndTime:'10:30',durationMinutes:120,slots:2,quantity:1}]}]};
       return {available:true,offer:{id:'SYNTHETIC-OFFER',version:1},options:[{id:'SYNTHETIC-OPTION',date:input.requestedDate,time:input.requestedTime,endTime:'15:30',capacityEndTime:'15:30',durationMinutes:minutes,durationMode:'manual',quantity:1,assignments:[{role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'15:30',capacityEndTime:'15:30',durationMinutes:minutes,slots:minutes/60,quantity:1}]}]};
     }
-    export async function confirmOfficeAppointment(input){window.__commits.push(input);if(window.__failCommit) throw Error('Synthetic final capacity conflict');return {appointmentId:'SYNTHETIC-APT',workOrderIds:['SYNTHETIC-WO']};}
-    export async function createOfficeTemporaryHold(input){window.__holds.push(input);return {appointmentId:'SYNTHETIC-HOLD',workOrderIds:['SYNTHETIC-HOLD-WO']};}`,
+    async function commit(input,hold){
+      const calls=hold?window.__holds:window.__commits;calls.push(input);
+      if(window.__failCommit) throw Error('Synthetic final capacity conflict');
+      window.__records[input.requestId] ||= {appointmentId:hold?'SYNTHETIC-HOLD':'SYNTHETIC-APT',workOrderIds:window.__support?['SYNTHETIC-WO','SUPPORT-WO']:[hold?'SYNTHETIC-HOLD-WO':'SYNTHETIC-WO']};
+      if(window.__loseResponse && calls.length===1) throw Error('Synthetic response lost');
+      return window.__records[input.requestId];
+    }
+    export async function confirmOfficeAppointment(input){return commit(input,false);}
+    export async function createOfficeTemporaryHold(input){return commit(input,true);}`,
 };
 const entry = `
 import React, {useState} from 'react';
@@ -85,7 +96,7 @@ async function main() {
     for(const [name,engine] of [['chromium',chromium],['webkit',webkit]]) {
       const browser=await engine.launch({headless:true});
       try {
-        for(const scenario of ['confirmed','hold','availability-conflict','commit-conflict','read-only']) {
+        for(const scenario of ['confirmed','hold','cancel','selection-change','forecast-change','forecast-70','support','within-budget','lost-response','lost-hold-response','availability-conflict','commit-conflict','read-only']) {
           const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
           const unexpected=[];const errors=[];
           await context.route('**/*',route=>{
@@ -94,17 +105,21 @@ async function main() {
           });
           await context.addInitScript(({project,scenario})=>{
             localStorage.setItem('demac.erp-next.projects.preview.v1',JSON.stringify({version:1,selectedProjectId:project.id,projects:[project]}));
-            window.__checks=[];window.__commits=[];window.__holds=[];window.__requests=0;
+            window.__checks=[];window.__commits=[];window.__holds=[];window.__requests=0;window.__records={};
+            window.__loseResponse=scenario==='lost-response'||scenario==='lost-hold-response';
+            window.__support=scenario==='support';
             window.__readOnly=scenario==='read-only';window.__unavailable=scenario==='availability-conflict';window.__failCommit=scenario==='commit-conflict';
-          },{project:fixture,scenario});
+          },{project:{...fixture,scheduledFutureHours:['forecast-70','support'].includes(scenario)?64:63},scenario});
           const page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
           try {
             await page.goto(url);
             await page.getByRole('button',{name:/^Project Find a Project/i}).click();
             await page.getByRole('button',{name:/PRJ-BROWSER-TEST/}).click();
-            await page.getByLabel(/Planned Project slots/i).fill('6');
-            await page.locator('[data-project-budget-warning]').first().waitFor();
-            assert.match(await page.locator('[data-project-budget-warning]').first().innerText(),/\+3h/);
+            await page.getByLabel(/Planned Project slots/i).fill(scenario==='within-budget'?'3':'6');
+            if(scenario!=='within-budget') {
+              await page.locator('[data-project-budget-warning]').first().waitFor();
+              assert.match(await page.locator('[data-project-budget-warning]').first().innerText(),['forecast-70','support'].includes(scenario)?/\+4h/:/\+3h/);
+            }
             const confirm=page.getByRole('button',{name:'Confirm appointment',exact:true});
             if(scenario==='availability-conflict') {
               await page.getByText(/no longer has the complete requested capacity/).waitFor();
@@ -113,29 +128,69 @@ async function main() {
               assert.equal(await confirm.isDisabled(),true);
             } else {
               await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Confirm appointment'&&!button.disabled));
+              const isHold=scenario==='hold'||scenario==='lost-hold-response';
+              if(isHold)await page.getByRole('button',{name:'Temporary hold',exact:true}).click();else await confirm.click();
+              if(scenario!=='within-budget') {
+                const decision=page.getByRole('dialog',{name:'La reserva supera el presupuesto estimado',exact:true});
+                await decision.waitFor();
+                assert.match(await decision.innerText(),['forecast-70','support'].includes(scenario)?/Presupuesto: 66 h · Total previsto: 70 h · Exceso: 4 h/:/Presupuesto: 66 h · Total previsto: 69 h · Exceso: 3 h/);
+                assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length),0);
+                if(['cancel','selection-change'].includes(scenario)) {
+                  await decision.getByRole('button',{name:'Cancelar',exact:true}).click();
+                  assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length),0);
+                  if(scenario==='selection-change') {
+                    await page.getByLabel(/Planned Project slots/i).fill('5');
+                    await confirm.click();await decision.waitFor();
+                    assert.match(await decision.innerText(),/Total previsto: 68 h · Exceso: 2 h/);
+                  }
+                } else if(scenario==='forecast-change') {
+                  await page.evaluate(()=>{
+                    const key='demac.erp-next.projects.preview.v1';const state=JSON.parse(localStorage.getItem(key));
+                    state.projects[0].scheduledFutureHours=64;localStorage.setItem(key,JSON.stringify(state));
+                    window.dispatchEvent(new StorageEvent('storage',{key}));
+                  });
+                  await decision.waitFor({state:'hidden'});
+                  assert.equal(await page.evaluate(()=>window.__commits.length),0);
+                  await confirm.click();await decision.waitFor();
+                  assert.match(await decision.innerText(),/Total previsto: 70 h · Exceso: 4 h/);
+                }
+                if(scenario!=='cancel') {
+                  await page.setViewportSize({width:390,height:844});
+                  assert.ok(await decision.evaluate(el=>el.scrollWidth<=el.clientWidth+2));
+                  if(scenario==='confirmed')await page.screenshot({path:path.join(artifacts,`${name}-acknowledgement-mobile.png`),fullPage:true});
+                  await decision.getByRole('button',{name:'Sí, estoy consciente; continuar',exact:true}).click();
+                }
+              }
               if(scenario==='commit-conflict') {
-                await confirm.click();await page.getByText('Synthetic final capacity conflict',{exact:true}).waitFor();
+                await page.getByText('Synthetic final capacity conflict',{exact:true}).waitFor();
                 assert.equal(await page.evaluate(()=>window.__created),undefined);
-              } else {
-                if(scenario==='hold')await page.getByRole('button',{name:'Temporary hold',exact:true}).click();else await confirm.click();
+              } else if(scenario!=='cancel') {
+                if(scenario==='lost-response'||scenario==='lost-hold-response') {
+                  await page.getByRole('button',{name:'Recuperar reserva original'}).click();
+                }
                 await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
-                const data=await page.evaluate(()=>({state:JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')),created:window.__created,checks:window.__checks,commits:window.__commits,holds:window.__holds}));
+                const data=await page.evaluate(()=>({state:JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')),created:window.__created,checks:window.__checks,commits:window.__commits,holds:window.__holds,records:window.__records}));
+                const scheduled=scenario==='within-budget'?66:scenario==='selection-change'?68:['forecast-70','forecast-change','support'].includes(scenario)?70:69;
                 assert.equal(data.state.projects[0].estimatedLaborHours,66);
-                assert.equal(data.state.projects[0].scheduledFutureHours,69);
+                assert.equal(data.state.projects[0].scheduledFutureHours,scheduled);
                 assert.equal(data.state.projects[0].actualLaborHours,0);
-                assert.equal(data.state.projects[0].assignments.length,1);
-                assert.equal(data.state.projects[0].assignments[0].laborBudgetAtScheduling.overBudgetHoursAfter,3);
+                assert.equal(data.state.projects[0].assignments.length,scenario==='support'?2:1);
+                assert.equal(data.state.projects[0].assignments.at(-1).laborBudgetAtScheduling.overBudgetHoursAfter,scheduled-66);
                 assert.equal(data.created.project.syncStatus,'linked');
-                assert.ok(data.checks.every(check=>check.workLines[0].manualDurationMinutes===360));
-                assert.equal(scenario==='hold'?data.holds.length:data.commits.length,1);
-                await page.getByText('Recorded allocation warnings (1)',{exact:true}).click();
-                await page.getByText(/Project forecast at scheduling: 69h \/ 66h/).waitFor();
+                const calls=isHold?data.holds:data.commits;
+                assert.equal(calls.length,scenario==='lost-response'||scenario==='lost-hold-response'?2:1);
+                if(calls.length===2)assert.deepEqual(calls[0],calls[1]);
+                assert.equal(Object.keys(data.records).length,1);
+                if(scenario!=='within-budget') {
+                  await page.getByText('Recorded allocation warnings ('+(scenario==='support'?2:1)+')',{exact:true}).click();
+                  await page.getByText(new RegExp('Project forecast at scheduling: '+scheduled+'h / 66h')).waitFor();
+                }
                 await page.setViewportSize({width:390,height:844});
                 assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
                 await page.screenshot({path:path.join(artifacts,`${name}-${scenario}-mobile.png`),fullPage:true});
               }
             }
-            if(['availability-conflict','commit-conflict','read-only'].includes(scenario)) {
+            if(['cancel','availability-conflict','commit-conflict','read-only'].includes(scenario)) {
               const local=await page.evaluate(()=>JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')).projects[0]);
               assert.equal(local.scheduledFutureHours,63);assert.equal(local.assignments.length,0);
             }
@@ -148,6 +203,11 @@ async function main() {
         }
       } finally {await browser.close();}
     }
-  } finally {await new Promise(resolve=>server.close(resolve));fs.rmSync(output,{recursive:true,force:true});}
+  } finally {
+    await new Promise(resolve=>server.close(resolve));
+    const tempRoot=path.resolve(os.tmpdir());const relative=path.relative(tempRoot,path.resolve(output));
+    if(relative.startsWith('..')||path.isAbsolute(relative)||!relative.startsWith('demac-budget-browser-'))throw Error('Unsafe test cleanup target');
+    fs.rmSync(output,{recursive:true,force:true});
+  }
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

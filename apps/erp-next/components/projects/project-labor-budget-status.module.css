@@ -17,3 +17,11 @@
 .forecast { font-weight: 600; }
 .actual { font-weight: 700; }
 @media (max-width: 40rem) { .summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.confirmation{width:min(520px,calc(100vw - 32px));box-sizing:border-box;border:1px solid #c58a18;border-radius:14px;padding:24px;color:var(--text,#172033);background:var(--surface,#fff);box-shadow:0 24px 80px #0005;font-size:14px;line-height:1.5}
+.confirmation::backdrop{background:#08132699}
+.confirmation h2{margin:0 0 16px;font-size:20px}
+.confirmation section{padding:12px;background:#fff5d9;color:#583b04;border-radius:8px;margin:10px 0}
+.confirmation section p{margin:6px 0 0}
+.confirmation footer{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-top:20px}
+.confirmation button{padding:10px 14px;border:1px solid #a87010;border-radius:8px;color:inherit;background:var(--surface,#fff);font:inherit;cursor:pointer}
+.confirmation button:last-child{background:#825500;color:#fff}

@@ -20,6 +20,20 @@ type BudgetSource = {
   scheduledFutureHours: number;
 };
 
+/** Sum each Van allocation once. Do not add the requested workload again to its split. */
+export function projectAllocationHours(assignments: Array<{ vanId: string; time?: string; durationMinutes?: number; slots: number }>) {
+  const allocations = new Map<string, number>();
+  for (const assignment of assignments) {
+    const key = JSON.stringify([assignment.vanId, assignment.time ?? '']);
+    const minutes = hours(assignment.durationMinutes ?? assignment.slots * 60, 'Allocated Van minutes');
+    if (!assignment.vanId || minutes <= 0) throw new Error('A positive identified Van allocation is required.');
+    if (allocations.has(key) && allocations.get(key) !== minutes) throw new Error('Conflicting repeated Van allocation.');
+    allocations.set(key, minutes);
+  }
+  if (!allocations.size) throw new Error('At least one Van allocation is required.');
+  return hours([...allocations.values()].reduce((sum, minutes) => sum + minutes, 0) / 60, 'Allocated Van hours');
+}
+
 function hours(value: number, label: string) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new Error(`${label} must be a finite non-negative number.`);

@@ -5,7 +5,7 @@ import {
   linkProjectSchedulingAssignment, postProjectAssignment,
   commitBrowserProjectsPreviewMutation, type BrowserProject, type BrowserProjectsPreviewState,
 } from '../lib/browser-projects';
-import { calculateProjectLaborBudget } from '../lib/project-labor-budget';
+import { calculateProjectLaborBudget, projectAllocationHours } from '../lib/project-labor-budget';
 import { createProjectPhase, projectPhases, schedulePreviewPhaseAssignment } from '../lib/project-phase-planner';
 
 let passed = 0;
@@ -108,6 +108,22 @@ check('exact retry adds neither hours, warnings nor a duplicate Project assignme
   assert.strictEqual(linkProjectSchedulingAssignment(first, linkInput()), first);
   assert.equal(first.projects[0].assignments.length, 1);
 });
+check('primary and support consume their own allocation once; retries preserve all prior work', () => {
+  const before = state({ ...fixture(), scheduledFutureHours: 64 });
+  const primary = { ...linkInput(), scheduledSlots: 4 };
+  const support = { ...linkInput(), scheduledSlots: 2, workOrderId: 'BUDGET-SUPPORT-WO', vanId: 'SUPPORT-VAN' };
+  const linked = linkProjectSchedulingAssignment(linkProjectSchedulingAssignment(before, primary), support);
+  assert.equal(linked.projects[0].scheduledFutureHours, 70);
+  assert.equal(linked.projects[0].actualLaborHours, 0);
+  assert.equal(linked.projects[0].assignments[1].laborBudgetAtScheduling?.overBudgetHoursAfter, 4);
+  assert.strictEqual(linkProjectSchedulingAssignment(linkProjectSchedulingAssignment(linked, support), primary), linked);
+  const allocations = [{ vanId: 'PRIMARY', time: '08:30', durationMinutes: 240, slots: 4 },
+    { vanId: 'SUPPORT', time: '08:30', durationMinutes: 120, slots: 2 }];
+  assert.equal(projectAllocationHours(allocations), 6);
+  assert.equal(projectAllocationHours([...allocations, allocations[1]]), 6);
+  assert.throws(() => projectAllocationHours([...allocations, { ...allocations[1], durationMinutes: 180 }]), /Conflicting/);
+  assert.deepEqual(before, state({ ...fixture(), scheduledFutureHours: 64 }));
+});
 check('promoting a held booking preserves its original budget evidence without double counting', () => {
   const input = { ...linkInput(), bookingStatus: 'temporary_hold' as const };
   const held = linkProjectSchedulingAssignment(state(), input);
@@ -151,7 +167,7 @@ check('closed phases and incomplete dependencies are not overridden by a budget 
 check('UI leaves authorization and real availability gates in place and does not mark a forecast invalid', () => {
   const drawer = readFileSync('components/scheduling/live-appointment-create-drawer.tsx', 'utf8');
   const dialog = readFileSync('components/projects/project-phase-planner-dialogs.tsx', 'utf8');
-  assert.match(drawer, /<ProjectLaborBudgetWarning budget=\{projectPlan\.laborBudget\}/);
+  assert.match(drawer, /<ProjectLaborBudgetWarning budget=\{bookingBudgetPlan\.laborBudget\}/);
   assert.match(drawer, /aria-invalid=\{Boolean\(projectPlanState\.error\)\}/);
   assert.match(drawer, /if \(!activeValidation \|\| !selectedValidatedOption\) return/);
   assert.match(drawer, /await confirmOfficeAppointment\(/);
