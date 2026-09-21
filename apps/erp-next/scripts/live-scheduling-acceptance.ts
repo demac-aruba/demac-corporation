@@ -330,7 +330,8 @@ const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canoni
 requireCondition(dragCandidates.length > 0, 'A single-van appointment must expose same-day drag targets.');
 requireCondition(dragCandidates.some((slot) => slot.start === '09:30'), 'Past wall-clock time must not hide a physically open manual destination.');
 requireCondition(dragCandidates.some((slot) => slot.start === '10:30' && slot.end === '12:30'), 'A two-hour block must be allowed at 10:30 because lunch is not a hard conflict.');
-requireCondition(dragCandidates.every((slot) => slot.start !== '15:30'), 'A two-hour block must not be offered at 15:30 because it exceeds the operating-day end.');
+requireCondition(dragCandidates.filter((slot) => slot.start === '15:30').every((slot) => slot.vanId !== canonical.primaryVanId && slot.possibleOvertime?.requiredSlots === 2 && slot.possibleOvertime.ordinarySlots === 1), 'An overrun may only be offered as a marked cross-Van confirmation candidate, never ordinary capacity.');
+requireCondition(dragCandidates.some((slot) => slot.start === '15:30' && slot.possibleOvertime), 'The marked overrun destination must remain selectable before confirmation.');
 
 const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
 requireCondition(Boolean(target), 'A valid target must exist for committed projection coverage.');
@@ -391,6 +392,13 @@ function appointmentAt(id: string, customer: string, vanId: string, start: strin
 }
 
 const christianPm = appointmentAt('APT-CHRISTIAN-PM', 'Christian', 'VAN-3', '13:30', '15:30', 2);
+const overtimeExample = appointmentAt('APT-OVERTIME', 'Synthetic overtime example', 'VAN-1', '08:30', '11:30', 3);
+const overtimeCandidates = liveDragMoveCandidates(operationalDay!, overtimeExample, overtimeExample.assignments, baseCapacity);
+const overtimeTarget = overtimeCandidates.find((slot) => slot.vanId === 'VAN-2' && slot.start === '14:30');
+requireCondition(overtimeTarget?.possibleOvertime?.requiredSlots === 3 && overtimeTarget.possibleOvertime.ordinarySlots === 2 && overtimeTarget.end === '17:30', 'The three-slot / two ordinary slots case must retain all three hours and remain selectable.');
+const refreshedOvertime = projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], time: '14:30', vanId: 'VAN-2', appointmentDurationMinutes: 180, scheduledSlots: 3, appointmentEndTime: '17:30', appointmentCapacityEndTime: '17:30', operationalMoveOvertime: { accepted: true, capacityEnd: '17:30' } }], clients, properties)[0];
+requireCondition(refreshedOvertime.scheduledSlotCount === 3 && refreshedOvertime.assignments[0].capacitySlotStarts?.join('|') === '14:30|15:30|16:30', 'Reload must preserve the three capacity units including the extension.');
+requireCondition(refreshedOvertime.assignments[0].possibleOvertime && refreshedOvertime.assignments[0].end === '17:30', 'Reload must retain the accepted estimate, without actual overtime data.');
 const maribelVan1Am = appointmentAt('APT-MARIBEL-V1-AM', 'Maribel Marquez', 'VAN-1', '08:30', '11:30', 3);
 const maribelVan1Pm = appointmentAt('APT-MARIBEL-V1-PM', 'Maribel Marquez', 'VAN-1', '13:30', '16:30', 3);
 const maribelVan4Pm = appointmentAt('APT-MARIBEL-V4-PM', 'Maribel Marquez', 'VAN-4', '13:30', '16:30', 3);
