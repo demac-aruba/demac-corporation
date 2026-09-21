@@ -76,3 +76,25 @@ local preview, review deployment ordering (backend before UI), and plan latency 
 For rollback before use, revert the task commit. After real accepted transfers exist, retain
 the bounded readers/guards and disable new proposals with a forward patch; do not rewrite
 appointments or erase audit. Human approval is still required for merge and deployment.
+
+## Owner acceptance and merge-only integration
+
+On 2026-09-21 the owner validated the synthetic Preview and approved the merge. After
+being informed that main-push workflows also deploy production and run existing WhatsApp
+queue/group migrations, the owner confirmed proceeding with the proposed merge-only path.
+
+The merge commit must include the exact marker `[merge-only]`. The five production jobs
+selected by this task's paths (Office Booking, Work Order, Customer Agent, Field Operations
+and Transactional WhatsApp) reject that marker on a push. All validation jobs, steps and
+triggers remain unchanged. Both Vercel configurations use the documented ignoreCommand
+mechanism to ignore that marked revision. No workflow is globally disabled, no credential
+or security rule changes, and no data migration runs for this merge. Future unmarked
+commits retain the existing publication behavior; this is not a permanent release freeze.
+
+The scheduling implementation approved in commit fec8cc66 is unchanged. Before merging,
+verify the production-condition matrix, actual ignore-command exit codes, complete CI on
+the final head, exact expected head SHA and unchanged base. After merging, verify skipped
+production jobs, successful validation and canceled Vercel builds for the merge SHA.
+
+Source: https://vercel.com/docs/project-configuration/vercel-json#ignorecommand — exit 0
+ignores the deployment build; exit 1 continues it. The marker is not a GitHub skip-CI token.
