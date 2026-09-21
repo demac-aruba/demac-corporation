@@ -29,8 +29,22 @@ Remaining work:
    Main automatically triggers Office, Field, Work Order and WhatsApp deployments;
    WhatsApp also runs migration scripts. Existing Projects runtime/import flags remain
    off/closed. Merging alone does not activate the complete central Projects workflow.
-   Final publication, merge, deployment, activation and migration authorization remains
-   absent; the staging decision does not grant it.
+   The owner's subsequent “ok entonces ya puedes hacer merge ?” authorizes publication
+   and merge once the outstanding release conditions are satisfied. Publication to the
+   existing PR branches is now proceeding. This does not certify missing backups or
+   withdraw the original recovery/reconciliation conditions; no additional Projects
+   activation, permissions/configuration change or manual data migration was requested.
+
+## Publication authorization checkpoint
+
+On 2026-09-21 the PRs were freshly confirmed open/draft, based on main cb01c469;
+their heads remained a99402e (#514) and 3622bc5a (#515). Automatic effects were checked
+again before publication: feature branches run PR checks and may create Vercel previews;
+main changes trigger the production workflows described above, including WhatsApp data
+migrations. The prepared companion 530b7cb0 was then published by a normal fast-forward
+push to fix/projects-budget-soft-warning. Publish this documentation and the prepared
+#514 continuation next, and inspect checks on both actual remote heads before merge.
+Do not treat historical CI or local test results as current remote CI completion.
 
 QuickBooks connectivity and future photo/audio/AI expense capture are not prerequisites.
 There is no new general expense, accounting, payroll or Inventory implementation to finish
