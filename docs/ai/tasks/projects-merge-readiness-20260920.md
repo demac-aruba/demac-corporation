@@ -1,5 +1,10 @@
 # Projects merge readiness — 2026-09-20
 
+**2026-09-21 owner decision:** isolated staging is no longer a required release condition.
+The earlier staging requirements below are superseded by
+[the current release decision and remaining work](projects-release-decision-20260921.md).
+This does not certify a deployed test or waive real-data protection/publication approval.
+
 ## Current operational-cost scope — owner clarification
 
 QuickBooks and the future photo/audio expense assistant are **not prerequisites** for
