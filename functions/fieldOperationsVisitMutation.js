@@ -10,6 +10,7 @@ const {
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
 const { ACTIVE_VISIT_TARGETS, projectActivatedVisit } = require('./fieldOperationsVisitActions');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
+const { resolveCanonicalVanId } = require('./bookingVanIdentity');
 
 const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
 
@@ -259,6 +260,18 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         cancellationReason,
         secondVisitReason,
       });
+
+      // Capture the canonical lane in the existing append-only Field event, in the
+      // same transaction as the transition and assignment check. Projects must not
+      // infer historical execution from the mutable Work Order's current vanId.
+      if (target === 'in_progress') {
+        const aliases = context.assignment.context?.vanAliases;
+        const rawVanId = text(context.order.vanId, 180);
+        // A VAN-looking legacy document ID is not proof of a catalog lane.
+        const vanId = aliases instanceof Map && aliases.has(rawVanId)
+          ? resolveCanonicalVanId(rawVanId, aliases) : '';
+        event.metadata = { executionAssignment: { version: 1, vanId: vanId || null } };
+      }
 
       transaction.update(visitRef, patch);
       await appendAuditInTransaction({ transaction, event, visit: nextStoredVisit, identity });

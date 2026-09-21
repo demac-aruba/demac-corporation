@@ -1,0 +1,158 @@
+name: Projects registry isolated integration
+on:
+  pull_request:
+    paths:
+      - 'functions/projects/**'
+      - 'functions/projectsRegistry.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package*.json'
+      - 'apps/erp-next/lib/projects/booking-handoff.ts'
+      - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/bookingLifecycleIntent.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle*'
+      - 'functions/bookingPartialCompletion*'
+      - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthority.js'
+      - 'functions/fieldOperationsAuthorityWorkVisit.js'
+      - 'functions/fieldOperationsVisitMutation*'
+      - 'functions/fieldOperationsOfficeReview.js'
+      - 'firebase.projects-emulator.json'
+      - '.github/workflows/projects-registry-ci.yml'
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - 'functions/projects/**'
+      - 'functions/projectsRegistry.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package*.json'
+      - 'apps/erp-next/lib/projects/booking-handoff.ts'
+      - 'apps/erp-next/scripts/projects-booking-handoff.test.cjs'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/officeBookingAuthority.js'
+      - 'firebase.projects-emulator.json'
+      - 'functions/fieldOperationsVisitMutation*'
+      - '.github/workflows/projects-registry-ci.yml'
+permissions:
+  contents: read
+concurrency:
+  group: projects-registry-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-auth-firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated dependencies without production credentials
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/projects-tools" --no-audit --no-fund firebase-tools@15.30.0
+      - name: Domain and recovery contracts
+        run: |
+          node --check functions/projects/registry-service.js
+          node --check functions/projects/registry-activity.js
+          node --test functions/projects/*.test.js
+          node --test functions/fieldOperationsVisitMutation.test.js functions/fieldOperationsAudit.test.js
+          node --test functions/bookingAuthorityAppointmentLifecycle.test.js functions/bookingPartialCompletion.test.js functions/officeBookingAuthorityFacadePartial.test.js
+      - name: Real client Project selection and commit-receipt contracts
+        run: node --experimental-strip-types --test apps/erp-next/scripts/projects-booking-handoff.test.cjs
+      - name: Real Auth and Firestore; atomicity, contention, permissions and read-only activity
+        run: >-
+          "$RUNNER_TEMP/projects-tools/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node --test functions/projects/registry.emulator.cjs && node --test functions/projects/registry-import.emulator.cjs && node --test functions/projects/booking-integration.emulator.cjs && node --test functions/projects/booking-public.emulator.cjs && node --experimental-strip-types --test functions/projects/booking-client-handoff.emulator.cjs && node --test functions/projects/registry-execution.emulator.cjs'
+      - name: Actual Firebase Functions bootstrap and HTTP transport against demo Auth and Firestore
+        env:
+          PROJECTS_UI_TOOLS: ${{ runner.temp }}/projects-tools
+        run: node functions/projects/run-http-emulator.cjs
+
+  combined-budget-regression:
+    # Disposable source integration only. Never pushes, merges a PR, deploys or accesses production.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BUDGET_FIX_SHA: 530b7cb0fbe433cd96525b737cb54617d0d9bf44
+      GCLOUD_PROJECT: demo-demac-projects
+      NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true'
+      NEXT_PUBLIC_PROJECTS_LEGACY_IMPORT_ENABLED: 'false'
+      NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Integrate the reviewed budget fix in the disposable workspace
+        run: |
+          git fetch --no-tags origin "$BUDGET_FIX_SHA"
+          git -c user.name='Isolated Projects QA' -c user.email='qa@example.test' merge --no-commit --no-ff "$BUDGET_FIX_SHA"
+          git diff --check
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install dependencies without production credentials
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix functions --no-audit --no-fund
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated combined browser tooling
+        run: |
+          echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-combined-tools" >> "$GITHUB_ENV"
+          npm install --prefix "$RUNNER_TEMP/projects-combined-tools" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0 esbuild@0.25.9
+          "$RUNNER_TEMP/projects-combined-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Combined project contracts and operational authorities
+        run: |
+          node --test functions/projects/*.test.js
+          npm run test:booking-authority --prefix functions
+          npm run test:field-authority --prefix functions
+      - name: Combined ERP types, budget rule and existing full build
+        working-directory: apps/erp-next
+        run: |
+          npm run typecheck
+          npx tsc --ignoreConfig scripts/project-budget-acceptance.ts scripts/project-phase-planner-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .project-budget-test --rootDir . --lib ES2022,DOM
+          node .project-budget-test/scripts/project-budget-acceptance.js
+          node .project-budget-test/scripts/project-phase-planner-acceptance.js
+          npm run build
+      - name: Combined actual UI and public Booking authority against demo Auth and Firestore
+        run: >-
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node --test functions/projects/booking-public.emulator.cjs && node apps/erp-next/scripts/projects-central-browser.cjs && node apps/erp-next/scripts/projects-drawer-browser.cjs && node apps/erp-next/scripts/office-lifecycle-browser.cjs'
+      - name: Combined legacy budget warning browser contract with synthetic authority
+        run: BUDGET_TEST_TOOLS="$PROJECTS_UI_TOOLS" node apps/erp-next/scripts/project-budget-browser.cjs
+      - name: Combined manual overtime and Booking concurrency against isolated Firestore
+        env:
+          GCLOUD_PROJECT: demo-demac-overtime
+        run: >-
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-overtime --config firebase.projects-emulator.json --only firestore
+          'node --test functions/bookingOperationalMove.emulator.test.cjs'
+      - name: Combined real Projects Functions entrypoint, HTTP, Auth and Firestore
+        run: node functions/projects/run-http-emulator.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: projects-combined-evidence
+          path: |
+            projects-central-ui-evidence/
+            projects-drawer-evidence/
+            office-lifecycle-evidence/
+          if-no-files-found: warn
+          retention-days: 7

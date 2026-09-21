@@ -94,6 +94,7 @@ function baseSeed(extra = {}) {
       date: "2026-08-18",
       startTime: "08:30",
       endTime: "11:30",
+      capacityEndTime: '11:30',
       primaryVanId: "VAN-1",
       assignments: [{ vanId: "VAN-1", vanName: "Van 1", time: "08:30", endTime: "11:30", quantity: 3, slots: 3, role: "primary" }],
       workOrderIds: ["WO-1"],
@@ -105,6 +106,7 @@ function baseSeed(extra = {}) {
       appointmentId: "APT-1",
       appointmentAssignmentRole: "primary",
       appointmentEndTime: "11:30",
+      appointmentCapacityEndTime: '11:30',
       status: "Confirmada",
       date: "2026-08-18",
       time: "08:30",
@@ -174,6 +176,8 @@ test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in on
   assert.equal(appointment.primaryVanId, "VAN-2");
   assert.equal(appointment.startTime, "13:30");
   assert.equal(appointment.endTime, "16:30");
+  assert.equal(appointment.capacityEndTime, "16:30");
+  assert.equal(appointment.assignments[0].capacityEndTime, "16:30");
   assert.equal(appointment.assignments[0].slots, 3);
   assert.deepEqual(appointment.assignments[0].technicianIds, ["tech-3", "tech-4"]);
   assert.equal(appointment.lifecycleHistory.length, 1);
@@ -182,6 +186,7 @@ test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in on
   assert.equal(workOrder.vanId, "VAN-2");
   assert.equal(workOrder.time, "13:30");
   assert.equal(workOrder.appointmentEndTime, "16:30");
+  assert.equal(workOrder.appointmentCapacityEndTime, "16:30");
   assert.equal(workOrder.scheduledSlots, 3);
   assert.equal(db.read("bookingCapacityLocks/OLD-1").active, false);
   assert.equal(appointment.capacityLockIds.length, 3);
@@ -261,6 +266,9 @@ test("lunch does not reduce moved capacity ownership, while the real end stays c
   assert.equal(lunchMove.db.read("appointments/APT-1").endTime, "12:30");
   assert.equal(lunchMove.db.read("workOrders/WO-1").appointmentEndTime, "12:30");
   assert.equal(lunchMove.db.read("appointments/APT-1").capacityLockIds.length, 3);
+  assert.equal(lunchMove.db.read('appointments/APT-1').capacityEndTime, '14:30');
+  assert.equal(lunchMove.db.read('appointments/APT-1').assignments[0].capacityEndTime, '14:30');
+  assert.equal(lunchMove.db.read('workOrders/WO-1').appointmentCapacityEndTime, '14:30');
 
   const tooLate = fixture();
   await assert.rejects(
@@ -314,6 +322,9 @@ test('acceptance preserves identity, duration, all three locks, crew and audit; 
   assert.equal(order.scheduledSlots, 3);
   assert.equal(order.airConditionerCount, 3);
   assert.equal(order.appointmentEndTime, '17:30');
+  assert.equal(order.appointmentCapacityEndTime, '17:30');
+  assert.equal(appointment.capacityEndTime, '17:30');
+  assert.equal(appointment.assignments[0].capacityEndTime, '17:30');
   assert.deepEqual(appointment.capacityLockIds.map((id) => db.read(`bookingCapacityLocks/${id}`).slot), ['14:30', '15:30', '16:30']);
   assert.equal(db.read('bookingCapacityLocks/OLD-1').active, false);
   assert.equal(appointment.lifecycleHistory[0].possibleOvertime.acceptedBy, 'owner-1');
@@ -407,12 +418,24 @@ test('an aborted canonical transaction leaves the entire original store intact',
   assert.deepEqual([...db.store], before);
 });
 
-test('old retries after a later move return their receipt without moving again', async () => {
+test('old overtime retries preserve a later ordinary move and its lunch-spanning capacity', async () => {
   const { db, authority } = overtimeFixture();
   const { input } = await prepareOvertime(authority);
   await authority.moveAppointment(input);
-  await authority.moveAppointment(moveInput({ requestId: 'second-move-12345', targetVanId: 'VAN-1', requestedTime: '08:30' }));
+  await authority.moveAppointment(moveInput({ requestId: 'second-move-12345', targetVanId: 'VAN-1', requestedTime: '09:30' }));
+  const afterOrdinaryMove = structuredClone([...db.store]);
+  const appointment = db.read('appointments/APT-1');
+  const order = db.read('workOrders/WO-1');
+  assert.equal(appointment.endTime, '12:30');
+  assert.equal(appointment.capacityEndTime, '14:30');
+  assert.equal(appointment.assignments[0].capacityEndTime, '14:30');
+  assert.equal(order.appointmentEndTime, '12:30');
+  assert.equal(order.appointmentCapacityEndTime, '14:30');
+  assert.equal(appointment.operationalMoveOvertime, null);
+  assert.equal(order.operationalMoveOvertime, null);
+  assert.deepEqual(appointment.capacityLockIds.map((id) => db.read(`bookingCapacityLocks/${id}`).slot), ['09:30', '10:30', '13:30']);
   assert.equal((await authority.moveAppointment(input)).replayed, true);
+  assert.deepEqual([...db.store], afterOrdinaryMove);
   assert.equal(db.read('appointments/APT-1').primaryVanId, 'VAN-1');
   assert.equal(db.read('appointments/APT-1').lifecycleHistory.length, 2);
 });

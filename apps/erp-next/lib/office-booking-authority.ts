@@ -1,3 +1,4 @@
+import { OfficeBookingResponseError } from './office-booking-errors';
 import type {
   AppointmentRecipientSelection,
   BookingContact,
@@ -5,7 +6,8 @@ import type {
   NewBookingContactLink,
 } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
-import { requireFirebaseWebSession } from './firebase/session';
+import { loadFirebaseWebSession, requireFirebaseWebSession } from './firebase/session';
+import { createLifecycleRecovery, type LifecycleCommand } from './office-lifecycle-recovery';
 
 export type OfficeBookingPreset = {
   id: string;
@@ -169,6 +171,8 @@ export type OfficeLifecycleResult = {
   success: true;
   replayed?: boolean;
   appointmentId: string;
+  requestId?: string;
+  operation?: string;
   changeKind?: OfficeLifecycleChangeKind;
   customerNotificationRecommended?: boolean;
   appointment: Record<string, unknown>;
@@ -298,9 +302,11 @@ async function callOfficeBookingAuthority<T>(
   data: Record<string, unknown>,
   timeoutMs = 15_000,
   externalSignal?: AbortSignal,
+  expectedUid?: string,
 ): Promise<T> {
   if (externalSignal?.aborted) throw new DOMException('Booking Authority request was cancelled.', 'AbortError');
   const session = await requireFirebaseWebSession();
+  if (expectedUid && (session.uid !== expectedUid || loadFirebaseWebSession()?.uid !== expectedUid)) throw new Error('The current account changed. Recover with the original operator.');
   if (externalSignal?.aborted) throw new DOMException('Booking Authority request was cancelled.', 'AbortError');
   const controller = new AbortController();
   let abortCause: 'external' | 'timeout' | null = null;
@@ -331,7 +337,7 @@ async function callOfficeBookingAuthority<T>(
     }) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
+      throw new OfficeBookingResponseError(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`, response.status, payload.error?.code ?? '', typeof payload.error?.details?.reason === 'string' ? payload.error.details.reason : '');
     }
     return payload;
   } catch (error) {
@@ -483,6 +489,8 @@ export async function checkOfficeCreateAvailability(input: {
   customerId: string;
   propertyId: string;
   appointmentId?: string;
+  sourcePartialAppointmentId?: string;
+  sourcePartialOutcomeRevision?: number;
   presetId?: string;
   serviceId?: string;
   quantity?: number;
@@ -624,6 +632,7 @@ export function sendOfficeAppointmentCommunication(input: {
 
 export async function checkOfficeRescheduleAvailability(input: {
   appointmentId: string;
+  expectedAppointmentToken: string;
   requestId: string;
   customerId: string;
   propertyId: string;
@@ -645,11 +654,12 @@ export async function checkOfficeRescheduleAvailability(input: {
 
 export async function cancelOfficeAppointment(input: {
   appointmentId: string;
+  expectedAppointmentToken: string;
   requestId: string;
   reason: string;
   note?: string;
 }) {
-  return callOfficeBookingAuthority<{ success: true; appointmentId: string; appointment: Record<string, unknown> }>('cancel_appointment', input);
+  return officeLifecycleRecovery().start({ action: 'cancel_appointment', data: input });
 }
 
 export async function rescheduleOfficeAppointment(input: {
@@ -662,7 +672,28 @@ export async function rescheduleOfficeAppointment(input: {
   note?: string;
   changeKind?: OfficeLifecycleChangeKind;
 }) {
-  return callOfficeBookingAuthority<OfficeLifecycleResult>('reschedule_appointment', input, 12_000);
+  return officeLifecycleRecovery().start({ action: 'reschedule_appointment', data: input });
+}
+
+export const OFFICE_LIFECYCLE_CHANGED = 'demac-office-lifecycle-changed';
+const lifecycleRecoveries = new Map<string, ReturnType<typeof createLifecycleRecovery>>();
+export function officeLifecycleRecovery() {
+  const uid = loadFirebaseWebSession()?.uid;
+  if (!uid) throw new Error('Sign in as the original operator to recover this appointment change.');
+  let recovery = lifecycleRecoveries.get(uid);
+  if (!recovery) {
+    recovery = createLifecycleRecovery({ storage: window.sessionStorage, uid,
+      authorized: () => loadFirebaseWebSession()?.uid === uid,
+      changed: () => window.dispatchEvent(new Event(OFFICE_LIFECYCLE_CHANGED)),
+      send: async (command: LifecycleCommand) => {
+        const session = await requireFirebaseWebSession();
+        if (session.uid !== uid || loadFirebaseWebSession()?.uid !== uid) throw new Error('The current account changed. Recover with the original operator.');
+        return callOfficeBookingAuthority<OfficeLifecycleResult>(command.action, command.data, 12_000, undefined, uid);
+      },
+    });
+    lifecycleRecoveries.set(uid, recovery);
+  }
+  return recovery;
 }
 
 /**

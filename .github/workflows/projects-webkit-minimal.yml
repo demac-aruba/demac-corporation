@@ -1,0 +1,35 @@
+name: Projects minimal browser diagnostic
+on:
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - 'apps/erp-next/scripts/projects-webkit-minimal.cjs'
+      - '.github/workflows/projects-webkit-minimal.yml'
+permissions:
+  contents: read
+jobs:
+  classify-native-errors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install only the pinned browser runner; no ERP or Firebase dependencies
+        run: |
+          echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-minimal-tools" >> "$GITHUB_ENV"
+          npm install --prefix "$RUNNER_TEMP/projects-minimal-tools" --no-audit --no-fund playwright@1.57.0
+          "$RUNNER_TEMP/projects-minimal-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: One controlled run with handled-network and real-uncaught controls
+        run: node apps/erp-next/scripts/projects-webkit-minimal.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: projects-minimal-browser-evidence
+          path: projects-minimal-browser-evidence/
+          if-no-files-found: error
+          retention-days: 7

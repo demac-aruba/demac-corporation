@@ -1,0 +1,59 @@
+name: Projects recovery and reconciliation
+
+on:
+  pull_request:
+    paths:
+      - 'functions/projects/**'
+      - 'apps/erp-next/components/projects/projects-recovery*'
+      - 'apps/erp-next/app/(erp)/projects/recovery/**'
+      - '.github/workflows/projects-recovery-ci.yml'
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - 'functions/projects/**'
+      - 'apps/erp-next/components/projects/projects-recovery*'
+      - 'apps/erp-next/app/(erp)/projects/recovery/**'
+      - '.github/workflows/projects-recovery-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Install Functions dependencies for the real endpoint bootstrap contracts
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Validate isolated recovery syntax
+        run: |
+          node --check functions/projects/recovery.js
+          node --check functions/projects/reconciliation.js
+          node --check functions/projects/reconciliation-reader.js
+      - name: Recovery and read-only reconciliation tests
+        run: node --test functions/projects/*.test.js
+  web-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/erp-next
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build

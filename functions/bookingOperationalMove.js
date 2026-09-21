@@ -429,7 +429,8 @@ function createOperationalMoveAuthority({
       const crew = overtime?.crew || targetCrew(targetVan, dailyAssignment);
       const targetStartMinutes = timeToMinutes(targetTime);
       const targetEnd = targetStartMinutes === null ? "" : minutesToTime(targetStartMinutes + durationMinutes);
-      const capacityEnd = minutesToTime(Math.max(timeToMinutes(targetEnd), timeToMinutes(requestedSlots.at(-1)) + 60));
+      const targetCapacityEnd = minutesToTime(Math.max(timeToMinutes(targetEnd),
+        ...requestedSlots.map(slot => timeToMinutes(slot) + 60)));
       const nextAssignment = compactObject({
         ...assignment,
         vanId: requiredVanId,
@@ -440,7 +441,7 @@ function createOperationalMoveAuthority({
         ...(overtime ? { additionalHelperStaffId: crew.additionalHelperStaffId } : {}),
         time: targetTime,
         endTime: targetEnd,
-        ...(overtime || appointment.operationalMoveOvertime ? { capacityEndTime: capacityEnd } : {}),
+        capacityEndTime: targetCapacityEnd,
         slots: slotCount,
         role: assignment.role || "primary",
       });
@@ -475,7 +476,7 @@ function createOperationalMoveAuthority({
         date: targetDate,
         startTime: targetTime,
         endTime: targetEnd,
-        ...(overtime || appointment.operationalMoveOvertime ? { capacityEndTime: capacityEnd } : {}),
+        capacityEndTime: targetCapacityEnd,
         assignments: [nextAssignment],
         primaryVanId: requiredVanId,
         capacityLockIds: newLocks.map((lock) => lock.id),
@@ -502,10 +503,10 @@ function createOperationalMoveAuthority({
           date: targetDate,
           time: targetTime,
           appointmentEndTime: targetEnd,
+          appointmentCapacityEndTime: targetCapacityEnd,
           vanId: requiredVanId,
           technicianIds: crew.technicianIds,
           scheduledSlots: slotCount,
-          ...(overtime || appointment.operationalMoveOvertime ? { appointmentCapacityEndTime: capacityEnd } : {}),
           operationalMoveOvertime: overtimeAcceptance ? compactObject(overtimeAcceptance) : null,
           updatedAt: now.toISOString(),
           lastOperationalMoveRequestId: stableRequestId,

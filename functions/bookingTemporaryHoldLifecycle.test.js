@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { appointmentStateToken } = require('./bookingLifecycleIntent');
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { buildWorkOrders } = require("./bookingAuthorityWorkOrders");
 
@@ -155,6 +156,8 @@ function openRescheduleOffer() {
       constraints: { requestedDate: option.date, requestedTime: option.time },
     },
     options: [option],
+    lifecycleContext: { version: 1, appointmentId: 'APT-HOLD-1', actorId: 'owner-1', changeKind: 'customer_reschedule',
+      expectedAppointmentToken: appointmentStateToken(holdAppointment()) },
   };
 }
 
@@ -262,6 +265,7 @@ test("rescheduling a temporary hold moves its locks but keeps it held and silent
     "bookingOffers/OFR-HOLD-RESCHEDULE": openRescheduleOffer(),
   });
   const result = await lifecycle.rescheduleAppointment({
+    requestId: 'hold-reschedule-1', actor: { id: 'owner-1' },
     appointmentId: "APT-HOLD-1",
     offerId: "OFR-HOLD-RESCHEDULE",
     offerVersion: 1,

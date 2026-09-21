@@ -116,7 +116,7 @@ function fixture() {
       if (!value) throw new Error(`Missing appointment ${id}`);
       return { id, ...value };
     },
-    async createAppointment({ idempotencyKey, context }) {
+    async createAppointment({ idempotencyKey, context, actor }) {
       const identity = canonicalAppointmentIdentity(idempotencyKey);
       const existing = db.read(`appointments/${identity.appointmentId}`);
       if (existing) {
@@ -135,7 +135,14 @@ function fixture() {
         sourcePartialAppointmentId: context.sourcePartialAppointmentId,
       };
       db.write(`appointments/${identity.appointmentId}`, followUp);
-      db.write(`workOrders/WO-${identity.appointmentId}-1`, { appointmentId: identity.appointmentId, status: "Confirmada" });
+      db.write(`workOrders/WO-${identity.appointmentId}-1`, { appointmentId: identity.appointmentId, status: "Confirmada", sourcePartialAppointmentId: context.sourcePartialAppointmentId });
+      // The Booking Authority owns this atomic contract; the public emulator suite
+      // verifies the real transaction rather than this service-routing double.
+      const { remainingWorkLinkPatch } = require('./bookingPartialCompletion');
+      const original = db.read(`appointments/${context.sourcePartialAppointmentId}`);
+      db.write(`appointments/${context.sourcePartialAppointmentId}`, { ...original, ...remainingWorkLinkPatch({ original,
+        followUpAppointmentId: identity.appointmentId, actor, requestId: context.officeRequestId,
+        now: new Date('2026-08-31T21:30:00.000Z'), serverTimestamp: () => 'SERVER_TIMESTAMP' }) });
       return { success: true, replayed: false, appointmentId: identity.appointmentId, appointment: followUp, workOrderIds: followUp.workOrderIds };
     },
   };

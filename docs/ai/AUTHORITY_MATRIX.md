@@ -140,6 +140,13 @@ record for accounting workflows. ERP may reference, synchronize, present, and in
 governed workflows through the QuickBooks integration, but it must not become a competing
 accounting engine.
 
+The owner's 2026-09-20 Projects clarification permits confirmed manual operational
+expenses without a QuickBooks connection. Operational confirmation, accounting, payment,
+reconciliation and synchronization are separate states. Reuse approved operational write
+contracts; missing shared allocation/category/evidence contracts require a documented,
+approved extension rather than silently inventing another ledger. Browser-only captures
+remain local evidence until reviewed. See [the bounded scope and future capture contract](tasks/projects-operational-cost-scope-20260920.md).
+
 Agents must not create inside DEMAC ERP:
 
 - a parallel accounting engine or second accounting ledger/book of record;

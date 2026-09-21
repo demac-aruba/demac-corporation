@@ -161,6 +161,28 @@ test("checkAvailability stores one canonical offer and replays the same inbound 
   assert.ok(db.read(`bookingOffers/${first.offer.id}`));
 });
 
+test('lifecycle availability binds the observed appointment and cannot be retagged or used for creation', async () => {
+  const appointment = { id: 'APT-OBSERVED', appointmentId: 'APT-OBSERVED', customerId: 'client-1', propertyId: 'property-1', status: 'confirmed', workLines: baseRequest().workLines };
+  const { db, authority } = authorityFixture({ seed: { 'appointments/APT-OBSERVED': appointment } });
+  const observed = await authority.getAppointment(appointment.id);
+  const input = { request: baseRequest(), actor: { id: 'office-1' }, context: { requestKey: 'bound-change', excludeAppointmentId: appointment.id,
+    expectedAppointmentToken: observed.lifecycleToken, changeKind: 'details_edited' } };
+  const offered = await authority.checkAvailability(input);
+  assert.equal((await authority.checkAvailability(input)).replayed, true);
+  const before = structuredClone([...db.store]);
+  for (const change of [
+    { actor: { id: 'office-2' } },
+    { context: { ...input.context, changeKind: 'customer_reschedule' } },
+    { context: { requestKey: 'bound-change' } },
+    { request: { ...baseRequest(), workLines: [{ ...baseRequest().workLines[0], quantity: 3 }] } },
+  ]) await assert.rejects(authority.checkAvailability({ ...input, ...change }), error => error.code === 'idempotency_conflict');
+  for (const createMode of ['confirmed', 'temporary_hold']) await assert.rejects(authority.createAppointment({ offerId: offered.offer.id, offerVersion: 1,
+    optionId: offered.options[0].id, idempotencyKey: `misused-offer-${createMode}`, actor: input.actor, createMode }), error => error.details?.reason === 'lifecycle_offer_not_creation');
+  assert.deepEqual([...db.store], before);
+  db.read('appointments/APT-OBSERVED').notes = 'Concurrent scope';
+  await assert.rejects(authority.checkAvailability({ ...input, context: { ...input.context, requestKey: 'new-but-stale' } }), error => error.details?.reason === 'appointment_version_conflict');
+});
+
 test("createAppointment atomically creates appointment, work order, offer booking and capacity locks", async () => {
   const { db, authority } = authorityFixture();
   const availability = await authority.checkAvailability({ request: baseRequest(), context: { inboundMessageId: "wamid-book-0001" } });

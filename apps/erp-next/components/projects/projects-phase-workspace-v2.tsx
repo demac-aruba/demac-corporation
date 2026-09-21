@@ -68,6 +68,7 @@ import {
   TemplateDialog,
 } from './project-phase-planner-dialogs';
 import { ProjectPhaseTechnicianPreview } from './project-phase-technician-preview';
+import { ProjectLocalCostEvidence } from './project-local-cost-evidence';
 import styles from './projects-phase-workspace.module.css';
 import customerStyles from './projects-customer-picker.module.css';
 
@@ -220,6 +221,9 @@ function loadCompanyTemplates(): PhaseTemplate[] {
 
 function persistCompanyTemplates(templates: PhaseTemplate[]) {
   try {
+    const raw = window.localStorage.getItem(COMPANY_TEMPLATE_KEY);
+    const original: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(original) || original.some(item => !item || item.source !== 'Company' || !Array.isArray(item.phases))) return false;
     window.localStorage.setItem(COMPANY_TEMPLATE_KEY, JSON.stringify(templates));
     return true;
   } catch {
@@ -479,8 +483,9 @@ function CanonicalCreateProjectDialog({
 
 export function ProjectsPhaseWorkspaceV2() {
   const { principal } = useAuth();
+  const [storageIssue, setStorageIssue] = useState('');
   const canView = principal.active && principal.capabilities.has('projects.view');
-  const canManage = canView && principal.capabilities.has('projects.manage');
+  const canManage = canView && principal.capabilities.has('projects.manage') && !storageIssue;
   const canManageRef = useRef(canManage);
   canManageRef.current = canManage;
 
@@ -513,10 +518,7 @@ export function ProjectsPhaseWorkspaceV2() {
         ? current
         : loaded.state.selectedProjectId || loaded.state.projects[0]?.id || '');
       if (!loaded.state.projects.length) setView('portfolio');
-      if (loaded.removedIds.length) {
-        setNotice(`${loaded.removedIds.length} seeded sample project${loaded.removedIds.length === 1 ? '' : 's'} removed. User-created Project records were preserved.`);
-        setNoticeTone('success');
-      }
+      setStorageIssue(loaded.recoveryRequired ? loaded.sourceError || 'Some browser Project records are hidden pending recovery review. They may contain manual expenses or user changes. The original stored data is preserved; saving is paused until its recovery is resolved.' : '');
     };
     reload();
     setCompanyTemplates(loadCompanyTemplates());
@@ -766,21 +768,31 @@ export function ProjectsPhaseWorkspaceV2() {
   const portfolioHours = state.projects.reduce((sum, candidate) => sum + candidate.actualLaborHours, 0);
   const portfolioSpend = state.projects.reduce((sum, candidate) => sum + candidate.materialActual, 0);
   const atRisk = state.projects.filter((candidate) => projectMetrics(candidate).health !== 'On Track').length;
+  const recoveryNotice = storageIssue ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert"><span>!</span><p>{storageIssue}</p></div> : null;
 
   if (view === 'portfolio' || !project || !summary || !metrics) {
     return <section className={styles.workspace} aria-busy={busy}>
-      <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Clean phase-planning branch</strong><p>Only user-created Project records are shown. Customer selection uses canonical CRM; no seeded Project records are injected.</p></div></div>
+      {recoveryNotice}
+      <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Clean phase-planning branch</strong><p>Project plans, expenses and cost entries on this page belong to this browser. They are not shared or reconciled central totals. Customer selection uses canonical CRM. Original hidden records are preserved.</p></div></div>
       {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
+      {storageIssue ? <div className={styles.metrics}>
+        <Metric code="PR" label="Project records" value="Not verified" note="Original browser source requires review" tone="amber" />
+        <Metric code="AR" label="At risk" value="Not verified" note="Incomplete original source" tone="amber" />
+        <Metric code="HR" label="Recorded local hours" value="Unknown" note="Browser snapshot · not reconciled" tone="purple" />
+        <Metric code="AF" label="Recorded local material costs" value="Unknown" note="Browser snapshot · not shared or reconciled" tone="amber" />
+      </div> : <>
+      <p className={customerStyles.inlineNote}>The following metrics are recorded browser values, not verified shared totals. A recorded zero does not certify zero Project spending or work.</p>
       <div className={styles.metrics}>
         <Metric code="PR" label="Project records" value={String(state.projects.length)} note="No seeded samples" tone="blue" />
         <Metric code="AR" label="At risk" value={String(atRisk)} note="Based on recorded project actuals" tone={atRisk ? 'amber' : 'green'} />
         <Metric code="HR" label="Actual project hours" value={`${number(portfolioHours, 1)}h`} note="Across visible Project records" tone="purple" />
         <Metric code="AF" label="Material actuals" value={money(portfolioSpend)} note="Recorded Project consumption" tone="green" />
       </div>
+      </>}
       <article className={styles.panel}>
         <div className={styles.portfolioToolbar}><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Project number, customer, location…" /></label><strong>{filtered.length} project{filtered.length === 1 ? '' : 's'}</strong></div>
-        {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>No Project records exist on this preview domain</h2><p>A Vercel preview cannot read browser storage belonging to demac-aruba.com. Nothing was copied, deleted, or changed in CRM or Scheduling. Create a Project here by selecting an actual CRM customer to validate the workflow.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
+        {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>{storageIssue ? 'Project records require recovery review' : 'No Project records found in this browser'}</h2><p>A Vercel preview cannot read browser storage belonging to demac-aruba.com. Nothing was copied, deleted, or changed in CRM or Scheduling. Create a Project here by selecting an actual CRM customer to validate the workflow.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
           <div className={styles.projectTableHeader}><span>Project</span><span>Customer / Location</span><span>Physical</span><span>Labor</span><span>Materials</span><span>Status</span><span>Action</span></div>
           {filtered.map((candidate) => {
             const candidateMetrics = projectMetrics(candidate);
@@ -806,8 +818,9 @@ export function ProjectsPhaseWorkspaceV2() {
   const completedPhases = phases.filter((phase) => phase.workflowStatus === 'Completed').length;
 
   return <section className={styles.workspace} aria-busy={busy}>
-    <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Integrated Phase Planning</strong><p>This branch adds phase controls to the selected Project. Existing customer and property identity remains canonical in CRM.</p></div></div>
-    {!canManage ? <div className={`${styles.notice} ${styles.noticeWarning}`}><span>i</span><p>Your account has read-only Projects access.</p></div> : null}
+    {recoveryNotice}
+    <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Integrated Phase Planning</strong><p>This plan and its recorded costs are stored in this browser. They are not shared or reconciled central totals. Customer and property identity remains canonical in CRM.</p></div></div>
+    {!canManage && !storageIssue ? <div className={`${styles.notice} ${styles.noticeWarning}`}><span>i</span><p>Your account has read-only Projects access.</p></div> : null}
     {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
 
     <header className={styles.pageHeader}><div><nav><button type="button" onClick={() => setView('portfolio')}>Projects</button><span>›</span><span>{project.projectNumber}</span></nav><div className={styles.titleLine}><h1>{project.name}</h1><Pill label={project.status} tone={projectStatusTone(project.status)} /></div><p>{project.projectNumber} · {project.type} · {project.location}</p></div><div className={styles.headerActions}><button type="button" className={styles.secondaryButton} onClick={() => setView('portfolio')}>← Portfolio</button><button type="button" className={styles.primaryButton} onClick={() => setPhaseDialog({ mode: 'create' })} disabled={!canManage}>＋ Create Custom Phase</button></div></header>
@@ -827,6 +840,7 @@ export function ProjectsPhaseWorkspaceV2() {
 
     <div className={styles.mainLayout}>
       <main className={styles.mainColumn}>
+        <ProjectLocalCostEvidence project={project}/>
         <article className={styles.panel}>
           <div className={styles.panelHeader}><div><span>Owner-defined execution plan</span><h2>Project Phases</h2><p>Create each phase manually or copy an optional editable template. The combined phase allocation cannot exceed the Project’s approved labor capacity.</p></div><div className={styles.panelActions}><button type="button" className={styles.primaryButton} onClick={() => setPhaseDialog({ mode: 'create' })} disabled={!canManage}>＋ Create Custom Phase</button><button type="button" className={styles.secondaryButton} onClick={() => setTemplatesOpen(true)} disabled={!canManage}>Templates</button><button type="button" className={styles.secondaryButton} onClick={() => setSaveTemplateOpen(true)} disabled={!canManage || !phases.length}>Save as Template</button></div></div>
           <div className={styles.capacityStrip}><div><span>Total approved</span><strong>{number(summary.total)}h</strong><small>{project.estimatedSlots} slots</small></div><div><span>Allocated</span><strong>{number(summary.allocated)}h</strong><small>{percent(summary.allocationPercent)}</small></div><div><span>Unallocated</span><strong>{number(summary.unallocated)}h</strong></div><div><span>Scheduled</span><strong>{number(summary.scheduled, 1)}h</strong></div><div><span>Actual</span><strong>{number(summary.actual, 1)}h</strong></div></div>

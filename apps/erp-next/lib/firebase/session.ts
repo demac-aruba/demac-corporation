@@ -104,6 +104,10 @@ export async function refreshFirebaseWebSession(session: FirebaseWebSession) {
     refreshToken: payload.refresh_token,
     expiresAt: expiration(payload.expires_in),
   };
+  const current = loadFirebaseWebSession();
+  if (!current || current.uid !== session.uid || current.refreshToken !== session.refreshToken) {
+    throw new Error('The authentication session changed while it was being refreshed.');
+  }
   persistFirebaseWebSession(refreshed);
   return refreshed;
 }
@@ -115,7 +119,8 @@ export async function getValidFirebaseWebSession() {
   try {
     return await refreshFirebaseWebSession(session);
   } catch (error) {
-    clearFirebaseWebSession();
+    const current = loadFirebaseWebSession();
+    if (current?.uid === session.uid && current.refreshToken === session.refreshToken) clearFirebaseWebSession();
     throw error;
   }
 }

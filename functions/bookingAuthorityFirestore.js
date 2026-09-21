@@ -1,4 +1,6 @@
 const crypto = require("node:crypto");
+const { appointmentStateToken, assertAppointmentToken, lifecycleActorId,
+  assertSameLifecycleContext, assertCreationOffer } = require('./bookingLifecycleIntent');
 const {
   BOOKING_AUTHORITY_VERSION,
   BOOKING_ERROR_CODES,
@@ -100,6 +102,14 @@ function actorFields(actor = {}) {
     actorId: cleanText(actor.id || actor.userId, 160),
     actorName: cleanText(actor.name || actor.displayName, 160),
   };
+}
+
+function sameProjectContext(left, right) {
+  if (!left || !right) return left === right;
+  const keys = ["schemaVersion", "projectId", "phaseId", "expectedVersion", "actorId",
+    ...(left.sourcePartialAppointmentId ? ['sourcePartialAppointmentId', 'sourcePartialOutcomeRevision'] : [])];
+  return Object.keys(left).length === keys.length && Object.keys(right).length === keys.length
+    && keys.every(key => left[key] === right[key]);
 }
 
 function requestFingerprint(request) {
@@ -228,6 +238,7 @@ function createBookingAuthority({
   serverTimestamp = defaultServerTimestamp,
   offerTtlMinutes = 30,
   collections = BOOKING_COLLECTIONS,
+  projectIntegration = null,
 } = {}) {
   if (!db || typeof db.collection !== "function" || typeof db.runTransaction !== "function") {
     throw new Error("A Firestore-compatible db is required.");
@@ -235,6 +246,26 @@ function createBookingAuthority({
 
   async function checkAvailability({ request, actor = {}, context = {} } = {}) {
     const normalizedRequest = normalizeBookingRequest(request);
+    const lifecycleAppointmentId = cleanText(context.excludeAppointmentId, 180);
+    let lifecycleContext = null;
+    if (lifecycleAppointmentId) {
+      const appointment = await getAppointment(lifecycleAppointmentId);
+      assertAppointmentToken(appointment, context.expectedAppointmentToken);
+      if (appointment.customerId !== normalizedRequest.customerId || appointment.propertyId !== normalizedRequest.propertyId) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The appointment identity does not match the requested work.');
+      }
+      lifecycleContext = { version: 1, appointmentId: lifecycleAppointmentId, actorId: lifecycleActorId(actor),
+        expectedAppointmentToken: context.expectedAppointmentToken, changeKind: context.changeKind || 'customer_reschedule' };
+    }
+    const followUp = context.sourcePartialAppointmentId !== undefined;
+    if (followUp && lifecycleAppointmentId) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'A remaining-work offer cannot change its original appointment.');
+    if ((context.projectSelection !== undefined || followUp) && !projectIntegration) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Central Project booking is not configured.", { reason: "project_booking_not_active" });
+    }
+    const preparedFollowUp = followUp ? await projectIntegration.prepareFollowUpOffer({ request: normalizedRequest, actor, context }) : null;
+    const followUpContext = preparedFollowUp?.followUpContext || null;
+    const projectContext = preparedFollowUp ? preparedFollowUp.projectContext : context.projectSelection === undefined
+      ? null : await projectIntegration.prepareOffer({ request: normalizedRequest, actor, context });
     const now = asDate(clock());
     const requestKey = cleanText(context.requestKey || context.inboundMessageId || context.idempotencyKey, 500);
     const offerId = canonicalOfferIdentity(requestKey);
@@ -244,6 +275,14 @@ function createBookingAuthority({
       const existingSnapshot = await offerRef.get();
       if (existingSnapshot.exists) {
         const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
+        assertSameLifecycleContext(existing.lifecycleContext, lifecycleContext);
+        assertSameLifecycleContext(existing.followUpContext, followUpContext);
+        if (!sameProjectContext(existing.projectContext || null, projectContext)) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, "This availability request belongs to another Project selection.", { reason: "project_offer_context_conflict" });
+        }
+        if ((lifecycleContext || followUpContext) && (existing.requestFingerprint !== requestFingerprint(normalizedRequest) || !offerStillUsable(existing, now))) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, 'This change offer cannot be replaced. Obtain availability with a new requestId.', { reason: 'lifecycle_offer_request_conflict' });
+        }
         if (existing.requestFingerprint === requestFingerprint(normalizedRequest) && offerStillUsable(existing, now)) {
           return { success: true, available: true, replayed: true, offer: existing, options: existing.options || [], metadata: compactObject(existing.metadata || {}) };
         }
@@ -282,6 +321,9 @@ function createBookingAuthority({
       version: 1,
       status: "open",
       request: normalizedRequest,
+      ...(projectContext ? { projectContext } : {}),
+      ...(lifecycleContext ? { lifecycleContext } : {}),
+      ...(followUpContext ? { followUpContext } : {}),
       requestFingerprint: requestFingerprint(normalizedRequest),
       options,
       providerVersion: cleanText(result?.providerVersion, 120),
@@ -296,8 +338,32 @@ function createBookingAuthority({
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-    await offerRef.set(offer);
-    return { success: true, available: true, replayed: false, offer, options, metadata: compactObject(offer.metadata || {}) };
+    // Serialize ownership of an offer ID. A concurrent ordinary/Project check must not
+    // overwrite the other's bound Project context between the initial read and this write.
+    const persistedOffer = await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(offerRef);
+      if (lifecycleContext) {
+        const latest = await transaction.get(db.collection(collections.appointments).doc(lifecycleAppointmentId));
+        if (!latest.exists) throw new BookingAuthorityError(BOOKING_ERROR_CODES.APPOINTMENT_NOT_FOUND, 'The appointment no longer exists.');
+        assertAppointmentToken({ id: latest.id, ...latest.data() }, lifecycleContext.expectedAppointmentToken);
+      }
+      if (current.exists) assertSameLifecycleContext(current.data().lifecycleContext, lifecycleContext);
+      if (current.exists) assertSameLifecycleContext(current.data().followUpContext, followUpContext);
+      if (current.exists && !sameProjectContext(current.data().projectContext || null, projectContext)) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, "This availability request belongs to another Project selection.", { reason: "project_offer_context_conflict" });
+      }
+      if (current.exists && (lifecycleContext || followUpContext)
+          && (current.data().requestFingerprint !== offer.requestFingerprint || !offerStillUsable(current.data(), now))) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, 'This change offer cannot be replaced. Obtain availability with a new requestId.', { reason: 'lifecycle_offer_request_conflict' });
+      }
+      if (current.exists && current.data().requestFingerprint === offer.requestFingerprint && offerStillUsable(current.data(), now)) {
+        return { offer: { id: current.id, ...current.data() }, replayed: true };
+      }
+      transaction.set(offerRef, offer);
+      return { offer, replayed: false };
+    });
+    return { success: true, available: true, replayed: persistedOffer.replayed, offer: persistedOffer.offer,
+      options: persistedOffer.offer.options, metadata: compactObject(persistedOffer.offer.metadata || {}) };
   }
 
   async function getAppointment(appointmentId) {
@@ -317,7 +383,18 @@ function createBookingAuthority({
         { appointmentId: id },
       );
     }
-    return { id: snapshot.id, ...snapshot.data() };
+    const appointment = { id: snapshot.id, ...snapshot.data() };
+    return { ...appointment, lifecycleToken: appointmentStateToken(appointment) };
+  }
+
+  async function validateProjectReplay(transaction, appointment, actor, context) {
+    if (context.sourcePartialAppointmentId || appointment.sourcePartialAppointmentId) {
+      if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The existing follow-up requires reconciliation.', { reason: 'remaining_work_reconciliation_required' });
+      await projectIntegration.validateFollowUpReplay({ transaction, appointment, actor, context });
+    }
+    if (!appointment.projectContext) return;
+    if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "This Project booking needs its configured recovery workflow.", { reason: "project_booking_not_active" });
+    await projectIntegration.validateReplay({ transaction, appointment, actor, context });
   }
 
   async function createAppointment({
@@ -360,6 +437,7 @@ function createBookingAuthority({
         );
       }
       const replay = await getAppointment(record.appointmentId);
+      await validateProjectReplay(null, replay, actor, context);
       return {
         success: true,
         replayed: true,
@@ -372,6 +450,7 @@ function createBookingAuthority({
 
     const initialOfferSnapshot = await offerRef.get();
     const initialOffer = initialOfferSnapshot.exists ? { id: initialOfferSnapshot.id, ...initialOfferSnapshot.data() } : null;
+    assertCreationOffer(initialOffer, context);
     const initiallySelected = validateOfferSelection({ offer: initialOffer, offerVersion, optionId, now });
     assertBackdatedCreateIntent({ offer: initialOffer, context, createMode: normalizedCreateMode });
 
@@ -430,6 +509,7 @@ function createBookingAuthority({
           );
         }
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
+        await validateProjectReplay(transaction, replay, actor, context);
         return {
           success: true,
           replayed: true,
@@ -449,6 +529,7 @@ function createBookingAuthority({
             { appointmentId: identity.appointmentId },
           );
         }
+        await validateProjectReplay(transaction, existing, actor, context);
         return {
           success: true,
           replayed: true,
@@ -460,6 +541,7 @@ function createBookingAuthority({
       }
 
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
+      assertCreationOffer(currentOffer, context);
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       assertBackdatedCreateIntent({ offer: currentOffer, context, createMode: normalizedCreateMode });
       const backdatedMetadata = backdatedOfferMetadata(currentOffer);
@@ -547,10 +629,30 @@ function createBookingAuthority({
       } catch (error) {
         throw providerError(error, "buildWorkOrders");
       }
+      let projectWrite = null;
+      let sourceWrite = null;
+      if (currentOffer.followUpContext || context.sourcePartialAppointmentId) {
+        if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'Remaining-work integration is not configured.');
+        const original = await projectIntegration.validateFollowUpCommit({ transaction, offer: currentOffer, appointment, actor, context });
+        const { remainingWorkLinkPatch } = require('./bookingPartialCompletion');
+        sourceWrite = { ref: db.collection(collections.appointments).doc(original.id),
+          patch: remainingWorkLinkPatch({ original, followUpAppointmentId: identity.appointmentId, actor,
+            requestId: context.officeRequestId, now, serverTimestamp }) };
+        workOrders = workOrders.map(order => ({ ...order, sourcePartialAppointmentId: original.id,
+          sourcePartialOutcomeRevision: currentOffer.followUpContext.sourcePartialOutcomeRevision, workRelationship: 'remaining_work_follow_up' }));
+      }
+      if (currentOffer.projectContext) {
+        if (!projectIntegration) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Central Project booking is not configured.", { reason: "project_booking_not_active" });
+        projectWrite = await projectIntegration.prepareCommit({ transaction, appointment, workOrders,
+          boundContext: currentOffer.projectContext, actor, context, now });
+      }
       const workOrderIds = workOrders.map((item) => item.id);
       const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
         ...appointment,
+        ...(currentOffer.projectContext ? { projectContext: currentOffer.projectContext } : {}),
+        ...(currentOffer.followUpContext ? { sourcePartialAppointmentId: currentOffer.followUpContext.sourcePartialAppointmentId,
+          sourcePartialOutcomeRevision: currentOffer.followUpContext.sourcePartialOutcomeRevision, workRelationship: 'remaining_work_follow_up' } : {}),
         status: normalizedCreateMode,
         notificationRecipients,
         workOrderIds,
@@ -572,6 +674,13 @@ function createBookingAuthority({
         updatedAt: serverTimestamp(),
       });
 
+      // All Project reads/validation are complete before ANY write. These commit or roll back
+      // together with the canonical appointment, every Van Work Order and capacity lock.
+      if (projectWrite) {
+        transaction.create(projectWrite.linkRef, projectWrite.linkData);
+        transaction.create(projectWrite.eventRef, projectWrite.eventData);
+      }
+      if (sourceWrite) transaction.set(sourceWrite.ref, sourceWrite.patch, { merge: true });
       transaction.set(appointmentRef, appointmentRecord);
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({

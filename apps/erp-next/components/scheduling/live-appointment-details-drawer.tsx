@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { CanonicalAppointmentSummary } from './canonical-appointment-summary';
 import {
   cancelOfficeAppointment,
   confirmOfficeTemporaryHold,
@@ -111,6 +112,9 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [appointmentToken, setAppointmentToken] = useState('');
+  const [canonicalAppointment, setCanonicalAppointment] = useState<Record<string, unknown> | null>(null);
+  const [cancelled, setCancelled] = useState(false);
   const [partialOutcome, setPartialOutcome] = useState<PartialOutcomeSummary | null>(null);
 
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment && assignment.status !== 'cancelled')
@@ -120,7 +124,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const primaryCapacityEnd = primary?.capacityEnd || primary?.end;
   const supportCapacityEnd = support?.capacityEnd || support?.end;
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
-  const temporaryHold = appointment.status === 'temporary_hold';
+  const temporaryHold = (canonicalAppointment?.status || appointment.status) === 'temporary_hold';
   const workLabel = appointment.workLabel || appointment.workTypeId?.replaceAll('_', ' ') || appointment.customerFacingDescription || 'Scheduled work';
 
   const refreshPartialOutcome = async () => {
@@ -135,8 +139,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   useEffect(() => {
     let active = true;
     void getOfficeAppointment(appointment.id)
-      .then((result) => { if (active) setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome)); })
-      .catch(() => {});
+      .then((result) => { if (active) { setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome)); setCanonicalAppointment(result.appointment); setAppointmentToken(String(result.appointment.lifecycleToken || '')); } })
+      .catch(cause => { if (active) { setAppointmentToken(''); setError(cause instanceof Error ? cause.message : 'Reload the appointment before changing it.'); } });
     return () => { active = false; };
   }, [appointment.id]);
 
@@ -168,6 +172,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   };
 
   const cancel = async () => {
+    if (cancelled || busy) return;
+    if (!appointmentToken) { setError('Reload the appointment before cancelling it.'); return; }
     if (!reason) {
       setError(`Select a cancellation reason for this ${temporaryHold ? 'hold' : 'appointment'}.`);
       return;
@@ -177,12 +183,13 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     try {
       await cancelOfficeAppointment({
         appointmentId: appointment.id,
+        expectedAppointmentToken: appointmentToken,
         requestId: createOfficeLifecycleRequestId('cancel'),
         reason,
         note,
       });
-      await onChanged();
-      onClose();
+      setCancelled(true);
+      try { await onChanged(); onClose(); } catch { setError('The appointment was cancelled. Reload Scheduling to see its current status.'); }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `The ${temporaryHold ? 'temporary hold' : 'appointment'} could not be cancelled.`);
     } finally {
@@ -202,7 +209,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
       </header>
 
       <div className={styles.drawerBody}>
-        <section className={styles.formSection}>
+        {!appointmentToken && error ? <p role="alert">{error}</p> : null}
+        {canonicalAppointment ? <CanonicalAppointmentSummary appointment={canonicalAppointment} /> :         <section className={styles.formSection}>
           <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · Van capacity ${formatTime(primary?.start)}–${formatTime(primaryCapacityEnd)}`}</span></header>
           <div className={styles.formGrid}>
             <Field wide label="WORK TYPE" value={`${workLabel} · ${appointment.totalQuantity} unit${appointment.totalQuantity === 1 ? '' : 's'}`} />
@@ -217,7 +225,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             {support ? <Field label="SUPPORT CAPACITY WINDOW" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`} /> : null}
             <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
           </div>
-        </section>
+        </section>}
 
         {partialOutcome ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
           <header><strong style={{ color: 'var(--warning, #b45309)' }}>PARTIAL COMPLETION · ACTUAL OUTCOME</strong><span>Executed history preserved</span></header>
@@ -306,7 +314,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <label className={styles.wide}><span>Internal note</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
           </div>
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
-          <footer className={styles.drawerFooter}><div><span>{temporaryHold ? 'Temporary hold' : 'Appointment'}</span><strong>{appointment.customer} · {formatDate(appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : temporaryHold ? 'Cancel Hold & Release Capacity' : 'Cancel Appointment'}</button></div></footer>
+          <footer className={styles.drawerFooter}><div><span>{temporaryHold ? 'Temporary hold' : 'Appointment'}</span><strong>{appointment.customer} · {formatDate(typeof canonicalAppointment?.date === 'string' ? canonicalAppointment.date : appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || cancelled || !appointmentToken || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : temporaryHold ? 'Cancel Hold & Release Capacity' : 'Cancel Appointment'}</button></div></footer>
         </section> : null}
       </div>
     </aside>
