@@ -64,7 +64,7 @@ jobs:
           NODE
 
   deploy-field-operations-authority:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && !contains(github.event.head_commit.message, '[merge-only]')
     needs: validate-field-operations-authority
     runs-on: ubuntu-latest
     steps:

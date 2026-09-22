@@ -176,7 +176,7 @@ jobs:
           NODE
 
   deploy-office-booking-authority:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[merge-only]')
     needs: validate-office-booking-authority
     runs-on: ubuntu-latest
     steps:
