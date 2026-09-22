@@ -4,18 +4,22 @@ on:
     paths:
       - 'apps/erp-next/lib/browser-projects.ts'
       - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/lib/*project-slot-progress.ts'
       - 'apps/erp-next/lib/project-phase-planner.ts'
       - 'apps/erp-next/lib/office-booking-authority.ts'
       - 'apps/erp-next/components/projects/**'
       - 'apps/erp-next/components/scheduling/live-appointment-create-drawer.tsx'
       - 'apps/erp-next/scripts/project-budget*'
+      - 'apps/erp-next/scripts/project-slot-progress*'
       - '.github/workflows/project-budget-warning.yml'
   push:
     branches: [main]
     paths:
       - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/lib/*project-slot-progress.ts'
       - 'apps/erp-next/lib/office-booking-authority.ts'
       - 'apps/erp-next/scripts/project-budget*'
+      - 'apps/erp-next/scripts/project-slot-progress*'
       - '.github/workflows/project-budget-warning.yml'
 permissions:
   contents: read
@@ -44,6 +48,7 @@ jobs:
           && node .project-budget-test/scripts/project-budget-transport-acceptance.js
           && node .project-budget-test/scripts/project-phase-planner-acceptance.js
       - run: npm run test:projects-preview
+      - run: npm run test:project-slot-progress
       - run: npm run typecheck
       - name: Preserve Booking Authority and support/replay contracts
         working-directory: .
@@ -78,5 +83,17 @@ jobs:
         with:
           name: project-budget-browser-evidence
           path: project-budget-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Current slots and chronological detail with synthetic read-only data
+        env:
+          BUDGET_TEST_TOOLS: ${{ runner.temp }}/budget-tools
+        run: node apps/erp-next/scripts/project-slot-progress-browser.cjs
+      - name: Retain Project slot progress evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-slot-progress-evidence
+          path: project-slot-progress-evidence/
           if-no-files-found: warn
           retention-days: 7

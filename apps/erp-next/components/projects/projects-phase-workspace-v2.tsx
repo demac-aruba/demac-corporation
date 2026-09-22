@@ -10,7 +10,8 @@ import {
   type FormEvent,
 } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
-import { ProjectLaborBudgetSummary } from './project-labor-budget-status';
+import { ProjectSlotBudgetProgress, useProjectSlotSources } from './project-slot-progress';
+import { projectSlotProgress } from '@/lib/project-slot-progress';
 import {
   loadBookingMasterReferenceData,
   normalizeBookingPhone,
@@ -524,7 +525,11 @@ export function ProjectsPhaseWorkspaceV2() {
     setReady(true);
     const onStorage = () => reload();
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    window.addEventListener('focus', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onStorage);
+    };
   }, [canView]);
 
   useEffect(() => {
@@ -537,6 +542,7 @@ export function ProjectsPhaseWorkspaceV2() {
   }, [canManage]);
 
   const project = state.projects.find((candidate) => candidate.id === projectId);
+  const slotSource = useProjectSlotSources(ready && canView ? state.projects : [], principal);
   const phases = useMemo(() => project ? projectPhases(project) : [], [project]);
   const summary = useMemo(() => project ? phaseCapacitySummary(project) : null, [project]);
   const metrics = useMemo(() => project ? projectMetrics(project) : null, [project]);
@@ -766,7 +772,9 @@ export function ProjectsPhaseWorkspaceV2() {
   });
   const portfolioHours = state.projects.reduce((sum, candidate) => sum + candidate.actualLaborHours, 0);
   const portfolioSpend = state.projects.reduce((sum, candidate) => sum + candidate.materialActual, 0);
-  const atRisk = state.projects.filter((candidate) => projectMetrics(candidate).health !== 'On Track').length;
+  const atRisk = state.projects.filter((candidate) => projectSlotProgress(candidate, state.projects, slotSource.sources).overBudget > 0
+    || (candidate.materialBudget !== null && candidate.materialActual > candidate.materialBudget)).length;
+  const slotsVerified = slotSource.ready && state.projects.every((candidate) => projectSlotProgress(candidate, state.projects, slotSource.sources).complete);
 
   if (view === 'portfolio' || !project || !summary || !metrics) {
     return <section className={styles.workspace} aria-busy={busy}>
@@ -775,21 +783,21 @@ export function ProjectsPhaseWorkspaceV2() {
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
       <div className={styles.metrics}>
         <Metric code="PR" label="Project records" value={String(state.projects.length)} note="No seeded samples" tone="blue" />
-        <Metric code="AR" label="At risk" value={String(atRisk)} note="Recorded actuals and planned overruns" tone={atRisk ? 'amber' : 'green'} />
+        <Metric code="AR" label="Over budget" value={slotsVerified ? String(atRisk) : '—'} note={slotsVerified ? 'Verified slot or material overruns' : 'Slot totals pending verification'} tone={!slotsVerified ? 'amber' : atRisk ? 'red' : 'green'} />
         <Metric code="HR" label="Actual project hours" value={`${number(portfolioHours, 1)}h`} note="Across visible Project records" tone="purple" />
         <Metric code="AF" label="Material actuals" value={money(portfolioSpend)} note="Recorded Project consumption" tone="green" />
       </div>
       <article className={styles.panel}>
         <div className={styles.portfolioToolbar}><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Project number, customer, location…" /></label><strong>{filtered.length} project{filtered.length === 1 ? '' : 's'}</strong></div>
         {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>No Project records exist on this preview domain</h2><p>A Vercel preview cannot read browser storage belonging to demac-aruba.com. Nothing was copied, deleted, or changed in CRM or Scheduling. Create a Project here by selecting an actual CRM customer to validate the workflow.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
-          <div className={styles.projectTableHeader}><span>Project</span><span>Customer / Location</span><span>Physical</span><span>Labor</span><span>Materials</span><span>Status</span><span>Action</span></div>
+          <div className={styles.projectTableHeader}><span>Project</span><span>Customer / Location</span><span>Physical</span><span>Van slots</span><span>Materials</span><span>Status</span><span>Action</span></div>
           {filtered.map((candidate) => {
             const candidateMetrics = projectMetrics(candidate);
             return <div className={styles.projectRow} key={candidate.id}>
               <div><strong>{candidate.name}</strong><small>{candidate.projectNumber} · {candidate.type}</small></div>
               <div><strong>{candidate.customerName}</strong><small>{candidate.location}</small></div>
-              <div><strong>{percent(candidateMetrics.physicalCompletion)}</strong><Progress value={candidateMetrics.physicalCompletion} /></div>
-              <div><strong>{number(candidate.actualLaborHours, 1)}h / {number(candidate.estimatedLaborHours)}h</strong><small>Recorded actual / estimate</small><Progress value={candidateMetrics.laborConsumption} tone={candidateMetrics.laborConsumption > 100 ? 'red' : 'blue'} /><small>{number(candidate.scheduledFutureHours, 1)}h scheduled · {number(candidateMetrics.laborBudget.committedHoursAfter, 1)}h actual + scheduled</small>{candidateMetrics.laborBudget.overBudgetHoursAfter > 0 ? <Pill label={`Forecast +${number(candidateMetrics.laborBudget.overBudgetHoursAfter, 1)}h over budget`} tone="amber" /> : null}{candidateMetrics.laborBudget.actualOverBudgetHours > 0 ? <small>Recorded actual over budget: +{number(candidateMetrics.laborBudget.actualOverBudgetHours, 1)}h</small> : null}</div>
+              <div><strong>{percent(candidateMetrics.physicalCompletion)}</strong><Progress value={candidateMetrics.physicalCompletion} /><small>Recorded completion</small></div>
+              <div><ProjectSlotBudgetProgress project={candidate} projects={state.projects} source={slotSource} compact /></div>
               <div><strong>{money(candidate.materialActual)}</strong><small>{candidate.materialBudget === null ? 'No baseline' : `of ${money(candidate.materialBudget)}`}</small></div>
               <div><Pill label={candidate.status} tone={projectStatusTone(candidate.status)} /></div>
               <div><button type="button" className={styles.primaryButton} onClick={() => openProject(candidate)}>Open Phases</button></div>
@@ -824,7 +832,7 @@ export function ProjectsPhaseWorkspaceV2() {
       <Metric code="AC" label="Actual phase labor" value={`${number(summary.actual, 1)}h`} note={`${completedPhases} / ${phases.length} phases complete`} tone="amber" />
     </div>
 
-    <ProjectLaborBudgetSummary project={project} />
+    <ProjectSlotBudgetProgress project={project} projects={state.projects} source={slotSource} />
 
     <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Only the Phases experience is changed in this isolated branch.</small></div>
 
