@@ -19,6 +19,7 @@ type Mode = 'details' | 'edit' | 'reschedule' | 'cancel' | 'outcome';
 
 type Props = {
   appointment: BrowserAppointmentRecord;
+  project?: import('../../lib/scheduling-project-labels').SchedulingProjectLabel;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 };
@@ -106,7 +107,7 @@ function Field({ label, value, wide = false }: { label: string; value: React.Rea
   return <div className={wide ? styles.wide : undefined}><span style={{ color: 'var(--muted)', fontSize: 7 }}>{label}</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{value || '—'}</strong></div>;
 }
 
-export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }: Props) {
+export function LiveAppointmentDetailsDrawer({ appointment, project, onClose, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>('details');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -122,8 +123,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const supportCapacityEnd = support?.capacityEnd || support?.end;
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
   const temporaryHold = appointment.status === 'temporary_hold';
-  const workLabel = schedulingWorkSummary(appointment);
-  const serviceEstimate = hasServiceWorkEstimate(appointment);
+  const workLabel = schedulingWorkSummary(appointment, undefined, project);
+  const serviceEstimate = hasServiceWorkEstimate(appointment, project);
 
   const refreshPartialOutcome = async () => {
     try {
