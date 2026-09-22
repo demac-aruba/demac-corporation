@@ -66,6 +66,11 @@ async function main() {
   assert.equal((await isolated.resolve([original.id])).size, 0, 'another authorized session has no shared names');
   const failing = createSchedulingAttributionCache(async () => { throw Error('Synthetic failure'); }, bookingActorLabel);
   assert.equal(applySchedulingAttribution([known], await failing.resolve([original.id]))[0].bookedByName, 'Original creator');
+  const denied = createSchedulingAttributionCache(async () => { throw Error('Access revoked (permission-denied)'); }, bookingActorLabel);
+  await Promise.all([
+    assert.rejects(denied.resolve([original.id]), /permission-denied/, 'authorization loss cannot be treated as temporary metadata failure'),
+    assert.rejects(denied.resolve([original.id]), /permission-denied/, 'a newer deduplicated reader must also observe authorization loss'),
+  ]);
   console.log('PASS scheduling attribution: retention, identity, expiry, authoritative correction/clear, deduplication, failure, cancellation, move and session invalidation');
 }
 void main().catch((error) => { console.error(error); process.exitCode = 1; });

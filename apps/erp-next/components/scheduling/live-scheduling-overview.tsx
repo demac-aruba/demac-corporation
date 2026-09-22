@@ -19,7 +19,7 @@ import {
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
 import { liveJobCapacityEnd } from '../../lib/live-scheduling';
-import { applySchedulingAttribution, retainSchedulingAttribution } from '../../lib/scheduling-attribution';
+import { applySchedulingAttribution, retainSchedulingAttribution, schedulingAttributionAuthorizationLost } from '../../lib/scheduling-attribution';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -179,6 +179,13 @@ function bookingBadge(name?: string) {
 
 export function LiveSchedulingOverview() {
   const { principal } = useAuth();
+  const sessionKey = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;
+  if (!principal.active || !principal.capabilities.has('scheduling.view')) return <p>Scheduling access is unavailable.</p>;
+  return <LiveSchedulingSession key={sessionKey} />;
+}
+
+function LiveSchedulingSession() {
+  const { principal, refreshPrincipal } = useAuth();
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
@@ -260,7 +267,12 @@ export function LiveSchedulingOverview() {
         .then((patches) => {
           if (current()) setAppointments((items) => current() ? applySchedulingAttribution(items, patches) : items);
         })
-        .catch(() => {
+        .catch((attributionError) => {
+          if (current() && schedulingAttributionAuthorizationLost(attributionError)) {
+            attributionCache.clear();
+            setAppointments((items) => current() ? items.map((item) => ({ ...item, bookedById: undefined, bookedByName: undefined, bookedBySource: undefined })) : items);
+            void refreshPrincipal().catch(() => undefined);
+          }
           // Booking attribution is supplemental; operational scheduling stays usable without it.
         });
     } catch (loadError) {
@@ -272,7 +284,7 @@ export function LiveSchedulingOverview() {
     refreshInFlight.current = { key: viewKey, sequence, promise };
     void promise.finally(() => { if (refreshInFlight.current?.promise === promise) refreshInFlight.current = null; });
     return promise;
-  }, [attributionCache, canView, viewKey, weekEndDate, weekStartDate]);
+  }, [attributionCache, canView, refreshPrincipal, viewKey, weekEndDate, weekStartDate]);
 
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
