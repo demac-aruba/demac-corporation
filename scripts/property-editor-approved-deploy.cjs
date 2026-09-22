@@ -5,6 +5,13 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const project = 'demac-corporation';
 const names = ['officeBookingAuthority', 'fieldOperationsAuthority', 'processCustomerAgentInbound', 'processCustomerAgentReactivation'];
+// Resume the two exact revisions already deployed by the preceding run. Its
+// application tree is unchanged; only this verification script is corrected.
+const resumeTree = 'cd208a4e1417dad4fc5a5ec541c4d58ba085f845';
+const resumed = {
+  officeBookingAuthority: { revision: 'officebookingauthority-00065-cic', generation: '1790100914040000' },
+  fieldOperationsAuthority: { revision: 'fieldoperationsauthority-00006-bag', generation: '1790100997242728' },
+};
 if (process.env.GITHUB_REPOSITORY !== 'demac-aruba/demac-corporation' || process.env.GITHUB_REF !== 'refs/heads/release/property-editor-approved') throw new Error('Release context mismatch');
 const run = (args) => execFileSync('gcloud', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 20 * 1024 * 1024 });
 const describe = name => JSON.parse(run(['functions', 'describe', name, '--project=' + project, '--region=us-central1', '--gen2', '--format=json']));
@@ -24,12 +31,14 @@ async function checkHttp(name) {
     assert.match(response.headers.get('access-control-allow-headers') || '', /authorization/i);
     assert.match(response.headers.get('access-control-allow-methods') || '', /POST/);
   }
-  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: name === 'officeBookingAuthority' ? 'list_property_locations' : 'list_jobs', data: {} }) });
+  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: name === 'officeBookingAuthority' ? 'list_property_locations' : 'get_schedule', data: {} }) });
   assert.equal(response.status, 401, name + ' must require authentication');
+  assert.equal((await response.json()).error.code, 'unauthenticated');
 }
 (async () => {
   // Fail before any deploy if a consumer is missing or has an unexpected runtime.
   const before = Object.fromEntries(names.map(name => [name, describe(name)]));
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD:functions'], { encoding: 'utf8' }).trim(), resumeTree, 'Reviewed function source changed');
   for (const name of names) {
     assert.equal(before[name].state, 'ACTIVE');
     assert.equal(before[name].buildConfig.runtime, 'nodejs22');
@@ -46,9 +55,15 @@ async function checkHttp(name) {
     const previous = before[name];
     const entry = { name, previousRevision: previous.serviceConfig.revision, previousSource: previous.buildConfig.source, verified: false };
     result.functions.push(entry); record();
-    run(['functions', 'deploy', name, '--project=' + project, '--region=us-central1', '--gen2', '--source=' + stage,
-      '--entry-point=' + name, '--runtime=' + previous.buildConfig.runtime,
-      '--run-service-account=' + previous.serviceConfig.serviceAccountEmail, '--quiet', '--format=value(state)']);
+    if (resumed[name]) {
+      assert.equal(previous.serviceConfig.revision, resumed[name].revision, name + ' changed since the reviewed deployment');
+      assert.equal(String(previous.buildConfig.source.storageSource.generation), resumed[name].generation);
+      entry.reusedVerifiedSource = true;
+    } else {
+      run(['functions', 'deploy', name, '--project=' + project, '--region=us-central1', '--gen2', '--source=' + stage,
+        '--entry-point=' + name, '--runtime=' + previous.buildConfig.runtime,
+        '--run-service-account=' + previous.serviceConfig.serviceAccountEmail, '--quiet', '--format=value(state)']);
+    }
     const after = describe(name);
     assert.equal(after.state, 'ACTIVE');
     assert.deepEqual(config(after), config(previous), name + ' configuration changed unexpectedly');
