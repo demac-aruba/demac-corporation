@@ -12,6 +12,11 @@ callers in the create/details/overview components, canonical Work Order projecti
 attribution transport, auth provider, scheduling moves, capacity and current Project bridge.
 Booking Authority, identity, OPS-SCHED/TEAM/SVC and communications remain unchanged.
 
+Draft PR #519 compares against `fix/projects-slot-labels`, verified at deployed `a053bb1f`.
+Comparing against main produces conflicts with pending merge-only overtime changes.
+No merge/rebase importing that work or resolution reverting it has been performed.
+Integration to main requires later reconciliation after the owner resolves release scope.
+
 ## Findings
 
 | Severity | Evidence and impact | Resolution |
@@ -85,3 +90,8 @@ preview blockers, finish acceptance, and obtain separate owner publication appro
 
 The component harness uses no real Firebase backend and is not offered as the required
 functional preview. Future release/rollback plan is in the linked task record.
+
+Vercel Git deployment controls were checked against the official branch-specific
+`git.deploymentEnabled` contract: https://vercel.com/docs/project-configuration/git-configuration.
+Both linked Vercel projects reported `productionBranch: main`; the branch exclusion does
+not change any other branch, production project setting or required verification gate.
