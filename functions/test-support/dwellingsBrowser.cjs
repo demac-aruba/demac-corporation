@@ -24,7 +24,7 @@ const output=process.env.PREVIEW_EVIDENCE_DIR; fs.mkdirSync(output,{recursive:tr
  console.log('PASS persisted CRM reload');
  await page.goto(base+'/scheduling');await page.getByRole('region',{name:'Van 1 schedule',exact:true}).getByRole('button',{name:'BOOK',exact:true}).first().click();
  await page.getByRole('textbox',{name:/search customer/i}).fill('DEMO Test Lane 100');
- await page.getByRole('button',{name:/DEMO Owner A/}).waitFor();
+ await page.getByRole('dialog',{name:'Create appointment'}).getByRole('button',{name:/DEMO Owner A.*SELECT/}).waitFor();
  await page.getByRole('button',{name:/DEMO Owner A.*SELECT/}).click();
  const dialog=page.getByRole('dialog',{name:'Create appointment'});
  const confirm=dialog.getByRole('button',{name:/^(Save backdated appointment|Confirm appointment)$/});
