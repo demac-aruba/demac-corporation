@@ -1,5 +1,11 @@
 {
-  "git": { "deploymentEnabled": { "fix/scheduling-history-attribution-cards": false, "fix/scheduling-linked-project-labels": false } },
+  "git": {
+    "deploymentEnabled": {
+      "fix/scheduling-history-attribution-cards": false,
+      "fix/scheduling-linked-project-labels": false,
+      "feature/property-dwellings-preview": false
+    }
+  },
   "framework": "nextjs",
   "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "buildCommand": "npm run build",

@@ -861,6 +861,7 @@ function LegacyDetailView({
             <h2>CLIENTE Y UBICACIÓN</h2>
             <div className={styles.infoGrid}>
               <div className={styles.info}><span>Propiedad</span><strong>{job.propertyName || 'Sin nombre'}</strong></div>
+              {job.locationSnapshot ? <><div className={styles.info}><span>Solicitante</span><strong>{job.locationSnapshot.requester?.name || 'Pendiente'}</strong></div><div className={styles.info}><span>Contacto de acceso</span><strong>{job.locationSnapshot.accessContact?.name || 'Pendiente'}</strong></div></> : null}
               <div className={styles.info}><span>Van</span><strong>{job.vanId || 'Sin van'}</strong></div>
               <div className={styles.info} style={{ gridColumn: '1 / -1' }}><span>Dirección</span><strong>{job.address || 'No disponible'}</strong></div>
             </div>
@@ -1067,6 +1068,7 @@ function DetailView({
               <div className={styles.info}><span>Orden</span><strong>{job.workOrderId}</strong></div>
               <div className={styles.info}><span>Dirección</span><strong>{job.address || 'No disponible'}</strong></div>
               <div className={styles.info}><span>Acceso</span><strong>{job.accessInstructions || 'Sin instrucciones especiales'}</strong></div>
+              {job.locationSnapshot ? <><div className={styles.info}><span>Solicitante</span><strong>{job.locationSnapshot.requester?.name || 'Pendiente'}</strong></div><div className={styles.info}><span>Contacto de acceso</span><strong>{job.locationSnapshot.accessContact?.name || 'Pendiente'}</strong></div></> : null}
             </div>
             <div className={styles.planned}>
               <div className={styles.plannedTitle}>Alcance programado</div>
@@ -1679,6 +1681,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         visitId: currentDetail.fieldVisit.id,
         requestId,
         locationLabel: input.locationLabel,
+        areaId: input.areaId,
         systemType: input.systemType,
         brand: input.brand,
         btu: input.btu,

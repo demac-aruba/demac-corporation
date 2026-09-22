@@ -315,13 +315,15 @@ function projectScheduleJob({ order, client, property, appointment, identity, as
     customerId: text(order.clientId, 180),
     customerName: text(client?.name || client?.company || order.clientName || 'Cliente', 240),
     propertyId: text(order.propertyId, 180),
-    propertyName: text(property?.name, 240),
+    ...(order.dwellingId ? { dwellingId: order.dwellingId } : {}),
+    ...(order.locationSnapshot ? { locationSnapshot: order.locationSnapshot } : {}),
+    propertyName: text(order.locationSnapshot?.locationLabel || property?.name, 240),
     address: text(order.address || property?.address || property?.addressRaw, 500),
     latitude: finiteNumberOrNull(property?.latitude),
     longitude: finiteNumberOrNull(property?.longitude),
-    arrivalPhone: text(client?.phone, 80),
-    arrivalWhatsapp: text(client?.whatsapp || client?.phone, 80),
-    accessInstructions: text(property?.accessInstructions || property?.propertyAccessInstructions || property?.entryInstructions || property?.accessNotes, 1500),
+    arrivalPhone: text(order.locationSnapshot ? order.locationSnapshot.accessContact?.phone : client?.phone, 80),
+    arrivalWhatsapp: text(order.locationSnapshot ? order.locationSnapshot.accessContact?.phone : client?.whatsapp || client?.phone, 80),
+    accessInstructions: text(order.locationSnapshot?.accessInstructions || property?.accessInstructions || property?.propertyAccessInstructions || property?.entryInstructions || property?.accessNotes, 1500),
     customerFacingDescription: text(order.customerFacingDescription || order.problem, 1500),
     technicianInstructions: text(order.technicianInstructions, 1500),
     plannedWork: plannedWorkItems(order, appointment),
@@ -422,7 +424,7 @@ async function loadAssignedJob(db, identity, workOrderId) {
       .where('propertyId', '==', propertyId)
       .get();
     equipment = snapshotItems(equipmentSnapshot)
-      .filter((item) => item.active !== false)
+      .filter((item) => item.active !== false && text(item.dwellingId, 180) === text(order.dwellingId, 180))
       .map((item) => {
         const technical = equipmentTechnicalProjection(item);
         return {
@@ -446,6 +448,9 @@ async function loadAssignedJob(db, identity, workOrderId) {
       assignment,
     }),
     knownEquipment: equipment,
+    areas: propertyId && (order.dwellingId || maps.properties.get(propertyId)?.locationVersion) ? snapshotItems(await db.collection('properties').doc(propertyId).collection('areas').get())
+      .filter((area) => area.active !== false && text(area.dwellingId, 180) === text(order.dwellingId, 180))
+      .map((area) => ({ id: area.id, name: area.name })) : [],
   };
 }
 

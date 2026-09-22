@@ -571,6 +571,7 @@ function createPartialCompletionAuthority({
     if (
       request.customerId !== cleanText(original.customerId, 160)
       || request.propertyId !== cleanText(original.propertyId, 160)
+      || cleanText(request.dwellingId, 180) !== cleanText(original.dwellingId, 180)
       || !sameWorkLines(request.workLines, outcome.remainingWorkLines)
     ) {
       throw new BookingAuthorityError(

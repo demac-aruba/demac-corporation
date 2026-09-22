@@ -135,6 +135,7 @@ export function PropertyContactDraftEditor({
 export function PropertyCommunicationPanel({
   client,
   propertyId,
+  dwellingId = '',
   contacts,
   assignments,
   selections,
@@ -143,13 +144,14 @@ export function PropertyCommunicationPanel({
 }: {
   client: { id: string; name?: string; company?: string; phone?: string; whatsapp?: string; email?: string };
   propertyId: string;
+  dwellingId?: string;
   contacts: BookingContact[];
   assignments: BookingContactAssignment[];
   selections: AppointmentRecipientSelection[];
   onSelectionsChange: (next: AppointmentRecipientSelection[]) => void;
   onRefresh: () => Promise<void>;
 }) {
-  const resolved = useMemo(() => resolvedContactsForProperty(contacts, assignments, client.id, propertyId), [assignments, client.id, contacts, propertyId]);
+  const resolved = useMemo(() => resolvedContactsForProperty(contacts, assignments, client.id, propertyId, dwellingId), [assignments, client.id, contacts, propertyId, dwellingId]);
   const allContacts = customerContacts(contacts, client.id);
   const assignedIds = new Set(resolved.map((item) => item.contact.id));
   const unassigned = allContacts.filter((contact) => !assignedIds.has(contact.id));
@@ -212,16 +214,16 @@ export function PropertyCommunicationPanel({
 
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, background: 'var(--surface)', display: 'grid', gap: 8, marginTop: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}><div><strong style={{ display: 'block', fontSize: 7.2 }}>Communication contacts</strong><span style={{ color: 'var(--muted)', fontSize: 5.8 }}>Defaults come from this property relationship. Appointment recipients can be adjusted here without changing master data.</span></div><button type="button" className="btn" onClick={() => setManage((current) => !current)}>{manage ? 'Done' : 'Manage contacts'}</button></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}><div><strong style={{ display: 'block', fontSize: 7.2 }}>Communication contacts</strong><span style={{ color: 'var(--muted)', fontSize: 5.8 }}>Defaults come from the selected location relationships. Appointment recipients can be adjusted here without changing master data.</span></div>{!dwellingId ? <button type="button" className="btn" onClick={() => setManage((current) => !current)}>{manage ? 'Done' : 'Manage contacts'}</button> : null}</div>
 
       <RecipientRow name={text(client.name) || text(client.company) || 'Customer'} role="Customer / owner fallback" channel={text(client.whatsapp) || text(client.phone) || text(client.email)} selection={primary} onChange={updateSelection} />
       {resolved.map(({ contact, assignment }) => {
         const selection = selectionFor('contact', contact.id, { confirmation: assignment.appointmentConfirmation, reminder: assignment.appointmentReminder });
-        return <div key={assignment.id} style={{ display: 'grid', gap: 4 }}><RecipientRow name={contact.name} role={`${assignment.role}${assignment.scope === 'all_properties' ? ' · all properties' : ''}`} channel={contactDisplayChannel(contact)} badges={communicationBadges(assignment)} selection={selection} onChange={updateSelection} />{manage && assignment.scope === 'property' ? <button type="button" className="btn" disabled={saving} style={{ justifySelf: 'end' }} onClick={() => void removeAssignment(assignment)}>Remove from this property</button> : null}</div>;
+        return <div key={assignment.id} style={{ display: 'grid', gap: 4 }}><RecipientRow name={contact.name} role={`${assignment.role}${assignment.scope === 'all_properties' ? ' · all properties' : ''}`} channel={contactDisplayChannel(contact)} badges={communicationBadges(assignment)} selection={selection} onChange={updateSelection} />{manage && !dwellingId && assignment.scope === 'property' ? <button type="button" className="btn" disabled={saving} style={{ justifySelf: 'end' }} onClick={() => void removeAssignment(assignment)}>Remove from this property</button> : null}</div>;
       })}
       {!resolved.length ? <span style={{ color: 'var(--muted)', fontSize: 6 }}>No canonical property contacts yet. The customer remains the communication fallback.</span> : null}
 
-      {manage ? <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, display: 'grid', gap: 8 }}>
+      {manage && !dwellingId ? <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, display: 'grid', gap: 8 }}>
         {unassigned.length ? <div style={{ color: 'var(--muted)', fontSize: 6 }}>Existing customer contacts can be linked here instead of creating duplicates.</div> : null}
         <PropertyContactDraftEditor clientId={client.id} contacts={contacts} links={draftLinks} onChange={setDraftLinks} />
         <button type="button" className="btn primary" disabled={!draftLinks.length || saving} onClick={() => void saveDraftLinks()}>{saving ? 'Saving…' : 'Save contact relationships'}</button>

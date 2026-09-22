@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type { AppointmentRecipientSelection } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
@@ -18,6 +19,7 @@ function endpoint() {
 }
 
 export async function createAfterHoursEmergency(input: {
+  dwellingId?: string; requesterId?: string; accessContactId?: string;
   requestId: string;
   customerId: string;
   propertyId: string;
@@ -33,7 +35,7 @@ export async function createAfterHoursEmergency(input: {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 12_000);
   try {
-    const response = await fetch(endpoint(), {
+    const response = await fetch(firebaseTransportUrl(endpoint()), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${session.idToken}`,

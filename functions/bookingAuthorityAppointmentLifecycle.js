@@ -168,6 +168,9 @@ function holdRequestFromAppointment(appointment) {
   return normalizeBookingRequest({
     customerId: appointment.customerId,
     propertyId: appointment.propertyId,
+    dwellingId: appointment.dwellingId,
+    requesterId: appointment.requesterId,
+    accessContactId: appointment.accessContactId,
     workLines: appointment.workLines,
     constraints: appointment.constraints,
     notes: appointment.notes,
@@ -508,7 +511,8 @@ function createBookingAppointmentLifecycle({
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
-      if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)) {
+      if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)
+        || cleanText(currentRequest.dwellingId, 180) !== cleanText(current.dwellingId, 180)) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The current lifecycle offer no longer matches the appointment.", { appointmentId: id });
       }
       if (normalizedChangeKind === "operational_move") {

@@ -174,6 +174,8 @@ function buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignme
     appointmentId,
     clientId,
     propertyId,
+    ...(order.dwellingId ? { dwellingId: order.dwellingId } : {}),
+    ...(order.locationSnapshot ? { locationSnapshot: order.locationSnapshot } : {}),
     scheduledScopeSnapshot: buildScheduledScopeSnapshot(order, appointment, now),
     status: storageStatusFromWorkOrder(order),
     leadTechnicianStaffId: text(assignment?.leadTechnicianStaffId, 180) || undefined,
@@ -193,6 +195,8 @@ function projectCanonicalWorkVisit(record, identityFallback = {}) {
     workOrderId: text(record?.workOrderId, 180),
     customerId: text(record?.clientId || record?.customerId, 180),
     propertyId,
+    ...(record?.dwellingId ? { dwellingId: record.dwellingId } : {}),
+    ...(record?.locationSnapshot ? { locationSnapshot: record.locationSnapshot } : {}),
     scheduledScopeSnapshot: {
       // Active Legacy snapshots predate appointmentId/workLines. Fill only structural identity
       // from the already-validated Work Order; never invent historical planned work lines.
@@ -241,6 +245,9 @@ function assertReferenceMatches(record, expectedId, fields, code, label) {
 }
 
 function assertExistingVisitCompatible(existing, order) {
+  if (text(existing.dwellingId, 180) !== text(order.dwellingId, 180)) {
+    throw fieldError('visit_dwelling_conflict', 'The Work Visit dwelling differs from its Work Order.', 409);
+  }
   const expectedWorkOrderId = text(order.id, 180);
   const expectedCustomerId = text(order.clientId, 180);
   const expectedPropertyId = text(order.propertyId, 180);

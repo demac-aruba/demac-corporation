@@ -8,6 +8,7 @@ provider callbacks, and cached projections are never authority by themselves.
 | Identity and roles | Firebase Auth plus governed user/role records | Authenticated clients; admin functions | Token verification, server-side role checks, least privilege, audit |
 | Customer identity | Canonical `Customer` record through CRM/domain services | Authorized office/operations flows | Stable ID, duplicate detection, merge/alias audit |
 | Property identity | Canonical `Property` record linked to its Customer | Authorized CRM and scheduling flows | Stable ID, preserved history, no embedded duplicate identity |
+| Property-contained dwellings/areas (preview) | Child subcollections of canonical `properties`, through existing Office Booking Authority; assigned on-site area/equipment creation through Field Authority | Authorized office or assigned Field commands | Full Customer/Property/Dwelling/Area/Equipment chain, stable IDs, container-local codes, transaction/version/retry audit; no automatic classification of historical records |
 | Contact identity | Canonical `Contact` record | Authorized CRM and communication flows | Stable ID, deduplication, consent and audit |
 | Contact-to-Property responsibility | `contactPropertyAssignments` | Authorized CRM/communication flows | Explicit role/responsibility and effective configuration |
 | Scheduling and capacity | Booking Authority and approved canonical company/calendar/capacity settings | Office tools, ERP Next, allowlisted AI tool | Commit-time revalidation, conflict prevention, idempotency |
