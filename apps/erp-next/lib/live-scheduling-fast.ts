@@ -1,8 +1,8 @@
-import type { BrowserAppointmentRecord } from './browser-operational';
 import { listFirestoreCollection, queryFirestoreCollectionDateRange } from './firebase/firestore-rest';
 import { bookingActorLabel, projectLiveSchedulingAppointments } from './live-scheduling';
 import { loadLiveOperationalCapacityState } from './live-operational-capacity';
-import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
+import { listOfficeAppointmentAttribution } from './office-booking-authority';
+import { createSchedulingAttributionCache } from './scheduling-attribution';
 import { performanceClock, recordDuration, recordPerformanceMeasurement } from './performance-telemetry';
 
 type WorkOrder = Parameters<typeof projectLiveSchedulingAppointments>[0][number];
@@ -20,12 +20,9 @@ export type LiveSchedulingProperty = {
   active?: boolean; createdAt?: string; updatedAt?: string;
 };
 export type LiveSchedulingReferenceData = { clients: LiveSchedulingClient[]; properties: LiveSchedulingProperty[]; vans: Van[] };
-type CachedAttribution = { expiresAt: number; value: OfficeAppointmentAttribution };
 export type LiveSchedulingRange = { startDate: string; endDate: string };
 const REFERENCE_CACHE_MS = 5 * 60_000;
-const ATTRIBUTION_CACHE_MS = 5 * 60_000;
 let referenceCache: { expiresAt: number; promise: Promise<LiveSchedulingReferenceData> } | null = null;
-const attributionCache = new Map<string, CachedAttribution>();
 function text(value: unknown) { return typeof value === 'string' ? value.trim() : ''; }
 function recordScheduleDuration(name: string, startedAt: number, error = false) {
   recordDuration(name, 'scheduling', startedAt, { error });
@@ -111,38 +108,6 @@ export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingR
     throw error;
   }
 }
-async function attributionFor(appointmentIds: string[]) {
-  const now = Date.now();
-  const resolved = new Map<string, OfficeAppointmentAttribution>();
-  const missing: string[] = [];
-  for (const id of appointmentIds) {
-    const cached = attributionCache.get(id);
-    if (cached && cached.expiresAt > now) resolved.set(id, cached.value);
-    else missing.push(id);
-  }
-  if (missing.length) {
-    const loaded = await listOfficeAppointmentAttribution(missing);
-    for (const item of loaded) {
-      resolved.set(item.appointmentId, item);
-      attributionCache.set(item.appointmentId, { expiresAt: now + ATTRIBUTION_CACHE_MS, value: item });
-    }
-  }
-  return resolved;
-}
-export async function enrichLiveSchedulingAttribution(appointments: BrowserAppointmentRecord[]) {
-  const appointmentIds = [...new Set(appointments.map((appointment) => text(appointment.id)).filter(Boolean))];
-  if (!appointmentIds.length) return appointments;
-  const byId = await attributionFor(appointmentIds);
-  return appointments.map((appointment) => {
-    const authorityAppointment = byId.get(appointment.id);
-    if (!authorityAppointment) return appointment;
-    const actorLabel = bookingActorLabel(authorityAppointment);
-    return { ...appointment,
-      bookedById: text(authorityAppointment.createdBy) || undefined,
-      bookedByName: actorLabel || undefined,
-      bookedBySource: text(authorityAppointment.source) || undefined,
-      createdAt: text(authorityAppointment.createdAtIso) || appointment.createdAt,
-      updatedAt: text(authorityAppointment.updatedAtIso) || appointment.updatedAt,
-    };
-  });
+export function createLiveSchedulingAttributionCache() {
+  return createSchedulingAttributionCache(listOfficeAppointmentAttribution, bookingActorLabel);
 }

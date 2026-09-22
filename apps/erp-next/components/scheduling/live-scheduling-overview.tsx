@@ -14,11 +14,12 @@ import {
   type LiveOperationalCapacityState,
 } from '../../lib/live-operational-capacity';
 import {
-  enrichLiveSchedulingAttribution,
+  createLiveSchedulingAttributionCache,
   invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
 import { liveJobCapacityEnd } from '../../lib/live-scheduling';
+import { applySchedulingAttribution, retainSchedulingAttribution } from '../../lib/scheduling-attribution';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -171,12 +172,9 @@ function jobCrossesLunch(job: CalendarDispatchJob) {
 }
 
 function bookingBadge(name?: string) {
-  if (!name) return null;
-  const initial = name.trim().charAt(0).toUpperCase() || 'D';
-  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 'fit-content', marginTop: 4, padding: '3px 6px', borderRadius: 999, background: 'var(--brand-soft)', color: 'var(--brand)', fontSize: 5.8, fontWeight: 850 }}>
-    <b style={{ width: 14, height: 14, display: 'grid', placeItems: 'center', borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 5.4 }}>{initial}</b>
-    Booked by {name}
-  </span>;
+  return <div className={styles.bookingAttribution} data-booking-attribution>
+    {name ? <span tabIndex={0} title={`Booked by ${name}`}>Booked by {name}</span> : null}
+  </div>;
 }
 
 export function LiveSchedulingOverview() {
@@ -212,6 +210,14 @@ export function LiveSchedulingOverview() {
     return closureReason ? { ...day, isOpen: false, shiftLabel: closureReason } : day;
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
+  const canView = principal.active && principal.capabilities.has('scheduling.view');
+  const authScope = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;
+  const attributionCache = useMemo(() => createLiveSchedulingAttributionCache(), [authScope]);
+  const viewKey = `${authScope}:${weekStartDate}:${weekEndDate}`;
+  const viewRef = useRef(viewKey);
+  viewRef.current = viewKey;
+  const mountedRef = useRef(false);
+  const refreshInFlight = useRef<{ key: string; sequence: number; promise: Promise<void> } | null>(null);
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
   const interactionActive = liveSchedulingInteractionActive({
     selectedAppointmentId,
@@ -224,9 +230,14 @@ export function LiveSchedulingOverview() {
     manualRefreshing,
   });
 
-  const refresh = useCallback(async (forceCapacity = false) => {
+  const refresh = useCallback((forceCapacity = false): Promise<void> => {
+    if (!canView || !mountedRef.current) return Promise.resolve();
+    const inFlight = refreshInFlight.current;
+    if (!forceCapacity && inFlight?.key === viewKey && inFlight.sequence === refreshSequenceRef.current) return inFlight.promise;
     const sequence = ++refreshSequenceRef.current;
+    const current = () => mountedRef.current && viewRef.current === viewKey && sequence === refreshSequenceRef.current;
     if (forceCapacity) invalidateLiveSchedulingReferenceCache();
+    const promise = (async () => {
     try {
       const [next, capacityResult] = await Promise.all([
         loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
@@ -237,27 +248,31 @@ export function LiveSchedulingOverview() {
             error: capacityLoadError instanceof Error ? capacityLoadError.message : 'Live operational capacity could not be loaded.',
           })),
       ]);
-      if (sequence !== refreshSequenceRef.current) return;
-      setAppointments(next);
+      if (!current()) return;
+      setAppointments((items) => current() ? retainSchedulingAttribution(items, next) : items);
       setCapacityState(capacityResult.value);
       setCapacityError(capacityResult.error);
       setError('');
       setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       setLoading(false);
 
-      void enrichLiveSchedulingAttribution(next)
-        .then((enriched) => {
-          if (sequence === refreshSequenceRef.current) setAppointments(enriched);
+      void attributionCache.resolve(next.map((item) => item.id))
+        .then((patches) => {
+          if (current()) setAppointments((items) => current() ? applySchedulingAttribution(items, patches) : items);
         })
         .catch(() => {
           // Booking attribution is supplemental; operational scheduling stays usable without it.
         });
     } catch (loadError) {
-      if (sequence !== refreshSequenceRef.current) return;
+      if (!current()) return;
       setError(loadError instanceof Error ? loadError.message : 'Live scheduling data could not be loaded.');
       setLoading(false);
     }
-  }, [weekEndDate, weekStartDate]);
+    })();
+    refreshInFlight.current = { key: viewKey, sequence, promise };
+    void promise.finally(() => { if (refreshInFlight.current?.promise === promise) refreshInFlight.current = null; });
+    return promise;
+  }, [attributionCache, canView, viewKey, weekEndDate, weekStartDate]);
 
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
@@ -270,7 +285,27 @@ export function LiveSchedulingOverview() {
   }, [interactionActive, refresh]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    invalidateLiveSchedulingReferenceCache();
+    setAppointments([]);
+    setCapacityState(null);
+    setSelectedAppointmentId('');
+    setBookingTarget(null);
+    setSupportTarget(null);
+    setAfterHoursTarget(null);
+    setPendingDragMove(null);
+    setMoveArmedJobId('');
+    return () => {
+      mountedRef.current = false;
+      refreshSequenceRef.current += 1;
+      attributionCache.clear();
+      invalidateLiveSchedulingReferenceCache();
+    };
+  }, [attributionCache]);
+
+  useEffect(() => {
     void refresh();
+    return () => { refreshSequenceRef.current += 1; };
   }, [refresh]);
 
   useEffect(() => {
