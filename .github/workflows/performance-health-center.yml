@@ -143,7 +143,7 @@ jobs:
           retention-days: 7
 
   deploy-telemetry:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[merge-only]')
     needs: [validate-telemetry, validate-erp-ui, isolated-emulators-and-browsers]
     runs-on: ubuntu-latest
     timeout-minutes: 25
