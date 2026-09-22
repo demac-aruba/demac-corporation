@@ -4,6 +4,7 @@ import {
   createOfficeCustomerWithProperty,
   createOfficeLifecycleRequestId,
   createOfficeProperty,
+  OfficeBookingRequestError,
   listOfficeContactDirectory,
   updateOfficeContact,
   updateOfficeCustomer,
@@ -44,6 +45,8 @@ export type NewBookingCustomer = {
 };
 
 export type NewBookingProperty = {
+  accessInstructions?: string;
+  locations?: import('./property-editor-draft').PropertyEditorValue['locations'];
   name: string;
   type?: string;
   address: string;
@@ -192,11 +195,12 @@ function assertCustomerDoesNotDuplicate(input: NewBookingCustomer, references: B
     );
   });
   if (duplicate) {
-    throw new Error(`A customer with this phone or WhatsApp already exists: ${text(duplicate.name) || text(duplicate.company) || duplicate.id}. Select the existing customer instead.`);
+    throw new OfficeBookingRequestError(`A customer with this phone or WhatsApp already exists: ${text(duplicate.name) || text(duplicate.company) || duplicate.id}. Select the existing customer instead.`, false);
   }
 }
 
 export async function createBookingCustomerWithProperty(args: {
+  requestId?: string;
   customer: NewBookingCustomer;
   property: NewBookingProperty;
   references: BookingReferenceData;
@@ -213,7 +217,7 @@ export async function createBookingCustomerWithProperty(args: {
   assertCustomerDoesNotDuplicate(args.customer, args.references);
 
   const result = await createOfficeCustomerWithProperty({
-    requestId: createOfficeLifecycleRequestId('schedule-customer'),
+    requestId: args.requestId ?? createOfficeLifecycleRequestId('schedule-customer'),
     customer: {
       name,
       company: text(args.customer.company),
@@ -232,6 +236,8 @@ export async function createBookingCustomerWithProperty(args: {
       zone,
       neighborhood: text(args.property.neighborhood),
       notes: text(args.property.notes),
+      accessInstructions: text(args.property.accessInstructions),
+      ...(args.property.locations ? { locations: args.property.locations } : {}),
       contactLinks: args.property.contactLinks ?? [],
     },
   });
@@ -245,7 +251,7 @@ export async function createBookingCustomerWithProperty(args: {
   return { customer, property };
 }
 
-export async function createBookingProperty(clientId: string, input: NewBookingProperty) {
+export async function createBookingProperty(clientId: string, input: NewBookingProperty, requestId = createOfficeLifecycleRequestId('schedule-property')) {
   const ownerId = text(clientId);
   const address = text(input.address);
   const zone = text(input.zone);
@@ -254,7 +260,7 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
   if (!zone) throw new Error('Property area / zone is required.');
 
   const result = await createOfficeProperty({
-    requestId: createOfficeLifecycleRequestId('schedule-property'),
+    requestId,
     customerId: ownerId,
     property: {
       name: text(input.name),
@@ -263,6 +269,8 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
       zone,
       neighborhood: text(input.neighborhood),
       notes: text(input.notes),
+      accessInstructions: text(input.accessInstructions),
+      ...(input.locations ? { locations: input.locations } : {}),
       contactLinks: input.contactLinks ?? [],
     },
   });

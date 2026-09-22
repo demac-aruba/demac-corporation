@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './firebase/isolated-preview';
 import { firebaseClientConfig } from './firebase/client-config';
 import { loadFirebaseWebSession, requireFirebaseWebSession, type FirebaseWebSession } from './firebase/session';
 import {
@@ -238,6 +239,7 @@ class FieldAuthorityRequestError extends Error {
 }
 
 export type RegisterOnSiteFieldEquipmentInput = {
+  areaId?: string;
   visitId: string;
   requestId: string;
   locationLabel: string;
@@ -306,7 +308,7 @@ async function performFieldAuthorityRequest(
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(endpoint(), {
+    const response = await fetch(firebaseTransportUrl(endpoint()), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${session.idToken}`,
@@ -555,7 +557,7 @@ export async function attachFieldAssetByQr(visitId: string, assetId: string, qrC
 
 export async function registerOnSiteFieldEquipment(input: RegisterOnSiteFieldEquipmentInput) {
   return parseFieldRegisterVisitAssetResponse(await callFieldAuthority('register_visit_asset', {
-    visitId: input.visitId, requestId: input.requestId, locationLabel: input.locationLabel, systemType: input.systemType,
+    visitId: input.visitId, requestId: input.requestId, areaId: input.areaId, locationLabel: input.locationLabel, systemType: input.systemType,
     brand: input.brand, btu: input.btu, refrigerant: input.refrigerant, voltage: input.voltage, qrCode: input.qrCode ?? '', evidencePaths: input.evidencePaths,
   }, 20_000));
 }

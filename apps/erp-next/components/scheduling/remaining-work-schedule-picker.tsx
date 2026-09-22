@@ -582,6 +582,7 @@ export function RemainingWorkSchedulePicker({ appointment, canonical, outcome, o
       if (!customerId || !propertyId || !workLines.length) return Promise.reject(new Error('The remaining work is missing its canonical customer, property, or work definition.'));
       return checkOfficeCreateAvailability({
         requestId: createPartialOutcomeRequestId('remaining-visual-availability'),
+        sourcePartialAppointmentId: appointment.id,
         customerId,
         propertyId,
         workLines,

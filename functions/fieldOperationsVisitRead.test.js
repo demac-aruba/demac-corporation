@@ -198,3 +198,13 @@ test('return-visit creation eligibility is a server projection of canonical visi
   assert.equal(canCreateReturnVisit(job({ allowedActions: ['read'] }), result.fieldVisit), false);
   assert.equal(canCreateReturnVisit(job(), { ...result.fieldVisit, secondVisitReason: undefined }), false);
 });
+
+test('dwelling-specific visit read preserves scope and rejects a neighbor on the same Property', async () => {
+  const locationSnapshot = { locationLabel: 'Property · Apartment 1' };
+  const stored = visit({ dwellingId: 'dw-1', locationSnapshot });
+  const current = await attachCurrentWorkVisitState(createDb([stored]), job({ dwellingId: 'dw-1', locationSnapshot }));
+  assert.equal(current.fieldVisit.dwellingId, 'dw-1');
+  assert.deepEqual(current.fieldVisit.locationSnapshot, locationSnapshot);
+  await assert.rejects(() => attachCurrentWorkVisitState(createDb([stored]), job({ dwellingId: 'dw-2' })), /dwelling differs/);
+  await assert.rejects(() => attachCurrentWorkVisitState(createDb([stored]), job()), /dwelling differs/);
+});

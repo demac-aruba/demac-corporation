@@ -107,6 +107,9 @@ function normalizeBookingRequest(value = {}) {
   return {
     customerId: requireText(value.customerId, "customerId", 160),
     propertyId: requireText(value.propertyId, "propertyId", 160),
+    ...(cleanText(value.dwellingId, 180) ? { dwellingId: cleanText(value.dwellingId, 180) } : {}),
+    ...(cleanText(value.requesterId, 180) ? { requesterId: cleanText(value.requesterId, 180) } : {}),
+    ...(cleanText(value.accessContactId, 180) ? { accessContactId: cleanText(value.accessContactId, 180) } : {}),
     workLines: normalizeWorkLines(value.workLines),
     constraints: {
       requestedDate: cleanText(value.constraints?.requestedDate, 20),
@@ -315,6 +318,9 @@ function buildAppointmentDraft({
     idempotencyKeyHash: identity.idempotencyKeyHash,
     customerId: normalizedRequest.customerId,
     propertyId: normalizedRequest.propertyId,
+    ...(normalizedRequest.dwellingId ? { dwellingId: normalizedRequest.dwellingId } : {}),
+    ...(normalizedRequest.requesterId ? { requesterId: normalizedRequest.requesterId } : {}),
+    ...(normalizedRequest.accessContactId ? { accessContactId: normalizedRequest.accessContactId } : {}),
     offerId: requireText(offer.id, "offer.id", 180),
     offerVersion: positiveInteger(offer.version),
     selectedOptionId: option.id,

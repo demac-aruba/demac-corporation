@@ -20,6 +20,7 @@ const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID ?? process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? firebaseDefaults.measurementId,
 };
 const publicBuildEnv = {
+  NEXT_PUBLIC_ISOLATED_PREVIEW: process.env.NEXT_PUBLIC_ISOLATED_PREVIEW ?? 'false',
   NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? 'unknown',
   // Preview/local collection is off unless an isolated test explicitly enables it.
   NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: process.env.NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT ?? (process.env.VERCEL_ENV === 'production' ? 'production' : 'preview'),

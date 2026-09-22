@@ -23,6 +23,7 @@ const LOCATION_SUGGESTIONS = [
 ];
 
 export type EquipmentRegistrationInput = {
+  areaId?: string;
   locationLabel: string;
   systemType: string;
   brand: string;
@@ -37,6 +38,7 @@ export type EquipmentRegistrationInput = {
 
 function initialTextState() {
   return {
+    areaId: '',
     locationLabel: '',
     systemType: 'Split wall mounted',
     brand: '',
@@ -94,6 +96,7 @@ export function EquipmentRegistrationControls({
 
     setLocalError(null);
     const success = await onRegister({
+      areaId: form.areaId || undefined,
       locationLabel: form.locationLabel.trim(),
       systemType: form.systemType.trim(),
       brand: form.brand.trim(),
@@ -117,6 +120,7 @@ export function EquipmentRegistrationControls({
 
       {available ? (
         <div className={styles.interventionForm}>
+          {job.dwellingId || job.areas?.length ? <label><span>Área de {job.propertyName || 'esta visita'}</span><select className={styles.select} disabled={mutationBusy} value={form.areaId} onChange={(event) => { setField('areaId', event.target.value); const area = job.areas?.find((item) => item.id === event.target.value); if (area) setField('locationLabel', area.name); }}><option value="">Nueva área: escribe su nombre abajo</option>{job.areas?.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label> : null}
           <label>
             <span>Ubicación / título *</span>
             <input

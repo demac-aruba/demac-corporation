@@ -123,6 +123,8 @@ function buildProfessionalReportPreview(job) {
     workOrderId,
     customerId,
     propertyId,
+    ...(job.dwellingId ? { dwellingId: job.dwellingId } : {}),
+    ...(job.locationSnapshot ? { locationSnapshot: job.locationSnapshot } : {}),
     status,
     plannedQuantity: countPlannedQuantity(job),
     unreconciledPlannedQuantity: unreconciledQuantity,

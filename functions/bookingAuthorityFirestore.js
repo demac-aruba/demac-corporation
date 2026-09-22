@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { resolvePropertyLocation } = require('./propertyLocations');
 const {
   BOOKING_AUTHORITY_VERSION,
   BOOKING_ERROR_CODES,
@@ -471,6 +472,22 @@ function createBookingAuthority({
         transaction.get(propertyRef),
       ]);
       const { customer, property } = assertCustomerPropertyRelationship({ customerSnapshot, propertySnapshot, request });
+      let legacyFollowUp = false;
+      let followUpLocation;
+      if (context.sourcePartialAppointmentId) {
+        const original = await transaction.get(db.collection(collections.appointments).doc(context.sourcePartialAppointmentId));
+        const previous = original.exists ? original.data() : null;
+        if (!previous || previous.customerId !== request.customerId || previous.propertyId !== request.propertyId
+          || cleanText(previous.dwellingId, 180) !== cleanText(request.dwellingId, 180)) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The follow-up location must match the original appointment.');
+        }
+        legacyFollowUp = !previous.dwellingId;
+        followUpLocation = previous.locationSnapshot;
+      }
+      const locationSnapshot = (property.hasIndependentDwellings || request.dwellingId || request.requesterId || request.accessContactId)
+        ? await resolvePropertyLocation({ db, transaction, customer, property,
+          request: followUpLocation ? { ...request, requesterId: undefined, accessContactId: undefined } : request, requireExplicit: !legacyFollowUp }) : undefined;
+      if (locationSnapshot && followUpLocation) Object.assign(locationSnapshot, { requester: followUpLocation.requester || null, accessContact: followUpLocation.accessContact || null });
 
       let transactionValidation;
       try {
@@ -551,6 +568,7 @@ function createBookingAuthority({
       const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
         ...appointment,
+        ...(locationSnapshot ? { locationSnapshot } : {}),
         status: normalizedCreateMode,
         notificationRecipients,
         workOrderIds,
@@ -576,6 +594,8 @@ function createBookingAuthority({
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
+          ...(locationSnapshot ? { dwellingId: locationSnapshot.dwellingId || '', locationSnapshot,
+            requesterId: request.requesterId || '', accessContactId: request.accessContactId || '' } : {}),
           bookingAuthorityVersion: BOOKING_AUTHORITY_VERSION,
           bookingOfferId: canonicalOfferId,
           createdAt: workOrder.createdAt || now.toISOString(),
