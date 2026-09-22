@@ -3,6 +3,7 @@
 import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-budget-status';
 import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-confirmation';
 import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
+import { projectSlotLabel } from '@/lib/project-slot-label';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
@@ -1041,7 +1042,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     if (projectMode && selectedProject && projectWorkPreset && projectPlan) {
       const projectInstructions = [
         projectWorkDescription,
-        `Planned Project capacity: ${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'} (${durationLabel(projectPlan.scheduledHours * 60)} Van time).`,
+        `Planned Project capacity: ${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}.`,
         authorizedTechnicianInstructions.trim(),
       ].filter(Boolean).join('\n');
       return [{
@@ -1444,6 +1445,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
       {budgetConfirmation && budgetConfirmation.signature === budgetSignature && bookingBudgetPlan && canManageProjects && !busy && !checking && <ProjectBudgetConfirmation
         key={budgetConfirmation.signature}
+        slotDurationMinutes={selectedProject?.slotDurationMinutes ?? 60}
         budgets={[{ scope: 'Proyecto', budget: bookingBudgetPlan.laborBudget }, ...(bookingBudgetPlan.phaseLaborBudget ? [{ scope: 'Fase', budget: bookingBudgetPlan.phaseLaborBudget }] : [])]}
         onCancel={() => setBudgetConfirmation(null)}
         onContinue={() => { void (budgetConfirmation.action === 'hold' ? holdBooking(budgetConfirmation.signature) : confirmBooking(budgetConfirmation.signature)); }}
@@ -1614,7 +1616,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           </section>
 
           <section className={styles.section}>
-            <header><div><span>{isAfterHours ? '3' : '4'}</span><strong>Work & allocation</strong><small>{projectMode ? 'Choose whole Project slots to reserve for this Van. Actual technician hours remain individual field time.' : 'Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.'}</small></div></header>
+            <header><div><span>{isAfterHours ? '3' : '4'}</span><strong>Work & allocation</strong><small>{projectMode ? 'Choose the Project slots to reserve in the crew schedule.' : 'Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.'}</small></div></header>
             <div className={styles.sectionBody}>
               {projectMode ? (
                 selectedProject ? (
@@ -1637,19 +1639,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         <span>Planned Project slots *</span>
                         <input aria-invalid={Boolean(projectPlanState.error)} aria-describedby="project-slots-help" type="number" min="1" max={projectDailySlotLimit} step="1" inputMode="numeric" value={projectSlots} onChange={(event) => { setProjectSlots(event.target.value); resetCapacityValidation(); }} placeholder={`1–${projectDailySlotLimit} slots`} />
                       </label>
-                      <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> enter whole slots only. One slot reserves {selectedProject.slotDurationMinutes} minutes of Van capacity; this Project allows up to {selectedProject.slotsPerWorkDay} slots per workday. Each technician records actual labor time separately in the Technician Portal.</div>
+                      <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> select whole slots from the crew schedule. {projectDailySlotLimit === 6 ? 'A normal workday has 6 slots: 3 in the morning and 3 in the afternoon.' : `This Project allows up to ${projectDailySlotLimit} slots per workday.`} Actual availability is checked before booking.</div>
                     </div>
                     {projectPlanState.error ? <div className={styles.projectPlanError} role="alert">{projectPlanState.error}</div> : null}
-                    {bookingBudgetPlan ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.laborBudget} /> : null}
-                    {bookingBudgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.phaseLaborBudget} scope="Phase" /> : null}
+                    {bookingBudgetPlan ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.laborBudget} slotDurationMinutes={selectedProject.slotDurationMinutes} /> : null}
+                    {bookingBudgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={bookingBudgetPlan.phaseLaborBudget} slotDurationMinutes={selectedProject.slotDurationMinutes} scope="Phase" /> : null}
                     {projectPlan ? (
                       <div className={styles.projectPlanSummary}>
-                        <div><span>PROJECT SLOTS</span><strong>{projectPlan.scheduledSlots}</strong><small>{selectedProject.slotDurationMinutes} min each</small></div>
-                        <div><span>EQUIVALENT VAN TIME</span><strong>{durationLabel(projectPlan.scheduledHours * 60)}</strong></div>
-                        <div><span>BUDGET HOURS REMAINING</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
+                        <div><span>SELECTED SLOTS</span><strong>{projectPlan.scheduledSlots} {projectPlan.scheduledSlots === 1 ? 'slot' : 'slots'}</strong></div>
+                        <div><span>PROJECT SLOT BUDGET</span><strong>{projectSlotLabel(projectPlan.laborBudget.budgetHours, selectedProject.slotDurationMinutes)}</strong></div>
+                        <div><span>BUDGET SLOTS REMAINING</span><strong>{projectSlotLabel((bookingBudgetPlan ?? projectPlan).laborBudget.remainingHoursAfter, selectedProject.slotDurationMinutes)}</strong><small>{projectSlotLabel(projectPlan.remainingHoursBefore, selectedProject.slotDurationMinutes)} before this visit</small></div>
                       </div>
                     ) : null}
-                    {!projectWorkPreset && !presetsLoading ? <div className={styles.projectPlanError} role="alert">Scheduling needs the active “Other” work type to reserve manual Project hours. Enable it in Services & Products.</div> : null}
+                    {!projectWorkPreset && !presetsLoading ? <div className={styles.projectPlanError} role="alert">Scheduling needs the active “Other” work type to reserve Project slots. Enable it in Services & Products.</div> : null}
                   </div>
                 ) : <div className={styles.emptyResult}>Select a Project above before entering planned slots.</div>
               ) : <>
@@ -1695,7 +1697,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               <div className={styles.quantityRow}>
                 <div><span>{projectMode ? 'Project task' : 'Work lines'}</span><strong>{projectMode ? selectedProjectPhase?.name || selectedProject?.type || '—' : `${workLines.length} line${workLines.length === 1 ? '' : 's'} · ${totalQuantity} item${totalQuantity === 1 ? '' : 's'}`}</strong></div>
                 <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : '—'}</strong></div>
-                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
+                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : projectMode ? bookingBudgetPlan && selectedProject ? projectSlotLabel(bookingBudgetPlan.scheduledHours, selectedProject.slotDurationMinutes) : '—' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
                 <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={authorizedDescription} onChange={(event) => { setDescription(event.target.value); invalidateOfferValidation(); }} placeholder={projectMode ? 'Project scope for this scheduled visit…' : 'Example: Two standard services and one installation. BTU to be confirmed by technician on site.'} /></label>
@@ -1810,7 +1812,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       return <article key={`${assignment.vanId}-${start}-${index}`}>
                         <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
                         <strong>{assignment.vanName || assignment.vanId}</strong>
-                        <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
+                        <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {projectMode && selectedProject ? projectSlotLabel((assignment.durationMinutes || assignment.slots * 60) / 60, selectedProject.slotDurationMinutes) : durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
                         {support ? <small>{assignment.quantity} support unit{assignment.quantity === 1 ? '' : 's'}</small> : null}
                         {workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
                       </article>;
