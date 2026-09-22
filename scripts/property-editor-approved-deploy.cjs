@@ -11,12 +11,17 @@ const resumeTree = 'cd208a4e1417dad4fc5a5ec541c4d58ba085f845';
 const resumed = {
   officeBookingAuthority: { revision: 'officebookingauthority-00065-cic', generation: '1790100914040000' },
   fieldOperationsAuthority: { revision: 'fieldoperationsauthority-00006-bag', generation: '1790100997242728' },
+  processCustomerAgentInbound: { revision: 'processcustomeragentinbound-00053-tab', generation: '1790101293929559' },
 };
 if (process.env.GITHUB_REPOSITORY !== 'demac-aruba/demac-corporation' || process.env.GITHUB_REF !== 'refs/heads/release/property-editor-approved') throw new Error('Release context mismatch');
 const run = (args) => execFileSync('gcloud', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 20 * 1024 * 1024 });
 const describe = name => JSON.parse(run(['functions', 'describe', name, '--project=' + project, '--region=us-central1', '--gen2', '--format=json']));
 const stable = config => Object.fromEntries(Object.entries(config || {}).filter(([key]) => !['revision', 'uri', 'service'].includes(key)));
-const config = fn => ({ service: stable(fn.serviceConfig), trigger: fn.eventTrigger || null, runtime: fn.buildConfig.runtime, entryPoint: fn.buildConfig.entryPoint });
+// Event filters are an unordered conjunction; compare every attribute/operator/value
+// but not the order in which the Cloud Functions API serializes that set.
+const config = fn => ({ service: stable(fn.serviceConfig), trigger: fn.eventTrigger ? {
+  ...fn.eventTrigger, eventFilters: [...(fn.eventTrigger.eventFilters || [])].sort((a, b) => a.attribute.localeCompare(b.attribute)),
+} : null, runtime: fn.buildConfig.runtime, entryPoint: fn.buildConfig.entryPoint });
 const result = { sourceSha: process.env.GITHUB_SHA, project, functions: [] };
 const destination = path.join(process.env.RUNNER_TEMP, 'property-editor-release-result.json');
 const record = () => fs.writeFileSync(destination, JSON.stringify(result, null, 2));
@@ -44,6 +49,21 @@ async function checkHttp(name) {
     assert.equal(before[name].buildConfig.runtime, 'nodejs22');
     assert.equal(before[name].buildConfig.entryPoint, name);
     assert.ok(before[name].serviceConfig.serviceAccountEmail);
+  }
+  // The interrupted run's event consumer is already live. Compare its previous
+  // and current Cloud Run specs directly; only the versioned source image differs.
+  const revisionSpec = name => {
+    const value = JSON.parse(run(['run', 'revisions', 'describe', name, '--project=' + project, '--region=us-central1', '--format=json'])).spec;
+    return { ...value, containers: value.containers.map(container => ({ ...container, image: '(source revision)',
+      env: [...(container.env || [])].sort((a, b) => a.name.localeCompare(b.name)) })) };
+  };
+  assert.deepEqual(revisionSpec(before.processCustomerAgentInbound.serviceConfig.revision), revisionSpec('processcustomeragentinbound-00052-jop'), 'Inbound runtime configuration differs from original revision');
+  for (const name of names.filter(name => name.startsWith('processCustomerAgent'))) {
+    const trigger = before[name].eventTrigger;
+    assert.equal(trigger.retryPolicy, 'RETRY_POLICY_RETRY');
+    assert.equal(trigger.eventType, name.endsWith('Inbound') ? 'google.cloud.firestore.document.v1.created' : 'google.cloud.firestore.document.v1.updated');
+    assert.equal(trigger.eventFilters.find(filter => filter.attribute === 'document').value,
+      name.endsWith('Inbound') ? 'whatsappMessages/{messageId}' : 'communicationConversations/{conversationId}');
   }
   const stage = path.join(process.env.RUNNER_TEMP, 'property-editor-function-source');
   fs.mkdirSync(stage);
