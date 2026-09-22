@@ -22,6 +22,7 @@ Compared the complete working diff against d1a495611f178210474f6fd40b84e514f614b
 | Medium | Public preview might use production frontend defaults | Exact demo project guard, same-origin Firebase gateway, built-bundle check, CSP, disallowed production project paths and no external workers. |
 | Medium | Pushing a branch could trigger hosting automation | Branch-specific git.deploymentEnabled=false in both Vercel roots plus existing merge-only ignore marker. Production GitHub jobs restricted to main; no workflow_dispatch. |
 | Low | Extremely large dwelling/contact batches exceed transaction limits | Explicit bounded batch rejection before writes; users can submit additional batches. |
+| Low | Existing project-budget browser harness did not answer the newly required location read | Extended its synthetic authority adapter with the exact customer/property response; real location UI and all budget/capacity assertions remain active, with an added canonical-read assertion. |
 
 ## Verification
 - ERP Next typecheck and optimized static build; mandatory prebuild checks passed.

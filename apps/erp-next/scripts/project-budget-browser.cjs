@@ -34,6 +34,12 @@ const stubs = {
   'property-communication-editor': `export function PropertyCommunicationPanel(){return null;} export function PropertyContactDraftEditor(){return null;}`,
   'after-hours-booking': `export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
   'office-booking-authority': `
+    export class OfficeBookingRequestError extends Error {}
+    export async function callOfficeBookingAuthority(action,input){
+      if(action!=='list_property_locations'||input.customerId!=='CUSTOMER-BROWSER-TEST'||input.propertyId!=='PROPERTY-BROWSER-TEST')throw Error('Unexpected property location operation');
+      window.__locationReads.push(input);
+      return {success:true,property:{id:input.propertyId,clientId:input.customerId,name:'Synthetic site',address:'Synthetic site',active:true,hasIndependentDwellings:false,locationVersion:0},dwellings:[],areas:[],assignments:[]};
+    }
     export function officeBookingOutcomeUnknown(error){return error.message==='Synthetic response lost';}
     export function createOfficeLifecycleRequestId(){return 'synthetic-request-'+(++window.__requests);}
     export async function listOfficeBookingPresets(){return {presets:[{id:'other',label:'Other',active:true,serviceId:'SERVICE-TEST',durationMode:'manual',durationMinutesPerUnit:60}]};}
@@ -74,8 +80,9 @@ async function main() {
     bundle:true, platform:'browser', format:'iife', jsx:'automatic', define:{'process.env':JSON.stringify({NODE_ENV:'production',NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED:'false',NEXT_PUBLIC_PROJECTS_BOOKING_ENABLED:'false',NEXT_PUBLIC_FIREBASE_PROJECT_ID:'demo-demac-projects'})},
     plugins:[{name:'synthetic-authority-boundary',setup(builder){
       builder.onResolve({filter:/.*/}, args=>{
-        if(!args.importer.endsWith('live-appointment-create-drawer.tsx'))return;
         const key=path.basename(args.path);
+        const locationAuthority=key==='office-booking-authority'&&(args.importer.endsWith('property-locations.ts')||args.importer.endsWith('property-locations.tsx'));
+        if(!args.importer.endsWith('live-appointment-create-drawer.tsx')&&!locationAuthority)return;
         if(stubs[key])return {path:key,namespace:'budget-test-stub'};
       });
       builder.onLoad({filter:/.*/,namespace:'budget-test-stub'},args=>({contents:stubs[args.path],loader:'js',resolveDir:APP}));
@@ -105,7 +112,7 @@ async function main() {
           });
           await context.addInitScript(({project,scenario})=>{
             localStorage.setItem('demac.erp-next.projects.preview.v1',JSON.stringify({version:1,selectedProjectId:project.id,projects:[project]}));
-            window.__checks=[];window.__commits=[];window.__holds=[];window.__requests=0;window.__records={};
+            window.__checks=[];window.__commits=[];window.__holds=[];window.__requests=0;window.__records={};window.__locationReads=[];
             window.__loseResponse=scenario==='lost-response'||scenario==='lost-hold-response';
             window.__support=scenario==='support';
             window.__readOnly=scenario==='read-only';window.__unavailable=scenario==='availability-conflict';window.__failCommit=scenario==='commit-conflict';
@@ -195,6 +202,9 @@ async function main() {
               assert.equal(local.scheduledFutureHours,63);assert.equal(local.assignments.length,0);
             }
             assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
+            const locationReads=await page.evaluate(()=>window.__locationReads);
+            assert.ok(locationReads.length>0,'Real location panel must load its canonical property before availability');
+            for(const read of locationReads)assert.deepEqual(read,{customerId:'CUSTOMER-BROWSER-TEST',propertyId:'PROPERTY-BROWSER-TEST'});
             console.log(`PASS ${name}: ${scenario}; real drawer, synthetic backend, zero external requests.`);
           } catch(error) {
             console.error('BUDGET_BROWSER_FAILURE',name,scenario,JSON.stringify({errors,text:(await page.locator('body').innerText()).slice(0,9000)}));
