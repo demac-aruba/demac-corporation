@@ -1785,14 +1785,14 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                                 {supportWindows.length > 1 ? `${support.vanName || support.vanId} · ` : ''}Van capacity {formatTime(window.start)}{window.capacityEnd ? `–${formatTime(window.capacityEnd)}` : ''}
                                 <small>
                                   {support.quantity} support unit{support.quantity === 1 ? '' : 's'}
-                                  {window.workEnd && window.capacityEnd !== window.workEnd ? ` · Service-work estimate ends ${formatTime(window.workEnd)}` : ''}
+                                  {!projectMode && window.workEnd && window.capacityEnd !== window.workEnd ? ` · Service-work estimate ends ${formatTime(window.workEnd)}` : ''}
                                 </small>
                               </span>;
                             }) : <>
                               <span>Van capacity {formatTime(primaryStart)}{primaryCapacityEnd ? `–${formatTime(primaryCapacityEnd)}` : ''}</span>
                               <small>
                                 No support van required
-                                {primaryWorkEnd && primaryCapacityEnd !== primaryWorkEnd ? ` · Service-work estimate ends ${formatTime(primaryWorkEnd)}` : ''}
+                                {!projectMode && primaryWorkEnd && primaryCapacityEnd !== primaryWorkEnd ? ` · Service-work estimate ends ${formatTime(primaryWorkEnd)}` : ''}
                               </small>
                             </>}
                             {supportWindows.length ? <small>{requestTarget.vanName} remains primary</small> : null}
@@ -1814,7 +1814,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         <strong>{assignment.vanName || assignment.vanId}</strong>
                         <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {projectMode && selectedProject ? projectSlotLabel((assignment.durationMinutes || assignment.slots * 60) / 60, selectedProject.slotDurationMinutes) : durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
                         {support ? <small>{assignment.quantity} support unit{assignment.quantity === 1 ? '' : 's'}</small> : null}
-                        {workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
+                        {!projectMode && workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
                       </article>;
                     })}
                   </div>

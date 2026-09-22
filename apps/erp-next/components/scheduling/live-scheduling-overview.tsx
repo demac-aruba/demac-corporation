@@ -20,6 +20,7 @@ import {
 } from '../../lib/live-scheduling-fast';
 import { liveJobCapacityEnd } from '../../lib/live-scheduling';
 import { applySchedulingAttribution, retainSchedulingAttribution, schedulingAttributionAuthorizationLost } from '../../lib/scheduling-attribution';
+import { assignmentReservationLabel, hasServiceWorkEstimate, schedulingWorkSummary } from '../../lib/scheduling-card-presentation';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -66,12 +67,6 @@ function formatTime(value: string) {
   const [hourText, minute] = value.split(':');
   const hour = Number(hourText);
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
-}
-
-function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined, fallbackId = '') {
-  if (appointment?.workLabel) return appointment.workLabel;
-  const fallback = fallbackId.replaceAll('_', ' ').trim();
-  return fallback ? fallback.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Scheduled work';
 }
 
 function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
@@ -1056,10 +1051,10 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       >
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
-          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
+          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity)}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {!continuation && span > 1 ? <small>{span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
-          {!continuation && capacityOutlastsWork ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
+          {!continuation ? <small>{formatTime(job.start)}–{formatTime(capacityEnd)} · {assignmentReservationLabel(job)}</small> : null}
+          {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
@@ -1097,8 +1092,9 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       }} style={{ cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
-          <span>{appointmentWorkLabel(jobLinks.get(job.id)?.appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
-          {capacityEnd !== job.end ? <small>Service-work estimate ends {formatTime(job.end)}</small> : null}
+          <span>{schedulingWorkSummary(jobLinks.get(job.id)?.appointment, job.quantity)} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
+          <small>{assignmentReservationLabel(job)}</small>
+          {capacityEnd !== job.end && hasServiceWorkEstimate(jobLinks.get(job.id)?.appointment) ? <small>Service-work estimate ends {formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           <small>{job.site} · {job.sector}</small>
           {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>
