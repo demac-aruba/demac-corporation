@@ -1,5 +1,5 @@
 {
-  "git": { "deploymentEnabled": { "fix/scheduling-history-attribution-cards": false } },
+  "git": { "deploymentEnabled": { "fix/scheduling-history-attribution-cards": false, "fix/scheduling-linked-project-labels": false } },
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install --no-audit --no-fund"

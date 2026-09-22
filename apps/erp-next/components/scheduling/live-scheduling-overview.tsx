@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { BROWSER_PROJECTS_PREVIEW_KEY } from '../../lib/browser-projects';
+import { loadBrowserValue } from '../../lib/browser-store';
+import { schedulingProjectLabel, type SchedulingProjectLabel } from '../../lib/scheduling-project-labels';
 import {
   liveCompanyClosureReason,
   liveOperationalStartTimes,
@@ -52,7 +55,7 @@ import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
 type DisplayVan = { id: string; name: string; active: boolean };
-type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
+type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord; project?: SchedulingProjectLabel };
 type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
@@ -184,6 +187,7 @@ function LiveSchedulingSession() {
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
+  const [projectState, setProjectState] = useState<unknown>(null);
   const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(null);
   const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
@@ -213,6 +217,22 @@ function LiveSchedulingSession() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const canView = principal.active && principal.capabilities.has('scheduling.view');
+  const canViewProjects = principal.active && principal.capabilities.has('projects.view');
+  const refreshProjectLabels = useCallback(() => {
+    setProjectState(canViewProjects ? loadBrowserValue<unknown>(BROWSER_PROJECTS_PREVIEW_KEY, null) : null);
+  }, [canViewProjects]);
+  useEffect(() => {
+    refreshProjectLabels();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === BROWSER_PROJECTS_PREVIEW_KEY) refreshProjectLabels();
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', refreshProjectLabels);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', refreshProjectLabels);
+    };
+  }, [refreshProjectLabels]);
   const authScope = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;
   const attributionCache = useMemo(() => createLiveSchedulingAttributionCache(), [authScope]);
   const viewKey = `${authScope}:${weekStartDate}:${weekEndDate}`;
@@ -234,6 +254,7 @@ function LiveSchedulingSession() {
 
   const refresh = useCallback((forceCapacity = false): Promise<void> => {
     if (!canView || !mountedRef.current) return Promise.resolve();
+    refreshProjectLabels();
     const inFlight = refreshInFlight.current;
     if (!forceCapacity && inFlight?.key === viewKey && inFlight.sequence === refreshSequenceRef.current) return inFlight.promise;
     const sequence = ++refreshSequenceRef.current;
@@ -279,7 +300,7 @@ function LiveSchedulingSession() {
     refreshInFlight.current = { key: viewKey, sequence, promise };
     void promise.finally(() => { if (refreshInFlight.current?.promise === promise) refreshInFlight.current = null; });
     return promise;
-  }, [attributionCache, canView, refreshPrincipal, viewKey, weekEndDate, weekStartDate]);
+  }, [attributionCache, canView, refreshPrincipal, refreshProjectLabels, viewKey, weekEndDate, weekStartDate]);
 
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
@@ -373,13 +394,16 @@ function LiveSchedulingSession() {
   }, [vans.length]);
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
+  const projectLabels = useMemo(() => new Map(appointments.map((appointment) => [
+    appointment.id, canViewProjects ? schedulingProjectLabel(appointment, projectState) : undefined,
+  ])), [appointments, canViewProjects, projectState]);
   const jobLinks = useMemo(() => {
     const result = new Map<string, JobLink>();
     for (const appointment of appointments) {
-      for (const assignment of appointment.assignments) result.set(assignment.id, { appointmentId: appointment.id, appointment });
+      for (const assignment of appointment.assignments) result.set(assignment.id, { appointmentId: appointment.id, appointment, project: projectLabels.get(appointment.id) });
     }
     return result;
-  }, [appointments]);
+  }, [appointments, projectLabels]);
   const weekSummaries = useMemo(
     () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans, capacityState)])),
     [capacityState, jobs, vans, week],
@@ -868,7 +892,7 @@ function LiveSchedulingSession() {
         </nav> : null}
       </div>
 
-      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
+      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
@@ -984,6 +1008,7 @@ function VanScheduleSlots({
       key={`${job.id}-${slot.start}`}
       job={job}
       appointment={jobLinks.get(job.id)?.appointment}
+      project={jobLinks.get(job.id)?.project}
       span={span}
       crossesLunch={jobCrossesLunch(job)}
       continuation={job.start !== slot.start}
@@ -998,9 +1023,10 @@ function VanScheduleSlots({
   return <div className={styles.slotList} data-schedule-slots>{rows}</div>;
 }
 
-function AppointmentBlock({ job, appointment, span, crossesLunch, continuation = false, armed, outsideCapacity, onOpen, onArm }: {
+function AppointmentBlock({ job, appointment, project, span, crossesLunch, continuation = false, armed, outsideCapacity, onOpen, onArm }: {
   job: CalendarDispatchJob;
   appointment?: BrowserAppointmentRecord;
+  project?: SchedulingProjectLabel;
   span: number;
   crossesLunch: boolean;
   continuation?: boolean;
@@ -1051,12 +1077,12 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       >
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
-          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity)}</span>}
+          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity, project)}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation ? <small>{formatTime(job.start)}–{formatTime(capacityEnd)} · {assignmentReservationLabel(job)}</small> : null}
-          {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
+          {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment, project) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
-          {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
+          {crossesLunch ? <small>{project ? 'Lunch / break · Van capacity remains reserved' : 'Lunch remains non-sellable · service-capacity ownership is preserved'}</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
           <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
@@ -1092,9 +1118,9 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       }} style={{ cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
-          <span>{schedulingWorkSummary(jobLinks.get(job.id)?.appointment, job.quantity)} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
+          <span>{schedulingWorkSummary(jobLinks.get(job.id)?.appointment, job.quantity, jobLinks.get(job.id)?.project)} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
           <small>{assignmentReservationLabel(job)}</small>
-          {capacityEnd !== job.end && hasServiceWorkEstimate(jobLinks.get(job.id)?.appointment) ? <small>Service-work estimate ends {formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
+          {capacityEnd !== job.end && hasServiceWorkEstimate(jobLinks.get(job.id)?.appointment, jobLinks.get(job.id)?.project) ? <small>Service-work estimate ends {formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           <small>{job.site} · {job.sector}</small>
           {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>
