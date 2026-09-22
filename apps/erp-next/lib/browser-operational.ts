@@ -38,6 +38,9 @@ export type BrowserAppointmentRecord = {
   presetId: WorkPresetId;
   workTypeId?: string;
   workLabel?: string;
+  /** Read projection of canonical Work Order work items; never a separate write authority. */
+  workSummaryLines?: Array<{ label: string; quantity?: number; quantityUnit?: 'unit' | 'service'; durationMode?: string }>;
+  serviceWorkEstimateAvailable?: boolean;
   serviceId?: string;
   totalQuantity: number;
   scheduledDurationMinutes?: number;

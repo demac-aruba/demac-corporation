@@ -14,11 +14,13 @@ import {
   type LiveOperationalCapacityState,
 } from '../../lib/live-operational-capacity';
 import {
-  enrichLiveSchedulingAttribution,
+  createLiveSchedulingAttributionCache,
   invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
 import { liveJobCapacityEnd } from '../../lib/live-scheduling';
+import { applySchedulingAttribution, retainSchedulingAttribution, schedulingAttributionAuthorizationLost } from '../../lib/scheduling-attribution';
+import { assignmentReservationLabel, hasServiceWorkEstimate, schedulingWorkSummary } from '../../lib/scheduling-card-presentation';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -66,12 +68,6 @@ function formatTime(value: string) {
   const [hourText, minute] = value.split(':');
   const hour = Number(hourText);
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
-}
-
-function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined, fallbackId = '') {
-  if (appointment?.workLabel) return appointment.workLabel;
-  const fallback = fallbackId.replaceAll('_', ' ').trim();
-  return fallback ? fallback.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Scheduled work';
 }
 
 function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null, jobs: CalendarDispatchJob[] = []): DisplaySlot[] {
@@ -174,16 +170,20 @@ function jobCrossesLunch(job: CalendarDispatchJob) {
 }
 
 function bookingBadge(name?: string) {
-  if (!name) return null;
-  const initial = name.trim().charAt(0).toUpperCase() || 'D';
-  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 'fit-content', marginTop: 4, padding: '3px 6px', borderRadius: 999, background: 'var(--brand-soft)', color: 'var(--brand)', fontSize: 5.8, fontWeight: 850 }}>
-    <b style={{ width: 14, height: 14, display: 'grid', placeItems: 'center', borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 5.4 }}>{initial}</b>
-    Booked by {name}
-  </span>;
+  return <div className={styles.bookingAttribution} data-booking-attribution>
+    {name ? <span tabIndex={0} title={`Booked by ${name}`}>Booked by {name}</span> : null}
+  </div>;
 }
 
 export function LiveSchedulingOverview() {
   const { principal } = useAuth();
+  const sessionKey = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;
+  if (!principal.active || !principal.capabilities.has('scheduling.view')) return <p>Scheduling access is unavailable.</p>;
+  return <LiveSchedulingSession key={sessionKey} />;
+}
+
+function LiveSchedulingSession() {
+  const { principal, refreshPrincipal } = useAuth();
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
@@ -215,6 +215,14 @@ export function LiveSchedulingOverview() {
     return closureReason ? { ...day, isOpen: false, shiftLabel: closureReason } : day;
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
+  const canView = principal.active && principal.capabilities.has('scheduling.view');
+  const authScope = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;
+  const attributionCache = useMemo(() => createLiveSchedulingAttributionCache(), [authScope]);
+  const viewKey = `${authScope}:${weekStartDate}:${weekEndDate}`;
+  const viewRef = useRef(viewKey);
+  viewRef.current = viewKey;
+  const mountedRef = useRef(false);
+  const refreshInFlight = useRef<{ key: string; sequence: number; promise: Promise<void> } | null>(null);
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
   const interactionActive = liveSchedulingInteractionActive({
     selectedAppointmentId,
@@ -227,9 +235,14 @@ export function LiveSchedulingOverview() {
     manualRefreshing,
   });
 
-  const refresh = useCallback(async (forceCapacity = false) => {
+  const refresh = useCallback((forceCapacity = false): Promise<void> => {
+    if (!canView || !mountedRef.current) return Promise.resolve();
+    const inFlight = refreshInFlight.current;
+    if (!forceCapacity && inFlight?.key === viewKey && inFlight.sequence === refreshSequenceRef.current) return inFlight.promise;
     const sequence = ++refreshSequenceRef.current;
+    const current = () => mountedRef.current && viewRef.current === viewKey && sequence === refreshSequenceRef.current;
     if (forceCapacity) invalidateLiveSchedulingReferenceCache();
+    const promise = (async () => {
     try {
       const [next, capacityResult] = await Promise.all([
         loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
@@ -240,27 +253,36 @@ export function LiveSchedulingOverview() {
             error: capacityLoadError instanceof Error ? capacityLoadError.message : 'Live operational capacity could not be loaded.',
           })),
       ]);
-      if (sequence !== refreshSequenceRef.current) return;
-      setAppointments(next);
+      if (!current()) return;
+      setAppointments((items) => current() ? retainSchedulingAttribution(items, next) : items);
       setCapacityState(capacityResult.value);
       setCapacityError(capacityResult.error);
       setError('');
       setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       setLoading(false);
 
-      void enrichLiveSchedulingAttribution(next)
-        .then((enriched) => {
-          if (sequence === refreshSequenceRef.current) setAppointments(enriched);
+      void attributionCache.resolve(next.map((item) => item.id))
+        .then((patches) => {
+          if (current()) setAppointments((items) => current() ? applySchedulingAttribution(items, patches) : items);
         })
-        .catch(() => {
+        .catch((attributionError) => {
+          if (current() && schedulingAttributionAuthorizationLost(attributionError)) {
+            attributionCache.clear();
+            setAppointments((items) => current() ? items.map((item) => ({ ...item, bookedById: undefined, bookedByName: undefined, bookedBySource: undefined })) : items);
+            void refreshPrincipal().catch(() => undefined);
+          }
           // Booking attribution is supplemental; operational scheduling stays usable without it.
         });
     } catch (loadError) {
-      if (sequence !== refreshSequenceRef.current) return;
+      if (!current()) return;
       setError(loadError instanceof Error ? loadError.message : 'Live scheduling data could not be loaded.');
       setLoading(false);
     }
-  }, [weekEndDate, weekStartDate]);
+    })();
+    refreshInFlight.current = { key: viewKey, sequence, promise };
+    void promise.finally(() => { if (refreshInFlight.current?.promise === promise) refreshInFlight.current = null; });
+    return promise;
+  }, [attributionCache, canView, refreshPrincipal, viewKey, weekEndDate, weekStartDate]);
 
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
@@ -273,7 +295,27 @@ export function LiveSchedulingOverview() {
   }, [interactionActive, refresh]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    invalidateLiveSchedulingReferenceCache();
+    setAppointments([]);
+    setCapacityState(null);
+    setSelectedAppointmentId('');
+    setBookingTarget(null);
+    setSupportTarget(null);
+    setAfterHoursTarget(null);
+    setPendingDragMove(null);
+    setMoveArmedJobId('');
+    return () => {
+      mountedRef.current = false;
+      refreshSequenceRef.current += 1;
+      attributionCache.clear();
+      invalidateLiveSchedulingReferenceCache();
+    };
+  }, [attributionCache]);
+
+  useEffect(() => {
     void refresh();
+    return () => { refreshSequenceRef.current += 1; };
   }, [refresh]);
 
   useEffect(() => {
@@ -1043,11 +1085,11 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       >
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
-          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
+          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity)}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {!continuation && span > 1 ? <small>{appointment?.scheduledSlotCount || span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
+          {!continuation ? <small>{formatTime(job.start)}–{formatTime(capacityEnd)} · {assignmentReservationLabel(job)}</small> : null}
           {job.possibleOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
-          {!continuation && capacityOutlastsWork ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
+          {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
@@ -1085,8 +1127,9 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       }} style={{ cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
-          <span>{appointmentWorkLabel(jobLinks.get(job.id)?.appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
-          {capacityEnd !== job.end ? <small>Service-work estimate ends {formatTime(job.end)}</small> : null}
+          <span>{schedulingWorkSummary(jobLinks.get(job.id)?.appointment, job.quantity)} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
+          <small>{assignmentReservationLabel(job)}</small>
+          {capacityEnd !== job.end && hasServiceWorkEstimate(jobLinks.get(job.id)?.appointment) ? <small>Service-work estimate ends {formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           <small>{job.site} · {job.sector}</small>
           {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>

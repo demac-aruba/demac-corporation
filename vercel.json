@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "git": { "deploymentEnabled": { "feature/property-dwellings-preview": false } },
+  "git": {
+    "deploymentEnabled": {
+      "fix/scheduling-history-attribution-cards": false,
+      "feature/property-dwellings-preview": false
+    }
+  },
   "framework": null,
   "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "installCommand": "npm install --prefix apps/erp-next --no-audit --no-fund",
@@ -10,8 +15,14 @@
     {
       "source": "/sw.js",
       "headers": [
-        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
-        { "key": "Service-Worker-Allowed", "value": "/" }
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        }
       ]
     }
   ]

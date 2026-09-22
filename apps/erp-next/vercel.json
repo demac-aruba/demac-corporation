@@ -1,6 +1,11 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "fix/scheduling-history-attribution-cards": false,
+      "feature/property-dwellings-preview": false
+    }
+  },
   "framework": "nextjs",
-  "git": { "deploymentEnabled": { "feature/property-dwellings-preview": false } },
   "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "buildCommand": "npm run build",
   "installCommand": "npm install --no-audit --no-fund"

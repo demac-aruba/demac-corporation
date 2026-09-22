@@ -31,4 +31,6 @@ The editor uses the same Property identity and child collections established by 
 
 ## Decision and limits
 
+Integrated main through `4488d8cd` after Scheduling attribution/card corrections landed. Reviewed auto-merges in the booking drawer, property reference types and project-budget fixture; preserved the main branch's slot presentation and attribution cache. The only textual conflict was Vercel branch exclusions. Both configuration files retain both branches' deployment exclusions and the existing merge-only guard; the duplicate `git` key produced by an automatic merge was eliminated before commit. Recheck the integrated build, Scheduling and budget scenarios alongside the public editor preview.
+
 Pass for isolated preview review. Keep PR draft and production activation blocked on the separately required owner approval. No real-data migration, production secret/rule/config change, merge, external message or invoice was performed. Physical devices were not available; mobile evidence uses browser/device emulation. The temporary tunnel requires the host to remain awake. Existing saved units cannot be removed by lowering counts; archival/deletion needs its own deliberate history-preserving workflow.

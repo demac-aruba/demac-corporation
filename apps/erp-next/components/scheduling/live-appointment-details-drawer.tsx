@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { assignmentReservedSlots, hasServiceWorkEstimate, schedulingWorkSummary } from '../../lib/scheduling-card-presentation';
 import {
   cancelOfficeAppointment,
   confirmOfficeTemporaryHold,
@@ -121,7 +122,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const supportCapacityEnd = support?.capacityEnd || support?.end;
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
   const temporaryHold = appointment.status === 'temporary_hold';
-  const workLabel = appointment.workLabel || appointment.workTypeId?.replaceAll('_', ' ') || appointment.customerFacingDescription || 'Scheduled work';
+  const workLabel = schedulingWorkSummary(appointment);
+  const serviceEstimate = hasServiceWorkEstimate(appointment);
 
   const refreshPartialOutcome = async () => {
     try {
@@ -205,15 +207,16 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         <section className={styles.formSection}>
           <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · Van capacity ${formatTime(primary?.start)}–${formatTime(primaryCapacityEnd)}`}</span></header>
           <div className={styles.formGrid}>
-            <Field wide label="WORK TYPE" value={`${workLabel} · ${appointment.totalQuantity} unit${appointment.totalQuantity === 1 ? '' : 's'}`} />
-            <Field label="TIME / UNIT" value={durationLabel(appointment.durationMinutesPerUnit)} />
-            <Field label="TOTAL WORK" value={durationLabel(appointment.scheduledDurationMinutes)} />
-            <Field label="CAPACITY SPOTS" value={appointment.scheduledSlotCount ? `${appointment.scheduledSlotCount} spot${appointment.scheduledSlotCount === 1 ? '' : 's'}` : 'Not recorded'} />
-            <Field label="PRIMARY WORK ESTIMATE" value={primary ? `${formatTime(primary.start)}–${formatTime(primary.end)}` : 'Not recorded'} />
+            <Field wide label="WORK TYPE · ENTIRE APPOINTMENT" value={workLabel} />
+            {serviceEstimate && (appointment.workSummaryLines?.length ?? 0) === 1 ? <Field label="TIME / UNIT" value={durationLabel(appointment.durationMinutesPerUnit)} /> : null}
+            {serviceEstimate ? <Field label="TECHNICAL WORK ESTIMATE" value={durationLabel(appointment.scheduledDurationMinutes)} /> : null}
+            <Field label="PRIMARY RESERVED SLOTS" value={primary ? assignmentReservedSlots(primary) ?? 'Not verified' : 'Not recorded'} />
+            {serviceEstimate ? <Field label="PRIMARY WORK ESTIMATE · NOT VAN RELEASE" value={primary ? `${formatTime(primary.start)}–${formatTime(primary.end)}` : 'Not recorded'} /> : null}
             <Field label="CAPACITY WINDOW" value={primary ? `${formatTime(primary.start)}–${formatTime(primaryCapacityEnd)}` : 'Not recorded'} />
             <Field label="PRIMARY VAN" value={primary?.vanId?.replace('VAN-', 'Van ') || '—'} />
             <Field label="SUPPORT VAN" value={support?.vanId.replace('VAN-', 'Van ') || 'None'} />
-            {support ? <Field label="SUPPORT WORK ESTIMATE" value={`${formatTime(support.start)}–${formatTime(support.end)}`} /> : null}
+            {support && serviceEstimate ? <Field label="SUPPORT WORK ESTIMATE · NOT VAN RELEASE" value={`${formatTime(support.start)}–${formatTime(support.end)}`} /> : null}
+            {support ? <Field label="SUPPORT RESERVED SLOTS" value={assignmentReservedSlots(support) ?? 'Not verified'} /> : null}
             {support ? <Field label="SUPPORT CAPACITY WINDOW" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`} /> : null}
             <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
           </div>
