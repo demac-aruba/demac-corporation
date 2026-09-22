@@ -325,8 +325,8 @@ export function SchedulePhaseDialog({
       <label><span>Van capacity slots *</span><select name="scheduledSlots" value={slots} onChange={(event) => setSlots(event.target.value)}>{Array.from({ length: project.slotsPerWorkDay }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} slot{value === 1 ? '' : 's'} · {number(value * project.slotDurationMinutes / 60)}h</option>)}</select></label>
       <label><span>Technician IDs or names</span><input name="technicianIds" placeholder="Miguel Reyes, Walter" /></label>
       <label><span>Units planned for this visit</span><input name="unitsPlanned" type="number" min="0" step="1" defaultValue={phase.progressMethod === 'units' ? Math.min(phase.unitsPlanned, 2) : 0} /></label>
-      {budgetPlan ? <ProjectLaborBudgetWarning budget={budgetPlan.laborBudget} /> : null}
-      {budgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={budgetPlan.phaseLaborBudget} scope="Phase" /> : null}
+      {budgetPlan ? <ProjectLaborBudgetWarning budget={budgetPlan.laborBudget} slotDurationMinutes={project.slotDurationMinutes} /> : null}
+      {budgetPlan?.phaseLaborBudget ? <ProjectLaborBudgetWarning budget={budgetPlan.phaseLaborBudget} slotDurationMinutes={project.slotDurationMinutes} scope="Phase" /> : null}
       <div className={styles.infoBox}>This preview plans {number(hours, 1)}h. Remaining phase budget: {number(Math.max(0, remaining - hours), 1)}h. Exceeding an estimate does not block planning or change the original budget. Live bookings still go through Canonical Scheduling.</div>
       <div className={styles.briefingPreview}><span>Technician handoff preview</span><p>{briefing}</p></div>
       {error ? <div className={styles.formError}>{error}</div> : null}

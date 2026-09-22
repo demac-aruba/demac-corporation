@@ -118,7 +118,7 @@ async function main() {
             await page.getByLabel(/Planned Project slots/i).fill(scenario==='within-budget'?'3':'6');
             if(scenario!=='within-budget') {
               await page.locator('[data-project-budget-warning]').first().waitFor();
-              assert.match(await page.locator('[data-project-budget-warning]').first().innerText(),['forecast-70','support'].includes(scenario)?/\+4h/:/\+3h/);
+              assert.match(await page.locator('[data-project-budget-warning]').first().innerText(),['forecast-70','support'].includes(scenario)?/\+4 slots/:/\+3 slots/);
             }
             const confirm=page.getByRole('button',{name:'Confirm appointment',exact:true});
             if(scenario==='availability-conflict') {
@@ -128,12 +128,18 @@ async function main() {
               assert.equal(await confirm.isDisabled(),true);
             } else {
               await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Confirm appointment'&&!button.disabled));
+              const bookingText=await page.getByRole('dialog',{name:'Create appointment',exact:true}).innerText();
+              assert.doesNotMatch(bookingText,/\d(?:[.,]\d+)?\s*(?:h\b|hours?\b|horas?\b)/i,'Project booking must display slots, not hour equivalents.');
+              assert.match(bookingText,/3 in the morning and 3 in the afternoon/);
+              assert.match(bookingText,/BUDGET SLOTS REMAINING/);
+              assert.match(bookingText,scenario==='within-budget'?/Scheduled allocation\s+3 slots/i:/Scheduled allocation\s+6 slots/i);
+              if(scenario==='confirmed')await page.screenshot({path:path.join(artifacts,`${name}-slot-booking-desktop.png`),fullPage:true});
               const isHold=scenario==='hold'||scenario==='lost-hold-response';
               if(isHold)await page.getByRole('button',{name:'Temporary hold',exact:true}).click();else await confirm.click();
               if(scenario!=='within-budget') {
                 const decision=page.getByRole('dialog',{name:'La reserva supera el presupuesto estimado',exact:true});
                 await decision.waitFor();
-                assert.match(await decision.innerText(),['forecast-70','support'].includes(scenario)?/Presupuesto: 66 h · Total previsto: 70 h · Exceso: 4 h/:/Presupuesto: 66 h · Total previsto: 69 h · Exceso: 3 h/);
+                assert.match(await decision.innerText(),['forecast-70','support'].includes(scenario)?/Presupuesto: 66 slots · Total previsto: 70 slots · Exceso: 4 slots/:/Presupuesto: 66 slots · Total previsto: 69 slots · Exceso: 3 slots/);
                 assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length),0);
                 if(['cancel','selection-change'].includes(scenario)) {
                   await decision.getByRole('button',{name:'Cancelar',exact:true}).click();
@@ -141,7 +147,7 @@ async function main() {
                   if(scenario==='selection-change') {
                     await page.getByLabel(/Planned Project slots/i).fill('5');
                     await confirm.click();await decision.waitFor();
-                    assert.match(await decision.innerText(),/Total previsto: 68 h · Exceso: 2 h/);
+                    assert.match(await decision.innerText(),/Total previsto: 68 slots · Exceso: 2 slots/);
                   }
                 } else if(scenario==='forecast-change') {
                   await page.evaluate(()=>{
@@ -152,7 +158,7 @@ async function main() {
                   await decision.waitFor({state:'hidden'});
                   assert.equal(await page.evaluate(()=>window.__commits.length),0);
                   await confirm.click();await decision.waitFor();
-                  assert.match(await decision.innerText(),/Total previsto: 70 h · Exceso: 4 h/);
+                  assert.match(await decision.innerText(),/Total previsto: 70 slots · Exceso: 4 slots/);
                 }
                 if(scenario!=='cancel') {
                   await page.setViewportSize({width:390,height:844});
@@ -183,7 +189,7 @@ async function main() {
                 assert.equal(Object.keys(data.records).length,1);
                 if(scenario!=='within-budget') {
                   await page.getByText('Recorded allocation warnings ('+(scenario==='support'?2:1)+')',{exact:true}).click();
-                  await page.getByText(new RegExp('Project forecast at scheduling: '+scheduled+'h / 66h')).waitFor();
+                  await page.getByText(new RegExp('Project forecast at scheduling: '+scheduled+' slots / 66 slots')).waitFor();
                 }
                 await page.setViewportSize({width:390,height:844});
                 assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
