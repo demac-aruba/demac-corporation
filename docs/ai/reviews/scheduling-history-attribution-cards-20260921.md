@@ -1,4 +1,4 @@
-# Scheduling review — incomplete delivery; release blocked
+# Scheduling review — bounded release; original Project scope incomplete
 
 ## Review mode
 
@@ -12,10 +12,13 @@ callers in the create/details/overview components, canonical Work Order projecti
 attribution transport, auth provider, scheduling moves, capacity and current Project bridge.
 Booking Authority, identity, OPS-SCHED/TEAM/SVC and communications remain unchanged.
 
-Draft PR #519 compares against `fix/projects-slot-labels`, verified at deployed `a053bb1f`.
-Comparing against main produces conflicts with pending merge-only overtime changes.
-No merge/rebase importing that work or resolution reverting it has been performed.
-Integration to main requires later reconciliation after the owner resolves release scope.
+PR #519 originally compared against deployed `fix/projects-slot-labels` (`a053bb1f`).
+The owner subsequently authorized resolving conflicts, merging and deploying after the
+incomplete feature scope was explicitly disclosed. The integration preserves main's
+overtime slot extension, consent/move path and warning alongside the new attribution and
+per-assignment card presentation. No Functions or Booking Authority code differs from main.
+The main merge must retain `[merge-only]`; production uses the reviewed `8a852d81` tree
+on the deployed baseline, so pending overtime remains unshipped.
 
 ## Findings
 
@@ -58,6 +61,20 @@ Integration to main requires later reconciliation after the owner resolves relea
 
 ## Acceptance status
 
+### Conflict-resolution verification
+
+Fresh Solo Maintainer Adversarial Review of the integration against `main` (`dbc65e2f`):
+the only source conflict combined `displaySlotsForVan`'s accepted overtime extension with
+the new summary helper, and combined the existing overtime warning with assignment-specific
+slots and evidence-gated technical estimates. Both main behaviors remain intact. No Functions,
+write authority, overtime consent, calendar, or lock implementation differs from main.
+
+Integrated tree: typecheck, full build with normal prebuild gates, live scheduling, dispatch
+and lifecycle PASS. Targeted operational-move/capacity/lifecycle backend tests: 45/45 PASS,
+zero skips. Real 90-second desktop/mobile component runs PASS again; added a real rendered
+accepted-overtime case proving three reserved slots, 17:30 end and the warning remain visible.
+These are synthetic regressions, not a claim that blocked historical Projects now work.
+
 | Requested cases | Status |
 | --- | --- |
 | 1: historical Project cancellation + two-slot correction + durable Project link | BLOCKED: missing canonical Project/phase and historical authority |
@@ -74,10 +91,13 @@ confirmed through Vercel; active backend source is still unverified. No gate was
 
 ## Decision
 
-BLOCK / incomplete owner request. The attribution fix and bounded card corrections are
-reviewable in Draft, but do not qualify as the requested complete three-flow delivery.
-Do not merge, auto-merge, deploy or repair production data. Resolve the authority and isolated
-preview blockers, finish acceptance, and obtain separate owner publication approval.
+The original three-flow request remains INCOMPLETE. The owner has now authorized merge
+and deployment of the disclosed partial implementation. This permits the attribution and
+bounded card corrections, not historical Project writes or invented Project identity.
+Preserve all pending main behavior in Git and deploy only reviewed `8a852d81` on the verified
+production baseline. No data repair, migration, backend release or complete Project
+acceptance is part of this bounded release. Integration checks and staged deployment
+verification remain required; no failing gate is waived.
 
 ## Safe review walks (component simulation only)
 

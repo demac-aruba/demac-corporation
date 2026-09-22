@@ -293,6 +293,13 @@ function createAfterHoursAuthority({
           { reason: "after-hours-open-job-exists", vanId, workOrderId: existingOpen.id },
         );
       }
+      // Bounded manual overtime shares the BAH guard with emergencies, but does not
+      // become an open-ended emergency. Its complete reserved tail must stay protected.
+      const boundedConflict = canonical.workOrders.find((order) => order.operationalMoveOvertime?.accepted === true
+        && !['Cancelada', 'Reprogramada', 'cancelled', 'rescheduled'].includes(cleanText(order.status, 80))
+        && (order.vanId === vanId || (order.technicianIds || []).some((id) => crew.technicianIds.includes(id)))
+        && startMinutes < timeMinutes(order.operationalMoveOvertime.capacityEnd));
+      if (boundedConflict) throw new BookingAuthorityError(BOOKING_ERROR_CODES.SLOT_CONFLICT, 'The Van or crew is reserved by a fixed-duration manual transfer.', { reason: 'bounded-overtime-conflict', workOrderId: boundedConflict.id });
 
       const client = { id: clientSnapshot.id, ...clientSnapshot.data() };
       const property = { id: propertySnapshot.id, ...propertySnapshot.data() };

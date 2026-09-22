@@ -4,8 +4,26 @@
 
 Owner request: correct historical project bookings, attribution flicker and reservation
 card meaning. Deep Review: permissions, historical truth, async concurrency and recovery.
-Scope is ERP Next Scheduling and its direct Booking Authority dependencies. No dwellings,
-production data repair, merge, automatic merge or production deployment is authorized.
+Scope is ERP Next Scheduling and its direct Booking Authority dependencies. The original
+request prohibited merge/deploy. After the incomplete scope and main conflict were explained,
+the owner explicitly authorized resolving conflicts, merging and deploying the available
+corrections. No dwellings, production data repair, new authority or historical Project write
+has been authorized or implemented.
+
+## Authorized integration and bounded release
+
+Integrate with `main` while preserving its accepted manual-move overtime code. The merge
+uses the existing `[merge-only]` mechanism so it cannot publish unrelated pending frontend
+or backend changes. The production candidate is the previously reviewed and green-CI
+`8a852d81d783c78a0838b4dc1efd161948b96600` tree based on deployed `a053bb1f`.
+It contains attribution and bounded card-presentation fixes only, with no overtime release.
+Build that exact tree using the existing ERP web project's production configuration, stage
+without domain promotion, inspect it, and promote only after integration checks and merge.
+Keep `dpl_DS6LepFpsKzBUdQ2Qm4AVxPDXyPk` as the frontend rollback artifact.
+
+This changes release authorization, not the original feature completion status: historical
+Projects and authoritative Project/fase labeling remain blocked. No complete isolated
+three-flow preview or integrated Project acceptance is claimed.
 
 ## Baseline evidence (2026-09-21 Aruba)
 
@@ -72,7 +90,7 @@ Firestore, Storage, deny-external-egress communication adapters and synthetic fi
 No currently proven isolated hosted backend is assumed. Browser component simulations do
 not satisfy the requested three-flow functional preview or cross-session backend tests.
 
-Before future publication: resolve the authority blocker, verify deployed backend source,
+Before completing the original Project workflow: resolve the authority blocker, verify deployed backend source,
 finish all acceptance cases in an isolated environment, review the final exact diff against
 the then-current production tree, obtain owner approval, and deploy through the governed
 release process. Roll back frontend by restoring its prior deployment; any later backend
