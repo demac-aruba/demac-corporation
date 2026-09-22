@@ -1,0 +1,51 @@
+const fs=require('node:fs'); const assert=require('node:assert/strict');
+const {chromium,webkit,devices}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const credentials=JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE,'utf8'));
+const base=process.env.PREVIEW_URL||'http://127.0.0.1:4397';
+if(!/^http:\/\/127\.0\.0\.1:4397$/.test(base)&&!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(base)) throw Error('Synthetic gateway only');
+const output=process.env.PREVIEW_EVIDENCE_DIR; fs.mkdirSync(output,{recursive:true});
+(async()=>{
+ const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();
+ page.on('dialog',d=>d.accept()); const errors=[],outside=[]; page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',r=>{if(!r.url().startsWith(base)&&!r.url().startsWith('data:'))outside.push(new URL(r.url()).origin)});
+ async function login(p,email=credentials.office){await p.goto(base+'/login');await p.getByRole('textbox',{name:'Email',exact:true}).fill(email);await p.getByRole('textbox',{name:'Password',exact:true}).fill(credentials.password);await p.getByRole('button',{name:'Sign in securely'}).click();await p.waitForURL(url=>!url.pathname.includes('/login'),{timeout:30000});}
+ try{
+ await login(page); console.log('PASS password sign-in');
+ await page.goto(base+'/crm');await page.getByRole('button',{name:/DO DEMO Owner A /}).click();await page.getByRole('button',{name:'Properties',exact:true}).click();
+ const card=page.locator('article').filter({has:page.getByText('DEMO Garden House',{exact:true})});await card.getByRole('button',{name:'Edit property',exact:true}).click();
+ let panel=page.getByRole('dialog',{name:'Editar propiedad',exact:true});await panel.getByRole('button',{name:'Editar Apartment 1',exact:true}).click();await panel.getByRole('textbox',{name:'Indicaciones de acceso',exact:true}).fill('DEMO: gate on the left; ask for Access contact.');
+ await page.route('**/officeBookingAuthority',route=>route.request().postData()?.includes('"update_property"')?route.abort():route.continue());
+ await panel.getByRole('button',{name:'Guardar cambios',exact:true}).click();await panel.getByRole('button',{name:'Reintentar guardado',exact:true}).waitFor();
+ assert.match(await panel.getByRole('textbox',{name:'Indicaciones de acceso',exact:true}).inputValue(),/gate on the left/);
+ await page.unroute('**/officeBookingAuthority');await panel.getByRole('button',{name:'Reintentar guardado',exact:true}).click();await panel.waitFor({state:'hidden'});
+ console.log('PASS offline save retains draft, safe retry persists');
+ await page.reload();await page.getByRole('button',{name:/DO DEMO Owner A /}).click();await page.getByRole('button',{name:'Properties',exact:true}).click();await card.getByRole('button',{name:'Edit property',exact:true}).click();
+ await panel.getByRole('button',{name:'Editar Apartment 1',exact:true}).click();assert.match(await panel.getByRole('textbox',{name:'Indicaciones de acceso',exact:true}).inputValue(),/gate on the left/);await page.screenshot({path:output+'/crm-desktop.png',fullPage:true});await panel.getByRole('button',{name:'Cancelar',exact:true}).click();
+ console.log('PASS persisted CRM reload');
+ await page.goto(base+'/scheduling');await page.getByRole('region',{name:'Van 1 schedule',exact:true}).getByRole('button',{name:'BOOK',exact:true}).first().click();
+ await page.getByRole('textbox',{name:/search customer/i}).fill('DEMO Test Lane 100');
+ await page.getByRole('dialog',{name:'Create appointment'}).getByRole('button',{name:/DEMO Owner A.*SELECT/}).waitFor();
+ await page.getByRole('button',{name:/DEMO Owner A.*SELECT/}).click();
+ const dialog=page.getByRole('dialog',{name:'Create appointment'});
+ const confirm=dialog.getByRole('button',{name:/^(Save backdated appointment|Confirm appointment)$/});
+ const destination=dialog.getByRole('button',{name:/DEMO Garden House/});if(await destination.count())await destination.click();
+ await dialog.getByRole('button',{name:/^Standard Service 1 hour/}).click();
+ await dialog.getByRole('button',{name:/^Standard Service 1 hour/}).click();
+ assert.equal(await confirm.isDisabled(),true);
+ await dialog.getByRole('button',{name:'Apartment 1 1 · Apartamento',exact:true}).click();
+ await dialog.getByRole('combobox',{name:'Requested by · this visit',exact:true}).selectOption('contact:DEMO-requester');
+ await dialog.getByRole('combobox',{name:'Access contact · this visit',exact:true}).selectOption('contact:DEMO-access');
+ await dialog.getByRole('textbox',{name:'Technician instructions',exact:true}).fill('DEMO browser acceptance: keep this apartment context.');
+ await confirm.waitFor({state:'visible'});
+ await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>/^(Save backdated appointment|Confirm appointment)$/.test(b.textContent)&&!b.disabled));
+ await page.screenshot({path:output+'/booking-desktop.png',fullPage:true});
+ const createdResponse=page.waitForResponse(r=>r.url().includes('/officeBookingAuthority')&&r.request().postData()?.includes('"create_appointment"'));
+ await confirm.click();
+ const created=await (await createdResponse).json();assert.equal(created.success,true,JSON.stringify(created));
+ await dialog.waitFor({state:'hidden'});
+ fs.writeFileSync(output+'/booking-result.json',JSON.stringify(created,null,2));
+ console.log('PASS address search, explicit dwelling, requester/access, two units with incomplete inventory; returns to agenda');
+ assert.deepEqual(errors,[]);assert.deepEqual(outside,[]);
+ fs.writeFileSync(output+'/errors.json',JSON.stringify({errors,outside},null,2));
+ }catch(e){await page.screenshot({path:output+'/failure.png',fullPage:true});console.log((await page.locator('body').ariaSnapshot()).slice(-18000));throw e;}finally{await browser.close()}
+})().catch(e=>{console.error(e);process.exitCode=1});

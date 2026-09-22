@@ -31,6 +31,7 @@ export type BookingContactAssignment = ContactCommunicationRules & {
   contactId: string;
   scope: ContactScope;
   propertyId?: string;
+  dwellingId?: string;
   role: string;
   active?: boolean;
   createdAt?: string;
@@ -79,13 +80,15 @@ export function effectiveAssignmentsForProperty(
   assignments: BookingContactAssignment[],
   clientId: string,
   propertyId: string,
+  dwellingId = '',
 ) {
   const relevant = assignments.filter((assignment) => assignment.active !== false
     && assignment.clientId === clientId
+    && (!assignment.dwellingId || assignment.dwellingId === dwellingId)
     && (assignment.scope === 'all_properties' || assignment.propertyId === propertyId));
   const byContact = new Map<string, BookingContactAssignment>();
   relevant
-    .sort((a, b) => Number(a.scope === 'property') - Number(b.scope === 'property'))
+    .sort((a, b) => (Number(a.scope === 'property') + Number(Boolean(a.dwellingId))) - (Number(b.scope === 'property') + Number(Boolean(b.dwellingId))))
     .forEach((assignment) => byContact.set(assignment.contactId, assignment));
   return [...byContact.values()];
 }
@@ -95,9 +98,10 @@ export function resolvedContactsForProperty(
   assignments: BookingContactAssignment[],
   clientId: string,
   propertyId: string,
+  dwellingId = '',
 ): ResolvedPropertyContact[] {
   const contactById = new Map(contacts.filter((contact) => contact.active !== false && contact.clientId === clientId).map((contact) => [contact.id, contact]));
-  return effectiveAssignmentsForProperty(assignments, clientId, propertyId)
+  return effectiveAssignmentsForProperty(assignments, clientId, propertyId, dwellingId)
     .map((assignment) => ({ contact: contactById.get(assignment.contactId), assignment }))
     .filter((item): item is ResolvedPropertyContact => Boolean(item.contact));
 }

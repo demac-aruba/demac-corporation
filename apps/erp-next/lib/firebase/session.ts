@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './isolated-preview';
 import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
 
 const SESSION_KEY = 'demac.erp-next.firebase.session.v1';
@@ -40,7 +41,7 @@ function expiration(expiresIn: string) {
 }
 
 async function postJson<T>(url: string, body: Record<string, unknown>): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(firebaseTransportUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

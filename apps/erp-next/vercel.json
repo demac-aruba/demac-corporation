@@ -1,5 +1,10 @@
 {
-  "git": { "deploymentEnabled": { "fix/scheduling-history-attribution-cards": false } },
+  "git": {
+    "deploymentEnabled": {
+      "fix/scheduling-history-attribution-cards": false,
+      "feature/property-dwellings-preview": false
+    }
+  },
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install --no-audit --no-fund"

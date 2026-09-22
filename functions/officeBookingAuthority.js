@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { createPropertyLocationService, preparePropertyEditorWrite, resolvePropertyLocation } = require('./propertyLocations');
 const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -148,6 +149,9 @@ function bookingRequestFromOffice(data = {}) {
   return normalizeBookingRequest({
     customerId: data.customerId,
     propertyId: data.propertyId,
+    dwellingId: data.dwellingId,
+    requesterId: data.requesterId,
+    accessContactId: data.accessContactId,
     workLines,
     constraints: {
       requestedDate: data.requestedDate,
@@ -859,6 +863,10 @@ function createOfficeBookingApi({
         property = existingProperty;
         return;
       }
+      const locationPlan = propertyInput.locations === undefined ? null : await preparePropertyEditorWrite({
+        db, transaction, property: { ...property, locationVersion: 0 }, identity, stamp: now,
+        data: { ...propertyInput.locations, customerId: clientId, propertyId, requestId, kind: 'dwellings' },
+      });
       await writeContactLinks(transaction, db, {
         clientId,
         propertyId,
@@ -867,6 +875,14 @@ function createOfficeBookingApi({
         now,
       });
       transaction.set(clientRef, customer);
+      if (locationPlan) {
+        property = { ...property, ...locationPlan.summary };
+        locationPlan.write();
+        transaction.create(db.collection('bookingIdempotency').doc(masterDataId('property-create', `${identity.uid}:${propertyId}:${requestId}`)), {
+          operation: 'createCustomerProperty', actorId: identity.uid, requestId, customerId: clientId, propertyId, occurredAt: now,
+          propertyAfter: property, ...locationPlan.audit,
+        });
+      }
       transaction.set(propertyRef, property);
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, customer, property };
@@ -929,6 +945,10 @@ function createOfficeBookingApi({
         property = existing;
         return;
       }
+      const locationPlan = propertyInput.locations === undefined ? null : await preparePropertyEditorWrite({
+        db, transaction, property: { ...property, locationVersion: 0 }, identity, stamp: now,
+        data: { ...propertyInput.locations, customerId: clientId, propertyId, requestId, kind: 'dwellings' },
+      });
       await writeContactLinks(transaction, db, {
         clientId,
         propertyId,
@@ -936,6 +956,14 @@ function createOfficeBookingApi({
         identity,
         now,
       });
+      if (locationPlan) {
+        property = { ...property, ...locationPlan.summary };
+        locationPlan.write();
+        transaction.create(db.collection('bookingIdempotency').doc(masterDataId('property-create', `${identity.uid}:${propertyId}:${requestId}`)), {
+          operation: 'createProperty', actorId: identity.uid, requestId, customerId: clientId, propertyId, occurredAt: now,
+          propertyAfter: property, ...locationPlan.audit,
+        });
+      }
       transaction.set(propertyRef, property);
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, property };
@@ -972,12 +1000,14 @@ function createOfficeBookingApi({
 
   async function updateProperty(data = {}, identity = {}) {
     if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for CRM master-data changes.");
-    officeRequestId(data.requestId);
+    const requestId = officeRequestId(data.requestId);
     const customerId = requiredMasterText(data.customerId, "customerId", "Customer id", 180);
     const propertyId = requiredMasterText(data.propertyId, "propertyId", "Property id", 180);
     const clientRef = db.collection("clients").doc(customerId);
     const propertyRef = db.collection("properties").doc(propertyId);
     const now = new Date().toISOString();
+    const ledgerRef = data.locations === undefined ? null : db.collection("bookingIdempotency").doc(masterDataId("property-update", `${identity.uid}:${requestId}`));
+    const fingerprint = masterDataFingerprint(OFFICE_BOOKING_ACTIONS.UPDATE_PROPERTY, data);
     let property;
     await db.runTransaction(async (transaction) => {
       const [customerSnapshot, propertySnapshot] = await Promise.all([
@@ -998,6 +1028,19 @@ function createOfficeBookingApi({
           { customerId, propertyId },
         );
       }
+      if (ledgerRef) {
+        const replay = await transaction.get(ledgerRef);
+        if (replay.exists) {
+          const audit = replay.data();
+          if (audit.fingerprint !== fingerprint || audit.actorId !== identity.uid) throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, 'This request already belongs to another change.', { reason: 'idempotency_conflict' });
+          property = audit.propertyAfter;
+          return;
+        }
+      }
+      const locationPlan = data.locations === undefined ? null : await preparePropertyEditorWrite({
+        db, transaction, property: current, identity, stamp: now,
+        data: { ...data.locations, customerId, propertyId, requestId, kind: 'dwellings' },
+      });
       assertExpectedUpdatedAt(current, data.expectedUpdatedAt, "property", propertyId);
       property = {
         ...current,
@@ -1006,6 +1049,12 @@ function createOfficeBookingApi({
         clientId: customerId,
         ...updatedByFields(identity, now),
       };
+      if (locationPlan) {
+        property = { ...property, ...locationPlan.summary };
+        locationPlan.write();
+        transaction.create(ledgerRef, { operation: 'update_property', actorId: identity.uid, requestId, fingerprint,
+          customerId, propertyId, occurredAt: now, propertyBefore: current, propertyAfter: property, ...locationPlan.audit });
+      }
       transaction.set(propertyRef, property);
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, property };
@@ -1121,6 +1170,11 @@ function createOfficeBookingApi({
 
   async function execute({ action, data = {}, identity }) {
     const actor = officeActor(identity);
+    if (action === 'list_property_locations' || action === 'save_property_locations') {
+      requireOfficeRole(identity?.role);
+      const locations = createPropertyLocationService({ db });
+      return action === 'list_property_locations' ? locations.list(data) : locations.save(data, identity);
+    }
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
     if (action === OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY) return listContactDirectory(data);
@@ -1137,7 +1191,27 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.DEACTIVATE_CONTACT_ASSIGNMENT) return deactivateContactAssignment(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
-      const request = bookingRequestFromOffice(data);
+      let request = bookingRequestFromOffice(data);
+      let lifecycleAppointment;
+      if (cleanText(data.appointmentId || data.sourcePartialAppointmentId, 180)) {
+        const existing = await db.collection('appointments').doc(cleanText(data.appointmentId || data.sourcePartialAppointmentId, 180)).get();
+        if (existing.exists) {
+          const previous = existing.data();
+          lifecycleAppointment = previous;
+          if (previous.customerId !== request.customerId || previous.propertyId !== request.propertyId) {
+            throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The lifecycle request must keep its customer and property.');
+          }
+          request = normalizeBookingRequest({ ...request, dwellingId: previous.dwellingId, requesterId: previous.requesterId, accessContactId: previous.accessContactId });
+        }
+      }
+      if (request.dwellingId || request.requesterId || request.accessContactId) {
+        const [customerSnapshot, propertySnapshot] = await Promise.all([
+          db.collection('clients').doc(request.customerId).get(), db.collection('properties').doc(request.propertyId).get(),
+        ]);
+        await resolvePropertyLocation({ db, customer: customerSnapshot.exists ? { ...customerSnapshot.data(), id: customerSnapshot.id } : null,
+          property: propertySnapshot.exists ? { ...propertySnapshot.data(), id: propertySnapshot.id } : null,
+          request: lifecycleAppointment ? { ...request, requesterId: undefined, accessContactId: undefined } : request, requireExplicit: !lifecycleAppointment });
+      }
       const bookingIntent = bookingIntentFromOffice(data);
       const backdated = bookingIntent.bookingMode === BACKDATED_BOOKING_MODE;
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
@@ -1155,6 +1229,7 @@ function createOfficeBookingApi({
         : await resolveAppointmentRecipients(db, {
           clientId: request.customerId,
           propertyId: request.propertyId,
+          dwellingId: request.dwellingId,
           selections: data.recipientSelections,
         });
       return authority.checkAvailability({

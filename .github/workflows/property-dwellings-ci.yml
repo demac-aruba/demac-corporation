@@ -1,0 +1,43 @@
+name: Property dwellings integrity
+
+on:
+  pull_request:
+    paths:
+      - 'functions/propertyLocations*'
+      - 'functions/bookingAuthority*.js'
+      - 'functions/officeBookingAuthority*.js'
+      - 'functions/customerContact*.js'
+      - 'functions/fieldOperations*.js'
+      - 'functions/test-support/dwellingsIsolation.cjs'
+      - 'firebase.dwellings-preview.json'
+      - '.github/workflows/property-dwellings-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-integrity:
+    runs-on: ubuntu-latest
+    env:
+      GCLOUD_PROJECT: demo-demac-dwellings
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8297
+      FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9297
+      FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:9397
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install function dependencies
+        run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - name: Verify isolated property transactions and access
+        run: >-
+          npx --yes firebase-tools@15.30.0 emulators:exec
+          --only firestore --project demo-demac-dwellings
+          --config firebase.dwellings-preview.json
+          "node --test functions/propertyLocations.emulator.test.cjs"

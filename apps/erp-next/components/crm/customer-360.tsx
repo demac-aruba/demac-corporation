@@ -199,7 +199,7 @@ export function Customer360() {
     await createOfficeProperty({
       requestId: value.requestId ?? createOfficeLifecycleRequestId('crm-property-create'),
       customerId: selected.client.id,
-      property: { name: value.name, type: value.type, address: value.address, zone: value.zone, neighborhood: value.neighborhood, accessInstructions: value.accessInstructions, notes: value.notes },
+      property: { locations: value.locations, name: value.name, type: value.type, address: value.address, zone: value.zone, neighborhood: value.neighborhood, accessInstructions: value.accessInstructions, notes: value.notes },
     });
     invalidateLiveSchedulingReferenceCache();
     await refresh(selected.client.id).catch(() => undefined);
@@ -213,6 +213,7 @@ export function Customer360() {
       customerId: selected.client.id,
       propertyId: value.id,
       expectedUpdatedAt: value.expectedUpdatedAt ?? '',
+      locations: value.locations,
       changes: { name: value.name, type: value.type, address: value.address, zone: value.zone, neighborhood: value.neighborhood, accessInstructions: value.accessInstructions, notes: value.notes },
     });
     invalidateLiveSchedulingReferenceCache();

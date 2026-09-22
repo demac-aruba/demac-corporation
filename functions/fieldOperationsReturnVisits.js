@@ -36,6 +36,8 @@ function buildReturnVisit({ previousVisit, scheduledScopeSnapshot, identity, ass
     appointmentId: previousVisit.appointmentId,
     clientId: previousVisit.customerId,
     propertyId: previousVisit.propertyId,
+    ...(previousVisit.dwellingId ? { dwellingId: previousVisit.dwellingId } : {}),
+    ...(previousVisit.locationSnapshot ? { locationSnapshot: previousVisit.locationSnapshot } : {}),
     scheduledScopeSnapshot: scheduledScopeSnapshot || previousVisit.scheduledScopeSnapshot,
     status: storageStatusFromCanonical('scheduled'),
     leadTechnicianStaffId: text(assignment?.leadTechnicianStaffId || previousVisit.leadTechnicianStaffId, 180) || undefined,

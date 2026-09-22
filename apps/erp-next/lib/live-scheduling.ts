@@ -41,6 +41,8 @@ type LiveWorkItem = {
 };
 
 type LiveWorkOrder = {
+  dwellingId?: string;
+  locationSnapshot?: { locationLabel?: string; accessInstructions?: string };
   id: string;
   appointmentId?: string;
   appointmentType?: string;
@@ -494,7 +496,7 @@ export function projectLiveSchedulingAppointments(
     const client = clientById.get(clientId);
     const property = propertyById.get(propertyId);
     const customer = clientLabel(client, clientId);
-    const site = propertyLabel(property, propertyId);
+    const site = text(primary.locationSnapshot?.locationLabel) || propertyLabel(property, propertyId);
     const sector = text(primary.operationalZone) || text(primary.zone) || text(property?.operationalZone) || text(property?.zone) || 'Unknown';
     const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans, operationalState));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
@@ -549,7 +551,7 @@ export function projectLiveSchedulingAppointments(
       customerEmail: text(client?.email) || undefined,
       customerPreferredLanguage: text(client?.preferredLanguage) || undefined,
       propertyAddress: text(property?.address) || text(primary.address) || undefined,
-      propertyAccessInstructions: text(property?.accessInstructions) || undefined,
+      propertyAccessInstructions: text(primary.locationSnapshot?.accessInstructions) || text(property?.accessInstructions) || undefined,
       status: cancelled ? 'cancelled' : temporaryHold ? 'temporary_hold' : 'confirmed',
       assignments,
       primaryVanId: primaryAssignment.vanId,

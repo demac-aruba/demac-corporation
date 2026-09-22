@@ -96,6 +96,7 @@ function createAfterHoursAuthority({
   }
 
   async function createEmergency({
+    dwellingId, requesterId, accessContactId,
     requestId,
     customerId,
     propertyId,
@@ -157,6 +158,7 @@ function createAfterHoursAuthority({
     const recipients = await resolveAppointmentRecipients(db, {
       clientId,
       propertyId: siteId,
+      dwellingId,
       selections: recipientSelections,
     });
 
@@ -296,6 +298,9 @@ function createAfterHoursAuthority({
 
       const client = { id: clientSnapshot.id, ...clientSnapshot.data() };
       const property = { id: propertySnapshot.id, ...propertySnapshot.data() };
+      const locationSnapshot = (property.hasIndependentDwellings || dwellingId || requesterId || accessContactId)
+        ? await require('./propertyLocations').resolvePropertyLocation({ db, transaction, customer: client, property,
+          request: { customerId: clientId, dwellingId, requesterId, accessContactId } }) : undefined;
       const workItems = resolvedWorkLines.map(({ line, preset }, index) => compactObject({
         id: cleanText(line.id, 120) || `AH-WORK-${hashId(`${appointmentId}|${preset.id}|${index}`, 12).toUpperCase()}`,
         presetId: preset.id,
@@ -326,6 +331,7 @@ function createAfterHoursAuthority({
         afterHoursKind: AFTER_HOURS_KIND,
       });
       const appointment = compactObject({
+        ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
         id: appointmentId,
         appointmentId,
         customerId: clientId,
@@ -352,6 +358,7 @@ function createAfterHoursAuthority({
         updatedAt: serverTimestamp(),
       });
       const workOrder = compactObject({
+        ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
         id: workOrderId,
         appointmentId,
         clientId,

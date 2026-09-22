@@ -353,6 +353,7 @@ function createFieldOperationsApi({
         visitId,
         requestId,
         locationLabel: cleanText(data.locationLabel, 240),
+        ...(cleanText(data.areaId, 180) ? { areaId: cleanText(data.areaId, 180) } : {}),
         systemType: cleanText(data.systemType, 120),
         brand: cleanText(data.brand, 120),
         btu: data.btu,

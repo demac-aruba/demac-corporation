@@ -131,10 +131,15 @@ function projectWorkIntervention(record, expectedContext = {}) {
   assertExpectedReference(workOrderId, expectedContext.workOrderId, 'Work Order');
   assertExpectedReference(customerId, expectedContext.customerId, 'Customer');
   assertExpectedReference(propertyId, expectedContext.propertyId, 'Property');
+  if (Object.hasOwn(expectedContext, 'dwellingId') && text(record.dwellingId, 180) !== text(expectedContext.dwellingId, 180)) {
+    throw fieldError('work_intervention_identity_conflict', 'Intervention belongs to a different dwelling.', 409);
+  }
   return {
     id,
     visitId,
     visitAssetId,
+    ...(record.dwellingId ? { dwellingId: text(record.dwellingId, 180) } : {}),
+    ...(record.areaId ? { areaId: text(record.areaId, 180) } : {}),
     assetId,
     plannedWorkLineId,
     serviceCatalogItemId,
@@ -402,6 +407,7 @@ function createPlannedWorkInterventionCommand({
         workOrderId: context.workOrderId,
         customerId: context.customerId,
         propertyId: context.propertyId,
+        dwellingId: context.dwellingId || '',
       };
 
       const interventionId = deterministicId('WI', `${normalizedVisitId}:${stable}`);
@@ -516,6 +522,9 @@ function createPlannedWorkInterventionCommand({
         propertyId: context.propertyId,
         visitAssetId: normalizedVisitAssetId,
         assetId: visitAsset.assetId,
+        ...(context.dwellingId ? { dwellingId: context.dwellingId } : {}),
+        ...(visitAsset.areaId ? { areaId: visitAsset.areaId } : {}),
+        ...(context.locationSnapshot ? { locationSnapshot: context.locationSnapshot } : {}),
         plannedWorkLineId: normalizedPlannedWorkLineId,
         serviceCatalogItemId: normalizedServiceId,
         interventionType: canonicalService.label,

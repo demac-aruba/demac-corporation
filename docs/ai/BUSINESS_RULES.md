@@ -170,3 +170,4 @@ Production activation remains separately owner-approved through the server-side 
 - New or edited explicit attendance records preserve an additive snapshot of the resolved
   scheduled start, end, break allowance, and scheduled paid-free minutes. Existing records
   without snapshot fields remain valid; no historical backfill is required.
+- `CRM-LOCATION-001` (isolated preview): independent dwellings require explicit selection; stable Property-contained IDs and server membership checks preserve owner, contacts, equipment and visit scope. No apartment-count rule implies equipment count or automatic historical classification. See `decisions/ADR-20260921-property-dwellings.md`.

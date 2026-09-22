@@ -358,3 +358,28 @@ test("rescheduling still blocks capacity genuinely owned by another active appoi
     /owned by another active appointment/i,
   );
 });
+
+test('dwelling lifecycle preserves frozen destination and rejects a neighboring dwelling offer', async () => {
+  const locationSnapshot = { dwellingId: 'dw-1', locationLabel: 'Synthetic property · Apartment 1', accessContact: { name: 'Original contact' } };
+  const previous = { ...appointmentSeed(), dwellingId: 'dw-1', locationSnapshot };
+  const offer = { ...openOffer(), request: { ...request(), dwellingId: 'dw-1' } };
+  const { db, lifecycle } = fixture({ 'appointments/APT-LIVE-1': previous, 'bookingOffers/OFR-RESCHEDULE-1': offer });
+  await lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: offer.id, offerVersion: 1, optionId: 'OPT-NEW', reason: 'Synthetic reschedule', actor: { id: 'owner-1' } });
+  assert.equal(db.read('appointments/APT-LIVE-1').dwellingId, 'dw-1');
+  assert.deepEqual(db.read('appointments/APT-LIVE-1').locationSnapshot, locationSnapshot);
+  const wrong = fixture({ 'appointments/APT-LIVE-1': previous, 'bookingOffers/OFR-RESCHEDULE-1': { ...offer, request: { ...offer.request, dwellingId: 'dw-neighbor' } } });
+  await assert.rejects(() => wrong.lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: offer.id, offerVersion: 1, optionId: 'OPT-NEW', reason: 'Wrong dwelling', actor: { id: 'owner-1' } }), /no longer matches/i);
+  assert.deepEqual(wrong.db.read('appointments/APT-LIVE-1'), previous);
+});
+
+test('legacy appointment stays unclassified when property gains independent dwellings', async () => {
+  const { db, lifecycle } = fixture({
+    'properties/property-1': { clientId: 'client-1', address: 'Synthetic address', hasIndependentDwellings: true },
+    'bookingOffers/OFR-RESCHEDULE-1': openOffer(),
+  });
+  await lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: 'OFR-RESCHEDULE-1', offerVersion: 1, optionId: 'OPT-NEW', reason: 'Legacy reschedule', actor: { id: 'owner-1' } });
+  assert.equal(db.read('appointments/APT-LIVE-1').dwellingId, undefined);
+  await lifecycle.cancelAppointment({ appointmentId: 'APT-LIVE-1', reason: 'Legacy cancellation', actor: { id: 'owner-1' } });
+  assert.equal(db.read('appointments/APT-LIVE-1').status, 'cancelled');
+  assert.equal(db.read('appointments/APT-LIVE-1').dwellingId, undefined);
+});

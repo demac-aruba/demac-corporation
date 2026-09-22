@@ -24,6 +24,9 @@ export type LiveCrmClient = {
 };
 
 export type LiveCrmProperty = {
+  hasIndependentDwellings?: boolean;
+  dwellingCount?: number;
+  locationVersion?: number;
   id: string;
   clientId: string;
   name?: string;
@@ -63,6 +66,7 @@ export type LiveCrmContact = {
 export type LiveCrmContactScope = 'property' | 'all_properties';
 
 export type LiveCrmContactAssignment = {
+  dwellingId?: string;
   id: string;
   clientId: string;
   contactId: string;
@@ -80,6 +84,9 @@ export type LiveCrmContactAssignment = {
 };
 
 export type LiveCrmEquipment = {
+  dwellingId?: string;
+  areaId?: string;
+  btu?: number;
   id: string;
   clientId?: string;
   propertyId?: string;
