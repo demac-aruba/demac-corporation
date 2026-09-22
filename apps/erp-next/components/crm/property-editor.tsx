@@ -112,12 +112,12 @@ export function PropertyEditor({ mode, requestId, customerId, customerName, cont
               <div className={styles.sectionTitle}><PropertyIcon name="pin" /><h3>Datos de la propiedad</h3></div>
               <div className={styles.owner}><div className={styles.ownerAvatar}>{customerName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CL'}</div><div><small>Cliente / propietario</small><strong>{customerName || 'Nuevo cliente'}</strong></div></div>
               {extraFields}
-              
+
               <div className={styles.fields}>
                 <label className={`${styles.field} ${styles.full}`}><span>Nombre de la propiedad</span><input autoFocus value={form.name} maxLength={180} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Morgenster Apartments" /></label>
                 <label className={`${styles.field} ${styles.full}`}><span>Dirección completa *</span><input required value={form.address} list={addressListId} onChange={(event) => { const address = event.target.value; const match = suggestions.find((item) => item.canonical === address); setForm((current) => ({ ...current, address, ...(match ? { zone: match.operationalZone || current.zone, neighborhood: match.neighborhood || current.neighborhood } : {}) })); }} placeholder="Calle y número de propiedad" /><datalist id={addressListId}>{suggestions.map((suggestion) => <option key={suggestion.canonical} value={suggestion.canonical} />)}</datalist></label>
                 <label className={styles.field}><span>Zona *</span><input required value={form.zone} onChange={(event) => update('zone', event.target.value)} placeholder="Ej. Oranjestad" /></label>
-                
+
                 <label className={styles.field}><span>Tipo de propiedad</span><select value={form.type} onChange={(event) => { update('type', event.target.value); setPrincipalType(event.target.value === 'Complejo de apartamentos' ? 'main_office' : 'main_house'); }}><option>Casa</option><option>Complejo de apartamentos</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option>{!['Casa', 'Complejo de apartamentos', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'].includes(form.type) ? <option>{form.type}</option> : null}</select></label>
               </div>
               <div className={styles.divider} />
