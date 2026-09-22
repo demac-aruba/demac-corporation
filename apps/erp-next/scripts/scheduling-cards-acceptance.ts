@@ -36,6 +36,8 @@ const [split] = projectLiveSchedulingAppointments([singleService, { ...singleSer
 assert.equal(schedulingWorkSummary(split), 'Standard service · 7 units');
 assert.equal(schedulingWorkSummary(split, split.assignments[0].quantity), 'Standard service · 4 units');
 assert.equal(schedulingWorkSummary(split, split.assignments[1].quantity), 'Standard service · 3 units');
+const [itemOnly] = projectLiveSchedulingAppointments([{ ...singleService, quantity: undefined }], [], []);
+assert.equal(schedulingWorkSummary(itemOnly, itemOnly.assignments[0].quantity), 'Standard service · 4 units', 'a canonical work-item quantity must precede the legacy default of one');
 const [legacy] = projectLiveSchedulingAppointments([{ id: 'unknown', appointmentId: 'unknown', date: base.date, time: base.time, vanId: 'VAN-1' }], [], []);
 assert.equal(schedulingWorkSummary(legacy), 'Work details pending verification');
 assert.equal(hasServiceWorkEstimate(legacy), false);

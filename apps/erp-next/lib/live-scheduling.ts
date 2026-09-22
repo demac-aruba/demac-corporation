@@ -222,7 +222,8 @@ function workOrderSupportForId(order: LiveWorkOrder) {
 }
 
 function workOrderQuantity(order: LiveWorkOrder) {
-  return positiveInteger(order.airConditionerCount ?? order.quantity);
+  const singleItem = order.appointmentWorkItems?.length === 1 ? order.appointmentWorkItems[0] : undefined;
+  return positiveInteger(order.airConditionerCount ?? order.quantity ?? singleItem?.quantity);
 }
 
 function contributesAppointmentWorkQuantity(order: LiveWorkOrder) {
