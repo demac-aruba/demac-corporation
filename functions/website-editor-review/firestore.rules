@@ -1,0 +1,655 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function activeStaff() {
+      return signedIn() && userProfile().data.active == true;
+    }
+
+    function adminRole() {
+      return activeStaff() && userProfile().data.role == 'admin';
+    }
+
+    function operationsRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
+    }
+
+    function inventoryRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor', 'inventory'];
+    }
+
+    function payrollRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'accounting'];
+    }
+
+    function marketingRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office'];
+    }
+
+    function technicianRole() {
+      return activeStaff() && userProfile().data.role == 'technician';
+    }
+
+    function adminOrSupervisor() {
+      return activeStaff() && userProfile().data.role in ['admin', 'supervisor'];
+    }
+
+    function communicationConversationFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'owner',
+        'ownerUserId',
+        'status',
+        'queue',
+        'aiDisposition',
+        'lockedBy',
+        'lockedByUserId',
+        'unread',
+        'nextAction',
+        'nextActionDue',
+        'updatedAt'
+      ]);
+    }
+
+    function communicationConversationAssignmentAllowed() {
+      return adminOrSupervisor()
+        || resource.data.get('ownerUserId', '') == request.auth.uid
+        || request.resource.data.get('ownerUserId', '') == request.auth.uid
+        || resource.data.get('ownerUserId', '') == '';
+    }
+
+    // TECHNICIAN_WORKFLOW_V7: assignment checks tolerate uid/staff/van identifiers and visit snapshots.
+    function currentStaffId() {
+      return userProfile().data.get('staffId', '');
+    }
+
+    function currentVanId() {
+      return userProfile().data.get('vanId', '');
+    }
+
+    function assignedToWorkOrderData(data) {
+      return technicianRole()
+        && (
+          request.auth.uid in data.get('technicianIds', [])
+          || currentStaffId() in data.get('technicianIds', [])
+          || (currentVanId() != '' && currentVanId() == data.get('vanId', ''))
+        );
+    }
+
+    function assignedToTechnician() {
+      return assignedToWorkOrderData(resource.data);
+    }
+
+    function workOrderData(workOrderId) {
+      return get(/databases/$(database)/documents/workOrders/$(workOrderId)).data;
+    }
+
+    function assignedToWorkOrderId(workOrderId) {
+      return assignedToWorkOrderData(workOrderData(workOrderId));
+    }
+
+    function visitData(visitId) {
+      return get(/databases/$(database)/documents/workVisits/$(visitId)).data;
+    }
+
+    function assignedToVisitId(visitId) {
+      return assignedToVisitData(visitData(visitId));
+    }
+
+    function assignedToVisitData(data) {
+      return technicianRole()
+        && (
+          assignedToWorkOrderId(data.workOrderId)
+          || request.auth.uid in data.get('participatingStaffIds', [])
+          || currentStaffId() in data.get('participatingStaffIds', [])
+          || (currentStaffId() != '' && currentStaffId() == data.get('leadTechnicianStaffId', ''))
+        );
+    }
+
+    function assignmentAwareWorkOrderRead(data) {
+      return activeStaff() && (!technicianRole() || assignedToWorkOrderData(data));
+    }
+
+    function assignmentAwareWorkOrderIdRead(workOrderId) {
+      return activeStaff() && (!technicianRole() || assignedToWorkOrderId(workOrderId));
+    }
+
+    function assignmentAwareVisitRead(data) {
+      return activeStaff() && (!technicianRole() || assignedToVisitData(data));
+    }
+
+    function assignmentAwareVisitIdRead(visitId) {
+      return activeStaff() && (!technicianRole() || assignedToVisitId(visitId));
+    }
+
+    function technicianWorkOrderFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'departedAt',
+        'arrivedAt',
+        'workStartedAt',
+        'pendingAt',
+        'completedAt',
+        'pendingReason',
+        'pendingAction',
+        'requiresSecondVisit',
+        'technicianDraftUpdatedAt',
+        'statusHistory',
+        'diagnosis',
+        'workPerformed',
+        'recommendation',
+        'customerSignature',
+        'measurements',
+        'photos',
+        'updatedAt'
+      ]);
+    }
+
+    function technicianVisitFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'arrivedAt',
+        'startedAt',
+        'completedAt',
+        'receiverName',
+        'requiresSecondVisit',
+        'secondVisitReason',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    function technicianVisitUnitFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'equipmentSystemId',
+        'locationLabel',
+        'status',
+        'addedOnSite',
+        'addedReason',
+        'completedAt',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    function technicianInterventionFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'type',
+        'templateId',
+        'templateVersion',
+        'status',
+        'scopeChangeId',
+        // AI_PROFESSIONAL_REPORTS_V8: technicians may request generation, while only operations roles edit the generated narrative.
+        'professionalReportStatus',
+        'professionalReportRequestedAt',
+        'professionalReportError',
+        'resultCode',
+        'resultNotes',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    function technicianReportSectionFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'assignedToStaffId',
+        'assignedToName',
+        'fields',
+        'missingRequiredFieldKeys',
+        'evidenceIds',
+        'lock',
+        'completedAt',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    function technicianAddOnFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'beforeEvidenceId',
+        'afterEvidenceId',
+        'notes',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    function technicianEquipmentFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'locationLabel',
+        'systemType',
+        'components',
+        'active',
+        'condition',
+        'installedAt',
+        'warrantyUntil',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
+    match /users/{userId} {
+      allow read: if activeStaff() && (request.auth.uid == userId || adminRole());
+      allow write: if false;
+    }
+
+    match /userAuditLogs/{logId} {
+      allow read: if adminRole();
+      allow write: if false;
+    }
+
+    match /clients/{clientId} {
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /clientDeletionLogs/{logId} {
+      allow read, create: if adminOrSupervisor();
+      allow update, delete: if false;
+    }
+
+    match /properties/{propertyId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
+    }
+
+    match /services/{serviceId} {
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /commercialProductStock/{productId} {
+      allow read: if activeStaff();
+      // Legacy clients may maintain only pre-location stock. Once Inventory Authority
+      // promotes a Product to v2, all physical stock mutations are server-side.
+      allow create: if inventoryRole()
+        && request.resource.data.get('version', 1) != 2
+        && !request.resource.data.keys().hasAny(['balances'])
+        && request.resource.data.productId == productId
+        && request.resource.data.onHand is int
+        && request.resource.data.onHand >= 0
+        && request.resource.data.reserved is int
+        && request.resource.data.reserved == 0
+        && request.resource.data.active is bool
+        && request.resource.data.verifiedAt is string
+        && request.resource.data.verifiedById == request.auth.uid
+        && request.resource.data.updatedById == request.auth.uid;
+      allow update: if inventoryRole()
+        && resource.data.get('version', 1) != 2
+        && request.resource.data.get('version', 1) != 2
+        && !resource.data.keys().hasAny(['balances'])
+        && !request.resource.data.keys().hasAny(['balances'])
+        && request.resource.data.productId == productId
+        && resource.data.productId == productId
+        && request.resource.data.onHand is int
+        && request.resource.data.onHand >= 0
+        && request.resource.data.reserved is int
+        && request.resource.data.reserved == resource.data.reserved
+        && request.resource.data.reserved >= 0
+        && request.resource.data.reserved <= request.resource.data.onHand
+        && request.resource.data.active is bool
+        && request.resource.data.verifiedAt is string
+        && request.resource.data.verifiedById == request.auth.uid
+        && request.resource.data.updatedById == request.auth.uid;
+      allow delete: if adminOrSupervisor()
+        && resource.data.get('version', 1) != 2
+        && !resource.data.keys().hasAny(['balances']);
+    }
+    match /staffProfiles/{staffId} {
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /vans/{vanId} {
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /dailyVanAssignments/{assignmentId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
+    }
+
+    match /staffAbsences/{absenceId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
+    }
+
+    match /employeePayrollSettings/{employeeId} {
+      allow read, create, update: if payrollRole();
+      allow delete: if adminRole();
+    }
+
+    match /employeeTimesheets/{entryId} {
+      allow read, create, update: if payrollRole();
+      allow delete: if adminRole();
+    }
+
+    match /vanMaintenanceLogs/{logId} {
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /vanHalfDaySchedules/{scheduleId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
+    }
+
+    match /calendarClosures/{closureId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
+    }
+
+    function websiteOwner() {
+      return activeStaff() && userProfile().data.role in ['admin', 'owner', 'superadmin', 'super_admin'];
+    }
+
+    function websiteEditorEnabled() {
+      let config = /databases/$(database)/documents/businessSettings/website-editor;
+      return exists(config) && get(config).data.get('backendEnabled', false) == true;
+    }
+
+    // APPOINTMENT_SETTINGS_V11: scheduling work type presets are admin-owned.
+    match /businessSettings/{settingId} {
+      function editorialDocument() { return settingId in ['publicVrfPageDraft', 'publicVrfPagePublished', 'website-editor']; }
+      allow read: if editorialDocument() ? websiteOwner() : activeStaff();
+      allow create, update: if editorialDocument()
+        ? (settingId != 'website-editor' && websiteOwner() && !websiteEditorEnabled())
+        : (settingId == 'appointment-work-presets' ? adminRole() : operationsRole());
+      allow delete: if !editorialDocument() && adminOrSupervisor();
+    }
+
+    match /businessSettings/publicVrfPagePublished/editorReleases/{releaseId} {
+      allow read: if websiteOwner();
+      allow write: if false; // Protected service only; immutable published receipts.
+    }
+
+    match /marketingUploadSessions/{sessionId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingAssets/{assetId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingCampaigns/{campaignId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingBrandSettings/{settingId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingCreativeFeedback/{feedbackId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /warehouseInventory/{itemId} {
+      allow read: if activeStaff();
+      // Legacy warehouse editing remains available only until the item is promoted
+      // to location-aware v2. Afterwards Inventory Authority is the single writer.
+      allow create: if inventoryRole()
+        && request.resource.data.get('inventoryVersion', 1) != 2
+        && !request.resource.data.keys().hasAny(['stockByLocation']);
+      allow update: if inventoryRole()
+        && resource.data.get('inventoryVersion', 1) != 2
+        && request.resource.data.get('inventoryVersion', 1) != 2
+        && !resource.data.keys().hasAny(['stockByLocation'])
+        && !request.resource.data.keys().hasAny(['stockByLocation']);
+      allow delete: if inventoryRole()
+        && resource.data.get('inventoryVersion', 1) != 2
+        && !resource.data.keys().hasAny(['stockByLocation']);
+    }
+    match /toolCatalog/{toolId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /vanToolAssets/{assetId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryChecks/{checkId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryCheckEntries/{entryId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryEvidence/{evidenceId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /workOrders/{workOrderId} {
+      allow read: if assignmentAwareWorkOrderRead(resource.data);
+      allow create: if operationsRole();
+      allow update: if operationsRole() || (assignedToTechnician() && technicianWorkOrderFieldsOnly());
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /workVisits/{visitId} {
+      allow read: if assignmentAwareVisitRead(resource.data);
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && request.resource.data.workOrderId == resource.data.workOrderId
+          && request.resource.data.clientId == resource.data.clientId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianVisitFieldsOnly());
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /visitUnits/{unitId} {
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.workOrderId == visitData(request.resource.data.visitId).workOrderId
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && request.resource.data.workOrderId == resource.data.workOrderId
+          && request.resource.data.visitId == resource.data.visitId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianVisitUnitFieldsOnly());
+      allow delete: if operationsRole();
+    }
+
+    match /workInterventions/{interventionId} {
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
+      allow create: if operationsRole()
+        || (assignedToVisitId(request.resource.data.visitId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToVisitId(resource.data.visitId)
+          && request.resource.data.visitId == resource.data.visitId
+          && request.resource.data.visitUnitId == resource.data.visitUnitId
+          && request.resource.data.templateId == resource.data.templateId
+          && request.resource.data.templateVersion == resource.data.templateVersion
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianInterventionFieldsOnly());
+      allow delete: if operationsRole();
+    }
+
+    match /workReportSections/{sectionId} {
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
+      allow create: if operationsRole()
+        || (assignedToVisitId(request.resource.data.visitId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToVisitId(resource.data.visitId)
+          && request.resource.data.visitId == resource.data.visitId
+          && request.resource.data.visitUnitId == resource.data.visitUnitId
+          && request.resource.data.interventionId == resource.data.interventionId
+          && request.resource.data.sectionType == resource.data.sectionType
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianReportSectionFieldsOnly());
+      allow delete: if operationsRole();
+    }
+
+    match /workVisitAddOns/{addOnId} {
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
+      allow create: if operationsRole()
+        || (assignedToVisitId(request.resource.data.visitId)
+          && request.resource.data.workOrderId == visitData(request.resource.data.visitId).workOrderId
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToVisitId(resource.data.visitId)
+          && request.resource.data.workOrderId == resource.data.workOrderId
+          && request.resource.data.visitId == resource.data.visitId
+          && request.resource.data.visitUnitId == resource.data.visitUnitId
+          && request.resource.data.interventionId == resource.data.interventionId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianAddOnFieldsOnly());
+      allow delete: if operationsRole();
+    }
+
+    match /equipmentSystems/{equipmentId} {
+      allow read: if assignmentAwareVisitIdRead(resource.data.sourceVisitId);
+      allow create: if operationsRole()
+        || (assignedToVisitId(request.resource.data.sourceVisitId)
+          && request.resource.data.sourceWorkOrderId == visitData(request.resource.data.sourceVisitId).workOrderId
+          && request.resource.data.clientId == visitData(request.resource.data.sourceVisitId).clientId
+          && request.resource.data.get('propertyId', '') == visitData(request.resource.data.sourceVisitId).get('propertyId', '')
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToVisitId(resource.data.sourceVisitId)
+          && request.resource.data.qrCode == resource.data.qrCode
+          && request.resource.data.clientId == resource.data.clientId
+          && request.resource.data.get('propertyId', '') == resource.data.get('propertyId', '')
+          && request.resource.data.sourceWorkOrderId == resource.data.sourceWorkOrderId
+          && request.resource.data.sourceVisitId == resource.data.sourceVisitId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianEquipmentFieldsOnly());
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /workOrderUnits/{unitId} {
+      allow read: if assignmentAwareWorkOrderIdRead(resource.data.workOrderId);
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && request.resource.data.workOrderId == resource.data.workOrderId);
+      allow delete: if operationsRole()
+        || assignedToWorkOrderId(resource.data.workOrderId);
+    }
+
+    match /workOrderEvidence/{evidenceId} {
+      allow read: if assignmentAwareWorkOrderIdRead(resource.data.workOrderId);
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.uploadedByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && resource.data.uploadedByUserId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'updatedAt']));
+      allow delete: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && resource.data.uploadedByUserId == request.auth.uid);
+    }
+
+    match /communicationConversations/{conversationId} {
+      allow read: if operationsRole();
+      allow create: if false;
+      allow update: if operationsRole()
+        && communicationConversationFieldsOnly()
+        && communicationConversationAssignmentAllowed();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /communicationOperatorPresence/{operatorId} {
+      allow read: if operationsRole();
+      allow create, update: if operationsRole() && request.auth.uid == operatorId;
+      allow delete: if adminOrSupervisor() || (operationsRole() && request.auth.uid == operatorId);
+    }
+
+    match /communicationInternalNotes/{noteId} {
+      allow read: if operationsRole();
+      allow create: if operationsRole()
+        && request.resource.data.createdByUserId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 10000;
+      allow update, delete: if false;
+    }
+
+    match /whatsappOutboundQueue/{messageId} {
+      allow read: if operationsRole();
+      allow create: if operationsRole()
+        && request.resource.data.status == 'queued';
+      allow update, delete: if false;
+    }
+
+    match /whatsappMessages/{messageId} {
+      allow read: if operationsRole();
+      allow write: if false;
+    }
+
+    match /whatsappMessageStatuses/{statusId} {
+      allow read: if operationsRole();
+      allow write: if false;
+    }
+
+    match /whatsappWebhookEvents/{eventId} {
+      allow read: if adminOrSupervisor();
+      allow write: if false;
+    }
+
+    // MULTILINGUAL_PROFESSIONAL_REPORTS_V9: office-approved Aruba Papiamento examples.
+    match /papiamentoCorrections/{correctionId} {
+      allow read: if operationsRole();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

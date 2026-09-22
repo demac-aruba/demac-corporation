@@ -160,6 +160,21 @@ be represented as independent.
 6. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md`.
 7. Update the AI engineering documents when evidence changes them.
 
+## Public website editorial rule
+
+Owner requirement [#512](https://github.com/demac-aruba/demac-corporation/issues/512):
+after design/content approval, every new or redesigned commercial public page must be
+connected to the shared visual text/image editor as part of its delivery. Do not create
+another backend editor per page or defer editorial bindings to later patch work.
+Commercial and Residential copy currently reported incorrect by the owner is not an
+approved business source. Confirm it during their own redesigns; do not invent facts.
+
+Editing activates explicitly from Settings, not from ordinary administrator sign-in.
+Careers, links/actions, forms, behavior, free layout/style and ERP operations are excluded.
+The pilot's scope and release gates are in [the editor task](docs/ai/website-editor/TASK.md)
+and [rollout checklist](docs/ai/website-editor/RELEASE.md). Preview approval never replaces
+production/security-rule deployment approval.
+
 ## Definition of done
 
 A change is done only when scope and acceptance criteria are satisfied; permissions

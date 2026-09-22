@@ -1,0 +1,10 @@
+{
+  "functions": [
+    {
+      "source": ".website-content-build",
+      "codebase": "website-content",
+      "runtime": "nodejs22",
+      "ignore": ["node_modules", ".git", "*.test.*", "*-debug.log"]
+    }
+  ]
+}

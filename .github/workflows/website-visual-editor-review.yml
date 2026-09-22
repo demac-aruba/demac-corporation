@@ -1,0 +1,163 @@
+name: Website visual editor review
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/**'
+      - 'functions/website*'
+      - 'functions/website-editor-review/**'
+      - 'functions/website-content-deployment/**'
+      - 'functions/bootstrap.js'
+      - 'firestore.rules'
+      - 'storage.rules'
+      - 'src/state/CalendarState.tsx'
+      - 'src/services/firebase.ts'
+      - 'scripts/patchAppointmentSettingsV11.cjs'
+      - 'website-editor.emulator.json'
+      - 'firebase.website-content.json'
+      - 'docs/ai/website-editor/**'
+      - '.github/workflows/website-visual-editor-review.yml'
+      - '.github/workflows/website-content-release.yml'
+
+permissions:
+  contents: read
+concurrency:
+  group: website-editor-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  domain-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node --check functions/websiteContentApi.js && node --check functions/websiteContentHttp.js && node --check functions/websiteContentFirebase.js && node --test functions/websiteContentService.test.js
+
+  browser-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Preserve operational sources and deployed rule paths for this editor PR
+        if: github.event.pull_request.number == 513
+        env:
+          WEBSITE_EDITOR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node apps/erp-next/scripts/website-editor-release-scope.cjs
+      - name: Build the actual site without live writes
+        env:
+          VERCEL_ENV: preview
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run typecheck --prefix apps/erp-next
+          node --test apps/erp-next/scripts/canonical-calendar-read-acceptance.cjs apps/erp-next/scripts/website-editor-client-acceptance.cjs
+          npm run build --prefix apps/erp-next
+      - name: Install isolated browser review tools
+        run: |
+          npm install --prefix /tmp/vrf-browser playwright@1.56.1 @playwright/test@1.56.1 --no-audit --no-fund
+          /tmp/vrf-browser/node_modules/.bin/playwright install --with-deps chromium webkit
+      - name: Exercise editor, negative activation, responsive UI, recovery and native navigation
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out >/tmp/editor-server.log 2>&1 &
+          node apps/erp-next/scripts/website-editor-browser-review.cjs
+          node apps/erp-next/scripts/website-editor-navigation-review.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-editor-browser-review
+          path: .website-editor-artifacts/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
+
+  rules-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated emulator test tools with the application TypeScript constraint
+        run: |
+          TS_VERSION=$(node -p "require('./apps/erp-next/package.json').devDependencies.typescript")
+          npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 firebase-admin@13.4.0 "typescript@$TS_VERSION" --no-audit --no-fund
+      - name: Verify candidate regressions, real persistence, unchanged production rules and live HTTP client
+        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only auth,firestore,storage "node functions/websiteContentRules.test.cjs && node functions/websiteContentPersistence.test.cjs && node functions/websiteContentLiveFlow.test.cjs"
+
+  release-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Build the isolated codebase and verify its only export
+        env:
+          FIREBASE_CONFIG: '{"projectId":"demo-demac-website","storageBucket":"demo-demac-website.appspot.com"}'
+        run: |
+          node functions/website-content-deployment/build.cjs
+          npm install --prefix .website-content-build --no-audit --no-fund
+          node -e "const a=require('node:assert/strict'); a.deepEqual(Object.keys(require('./.website-content-build/websiteContentApi')), ['websiteContentApi']); console.log('Website-only export verified; no deployment executed.');"
+
+  live-browser-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build the live client against a demo project, never production data
+        env:
+          VERCEL_ENV: production
+          WEBSITE_EDITOR_MODE: live
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-website
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-website.appspot.com
+          NEXT_PUBLIC_FIREBASE_API_KEY: demo-key
+          NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: preview
+          NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false'
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run typecheck --prefix apps/erp-next
+          npm run build --prefix apps/erp-next
+      - name: Install isolated emulator and browser tools
+        run: |
+          npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 firebase-admin@13.4.0 playwright@1.56.1 @playwright/test@1.56.1 --no-audit --no-fund
+          /tmp/editor-rules/node_modules/.bin/playwright install --with-deps chromium webkit
+      - name: Prove durable editing through the actual browser and authenticated service
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out >/tmp/editor-live-server.log 2>&1 &
+          /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config website-editor.emulator.json --project demo-demac-website --only auth,firestore,storage "node apps/erp-next/scripts/website-editor-live-browser.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-editor-live-browser-review
+          path: .website-editor-live-artifacts/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn

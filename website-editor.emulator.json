@@ -1,0 +1,11 @@
+{
+  "firestore": { "rules": "functions/website-editor-review/firestore.rules" },
+  "storage": { "rules": "functions/website-editor-review/storage.rules" },
+  "emulators": {
+    "firestore": { "host": "127.0.0.1", "port": 8187 },
+    "storage": { "host": "127.0.0.1", "port": 9297 },
+    "auth": { "host": "127.0.0.1", "port": 9097 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

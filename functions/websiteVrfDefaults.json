@@ -1,0 +1,308 @@
+{
+  "id": "publicVrfPagePublished",
+  "version": 1,
+  "hero": {
+    "eyebrow": "VRF SYSTEMS IN ARUBA",
+    "title": "Smarter VRF solutions for complex buildings in",
+    "accent": "Aruba.",
+    "description": "Energy-efficient. Flexible. Built for Aruba. DEMAC designs, installs and supports VRF systems for apartments, hotels, offices, villas and commercial buildings — delivering precise comfort, lower operating costs and long-term reliability.",
+    "imageUrl": "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=90&w=2400",
+    "imagePosition": "74% center",
+    "primaryCta": {
+      "label": "Request a VRF Consultation",
+      "href": "/contact?request=vrf"
+    },
+    "secondaryCta": {
+      "label": "WhatsApp Us",
+      "href": "/contact?channel=whatsapp"
+    },
+    "mobileImagePosition": "74% center"
+  },
+  "solutionsHeading": "The right VRF system for every project.",
+  "solutionsIntro": "From compact spaces to large, complex buildings, DEMAC provides the right VRF architecture for the property, load profile and long-term operating goals.",
+  "solutions": [
+    {
+      "id": "large-vrf",
+      "title": "Large VRF Systems",
+      "description": "High-capacity systems for hotels, large commercial buildings and multi-tower developments.",
+      "detail": "Ideal for: hotels, large offices, commercial complexes",
+      "imageUrl": "https://qtrypzzcjebvfcihiynt.supabase.co/storage/v1/object/public/base44-prod/public/user_690ccf1f4f20635046a259c9/e52f5393d_Tropicalrooftopwithmodernequipment1.png"
+    },
+    {
+      "id": "modular-vrf",
+      "title": "Modular VRF Systems",
+      "description": "Scalable systems that grow with the project and support phased or multi-building developments.",
+      "detail": "Ideal for: mid-size buildings, phased developments",
+      "imageUrl": "https://cdn1.npcdn.net/images/5960ee38ad7354220701bc5d1f0a886e_1772521105.webp?from=jpeg&md5id=d41ca4d10ddfea76d016acbfded20618&new_height=1000&new_width=1000&size=max&type=9&w=-62170008925"
+    },
+    {
+      "id": "mini-vrf",
+      "title": "Mini VRF Systems",
+      "description": "Compact, efficient VRF for villas, smaller buildings and light-commercial applications.",
+      "detail": "Ideal for: villas, small offices, residential buildings",
+      "imageUrl": "https://static.wixstatic.com/media/ba87af_d796787b6c0f440d9036b324b812071b~mv2.jpg/v1/fill/w_632%2Ch_632%2Cal_c%2Cq_85%2Cenc_avif%2Cquality_auto/ba87af_d796787b6c0f440d9036b324b812071b~mv2.jpg"
+    }
+  ],
+  "benefitsHeading": "A smarter way to cool.",
+  "benefits": [
+    {
+      "id": "zoned-comfort",
+      "title": "Zoned Comfort",
+      "description": "Individual temperature control for each room or zone."
+    },
+    {
+      "id": "energy-efficiency",
+      "title": "Energy Efficiency",
+      "description": "Variable-capacity operation follows real demand to reduce energy use."
+    },
+    {
+      "id": "flexible-design",
+      "title": "Flexible Design",
+      "description": "Adapts to complex building layouts, multiple floors and future changes."
+    },
+    {
+      "id": "long-pipe-runs",
+      "title": "Long Pipe Runs",
+      "description": "Greater design freedom for high-rise and larger sites."
+    },
+    {
+      "id": "central-control",
+      "title": "Centralized Control",
+      "description": "Manage zones, schedules and operating visibility from one interface."
+    },
+    {
+      "id": "quiet-operation",
+      "title": "Quiet Operation",
+      "description": "Low indoor noise for hotels, residences, offices and professional spaces."
+    }
+  ],
+  "indoorHeading": "A complete range of indoor units.",
+  "indoorIntro": "Mix and match indoor-unit styles to create the right comfort solution for each space.",
+  "indoorUnits": [
+    {
+      "id": "cassette",
+      "title": "Cassette Units",
+      "description": "Discreet ceiling integration with wide air distribution.",
+      "detail": "Offices · retail · commercial spaces",
+      "imageUrl": "/website/vrf/indoor-cassette-approved.webp",
+      "imageAlt": "Four-way ceiling cassette indoor unit"
+    },
+    {
+      "id": "fan-coil",
+      "title": "Fan Coil Units",
+      "description": "Flexible concealed or ducted installation for refined interiors.",
+      "detail": "Hotels · offices · residences",
+      "imageUrl": "/website/vrf/indoor-fan-coil-approved.webp",
+      "imageAlt": "Concealed ducted fan coil indoor unit"
+    },
+    {
+      "id": "floor-ceiling",
+      "title": "Floor-Ceiling Units",
+      "description": "Versatile mounting for open areas and spaces with limited ceiling options.",
+      "detail": "Retail · restaurants · open spaces",
+      "imageUrl": "/website/vrf/indoor-floor-ceiling-approved.webp",
+      "imageAlt": "Floor-ceiling indoor air conditioning unit"
+    },
+    {
+      "id": "air-handler",
+      "title": "Air Handlers",
+      "description": "Higher-static solutions for custom ductwork and larger conditioned areas.",
+      "detail": "Large buildings · custom applications",
+      "imageUrl": "/website/vrf/indoor-air-handler-approved.webp",
+      "imageAlt": "Ducted air handler cabinet"
+    },
+    {
+      "id": "mini-split",
+      "title": "Mini Split Units",
+      "description": "Compact, stylish indoor units with independent zoning.",
+      "detail": "Bedrooms · offices · smaller rooms",
+      "imageUrl": "/website/vrf/indoor-mini-split-approved.webp",
+      "imageAlt": "Wall-mounted mini split indoor unit"
+    }
+  ],
+  "applicationsHeading": "Trusted in every type of building.",
+  "applications": [
+    {
+      "id": "apartments",
+      "title": "Apartments & Condominiums",
+      "description": "Efficient, individual comfort for every residence.",
+      "imageUrl": "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    },
+    {
+      "id": "hospitality",
+      "title": "Hotels & Hospitality",
+      "description": "Quiet guest comfort with centralized oversight.",
+      "imageUrl": "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    },
+    {
+      "id": "office",
+      "title": "Office Buildings",
+      "description": "Flexible zoning for teams, meeting rooms and changing occupancy.",
+      "imageUrl": "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    },
+    {
+      "id": "retail",
+      "title": "Retail & Mixed Use",
+      "description": "Different schedules and comfort needs within one coordinated system.",
+      "imageUrl": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    },
+    {
+      "id": "villas",
+      "title": "Luxury Homes & Villas",
+      "description": "Discreet comfort and design flexibility for premium residences.",
+      "imageUrl": "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    },
+    {
+      "id": "controlled",
+      "title": "Medical / Controlled Environments",
+      "description": "Stable comfort and operational visibility for professional spaces.",
+      "imageUrl": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&fm=webp&q=88&w=1200"
+    }
+  ],
+  "processHeading": "From concept to comfort.",
+  "process": [
+    {
+      "id": "assessment",
+      "title": "Assessment",
+      "description": "We understand the building, occupancy, goals and operating requirements."
+    },
+    {
+      "id": "load-study",
+      "title": "Load Study & Concept",
+      "description": "Cooling loads, zoning and the system concept are developed for the project."
+    },
+    {
+      "id": "design",
+      "title": "Design & Coordination",
+      "description": "Equipment, piping, controls and trades are coordinated before execution."
+    },
+    {
+      "id": "installation",
+      "title": "Installation",
+      "description": "Professional installation by trained technicians with documented quality checks."
+    },
+    {
+      "id": "commissioning",
+      "title": "Commissioning",
+      "description": "Pressure testing, vacuum, addressing, startup and system validation."
+    },
+    {
+      "id": "support",
+      "title": "Maintenance & Support",
+      "description": "Preventive service, diagnostics and local after-sales support."
+    }
+  ],
+  "servicesHeading": "More than installation. A long-term partner.",
+  "services": [
+    {
+      "id": "assessment-design",
+      "title": "VRF Assessment & Design",
+      "description": "System analysis, load planning and coordinated solution design."
+    },
+    {
+      "id": "install-commission",
+      "title": "Installation & Commissioning",
+      "description": "Professional execution and complete system startup."
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics & Repairs",
+      "description": "Structured troubleshooting for refrigeration, electrical and controls."
+    },
+    {
+      "id": "maintenance",
+      "title": "Preventive Maintenance",
+      "description": "Protect efficiency, reliability and equipment life."
+    },
+    {
+      "id": "controls",
+      "title": "Controls & Integration",
+      "description": "Centralized controls, schedules and integration-ready planning."
+    },
+    {
+      "id": "technical-support",
+      "title": "Technical Support",
+      "description": "Local support from a team that understands the installed system."
+    }
+  ],
+  "trust": {
+    "eyebrow": "WHY WORK WITH DEMAC?",
+    "title": "Local expertise. Lasting performance.",
+    "description": "DEMAC combines VRF technical expertise with local Aruba knowledge to deliver systems that are practical to install, commission, service and support for the long term.",
+    "imageUrl": "https://skipcalls.com/aeo/hvac/hvac-first-hot-day-my-phone-blows-up-with-no-cool-calls.webp",
+    "bullets": [
+      "Aruba-based team with local expertise",
+      "End-to-end project coordination",
+      "Experienced installation and commissioning team",
+      "Reliable after-sales service and maintenance",
+      "Solutions for projects from mini VRF to modular systems",
+      "A long-term partner you can count on"
+    ]
+  },
+  "faqHeading": "Quick answers about VRF systems.",
+  "faq": [
+    {
+      "id": "what-is-vrf",
+      "title": "What is a VRF system?",
+      "description": "VRF uses variable refrigerant flow to serve multiple indoor zones from one coordinated outdoor-system architecture, matching capacity to demand."
+    },
+    {
+      "id": "efficiency",
+      "title": "How energy efficient are VRF systems?",
+      "description": "Inverter-driven compressors modulate capacity instead of operating only at full output, which can reduce unnecessary energy use when loads vary."
+    },
+    {
+      "id": "best-buildings",
+      "title": "What types of buildings are VRF systems best for?",
+      "description": "VRF is especially useful where many zones have different schedules or comfort needs, including hotels, apartments, offices, villas and mixed-use buildings."
+    },
+    {
+      "id": "mix-indoor",
+      "title": "Can I mix different indoor unit types?",
+      "description": "Yes. A properly designed VRF project can combine compatible cassettes, fan coils, floor-ceiling units, air handlers and wall-mounted units across different zones."
+    },
+    {
+      "id": "maintenance",
+      "title": "Do you provide maintenance and support?",
+      "description": "Yes. DEMAC supports VRF systems with preventive maintenance, diagnostics, repairs and ongoing technical support."
+    },
+    {
+      "id": "start-project",
+      "title": "How do I get started with a VRF project?",
+      "description": "Start with a consultation and project assessment so we can understand the building, cooling loads, zoning, electrical conditions and design priorities."
+    }
+  ],
+  "finalCta": {
+    "eyebrow": "READY TO OPTIMIZE YOUR BUILDING?",
+    "title": "Let’s design the right VRF solution for your building.",
+    "description": "Get expert advice from DEMAC’s VRF team in Aruba and build the system around your property, operating needs and long-term goals.",
+    "primaryCta": {
+      "label": "Request a VRF Consultation",
+      "href": "/contact?request=vrf"
+    },
+    "secondaryCta": {
+      "label": "WhatsApp Us",
+      "href": "/contact?channel=whatsapp"
+    },
+    "imageUrl": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&fm=webp&q=88&w=2400"
+  },
+  "editorial": {
+    "systemsEyebrow": "OUR VRF SOLUTIONS",
+    "benefitsEyebrow": "WHY CHOOSE VRF?",
+    "benefitsIntro": "VRF technology delivers superior comfort, efficiency and control — ideal for Aruba’s climate and modern buildings.",
+    "indoorsEyebrow": "INDOOR UNIT OPTIONS",
+    "buildingsEyebrow": "WHERE VRF WORKS BEST",
+    "processEyebrow": "HOW DEMAC DELIVERS VRF PROJECTS",
+    "processMobileEyebrow": "YOUR PROJECT, STEP BY STEP",
+    "processIntro": "A proven process. Exceptional results.",
+    "servicesEyebrow": "OUR SERVICE CAPABILITIES",
+    "faqEyebrow": "FREQUENTLY ASKED QUESTIONS",
+    "proof1": "Higher Energy Efficiency",
+    "proof2": "Individual Zoning Control",
+    "proof3": "Expert Design & Installation",
+    "proof4": "Long-Term After-Sales Support",
+    "testimonialText": "DEMAC delivered an exceptional VRF solution for our property. Professional, reliable and always available.",
+    "testimonialAuthor": "Commercial Client",
+    "testimonialLocation": "Aruba"
+  }
+}

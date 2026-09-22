@@ -20,6 +20,9 @@ const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID ?? process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? firebaseDefaults.measurementId,
 };
 const publicBuildEnv = {
+  // Review builds are browser-local. Production remains disabled until the
+  // protected publishing service and rules have passed the release checklist.
+  NEXT_PUBLIC_WEBSITE_EDITOR_MODE: process.env.WEBSITE_EDITOR_MODE === 'live' && process.env.VERCEL_ENV === 'production' ? 'live' : process.env.VERCEL_ENV === 'production' ? 'disabled' : 'review',
   NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? 'unknown',
   // Preview/local collection is off unless an isolated test explicitly enables it.
   NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: process.env.NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT ?? (process.env.VERCEL_ENV === 'production' ? 'production' : 'preview'),

@@ -5,6 +5,9 @@ on:
     paths:
       - 'apps/erp-next/app/services/vrf-systems/**'
       - 'apps/erp-next/components/public/vrf-mobile-*'
+      - 'apps/erp-next/components/public/vrf-page-*'
+      - 'functions/websiteEditorialContract*'
+      - 'functions/websiteVrfDefaults.json'
       - 'apps/erp-next/components/public/vrf-indoor-*'
       - 'apps/erp-next/components/vrf-website-manager-workspace.tsx'
       - 'apps/erp-next/lib/public-vrf-content.ts'
@@ -39,8 +42,10 @@ jobs:
       - name: Validate indoor catalogue and exact image bytes without data writes
         working-directory: apps/erp-next
         run: |
-          npx tsc --ignoreConfig scripts/vrf-indoor-catalog-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .vrf-indoor-test --rootDir .
-          node .vrf-indoor-test/scripts/vrf-indoor-catalog-acceptance.js
+          npx tsc --ignoreConfig scripts/vrf-indoor-catalog-acceptance.ts ../../functions/websiteEditorialContract.js --allowJs --checkJs false --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .vrf-indoor-test --rootDir ../..
+          mkdir -p .vrf-indoor-test/functions
+          cp ../../functions/websiteVrfDefaults.json .vrf-indoor-test/functions/
+          node .vrf-indoor-test/apps/erp-next/scripts/vrf-indoor-catalog-acceptance.js
       - name: Install isolated browser test tools
         run: |
           npm install --prefix /tmp/vrf-browser playwright@1.56.1 --no-audit --no-fund
