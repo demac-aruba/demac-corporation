@@ -26,6 +26,7 @@ Compared the complete working diff against d1a495611f178210474f6fd40b84e514f614b
 
 ## Verification
 - ERP Next typecheck and optimized static build; mandatory prebuild checks passed.
+- Project-budget browser harness: all 26 Chromium/WebKit scenarios pass with the real location panel and synthetic authority; forecast-change test waits for the new rendered forecast and React decision retirement before the next click.
 - 549 backend regression tests passed after final location/lifecycle/VisitRead changes.
 - 7 real Firestore-emulator integration scenarios cover A–E, G, I, K, L. Separate demo test project is reset; review preview data is retained.
 - CRM, live scheduling, lifecycle, field domain, field security contracts and field experience acceptance scripts passed.

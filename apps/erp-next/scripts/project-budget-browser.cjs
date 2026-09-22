@@ -157,6 +157,9 @@ async function main() {
                     window.dispatchEvent(new StorageEvent('storage',{key}));
                   });
                   await decision.waitFor({state:'hidden'});
+                  await page.waitForFunction(()=>document.querySelector('[data-project-budget-warning]')?.textContent.includes('Projected total: 70'));
+                  // Let React retire the old forecast decision before clicking its replacement.
+                  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
                   assert.equal(await page.evaluate(()=>window.__commits.length),0);
                   await confirm.click();await decision.waitFor();
                   assert.match(await decision.innerText(),/Total previsto: 70 h · Exceso: 4 h/);
