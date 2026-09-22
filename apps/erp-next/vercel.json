@@ -3,7 +3,8 @@
     "deploymentEnabled": {
       "fix/scheduling-history-attribution-cards": false,
       "fix/scheduling-linked-project-labels": false,
-      "feature/property-dwellings-preview": false
+      "feature/property-dwellings-preview": false,
+      "feature/project-slot-progress": false
     }
   },
   "framework": "nextjs",
