@@ -66,6 +66,7 @@ type LiveWorkOrder = {
   time?: string;
   duration?: number;
   appointmentDurationMinutes?: number;
+  appointmentDurationMode?: string;
   address?: string;
   zone?: string;
   operationalZone?: string;
@@ -144,6 +145,29 @@ function workOrderWorkLabel(order: LiveWorkOrder) {
   return text(order.appointmentWorkLabel) || text(item?.label) || humanizeWorkType(workOrderWorkTypeId(order));
 }
 
+function workOrderSummaryLines(order: LiveWorkOrder): NonNullable<BrowserAppointmentRecord['workSummaryLines']> {
+  const items = Array.isArray(order.appointmentWorkItems) ? order.appointmentWorkItems : [];
+  if (items.length) return items.map((item) => {
+    const workType = text(item.presetId);
+    const label = text(item.label) || (workType && workType !== 'other' ? humanizeWorkType(workType) : 'Work details pending verification');
+    const mode = text(item.durationMode) || text(order.appointmentDurationMode);
+    const quantity = Number(item.quantity);
+    const quantified = mode !== 'manual' && workType !== 'other' && Number.isInteger(quantity) && quantity > 0;
+    return { label, durationMode: mode,
+      ...(quantified ? { quantity, quantityUnit: mode === 'per_unit' ? 'unit' as const : 'service' as const } : {}),
+    };
+  });
+  const type = workOrderWorkTypeId(order);
+  const hasIdentity = Boolean(text(order.appointmentWorkLabel) || text(order.appointmentPresetId) || text(order.appointmentWorkType) || text(order.presetId));
+  const quantity = Number(order.airConditionerCount ?? order.quantity);
+  const quantified = hasIdentity && type !== 'other' && text(order.appointmentDurationMode) !== 'manual'
+    && Number.isInteger(quantity) && quantity > 0;
+  return [{ label: hasIdentity ? workOrderWorkLabel(order) : 'Work details pending verification',
+    durationMode: text(order.appointmentDurationMode),
+    ...(quantified ? { quantity, quantityUnit: 'unit' as const } : {}),
+  }];
+}
+
 function canonicalVanIdFromValue(value: unknown) {
   const raw = text(value);
   if (!raw) return '';
@@ -199,7 +223,8 @@ function workOrderSupportForId(order: LiveWorkOrder) {
 }
 
 function workOrderQuantity(order: LiveWorkOrder) {
-  return positiveInteger(order.airConditionerCount ?? order.quantity);
+  const singleItem = order.appointmentWorkItems?.length === 1 ? order.appointmentWorkItems[0] : undefined;
+  return positiveInteger(order.airConditionerCount ?? order.quantity ?? singleItem?.quantity);
 }
 
 function contributesAppointmentWorkQuantity(order: LiveWorkOrder) {
@@ -484,6 +509,12 @@ export function projectLiveSchedulingAppointments(
     const quantity = sorted.reduce((total, order) => total + (contributesAppointmentWorkQuantity(order) ? workOrderQuantity(order) : 0), 0);
     const workTypeId = workOrderWorkTypeId(primary);
     const workLabel = workOrderWorkLabel(primary);
+    const workSummaryLines = workOrderSummaryLines(primary);
+    // A single-service Work Order snapshots its assigned quantity. Details describe
+    // the whole appointment; cards override this with their own assignment quantity.
+    if (workSummaryLines.length === 1 && workSummaryLines[0].quantity !== undefined) workSummaryLines[0].quantity = quantity;
+    const serviceWorkEstimateAvailable = Number(primary.appointmentDurationMinutes ?? primary.duration) > 0
+      && workSummaryLines.every((line) => line.quantity !== undefined && line.durationMode !== 'manual');
     const fallbackDescription = `${workLabel} × ${quantity}`;
     const customerFacingDescription = text(primary.customerFacingDescription)
       || cleanCustomerDescription(primary.problem, fallbackDescription);
@@ -506,6 +537,8 @@ export function projectLiveSchedulingAppointments(
       presetId: primaryAssignment.presetId,
       workTypeId,
       workLabel,
+      workSummaryLines,
+      serviceWorkEstimateAvailable,
       serviceId: text(primary.serviceId) || undefined,
       totalQuantity: quantity,
       scheduledDurationMinutes: durationMinutes,
