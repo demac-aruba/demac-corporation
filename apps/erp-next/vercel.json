@@ -1,6 +1,7 @@
 {
   "git": { "deploymentEnabled": { "fix/scheduling-history-attribution-cards": false } },
   "framework": "nextjs",
+  "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "buildCommand": "npm run build",
   "installCommand": "npm install --no-audit --no-fund"
 }

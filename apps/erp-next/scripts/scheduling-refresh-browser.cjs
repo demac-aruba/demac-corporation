@@ -60,6 +60,7 @@ window.records=projectLiveSchedulingAppointments(['VAN-1','VAN-2'].map((vanId,i)
 })),[{id:'SYNTHETIC-CUSTOMER',name:'Synthetic test customer'}],[{id:'SYNTHETIC-PROPERTY',name:'Synthetic test site'}]);
 window.records.push(...projectLiveSchedulingAppointments([{id:'SYNTHETIC-SINGLE-WO',appointmentId:'SYNTHETIC-SINGLE-APT',date,time:'08:30',vanId:'VAN-3',status:'confirmed',appointmentPresetId:'standard_service',appointmentWorkLabel:'Standard service',appointmentDurationMode:'per_unit',appointmentDurationMinutes:60,scheduledSlots:1,quantity:1}],[],[]));
 window.originalRecords=structuredClone(window.records);
+window.overtimeRecords=projectLiveSchedulingAppointments([{id:'SYNTHETIC-OT-WO',appointmentId:'SYNTHETIC-OT-APT',date,time:'14:30',vanId:'VAN-2',status:'confirmed',appointmentPresetId:'standard_service',appointmentWorkLabel:'Standard service',appointmentDurationMode:'per_unit',appointmentDurationMinutes:180,appointmentEndTime:'17:30',appointmentCapacityEndTime:'17:30',scheduledSlots:3,quantity:3,operationalMoveOvertime:{accepted:true,capacityEnd:'17:30'}}],[],[]);
 const root=createRoot(document.getElementById('app'));window.unmount=()=>root.unmount();root.render(<React.StrictMode><div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div></React.StrictMode>);`;
 
 async function runCase(browser, origin, label, viewport) {
@@ -96,6 +97,14 @@ async function runCase(browser, origin, label, viewport) {
   const cardText=await cards.first().innerText();
   assert.match(cardText,/4:30 PM/);assert.match(cardText,/6 slots reserved/);assert.doesNotMatch(cardText,/1 unit|Service-work estimate|2:30 PM/);
   await page.screenshot({path:path.join(output,`${label}.png`),fullPage:true});
+  // Integration with main must preserve its accepted overtime while retaining new card semantics.
+  await page.evaluate(()=>{window.records=structuredClone(window.overtimeRecords);window.dispatchEvent(new Event('focus'));});
+  await page.getByText(/Posible overtime aceptado/).waitFor();
+  assert.equal(await cards.count(),1);
+  const overtimeText=await cards.first().innerText();
+  assert.match(overtimeText,/3 slots reserved/);assert.match(overtimeText,/5:30 PM/);
+  await page.evaluate(()=>{window.records=structuredClone(window.originalRecords);window.dispatchEvent(new Event('focus'));});
+  await page.waitForFunction(()=>document.querySelectorAll('[data-schedule-job]').length===3);
   // Old-week operational reads and attribution must not repopulate a new week.
   await page.evaluate(()=>{window.readDelay=800;window.clockOffset+=301000;window.attributionDelay=1800;window.dispatchEvent(new Event('focus'));});
   await page.getByRole('button',{name:'›',exact:true}).click();

@@ -55,6 +55,13 @@
   line-height: 1.15;
 }
 
+/* The consent warning must be readable independently of the dense agenda. */
+.readable [data-overtime-confirmation] p,
+.readable [data-overtime-confirmation] button {
+  font-size: 13px !important;
+  line-height: 1.5;
+}
+
 @media (max-width: 900px) {
   .readable :where(p, small, em, time, span) {
     font-size: 10px !important;

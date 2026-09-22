@@ -41,6 +41,7 @@ type LiveWorkItem = {
 };
 
 type LiveWorkOrder = {
+  operationalMoveOvertime?: { accepted?: boolean; capacityEnd?: string } | null;
   id: string;
   appointmentId?: string;
   appointmentType?: string;
@@ -345,6 +346,11 @@ function assignmentCapacitySlotStarts(
     || normalizedSlots(order.scheduledSlots).length
     || Math.ceil(positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60) / 60);
   const index = schedule.indexOf(start);
+  if (order.operationalMoveOvertime?.accepted && index >= 0) {
+    const owned = schedule.slice(index, index + count);
+    while (owned.length < count) owned.push(minutesToTime(timeToMinutes(owned[owned.length - 1]) + 60));
+    return owned;
+  }
   if (index < 0 || index + count > schedule.length) return [];
   return schedule.slice(index, index + count);
 }
@@ -447,6 +453,7 @@ function workOrderAssignment(
     segment: daySegment(start, end),
     vanId: resolvedVanId,
     capacitySlotStarts,
+    possibleOvertime: order.operationalMoveOvertime?.accepted === true,
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),
