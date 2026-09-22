@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { projectLiveSchedulingAppointments } from '../lib/live-scheduling';
 import { assignmentReservedSlots, hasServiceWorkEstimate, schedulingWorkSummary } from '../lib/scheduling-card-presentation';
+import { schedulingProjectLabel } from '../lib/scheduling-project-labels';
 
 const base = { id: 'SYNTHETIC-WO-1', appointmentId: 'SYNTHETIC-APT', date: '2026-09-18',
   time: '08:30', vanId: 'VAN-1', status: 'confirmed', appointmentPresetId: 'other',
@@ -43,3 +44,41 @@ assert.equal(schedulingWorkSummary(legacy), 'Work details pending verification')
 assert.equal(hasServiceWorkEstimate(legacy), false);
 assert.equal(assignmentReservedSlots({ capacitySlotStarts: ['08:30', '08:30', '09:30'] }), 2);
 console.log('PASS card projections: per-assignment six/two slots, technical/capacity separation, all service lines, manual/unknown quantities and no invented Project identity');
+
+const linkedAppointment = { ...manual, customerId: 'SYNTHETIC-CUSTOMER', siteId: 'SYNTHETIC-PROPERTY' };
+const project = {
+  id: 'SYNTHETIC-PROJECT', projectNumber: 'SYNTHETIC-001', name: 'Synthetic VRF project',
+  customerId: linkedAppointment.customerId, siteId: linkedAppointment.siteId,
+  phases: [{ id: 'phase-1', name: 'Installation', status: 'Completed' }],
+  assignments: manual.workOrderIds!.map((workOrderId) => ({
+    projectId: 'SYNTHETIC-PROJECT', appointmentId: manual.id, workOrderId, phaseId: 'phase-1',
+  })),
+};
+const state = (projects: unknown[]) => ({ version: 1, projects });
+const label = schedulingProjectLabel(linkedAppointment, state([project]));
+assert.deepEqual(label, { projectId: project.id, name: project.name, phaseNames: ['Installation'] });
+for (const job of linkedAppointment.assignments) {
+  assert.equal(schedulingWorkSummary(linkedAppointment, job.quantity, label), 'Project · Synthetic VRF project · Installation');
+  assert.equal(assignmentReservedSlots(job), 6);
+  assert.equal(job.end, '14:30');
+  assert.equal(job.capacityEnd, '16:30');
+}
+assert.equal(hasServiceWorkEstimate(mixed, label), false, 'a linked Project never inherits a service-unit estimate');
+assert.equal(assignmentReservedSlots(partial.assignments[0]), 2);
+assert.doesNotMatch(schedulingWorkSummary(partial, 2, label), /Full day|unit|Other/);
+for (const patch of [{ id: 'unrelated-appointment' }, { customerId: 'wrong-customer' }, { siteId: 'wrong-property' },
+  { workOrderId: 'wrong-wo', workOrderIds: ['wrong-wo'] }, { customerId: undefined }]) {
+  assert.equal(schedulingProjectLabel({ ...linkedAppointment, ...patch }, state([project])), undefined);
+}
+assert.equal(schedulingWorkSummary(manual, 1, schedulingProjectLabel(manual, state([project]))), 'Other');
+for (const patch of [{ projectId: 'wrong-project' }, { appointmentId: 'wrong-appointment' }, { workOrderId: 'wrong-wo' }]) {
+  assert.equal(schedulingProjectLabel(linkedAppointment, state([{ ...project, assignments: project.assignments.map((link) => ({ ...link, ...patch })) }])), undefined);
+}
+assert.equal(schedulingProjectLabel(linkedAppointment, state([project, { ...project, name: 'Duplicate identity' }])), undefined);
+assert.equal(schedulingProjectLabel(linkedAppointment, state([project, { ...project, id: 'another-project', assignments: project.assignments.map(link => ({ ...link, projectId: 'another-project' })) }])), undefined);
+assert.equal(schedulingProjectLabel(linkedAppointment, state([{ ...project, name: 'Renamed project' }]))?.name, 'Renamed project');
+for (const invalid of [null, {}, { version: 1, projects: [null, {}, { ...project, assignments: [null, 42, {}] }] }]) {
+  assert.equal(schedulingProjectLabel(linkedAppointment, invalid), undefined);
+}
+assert.deepEqual(schedulingProjectLabel(linkedAppointment, state([{ ...project, phases: [null, 42, {}] }]))?.phaseNames, []);
+console.log('PASS Project labels: exact appointment/work-order/customer/property links, ambiguous/stale/malformed rejection, phase/name refresh and unchanged per-Van capacity');

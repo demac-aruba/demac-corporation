@@ -1,7 +1,9 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
 import type { CalendarDispatchJob } from './scheduling-capacity';
+import type { SchedulingProjectLabel } from './scheduling-project-labels';
 
-export function schedulingWorkSummary(appointment: BrowserAppointmentRecord | undefined, assignmentQuantity?: number) {
+export function schedulingWorkSummary(appointment: BrowserAppointmentRecord | undefined, assignmentQuantity?: number, project?: SchedulingProjectLabel) {
+  if (project) return ['Project', project.name, ...project.phaseNames].join(' · ');
   const lines = appointment?.workSummaryLines;
   if (lines?.length) {
     // Appointment-level line quantities must not be presented as per-Van quantities.
@@ -20,8 +22,8 @@ export function assignmentReservedSlots(job: Pick<CalendarDispatchJob, 'capacity
   return slots.size || undefined;
 }
 
-export function hasServiceWorkEstimate(appointment: BrowserAppointmentRecord | undefined) {
-  return appointment?.serviceWorkEstimateAvailable === true;
+export function hasServiceWorkEstimate(appointment: BrowserAppointmentRecord | undefined, project?: SchedulingProjectLabel) {
+  return !project && appointment?.serviceWorkEstimateAvailable === true;
 }
 
 export function assignmentReservationLabel(job: Pick<CalendarDispatchJob, 'capacitySlotStarts'>) {
