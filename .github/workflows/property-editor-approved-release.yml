@@ -12,6 +12,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  inspect:
+    if: contains(github.event.head_commit.message, '[inspect-only]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: node scripts/property-editor-release-inspect.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: property-editor-configuration-inspection
+          path: ${{ runner.temp }}/property-editor-configuration-inspection.json
+
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +64,7 @@ jobs:
 
   deploy:
     needs: validate
-    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/property-editor-approved'
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/property-editor-approved' && !contains(github.event.head_commit.message, '[inspect-only]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
