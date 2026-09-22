@@ -18,7 +18,11 @@ async function checkHttp(name) {
   for (const origin of ['https://demac-corporation-web.vercel.app', 'https://demac-corporation.vercel.app']) {
     const response = await fetch(url, { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } });
     assert.equal(response.status, 204, name + ' CORS');
-    assert.equal(response.headers.get('access-control-allow-origin'), origin, name + ' allowed origin');
+    // Preserve each existing API's actual contract: Office uses bearer tokens with
+    // wildcard CORS; Field reflects the requesting origin. Neither uses cookies.
+    assert.equal(response.headers.get('access-control-allow-origin'), name === 'officeBookingAuthority' ? '*' : origin, name + ' allowed origin');
+    assert.match(response.headers.get('access-control-allow-headers') || '', /authorization/i);
+    assert.match(response.headers.get('access-control-allow-methods') || '', /POST/);
   }
   const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: name === 'officeBookingAuthority' ? 'list_property_locations' : 'list_jobs', data: {} }) });
   assert.equal(response.status, 401, name + ' must require authentication');
@@ -40,16 +44,18 @@ async function checkHttp(name) {
   for (const name of names) {
     console.log('Updating source for ' + name);
     const previous = before[name];
+    const entry = { name, previousRevision: previous.serviceConfig.revision, previousSource: previous.buildConfig.source, verified: false };
+    result.functions.push(entry); record();
     run(['functions', 'deploy', name, '--project=' + project, '--region=us-central1', '--gen2', '--source=' + stage,
       '--entry-point=' + name, '--runtime=' + previous.buildConfig.runtime,
       '--run-service-account=' + previous.serviceConfig.serviceAccountEmail, '--quiet', '--format=value(state)']);
     const after = describe(name);
     assert.equal(after.state, 'ACTIVE');
     assert.deepEqual(config(after), config(previous), name + ' configuration changed unexpectedly');
+    Object.assign(entry, { state: after.state, revision: after.serviceConfig.revision, source: after.buildConfig.source, configurationPreserved: true });
+    record();
     if (!previous.eventTrigger) await checkHttp(name);
-    result.functions.push({ name, state: after.state, previousRevision: previous.serviceConfig.revision,
-      revision: after.serviceConfig.revision, previousSource: previous.buildConfig.source,
-      source: after.buildConfig.source, configurationPreserved: true, verified: true });
+    entry.verified = true;
     record();
     console.log(name + ': ACTIVE, configuration preserved, verification passed');
   }
