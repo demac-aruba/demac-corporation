@@ -29,6 +29,13 @@ const [mixed] = projectLiveSchedulingAppointments([{ ...base, appointmentPresetI
 assert.equal(schedulingWorkSummary(mixed), 'Standard service · 2 units + Deep cleaning · 1 unit');
 assert.equal(schedulingWorkSummary(mixed, 99), 'Standard service + Deep cleaning', 'no appointment total copied onto each Van');
 assert.equal(hasServiceWorkEstimate(mixed), true);
+const singleService = { ...base, appointmentPresetId: 'standard_service', appointmentDurationMode: 'per_unit',
+  appointmentWorkItems: [{ id: 'standard', presetId: 'standard_service', label: 'Standard service', quantity: 4, durationMode: 'per_unit' }], quantity: 4 };
+const [split] = projectLiveSchedulingAppointments([singleService, { ...singleService, id: 'SYNTHETIC-SUPPORT', vanId: 'VAN-2',
+  appointmentAssignmentRole: 'support', quantity: 3, appointmentWorkItems: [{ ...singleService.appointmentWorkItems[0], quantity: 3 }] }], [], []);
+assert.equal(schedulingWorkSummary(split), 'Standard service · 7 units');
+assert.equal(schedulingWorkSummary(split, split.assignments[0].quantity), 'Standard service · 4 units');
+assert.equal(schedulingWorkSummary(split, split.assignments[1].quantity), 'Standard service · 3 units');
 const [legacy] = projectLiveSchedulingAppointments([{ id: 'unknown', appointmentId: 'unknown', date: base.date, time: base.time, vanId: 'VAN-1' }], [], []);
 assert.equal(schedulingWorkSummary(legacy), 'Work details pending verification');
 assert.equal(hasServiceWorkEstimate(legacy), false);

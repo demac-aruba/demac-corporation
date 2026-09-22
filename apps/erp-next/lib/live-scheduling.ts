@@ -158,10 +158,12 @@ function workOrderSummaryLines(order: LiveWorkOrder): NonNullable<BrowserAppoint
   });
   const type = workOrderWorkTypeId(order);
   const hasIdentity = Boolean(text(order.appointmentWorkLabel) || text(order.appointmentPresetId) || text(order.appointmentWorkType) || text(order.presetId));
-  const quantified = hasIdentity && type !== 'other' && text(order.appointmentDurationMode) !== 'manual';
+  const quantity = Number(order.airConditionerCount ?? order.quantity);
+  const quantified = hasIdentity && type !== 'other' && text(order.appointmentDurationMode) !== 'manual'
+    && Number.isInteger(quantity) && quantity > 0;
   return [{ label: hasIdentity ? workOrderWorkLabel(order) : 'Work details pending verification',
     durationMode: text(order.appointmentDurationMode),
-    ...(quantified ? { quantity: workOrderQuantity(order), quantityUnit: 'unit' as const } : {}),
+    ...(quantified ? { quantity, quantityUnit: 'unit' as const } : {}),
   }];
 }
 
@@ -500,7 +502,11 @@ export function projectLiveSchedulingAppointments(
     const workTypeId = workOrderWorkTypeId(primary);
     const workLabel = workOrderWorkLabel(primary);
     const workSummaryLines = workOrderSummaryLines(primary);
-    const serviceWorkEstimateAvailable = workSummaryLines.every((line) => line.quantity !== undefined && line.durationMode !== 'manual');
+    // A single-service Work Order snapshots its assigned quantity. Details describe
+    // the whole appointment; cards override this with their own assignment quantity.
+    if (workSummaryLines.length === 1 && workSummaryLines[0].quantity !== undefined) workSummaryLines[0].quantity = quantity;
+    const serviceWorkEstimateAvailable = Number(primary.appointmentDurationMinutes ?? primary.duration) > 0
+      && workSummaryLines.every((line) => line.quantity !== undefined && line.durationMode !== 'manual');
     const fallbackDescription = `${workLabel} × ${quantity}`;
     const customerFacingDescription = text(primary.customerFacingDescription)
       || cleanCustomerDescription(primary.problem, fallbackDescription);
