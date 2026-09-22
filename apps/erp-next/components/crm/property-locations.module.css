@@ -1,17 +1,11 @@
-.panel { border:1px solid var(--border); border-radius:14px; padding:16px; background:var(--surface); display:grid; gap:12px; min-width:0; }
-.header,.actions { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-.header h4 { margin:0; font-size:1rem; } .panel p { margin:4px 0; color:var(--muted); }
-.panel button,.panel input,.panel select,.panel textarea { font:inherit; min-height:40px; border:1px solid var(--border); border-radius:8px; padding:8px 10px; color:var(--text); background:var(--surface); max-width:100%; }
-.panel button { cursor:pointer; } .panel button:disabled { opacity:.55; cursor:default; }
-.panel button[aria-pressed=true] { border-color:var(--accent,#0891b2); background:var(--surface-2); }
-.panel label { display:grid; gap:4px; min-width:0; } .panel label small { color:var(--muted); }
-.list { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; }
-.list button { text-align:left; display:grid; gap:4px; } .list small { color:var(--muted); }
-.draft { display:grid; gap:10px; padding:12px; border-radius:10px; background:var(--surface-2); }
-.row { display:grid; grid-template-columns:90px minmax(120px,1fr) 140px auto; gap:8px; align-items:end; }
-.grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-.contacts { display:flex; flex-wrap:wrap; gap:10px; } .contacts label { display:flex; align-items:center; }
-.error { border-left:3px solid #b45309; padding:10px; } .equipment { list-style:none; padding:0; margin:0; display:grid; gap:6px; }
-.equipment li { padding:10px; background:var(--surface-2); border-radius:8px; }
-.scroll { max-height:340px; overflow:auto; display:grid; gap:10px; }
-@media(max-width:600px) { .panel { padding:12px; } .row { grid-template-columns:70px minmax(0,1fr); } .grid { grid-template-columns:1fr; } .list { grid-template-columns:1fr; } }
+.panel { margin:16px 0; padding:18px; border:1px solid var(--border); border-radius:14px; background:var(--surface); color:var(--text); }
+.header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; }
+.header>div { display:flex; gap:10px; align-items:center; }.header>div>svg { color:var(--brand); }
+.header strong { display:block; font-size:13px; }.header small { display:block; font-size:11px; color:var(--muted); margin-top:5px; }
+.header>button,.error button { display:inline-flex; align-items:center; gap:6px; min-height:36px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--brand-soft); color:var(--brand); font-family:inherit; font-size:12px; font-weight:600; cursor:pointer; }.header>button svg { width:16px; height:16px; }
+.search { display:block; position:relative; margin:16px 0 12px; }.search>svg { position:absolute; top:12px; left:12px; width:16px; height:16px; color:var(--muted); }.search input { width:100%; min-height:40px; padding:10px 12px 10px 36px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); color:var(--text); font-family:inherit; font-size:12px; }
+.list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr)); gap:8px; max-height:260px; overflow:auto; padding:3px; }
+.list button { display:flex; gap:10px; align-items:center; min-height:64px; padding:12px; text-align:left; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-family:inherit; }
+.list button>svg { width:20px; height:20px; color:var(--brand); flex-shrink:0; }.list button>span { min-width:0; flex:1; }.list strong { display:block; font-size:12px; overflow-wrap:anywhere; }.list small { display:block; color:var(--muted); font-size:11px; margin-top:5px; }
+.list button[aria-pressed=true] { background:var(--brand-soft); border-color:var(--brand); }.panel button:disabled { opacity:.5; cursor:default; }.panel :is(button,input):focus-visible { outline:3px solid var(--brand); outline-offset:2px; }
+.hint { font-size:12px; color:var(--muted); margin-bottom:0; }.error { padding:12px; background:var(--danger-soft); color:var(--text); font-size:12px; }

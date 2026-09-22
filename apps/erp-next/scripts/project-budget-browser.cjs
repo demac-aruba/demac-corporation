@@ -34,6 +34,7 @@ const stubs = {
   'property-communication-editor': `export function PropertyCommunicationPanel(){return null;} export function PropertyContactDraftEditor(){return null;}`,
   'after-hours-booking': `export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
   'office-booking-authority': `
+    export async function updateOfficeProperty(){throw Error('Unexpected property edit in budget acceptance');}
     export class OfficeBookingRequestError extends Error {}
     export async function callOfficeBookingAuthority(action,input){
       if(action!=='list_property_locations'||input.customerId!=='CUSTOMER-BROWSER-TEST'||input.propertyId!=='PROPERTY-BROWSER-TEST')throw Error('Unexpected property location operation');

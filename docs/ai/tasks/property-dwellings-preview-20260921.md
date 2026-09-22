@@ -94,7 +94,14 @@ historical links. Do not activate production or collapse dwellings automatically
 
 ## Results
 
+## Approved editor refinement
+
+Owner approved the generated unified property editor on 2026-09-21 and added optional main office for apartment complexes. Continue Deep Review for the atomic Customer/Property/Dwelling write contract. Replace the separate CRM location selector with the existing Create/Edit property entry point; reuse the same editor inside booking. Preserve canonical IDs, require explicit apartment selection for booking, keep existing rows/history on count changes, and add main_office as an additive location type. Prepare all location relationship reads before committing parent, children, assignments and audit in one Firestore transaction. No production activation.
+
+Match the approved two-column mockup with icons, radio cards, compact editable dwelling rows and one save action. Use the existing operator text-size setting: supporting copy/controls use the shared provider; new modal/section headings use its existing offset variable because the legacy provider intentionally excludes H1-H3. Verify Standard and +4px, desktop and narrow mobile, real save/reopen, offline retry and concurrent-version rejection before refreshing the isolated preview.
+
 Implementation is complete for isolated preview review. See the separate
+approved-editor [adversarial self-review](../reviews/property-editor-premium-20260922.md) for unified creation/editing, main offices, typography measurements and retry evidence, and the original
 [adversarial review](../reviews/property-dwellings-preview-20260921.md),
 [ADR](../decisions/ADR-20260921-property-dwellings.md) and
 [preview runbook](property-dwellings-preview-runbook.md) for contracts, actual

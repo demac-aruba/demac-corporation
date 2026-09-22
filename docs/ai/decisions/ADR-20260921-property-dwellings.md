@@ -24,6 +24,8 @@ Offers carry optional dwellingId/requesterId/accessContactId. Commit validates C
 - Subcollections require contextual reads. Equipment reads are scoped to the current Property; no global A/C load is added to New appointment.
 
 ## Compatibility, activation and recovery
+The approved unified editor uses the same model for residential houses and apartment complexes. `main_office` is an additional dwelling type alongside `main_house`, `apartment` and `annex`. Create Property, Create Customer + First Property and Edit Property can atomically commit an optional locations draft. Parent and child fields share the same transaction, version check and request replay; existing API callers that omit locations are unchanged. Area drafts can target the property or an already saved dwelling. No separate editor-only source of truth is introduced.
+
 No migration is required. Missing dwellingId means unclassified/legacy, never first apartment. Existing jobs retain their original destination and recipient snapshots. Old A/C remain visible through the property unclassified view.
 
 Production is NOT activated. Before any later rollout: owner approval, current-main rebase/review, rerun gates, deploy compatible backend before frontend, confirm existing role/rule boundaries, then enable only approved properties. No Firestore/Storage rule change is included.

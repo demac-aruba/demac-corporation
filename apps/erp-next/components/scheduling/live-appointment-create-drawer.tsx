@@ -6,6 +6,10 @@ import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/proje
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PropertyLocations } from '../crm/property-locations';
+import { PropertyEditor } from '../crm/property-editor';
+import type { PropertyEditorValue } from '../../lib/property-editor-draft';
+import { emptyPropertyEditor } from '../../lib/property-editor-draft';
+import propertyEditorStyles from '../crm/property-editor.module.css';
 import type { PropertyLocationData } from '../../lib/property-locations';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
@@ -57,10 +61,6 @@ import {
   liveVanCrew,
   loadLiveOperationalCapacityState,
 } from '../../lib/live-operational-capacity';
-import {
-  suggestArubaAddresses,
-  type ArubaAddressEntry,
-} from '../../lib/aruba-address-directory';
 import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
 import { useAuth } from '../auth/auth-provider';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
@@ -260,22 +260,7 @@ function optionMatchesTarget(option: OfficeBookingOption, target: LiveBookingTar
     && primary?.vanId === target.vanId;
 }
 
-function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
-  const base = text(draft.address);
-  const detail = text(draft.addressDetail);
-  const address = detail && !base.toLowerCase().endsWith(detail.toLowerCase())
-    ? `${base} ${detail}`
-    : base;
-  return {
-    name: text(draft.name),
-    type: text(draft.type),
-    address,
-    zone: text(draft.zone),
-    neighborhood: text(draft.neighborhood),
-    notes: text(draft.notes),
-    contactLinks: draft.contactLinks ?? [],
-  };
-}
+
 
 function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMinutes: number) {
   if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Add work';
@@ -1003,7 +988,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setPropertyEditorOpen(false);
   };
 
-  const saveCustomer = async () => {
+  const saveCustomer = async (value: PropertyEditorValue) => {
     if (masterSaving || masterInFlight.current) return;
     masterInFlight.current = true;
     setMasterSaving(true);
@@ -1012,7 +997,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       const created = await createBookingCustomerWithProperty({
         requestId: masterRequestId.current,
         customer: customerDraft,
-        property: materializePropertyDraft(customerPropertyDraft),
+        property: { ...value, contactLinks: customerPropertyDraft.contactLinks },
         references,
       });
       await refreshReferences().catch(() => undefined);
@@ -1024,7 +1009,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setCustomerEditorOpen(false);
       resetCapacityValidation();
     } catch (error) {
-      setMasterError(error instanceof Error ? error.message : 'The customer could not be created.');
+      throw error;
     } finally {
       masterInFlight.current = false;
       setMasterSaving(false);
@@ -1040,13 +1025,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setCustomerEditorOpen(false);
   };
 
-  const saveProperty = async () => {
+  const saveProperty = async (value: PropertyEditorValue) => {
     if (!selectedCustomer || masterSaving || masterInFlight.current) return;
     masterInFlight.current = true;
     setMasterSaving(true);
     setMasterError('');
     try {
-      const created = await createBookingProperty(selectedCustomer.id, materializePropertyDraft(propertyDraft), masterRequestId.current);
+      const created = await createBookingProperty(selectedCustomer.id, { ...value, contactLinks: propertyDraft.contactLinks }, masterRequestId.current);
       await refreshReferences().catch(() => undefined);
       setReferences((current) => ({ ...current, properties: [...current.properties.filter((item) => item.id !== created.id), created] }));
       setPropertyId(created.id);
@@ -1054,7 +1039,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setPropertyEditorOpen(false);
       resetCapacityValidation();
     } catch (error) {
-      setMasterError(error instanceof Error ? error.message : 'The property could not be created.');
+      throw error;
     } finally {
       masterInFlight.current = false;
       setMasterSaving(false);
@@ -1577,25 +1562,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               ) : null}
               <button type="button" className={styles.inlineAction} onClick={openCustomerEditor}>＋ Create customer</button>
 
-              {customerEditorOpen ? (
-                <div className={styles.editorPanel}>
-                  <header><div><strong>Create customer + first property</strong><span>Customer, property and optional contact relationships are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
-                  <div className={styles.formGrid}>
-                    <Field label="Customer name *" value={customerDraft.name} onChange={(value) => setCustomerDraft((current) => ({ ...current, name: value }))} />
-                    <Field label="Company" value={customerDraft.company ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, company: value }))} />
-                    <Field label="Phone / WhatsApp *" value={customerDraft.phone} onChange={(value) => setCustomerDraft((current) => ({ ...current, phone: value }))} placeholder="564-2625" />
-                    <Field label="WhatsApp if different" value={customerDraft.whatsapp ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, whatsapp: value }))} />
-                    <Field label="Email" value={customerDraft.email ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, email: value }))} type="email" />
-                    <label><span>Preferred language</span><select value={customerDraft.preferredLanguage} onChange={(event) => setCustomerDraft((current) => ({ ...current, preferredLanguage: event.target.value }))}><option>Papiamento</option><option>English</option><option>Español</option><option>Nederlands</option></select></label>
-                    <div className={styles.formDivider}>First service property</div>
-                    <Field label="Property name (optional)" value={customerPropertyDraft.name} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, name: value }))} placeholder="Pastechi House Building, Front Office, Rental Villa…" />
-                    <label><span>Property type</span><select value={customerPropertyDraft.type} onChange={(event) => setCustomerPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
-                    <PropertyAddressFields draft={customerPropertyDraft} onChange={setCustomerPropertyDraft} />
-                    <PropertyContactDraftEditor clientId="new-customer" contacts={[]} links={customerPropertyDraft.contactLinks ?? []} onChange={(contactLinks) => setCustomerPropertyDraft((current) => ({ ...current, contactLinks }))} />
-                  </div>
-                  <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setCustomerEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveCustomer()}>{masterSaving ? 'Saving…' : 'Create & select'}</button></footer>
-                </div>
-              ) : null}
               </>}
             </div>
           </section>
@@ -1616,7 +1582,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   {projectMode && selectedProject && !selectedProject.siteId ? <div className={styles.previewBoundary}><strong>Project update required:</strong> this Project has no linked Service Property. Open the Project, use Edit Project to link its canonical property, then return to Scheduling.</div> : null}
                   {!projectMode ? <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button> : null}
                   {selectedProperty ? <>
-                    <PropertyLocations key={`${customerId}:${propertyId}`} customerId={customerId} propertyId={propertyId} contacts={references.contacts} booking selectedId={dwellingId}
+                    <PropertyLocations key={`${customerId}:${propertyId}`} customerId={customerId} propertyId={propertyId} contacts={references.contacts} customerName={customerLabel(selectedCustomer)} booking selectedId={dwellingId}
                       onSelect={(id) => { setDwellingId(id); setAccessContactId(''); setRecipientSelections([]); resetCapacityValidation(); }}
                       onLoaded={(data) => { setLocationData(data); if (data) setReferences((current) => ({ ...current, properties: current.properties.map((item) => item.id === data.property.id ? { ...item, ...data.property } : item), contactAssignments: [...current.contactAssignments.filter((item) => item.propertyId !== data.property.id), ...data.assignments] })); }} />
                     <div className={styles.formGrid}>
@@ -1637,19 +1603,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 </>
               ) : <div className={styles.emptyResult}>Select a customer to load their properties.</div>}
 
-              {propertyEditorOpen ? (
-                <div className={styles.editorPanel}>
-                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Property identity stays separate from reusable customer contacts and communication rules.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
-                  <div className={styles.formGrid}>
-                    <Field label="Property name (optional)" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} placeholder="Pastechi House Building, Front Office, Rental Villa…" />
-                    <label><span>Property type</span><select value={propertyDraft.type} onChange={(event) => setPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
-                    <PropertyAddressFields draft={propertyDraft} onChange={setPropertyDraft} />
-                    <Field label="Notes" value={propertyDraft.notes ?? ''} onChange={(value) => setPropertyDraft((current) => ({ ...current, notes: value }))} wide />
-                    {selectedCustomer ? <PropertyContactDraftEditor clientId={selectedCustomer.id} contacts={references.contacts} links={propertyDraft.contactLinks ?? []} onChange={(contactLinks) => setPropertyDraft((current) => ({ ...current, contactLinks }))} /> : null}
-                  </div>
-                  <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setPropertyEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveProperty()}>{masterSaving ? 'Saving…' : 'Add & select'}</button></footer>
-                </div>
-              ) : null}
             </div>
           </section>
 
@@ -1893,63 +1846,24 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           </>}
         </footer>
       </aside>
+      {customerEditorOpen ? <PropertyEditor mode="create" requestId={masterRequestId.current} customerId="new-customer" customerName={customerDraft.name} contacts={[]} initial={emptyPropertyEditor}
+        submitLabel="Crear cliente y propiedad" validationMessage={!customerDraft.name.trim() || !customerDraft.phone.trim() ? 'Completa el nombre y teléfono del cliente.' : undefined}
+        onSave={saveCustomer} onClose={() => setCustomerEditorOpen(false)} extraFields={<>
+          <div className={propertyEditorStyles.sectionTitle}><h3>Nuevo cliente</h3></div><div className={propertyEditorStyles.fields}>
+            <label className={propertyEditorStyles.field}><span>Customer name *</span><input required value={customerDraft.name} onChange={(event) => setCustomerDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+            <label className={propertyEditorStyles.field}><span>Phone / WhatsApp *</span><input required value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} /></label>
+          </div><details className={propertyEditorStyles.disclosure}><summary>Más datos del cliente</summary><div className={propertyEditorStyles.fields}>
+            <Field label="Company" value={customerDraft.company ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, company: value }))} />
+            <Field label="WhatsApp if different" value={customerDraft.whatsapp ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, whatsapp: value }))} />
+            <Field label="Email" value={customerDraft.email ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, email: value }))} type="email" />
+            <label className={propertyEditorStyles.field}><span>Preferred language</span><select value={customerDraft.preferredLanguage} onChange={(event) => setCustomerDraft((current) => ({ ...current, preferredLanguage: event.target.value }))}><option>Papiamento</option><option>English</option><option>Español</option><option>Nederlands</option></select></label>
+          </div></details>
+          <details className={propertyEditorStyles.disclosure}><summary>Contactos generales de la propiedad</summary><PropertyContactDraftEditor clientId="new-customer" contacts={[]} links={customerPropertyDraft.contactLinks ?? []} onChange={(contactLinks) => setCustomerPropertyDraft((current) => ({ ...current, contactLinks }))} /></details>
+          <div className={propertyEditorStyles.divider} />
+        </>} /> : null}
+      {propertyEditorOpen && selectedCustomer ? <PropertyEditor mode="create" requestId={masterRequestId.current} customerId={selectedCustomer.id} customerName={customerLabel(selectedCustomer)} contacts={references.contacts} initial={{ ...emptyPropertyEditor, zone: text(selectedCustomer.zone) }}
+        onSave={saveProperty} onClose={() => setPropertyEditorOpen(false)} extraFields={<><details className={propertyEditorStyles.disclosure}><summary>Contactos generales de la propiedad</summary><PropertyContactDraftEditor clientId={selectedCustomer.id} contacts={references.contacts} links={propertyDraft.contactLinks ?? []} onChange={(contactLinks) => setPropertyDraft((current) => ({ ...current, contactLinks }))} /></details><div className={propertyEditorStyles.divider} /></>} /> : null}
     </div>
-  );
-}
-
-function PropertyAddressFields({ draft, onChange }: {
-  draft: PropertyDraft;
-  onChange: React.Dispatch<React.SetStateAction<PropertyDraft>>;
-}) {
-  const [selectedAddress, setSelectedAddress] = useState('');
-  const suggestions = useMemo(
-    () => selectedAddress === draft.address.trim() ? [] : suggestArubaAddresses(draft.address, 6),
-    [draft.address, selectedAddress],
-  );
-
-  const selectSuggestion = (suggestion: ArubaAddressEntry) => {
-    setSelectedAddress(suggestion.canonical);
-    onChange((current) => ({
-      ...current,
-      address: suggestion.canonical,
-      zone: suggestion.operationalZone || current.zone,
-      neighborhood: suggestion.neighborhood || current.neighborhood,
-    }));
-  };
-
-  return (
-    <>
-      <label className={styles.fieldWide}>
-        <span>Street / area *</span>
-        <input
-          value={draft.address}
-          onChange={(event) => {
-            setSelectedAddress('');
-            onChange((current) => ({
-              ...current,
-              address: event.target.value,
-              ...(event.target.value.trim() ? {} : { zone: '', neighborhood: '' }),
-            }));
-          }}
-          placeholder="Start typing: Santa Cruz, Savaneta, Pampunastraat…"
-          autoComplete="off"
-        />
-      </label>
-      {suggestions.length ? (
-        <div className={`${styles.searchResults} ${styles.fieldWide}`} style={{ maxHeight: 180, marginTop: -3 }}>
-          {suggestions.map((suggestion) => (
-            <button type="button" key={`${suggestion.canonical}-${suggestion.operationalZone}`} className={styles.searchResult} onClick={() => selectSuggestion(suggestion)}>
-              <div><strong>{suggestion.canonical}</strong><span>{suggestion.neighborhood || 'Aruba address directory'}</span></div>
-              <small>{suggestion.operationalZone || 'Zone not mapped yet'}</small>
-              <b>SELECT</b>
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <Field label="House / unit" value={draft.addressDetail} onChange={(value) => onChange((current) => ({ ...current, addressDetail: value }))} placeholder="175K · 54 C · Apt 2 · Local 1" />
-      <Field label="Area / zone" value={draft.zone} onChange={(value) => onChange((current) => ({ ...current, zone: value }))} placeholder="Auto-filled when mapped" />
-      <Field label="Neighborhood" value={draft.neighborhood ?? ''} onChange={(value) => onChange((current) => ({ ...current, neighborhood: value }))} />
-    </>
   );
 }
 

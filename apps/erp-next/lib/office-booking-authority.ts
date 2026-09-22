@@ -441,6 +441,7 @@ export function updateOfficeCustomer(input: {
 }
 
 export function updateOfficeProperty(input: {
+  locations?: import('./property-editor-draft').PropertyEditorValue['locations'];
   requestId: string;
   customerId: string;
   propertyId: string;

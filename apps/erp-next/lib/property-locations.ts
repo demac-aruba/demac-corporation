@@ -5,7 +5,7 @@ import type { LiveCrmEquipment, LiveCrmProperty } from './live-crm';
 
 export type PropertyDwelling = {
   id: string; clientId: string; propertyId: string; code: string; name: string;
-  type: 'main_house' | 'apartment' | 'annex'; accessInstructions: string; active: boolean;
+  type: 'main_house' | 'main_office' | 'apartment' | 'annex'; accessInstructions: string; active: boolean;
 };
 export type PropertyArea = { id: string; clientId: string; propertyId: string; dwellingId: string; code: string; name: string; active: boolean };
 export type PropertyLocationData = {

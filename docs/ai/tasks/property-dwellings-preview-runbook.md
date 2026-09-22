@@ -19,15 +19,15 @@ The gateway snapshots emulator Auth/Firestore/Storage to ../dwellings-emulator-d
 - npm run validate:firebase --prefix functions.
 - node --test functions/propertyLocations.emulator.test.cjs with the isolated env above. This clears ONLY demo-demac-dwellings-test, never the review project.
 - Node test suites listed in the review; no existing tests disabled.
-- Browser scripts in functions/test-support/dwellingsBrowser.cjs, dwellingsMobile.cjs and dwellingsFieldBrowser.cjs use PLAYWRIGHT_MODULE (or installed playwright), PREVIEW_URL, PREVIEW_CREDENTIALS_FILE and PREVIEW_EVIDENCE_DIR.
+- Browser scripts in functions/test-support/propertyEditorBrowser.cjs, dwellingsBrowser.cjs, dwellingsMobile.cjs and dwellingsFieldBrowser.cjs use PLAYWRIGHT_MODULE (or installed playwright), PREVIEW_URL, PREVIEW_CREDENTIALS_FILE and PREVIEW_EVIDENCE_DIR.
 - Credentials JSON is local only: office, technician, password. Browser/API evidence omits tokens/passwords.
 - dwellingsGatewayCheck.cjs consumes the browser-created booking-result.json; it verifies actual assignment, Storage, registration and report identity. Replays keep equipment IDs stable.
 
 The frontend gateway routes only explicit demo Firebase destinations. CSP limits connections to this origin. Backend factories bind only to local emulators; no Firebase triggers, queue consumers, scheduled workers or external message/billing integration runtimes are loaded. Direct database writes and non-evidence buckets are denied.
 
 ## Review route
-CRM → DEMO Owner A → Properties → DEMO Garden House → Apartment 1 (or unclassified A/C). DEMO Owner B has a 23-dwelling complex and another simple property. DEMO Owner C has 40 dwellings.
-Scheduling → an available BOOK slot → search DEMO Test Lane 100 → Garden House → explicitly choose dwelling → requester/access → work quantity → validate/confirm. Inline Create customer/Add property and Add independent dwellings return to the same modal.
+CRM → DEMO Owner A → Properties → DEMO Garden House → Edit property → expand Apartment 1 (or Áreas generales y A/C sin vivienda). New property creation uses the same unified editor. Choose Casa or Complejo de apartamentos, then Varias unidades, an optional main house/office, apartment count and annexes. DEMO Owner B has a 23-dwelling complex and another simple property. DEMO Owner C has 40 dwellings.
+Scheduling → an available BOOK slot → search DEMO Test Lane 100 → Garden House → explicitly choose dwelling → requester/access → work quantity → validate/confirm. Inline Create customer/Add property and Editar propiedad share the unified editor and return to the same booking modal. A new unit must be selected explicitly for the visit.
 Technician account → Field → assigned Apartment 1 visit → verify access/requester/area. Existing synthetic evidence depicts a placeholder image, never a real customer's equipment.
 
 ## Rollout boundary

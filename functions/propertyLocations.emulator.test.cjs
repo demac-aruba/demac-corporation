@@ -35,6 +35,62 @@ beforeEach(async () => {
 });
 after(()=>deleteApp(app));
 
+test('Unified editor: creates a main office and apartments atomically, exact retries preserve IDs and audit', async () => {
+  const input = { requestId: 'premium-office-create', customerId, property: { name: 'DEMO Complex', type: 'Complejo de apartamentos', address: 'Morgenster 88', zone: 'Oranjestad', locations: { expectedVersion: 0, rows: [{ code: 'OF', name: 'Oficina principal', type: 'main_office', contactIds: ['access'] }, apartment('A-01'), apartment('A-02')] } } };
+  const results = await Promise.all([api('create_property', input), api('create_property', input)]);
+  results.forEach(result => assert.equal(result.status, 200, JSON.stringify(result.body)));
+  const property = results[0].body.property;
+  assert.equal(results[1].body.property.id, property.id);
+  assert.equal(property.dwellingCount, 3); assert.equal(property.locationVersion, 1);
+  const saved = await locations.list({ customerId, propertyId: property.id });
+  assert.equal(saved.dwellings.filter(row => row.type === 'main_office').length, 1);
+  assert.equal(saved.assignments.length, 1);
+  assert.equal((await db.collection('bookingIdempotency').where('propertyId', '==', property.id).get()).size, 1);
+  assert.equal((await db.collection('equipmentSystems').get()).size, 1);
+});
+
+test('Unified editor: invalid unit rolls back new customer, property, contacts and every child', async () => {
+  const before = await Promise.all(['clients','properties','contacts','bookingIdempotency'].map(name => db.collection(name).get().then(s => s.size)));
+  const input = { requestId: 'premium-customer-invalid', customer: { name: 'DEMO New Owner', phone: '+2975990011' }, property: { address: 'Noord 55', zone: 'Noord', locations: { expectedVersion: 0, rows: [apartment('1'), apartment(' １ ')] } } };
+  const rejected = await api('create_customer_property', input);
+  assert.notEqual(rejected.status, 200);
+  const after = await Promise.all(['clients','properties','contacts','bookingIdempotency'].map(name => db.collection(name).get().then(s => s.size)));
+  assert.deepEqual(after, before);
+  input.requestId = 'premium-customer-valid'; input.property.locations.rows = [{ code: 'CP', name: 'Casa principal', type: 'main_house' }, apartment()];
+  const created = await api('create_customer_property', input);
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  assert.equal((await locations.list({ customerId: created.body.customer.id, propertyId: created.body.property.id })).dwellings.length, 2);
+});
+
+test('Unified editor: update, area and contacts commit together, stale edits and duplicates preserve original data', async () => {
+  const first = await create([apartment('1'), apartment('2')]);
+  const original = await get(`properties/${propertyId}`);
+  const input = { requestId: 'premium-update-property', customerId, propertyId, expectedUpdatedAt: original.updatedAt, changes: { name: 'DEMO Edited complex', address: original.address, zone: original.zone || 'Noord' }, locations: { expectedVersion: 1, rows: [{ ...apartment('OF'), id: first.ids[0], name: 'Oficina principal', type: 'main_office', contactIds: ['access'] }], areas: [{ name: 'Recepción', code: 'R', dwellingId: first.ids[0] }] } };
+  const changed = await api('update_property', input);
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal((await api('update_property', input)).status, 200);
+  const saved = await locations.list({ customerId, propertyId });
+  assert.equal(saved.property.locationVersion, 2); assert.equal(saved.dwellings.find(row => row.id === first.ids[0]).type, 'main_office');
+  assert.equal(saved.areas.length, 1); assert.equal(saved.assignments.length, 1); assert.equal(saved.property.dwellingCount, 2);
+  const snapshot = JSON.stringify(saved);
+  const stale = await api('update_property', { ...input, requestId: 'premium-stale-version', changes: { name: 'MUST NOT SAVE' } });
+  assert.notEqual(stale.status, 200);
+  const duplicate = await api('update_property', { ...input, requestId: 'premium-duplicate-unit', expectedUpdatedAt: saved.property.updatedAt, changes: { name: 'MUST NOT SAVE' }, locations: { expectedVersion: 2, rows: [{ ...apartment('2'), id: first.ids[0] }] } });
+  assert.notEqual(duplicate.status, 200);
+  const invalidArea = await api('update_property', { ...input, requestId: 'premium-invalid-area', expectedUpdatedAt: saved.property.updatedAt, changes: { name: 'MUST NOT SAVE' }, locations: { expectedVersion: 2, rows: [apartment('3')], areas: [{ name: 'Bad', code: 'B', dwellingId: 'foreign' }] } });
+  assert.notEqual(invalidArea.status, 200);
+  assert.equal(JSON.stringify(await locations.list({ customerId, propertyId })), snapshot);
+  assert.equal((await get('equipmentSystems/OLD')).dwellingId, undefined);
+});
+
+test('Unified editor: competing property updates accept one complete draft only', async () => {
+  const original = await get(`properties/${propertyId}`);
+  const results = await Promise.all(['A','B'].map(code => api('update_property', { requestId: `premium-race-${code}`, customerId, propertyId, expectedUpdatedAt: original.updatedAt || '', changes: { name: `DEMO Winner ${code}` }, locations: { expectedVersion: 0, rows: [apartment(code)] } })));
+  assert.equal(results.filter(result => result.status === 200).length, 1, JSON.stringify(results));
+  const saved = await locations.list({ customerId, propertyId });
+  assert.equal(saved.dwellings.length, 1); assert.equal(saved.property.name, `DEMO Winner ${saved.dwellings[0].code}`);
+});
+
 test('A/B/C/D: existing house plus five dwellings, configurable 23 and 40; property-local codes; no automatic equipment migration',async()=>{
   const before=await get('equipmentSystems/OLD');
   const saved=await create([{code:'MAIN',name:'Main house',type:'main_house'},...Array.from({length:4},(_,i)=>apartment(String(i+1)))]);
