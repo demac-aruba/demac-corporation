@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './isolated-preview';
 import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
 import { requireFirebaseWebSession } from './session';
 
@@ -91,7 +92,7 @@ export function decodeFirestoreFields(fields: Record<string, FirestoreValue>) {
 
 async function authenticatedFetch(url: string, init?: RequestInit) {
   const session = await requireFirebaseWebSession();
-  const response = await fetch(url, {
+  const response = await fetch(firebaseTransportUrl(url), {
     ...init,
     headers: {
       Authorization: `Bearer ${session.idToken}`,

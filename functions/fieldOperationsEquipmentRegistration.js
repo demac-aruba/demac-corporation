@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { resolvePropertyLocation } = require('./propertyLocations');
 const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
@@ -63,6 +64,7 @@ function normalizeEvidencePaths(value) {
 
 function normalizeRegistrationInput(input = {}) {
   return {
+    ...(text(input.areaId, 180) ? { areaId: text(input.areaId, 180) } : {}),
     locationLabel: requiredText(input.locationLabel, 'equipment_location_required', 'A room/location title is required for the A/C.', 240),
     systemType: requiredText(input.systemType, 'equipment_type_required', 'A/C system type is required.', 120),
     brand: requiredText(input.brand, 'equipment_brand_required', 'A/C brand is required.', 120),
@@ -101,6 +103,9 @@ function projectRegisteredEquipment(record, expectedContext = {}) {
   if (!id || !clientId || !propertyId || !sourceVisitId || !sourceWorkOrderId) {
     throw fieldError('equipment_registration_identity_conflict', 'Persisted on-site A/C registration identity is incomplete.', 409);
   }
+  if (Object.hasOwn(expectedContext, 'dwellingId') && text(record.dwellingId, 180) !== text(expectedContext.dwellingId, 180)) {
+    throw fieldError('equipment_registration_identity_conflict', 'Registered A/C belongs to a different dwelling.', 409);
+  }
   const checks = [
     ['Customer', clientId, text(expectedContext.customerId, 180)],
     ['Property', propertyId, text(expectedContext.propertyId, 180)],
@@ -135,6 +140,8 @@ function projectRegisteredEquipment(record, expectedContext = {}) {
     id,
     qrCode: qrCode || undefined,
     locationLabel,
+    ...(record.dwellingId ? { dwellingId: text(record.dwellingId, 180) } : {}),
+    ...(record.areaId ? { areaId: text(record.areaId, 180), areaName: text(record.areaName, 240) } : {}),
     systemType,
     brand,
     btu,
@@ -287,6 +294,7 @@ function createRegisterEquipmentSystemCommand({
         workOrderId: context.workOrderId,
         customerId: context.customerId,
         propertyId: context.propertyId,
+        dwellingId: context.dwellingId || '',
       };
       if (existingSnapshot.exists) {
         const existing = fieldSnapshotRecord(existingSnapshot);
@@ -314,6 +322,32 @@ function createRegisterEquipmentSystemCommand({
       }
 
       const occurredAt = text(now(), 80);
+      let location;
+      let newArea;
+      let locationProperty;
+      if (context.dwellingId || normalized.areaId) {
+        const [customerSnapshot, propertySnapshot] = await Promise.all([
+          transaction.get(db.collection('clients').doc(context.customerId)),
+          transaction.get(db.collection('properties').doc(context.propertyId)),
+        ]);
+        locationProperty = propertySnapshot.exists ? { ...propertySnapshot.data(), id: propertySnapshot.id } : null;
+        let selectedAreaId = normalized.areaId;
+        if (!selectedAreaId) {
+          const areaSnapshot = await transaction.get(db.collection('properties').doc(context.propertyId).collection('areas'));
+          const matching = (areaSnapshot.docs || []).map(fieldSnapshotRecord).filter((area) => area.active !== false
+            && text(area.dwellingId, 180) === context.dwellingId && text(area.name, 240).toLocaleLowerCase('en') === normalized.locationLabel.toLocaleLowerCase('en'));
+          if (matching.length > 1) throw fieldError('equipment_area_ambiguous', 'Several areas have that name. Select the correct area.', 409);
+          selectedAreaId = matching[0]?.id;
+          if (!selectedAreaId) newArea = { id: deterministicId('AR', `${context.propertyId}:${stable}`), clientId: context.customerId,
+            propertyId: context.propertyId, dwellingId: context.dwellingId, name: normalized.locationLabel,
+            code: deterministicId('AREA', `${context.propertyId}:${stable}`), active: true, createdAt: occurredAt, updatedAt: occurredAt, createdById: identity.uid, updatedById: identity.uid };
+        }
+        location = await resolvePropertyLocation({ db, transaction,
+          customer: customerSnapshot.exists ? { ...customerSnapshot.data(), id: customerSnapshot.id } : null,
+          property: locationProperty,
+          request: { customerId: context.customerId, dwellingId: context.dwellingId, areaId: selectedAreaId }, requireExplicit: false });
+        if (newArea) Object.assign(location, { areaId: newArea.id, areaName: newArea.name });
+      }
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
       const evidenceRecords = EQUIPMENT_REGISTRATION_EVIDENCE_KINDS.map((kind) => buildEquipmentRegistrationEvidence({
         assetId,
@@ -333,6 +367,7 @@ function createRegisterEquipmentSystemCommand({
         clientId: context.customerId,
         propertyId: context.propertyId,
         locationLabel: normalized.locationLabel,
+        ...(location ? { dwellingId: location.dwellingId || '', areaId: location.areaId, areaName: location.areaName } : {}),
         systemType: normalized.systemType,
         brand: normalized.brand,
         btu: normalized.btu,
@@ -370,6 +405,10 @@ function createRegisterEquipmentSystemCommand({
       }, 'equipmentSystem');
 
       transaction.create(equipmentRef, equipmentRecord);
+      if (newArea) {
+        transaction.create(db.collection('properties').doc(context.propertyId).collection('areas').doc(newArea.id), newArea);
+        transaction.set(db.collection('properties').doc(context.propertyId), { locationVersion: Number(locationProperty.locationVersion || 0) + 1, updatedAt: occurredAt, updatedById: identity.uid }, { merge: true });
+      }
       for (const evidence of evidenceRecords) {
         transaction.create(db.collection(FIELD_EVIDENCE_COLLECTION).doc(evidence.id), evidence);
         await appendAuditInTransaction({

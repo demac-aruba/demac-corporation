@@ -349,6 +349,7 @@ function createAdditionalWorkInterventionCommand({
         workOrderId: context.workOrderId,
         customerId: context.customerId,
         propertyId: context.propertyId,
+        dwellingId: context.dwellingId || '',
       };
       const scopeChangeId = deterministicId('SC', `${normalizedVisitId}:${stable}`);
       const interventionId = deterministicId('WI', `${normalizedVisitId}:additional:${stable}`);
@@ -466,6 +467,9 @@ function createAdditionalWorkInterventionCommand({
         propertyId: context.propertyId,
         visitAssetId: normalizedVisitAssetId,
         assetId: visitAsset.assetId,
+        ...(context.dwellingId ? { dwellingId: context.dwellingId } : {}),
+        ...(visitAsset.areaId ? { areaId: visitAsset.areaId } : {}),
+        ...(context.locationSnapshot ? { locationSnapshot: context.locationSnapshot } : {}),
         serviceCatalogItemId: normalizedServiceId,
         interventionType: canonicalService.label,
         origin: mappedOrigin.interventionOrigin,

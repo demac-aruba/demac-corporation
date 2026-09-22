@@ -3,6 +3,7 @@ const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFi
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
+const { resolvePropertyLocation } = require('./propertyLocations');
 
 const FIELD_VISIT_ASSET_STORAGE_VERSION = 1;
 const VISIT_ASSET_COLLECTION = 'visitAssets';
@@ -39,7 +40,10 @@ function assertExpectedReference(actual, expected, label) {
   }
 }
 
-function requireEquipmentIdentity(record, customerId, propertyId) {
+function requireEquipmentIdentity(record, customerId, propertyId, dwellingId = '') {
+  if (text(record?.dwellingId, 180) !== text(dwellingId, 180)) {
+    throw fieldError('asset_dwelling_mismatch', 'The selected A/C belongs to a different dwelling or is unclassified.', 409);
+  }
   const customerRefs = [
     ['clientId', text(record?.clientId, 180)],
     ['customerId', text(record?.customerId, 180)],
@@ -116,6 +120,9 @@ function projectVisitAsset(record, expectedContext = {}) {
   assertExpectedReference(workOrderId, expectedContext.workOrderId, 'Work Order');
   assertExpectedReference(customerId, expectedContext.customerId, 'Customer');
   assertExpectedReference(propertyId, expectedContext.propertyId, 'Property');
+  if (Object.hasOwn(expectedContext, 'dwellingId') && text(record.dwellingId, 180) !== text(expectedContext.dwellingId, 180)) {
+    throw fieldError('visit_asset_identity_conflict', 'The A/C belongs to a different dwelling.', 409);
+  }
   if (typeof record?.addedOnSite !== 'boolean') {
     throw fieldError('invalid_visit_asset_added_on_site', 'Persisted Visit Asset addedOnSite flag is invalid.', 409);
   }
@@ -123,6 +130,8 @@ function projectVisitAsset(record, expectedContext = {}) {
     id,
     visitId,
     assetId,
+    ...(record.dwellingId ? { dwellingId: text(record.dwellingId, 180) } : {}),
+    ...(record.areaId ? { areaId: text(record.areaId, 180) } : {}),
     sequence: canonicalSequence(record?.sequence),
     locationLabel: text(record?.locationLabel, 240),
     source,
@@ -247,6 +256,7 @@ function createAttachExistingVisitAssetCommand({
         workOrderId: context.workOrderId,
         customerId: context.customerId,
         propertyId: context.propertyId,
+        dwellingId: context.dwellingId || '',
       };
 
       if (!VISIT_ASSET_MUTABLE_VISIT_STATUSES.has(context.canonicalVisit.status)) {
@@ -265,7 +275,7 @@ function createAttachExistingVisitAssetCommand({
           throw fieldError('asset_not_available_for_visit', 'The QR does not identify an A/C available for this visit.', 404);
         }
         equipment = fieldSnapshotRecord(equipmentSnapshot);
-        requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
+        requireEquipmentIdentity(equipment, context.customerId, context.propertyId, context.dwellingId);
         if (text(equipment.qrCode, 512) !== presentedQrCode) {
           throw fieldError('asset_qr_mismatch', 'The QR does not identify the selected A/C for this visit.', 409);
         }
@@ -294,9 +304,17 @@ function createAttachExistingVisitAssetCommand({
           throw fieldError('asset_not_available_for_visit', 'The selected A/C is not available for this visit.', 404);
         }
         equipment = fieldSnapshotRecord(equipmentSnapshot);
-        requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
+        requireEquipmentIdentity(equipment, context.customerId, context.propertyId, context.dwellingId);
       }
 
+      if (context.dwellingId || equipment.areaId) {
+        const customerSnapshot = await transaction.get(db.collection('clients').doc(context.customerId));
+        const propertySnapshot = await transaction.get(db.collection('properties').doc(context.propertyId));
+        await resolvePropertyLocation({ db, transaction,
+          customer: customerSnapshot.exists ? { ...customerSnapshot.data(), id: customerSnapshot.id } : null,
+          property: propertySnapshot.exists ? { ...propertySnapshot.data(), id: propertySnapshot.id } : null,
+          request: { customerId: context.customerId, dwellingId: context.dwellingId, areaId: equipment.areaId }, requireExplicit: false });
+      }
       const existingAssetsSnapshot = await transaction.get(
         db.collection(VISIT_ASSET_COLLECTION).where('visitId', '==', normalizedVisitId),
       );
@@ -320,6 +338,8 @@ function createAttachExistingVisitAssetCommand({
         clientId: context.customerId,
         propertyId: context.propertyId,
         assetId: normalizedAssetId,
+        ...(context.dwellingId ? { dwellingId: context.dwellingId } : {}),
+        ...(equipment.areaId ? { areaId: equipment.areaId } : {}),
         sequence,
         locationLabel: text(equipment.locationLabel, 240),
         source: attachSource,

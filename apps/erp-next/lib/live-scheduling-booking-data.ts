@@ -197,6 +197,7 @@ function assertCustomerDoesNotDuplicate(input: NewBookingCustomer, references: B
 }
 
 export async function createBookingCustomerWithProperty(args: {
+  requestId?: string;
   customer: NewBookingCustomer;
   property: NewBookingProperty;
   references: BookingReferenceData;
@@ -213,7 +214,7 @@ export async function createBookingCustomerWithProperty(args: {
   assertCustomerDoesNotDuplicate(args.customer, args.references);
 
   const result = await createOfficeCustomerWithProperty({
-    requestId: createOfficeLifecycleRequestId('schedule-customer'),
+    requestId: args.requestId ?? createOfficeLifecycleRequestId('schedule-customer'),
     customer: {
       name,
       company: text(args.customer.company),
@@ -245,7 +246,7 @@ export async function createBookingCustomerWithProperty(args: {
   return { customer, property };
 }
 
-export async function createBookingProperty(clientId: string, input: NewBookingProperty) {
+export async function createBookingProperty(clientId: string, input: NewBookingProperty, requestId = createOfficeLifecycleRequestId('schedule-property')) {
   const ownerId = text(clientId);
   const address = text(input.address);
   const zone = text(input.zone);
@@ -254,7 +255,7 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
   if (!zone) throw new Error('Property area / zone is required.');
 
   const result = await createOfficeProperty({
-    requestId: createOfficeLifecycleRequestId('schedule-property'),
+    requestId,
     customerId: ownerId,
     property: {
       name: text(input.name),

@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type {
   AppointmentRecipientSelection,
   BookingContact,
@@ -302,7 +303,7 @@ function apiErrorDetail(payload: ApiError) {
   return typeof reason === 'string' && reason.trim() ? ` · ${reason.trim()}` : '';
 }
 
-async function callOfficeBookingAuthority<T>(
+export async function callOfficeBookingAuthority<T>(
   action: string,
   data: Record<string, unknown>,
   timeoutMs = 15_000,
@@ -325,7 +326,7 @@ async function callOfficeBookingAuthority<T>(
     controller.abort();
   }, timeoutMs);
   try {
-    const response = await fetch(endpoint(), {
+    const response = await fetch(firebaseTransportUrl(endpoint()), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${session.idToken}`,
@@ -491,6 +492,10 @@ export function deactivateOfficeContactAssignment(input: {
 }
 
 export async function checkOfficeCreateAvailability(input: {
+  sourcePartialAppointmentId?: string;
+  dwellingId?: string;
+  requesterId?: string;
+  accessContactId?: string;
   requestId: string;
   customerId: string;
   propertyId: string;

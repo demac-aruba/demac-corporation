@@ -71,9 +71,9 @@ function linkedCustomerContactIdFor(clientId, linkedCustomerId) {
   return `contact-${hashId(`${ownerId}|linked-customer:${personId}`, 24)}`;
 }
 
-function assignmentIdFor({ clientId, contactId, scope, propertyId }) {
+function assignmentIdFor({ clientId, contactId, scope, propertyId, dwellingId }) {
   const scopeKey = scope === 'all_properties' ? 'all' : cleanText(propertyId, 180);
-  return `contact-assignment-${hashId(`${clientId}|${contactId}|${scope}|${scopeKey}`, 24)}`;
+  return `contact-assignment-${hashId(`${clientId}|${contactId}|${scope}|${scopeKey}${dwellingId ? `|dwelling:${cleanText(dwellingId, 180)}` : ''}`, 24)}`;
 }
 
 function normalizeRules(input = {}) {
@@ -450,7 +450,7 @@ async function clientCollectionSnapshot(db, collectionName, clientId) {
   return collection.get();
 }
 
-async function resolveAppointmentRecipients(db, { clientId, propertyId, selections = [] }) {
+async function resolveAppointmentRecipients(db, { clientId, propertyId, dwellingId = '', selections = [] }) {
   const customerRef = db.collection('clients').doc(clientId);
   const propertyRef = db.collection('properties').doc(propertyId);
   const [customerSnapshot, propertySnapshot, contactSnapshot, assignmentSnapshot] = await Promise.all([
@@ -470,6 +470,7 @@ async function resolveAppointmentRecipients(db, { clientId, propertyId, selectio
     .map((doc) => ({ id: doc.id, ...doc.data() }))
     .filter((assignment) => assignment.active !== false
       && cleanText(assignment.clientId, 180) === clientId
+      && (!assignment.dwellingId || cleanText(assignment.dwellingId, 180) === dwellingId)
       && (assignment.scope === 'all_properties' || cleanText(assignment.propertyId, 180) === propertyId));
   const linkedCustomerIds = [...new Set(relevantAssignments
     .map((assignment) => cleanText(contactById.get(assignment.contactId)?.linkedCustomerId, 180))
@@ -485,7 +486,7 @@ async function resolveAppointmentRecipients(db, { clientId, propertyId, selectio
     .filter(Boolean));
   const effective = new Map();
   relevantAssignments
-    .sort((a, b) => Number(a.scope === 'property') - Number(b.scope === 'property'))
+    .sort((a, b) => (Number(a.scope === 'property') + Number(Boolean(a.dwellingId))) - (Number(b.scope === 'property') + Number(Boolean(b.dwellingId))))
     .forEach((assignment) => effective.set(assignment.contactId, assignment));
   let contactRecipients = [...effective.values()]
     .map((assignment) => {
@@ -498,7 +499,7 @@ async function resolveAppointmentRecipients(db, { clientId, propertyId, selectio
       return contactRecipient(projectLinkedCustomerContact({ ...contact, linkedCustomerId }, linkedCustomer), assignment);
     })
     .filter(Boolean);
-  if (!relevantAssignments.length && Array.isArray(property.contacts)) {
+  if (!dwellingId && !property.hasIndependentDwellings && !relevantAssignments.length && Array.isArray(property.contacts)) {
     contactRecipients = property.contacts.filter((contact) => contact?.active !== false).map(legacyContactRecipient).filter(Boolean);
   }
   const hasContactNoticeDefault = contactRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);

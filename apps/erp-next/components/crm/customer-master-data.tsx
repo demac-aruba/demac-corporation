@@ -11,6 +11,7 @@ import { matchesLiveCrmContactSearch } from '@/lib/live-crm';
 import { createOfficeLifecycleRequestId } from '@/lib/office-booking-authority';
 import contactLinkStyles from './customer-contact-link.module.css';
 import styles from './customer-master-data.module.css';
+import { PropertyLocations } from './property-locations';
 
 export type CustomerEditorValue = {
   id?: string;
@@ -265,6 +266,7 @@ function propertyName(property: LiveCrmProperty) {
 }
 
 export function CustomerMasterDataTab({ tab, graph, customerCandidates, onAddContact, onUpdateContact, onAddProperty, onUpdateProperty }: MasterDataProps) {
+  const [locationPropertyId, setLocationPropertyId] = useState('');
   const [editor, setEditor] = useState<EditorState>(null);
   const propertyById = useMemo(() => new Map(graph.properties.map((property) => [property.id, property])), [graph.properties]);
   const activeProperties = useMemo(() => graph.properties.filter((property) => property.active !== false), [graph.properties]);
@@ -295,6 +297,8 @@ export function CustomerMasterDataTab({ tab, graph, customerCandidates, onAddCon
       </div> : null}
 
       {tab === 'Properties' ? <div className={styles.recordList}>
+        <label>Open property dwellings & areas<select value={locationPropertyId} onChange={(event) => setLocationPropertyId(event.target.value)}><option value="">Choose an existing property…</option>{activeProperties.map((property) => <option key={property.id} value={property.id}>{propertyName(property)}</option>)}</select></label>
+        {activeProperties.some((property) => property.id === locationPropertyId) ? <PropertyLocations key={`${graph.client.id}:${locationPropertyId}`} customerId={graph.client.id} propertyId={locationPropertyId} contacts={graph.contacts} /> : null}
         {graph.properties.map((property) => <article className={styles.siteCard} key={property.id}><div className={styles.siteIcon}>⌂</div><div className={styles.recordMain}><div><strong>{propertyName(property)}</strong><b>{property.active === false ? 'Inactive' : 'Active'}</b></div><span>{property.address || property.addressRaw || 'Address pending'}</span><small>{property.neighborhood || property.zone || property.operationalZone || 'Area pending'} · {property.type || 'Property'}</small>{property.accessInstructions ? <em>{property.accessInstructions}</em> : null}</div><button type="button" onClick={() => setEditor({ kind: 'property', mode: 'edit', requestId: createOfficeLifecycleRequestId('crm-property-update'), initial: propertyEditorValue(property) })}>Edit property</button></article>)}
         {graph.properties.length === 0 ? <div className={styles.emptyState}><strong>No properties registered</strong><p>Add the first real service location for this customer.</p></div> : null}
       </div> : null}

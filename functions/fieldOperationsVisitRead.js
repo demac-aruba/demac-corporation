@@ -128,6 +128,7 @@ async function loadWorkVisitChainState(db, job) {
   const snapshot = await db.collection('workVisits').where('workOrderId', '==', workOrderId).get();
   const records = snapshotRecords(snapshot);
   const expectedOrderIdentity = {
+    dwellingId: text(job.dwellingId, 180),
     id: workOrderId,
     appointmentId: text(job?.appointmentId, 180),
     clientId: text(job?.customerId, 180),

@@ -1,3 +1,4 @@
+import { firebaseTransportUrl } from './isolated-preview';
 import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
 import { requireFirebaseWebSession } from './session';
 
@@ -13,7 +14,7 @@ export class FirebaseStorageUploadError extends Error {
 
 export function firebaseStorageMediaUrl(path: string) {
   if (!firebaseClientConfig.storageBucket) return '';
-  return `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`;
+  return firebaseTransportUrl(`https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`);
 }
 
 export async function uploadAuthenticatedFirebaseStorageObject(
@@ -30,7 +31,7 @@ export async function uploadAuthenticatedFirebaseStorageObject(
   }
   const session = await requireFirebaseWebSession();
   const endpoint = `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o?uploadType=media&name=${encodeURIComponent(normalizedPath)}`;
-  const response = await fetch(endpoint, {
+  const response = await fetch(firebaseTransportUrl(endpoint), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${session.idToken}`,

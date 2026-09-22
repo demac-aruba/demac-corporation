@@ -14,6 +14,7 @@ export type LiveSchedulingClient = {
   active?: boolean; createdAt?: string; updatedAt?: string;
 };
 export type LiveSchedulingProperty = {
+  hasIndependentDwellings?: boolean; dwellingCount?: number; locationVersion?: number;
   id: string; clientId?: string; name?: string; type?: string; address?: string;
   addressRaw?: string; addressNormalized?: string; neighborhood?: string;
   zone?: string; operationalZone?: string; notes?: string; accessInstructions?: string;

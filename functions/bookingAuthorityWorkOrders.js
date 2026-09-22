@@ -192,6 +192,8 @@ function buildWorkOrders({ appointment, option, request, customer, property, act
       appointmentId: appointment.appointmentId,
       clientId: customer.id,
       propertyId: property.id,
+      ...(appointment.dwellingId ? { dwellingId: appointment.dwellingId } : {}),
+      ...(appointment.locationSnapshot ? { locationSnapshot: appointment.locationSnapshot } : {}),
       serviceId,
       date: option.date,
       time: assignment.time || option.time,

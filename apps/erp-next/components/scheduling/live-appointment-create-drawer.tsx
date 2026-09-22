@@ -5,6 +5,8 @@ import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-
 import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PropertyLocations } from '../crm/property-locations';
+import type { PropertyLocationData } from '../../lib/property-locations';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
   BROWSER_PROJECTS_PREVIEW_KEY,
@@ -371,6 +373,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [requestedStart, setRequestedStart] = useState(target.start);
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
+  const [dwellingId, setDwellingId] = useState('');
+  const [requesterId, setRequesterId] = useState('');
+  const [accessContactId, setAccessContactId] = useState('');
+  const [locationData, setLocationData] = useState<PropertyLocationData | null>(null);
+  useEffect(() => { setDwellingId(''); setRequesterId(''); setAccessContactId(''); setLocationData(null); }, [customerId, propertyId]);
+  const locationReady = locationData?.property.id === propertyId && (!locationData.property.hasIndependentDwellings || locationData.dwellings.some((item) => item.id === dwellingId));
   const [recipientSelections, setRecipientSelections] = useState<AppointmentRecipientSelection[]>([]);
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
@@ -394,6 +402,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [customerPropertyDraft, setCustomerPropertyDraft] = useState<PropertyDraft>(emptyProperty);
   const [propertyDraft, setPropertyDraft] = useState<PropertyDraft>(emptyProperty);
   const [masterSaving, setMasterSaving] = useState(false);
+  const masterInFlight = useRef(false);
+  const masterRequestId = useRef('');
   const [masterError, setMasterError] = useState('');
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -731,6 +741,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       propertiesByCustomer.set(id, current);
     }
 
+    for (const contact of references.contacts) {
+      const current = propertiesByCustomer.get(contact.clientId) ?? [];
+      current.push(`${contact.name} ${contact.phone || ""} ${contact.whatsapp || ""}`);
+      propertiesByCustomer.set(contact.clientId, current);
+    }
     return references.clients
       .filter((customer) => customer.active !== false)
       .map((customer) => ({
@@ -741,7 +756,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       .sort((a, b) => b.score - a.score || customerLabel(a.customer).localeCompare(customerLabel(b.customer)))
       .slice(0, 10)
       .map((item) => item.customer);
-  }, [customerQuery, references.clients, references.properties]);
+  }, [customerQuery, references.clients, references.properties, references.contacts]);
 
   const serviceEstimatedMinutes = workLines.reduce((sum, line) => {
     const preset = presetById.get(line.presetId);
@@ -775,7 +790,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     });
     return [...grouped.values()].sort((left, right) => left.vanName.localeCompare(right.vanName));
   }, [selectedSupportSlotIds, supportSlotCandidates]);
-  const capacitySignature = [appointmentSource, customerId, propertyId, workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
+  const capacitySignature = [appointmentSource, customerId, propertyId, dwellingId, requesterId, accessContactId, Number(locationReady), workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
   const offerSignature = [capacitySignature, `support:${supportSelectionSignature}`, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim()].join('|');
   offerSignatureRef.current = offerSignature;
   const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
@@ -980,6 +995,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const openCustomerEditor = () => {
+    masterRequestId.current = createOfficeLifecycleRequestId('schedule-customer');
     setCustomerDraft({ ...emptyCustomer, name: customerQuery.trim() });
     setCustomerPropertyDraft({ ...emptyProperty, contactLinks: [] });
     setMasterError('');
@@ -988,16 +1004,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const saveCustomer = async () => {
-    if (masterSaving) return;
+    if (masterSaving || masterInFlight.current) return;
+    masterInFlight.current = true;
     setMasterSaving(true);
     setMasterError('');
     try {
       const created = await createBookingCustomerWithProperty({
+        requestId: masterRequestId.current,
         customer: customerDraft,
         property: materializePropertyDraft(customerPropertyDraft),
         references,
       });
-      await refreshReferences();
+      await refreshReferences().catch(() => undefined);
+      setReferences((current) => ({ ...current, clients: [...current.clients.filter((item) => item.id !== created.customer.id), created.customer], properties: [...current.properties.filter((item) => item.id !== created.property.id), created.property] }));
       setCustomerId(created.customer.id);
       setPropertyId(created.property.id);
       setRecipientSelections([]);
@@ -1007,11 +1026,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The customer could not be created.');
     } finally {
+      masterInFlight.current = false;
       setMasterSaving(false);
     }
   };
 
   const openPropertyEditor = () => {
+    masterRequestId.current = createOfficeLifecycleRequestId('schedule-property');
     if (!selectedCustomer) return;
     setPropertyDraft({ ...emptyProperty, zone: text(selectedCustomer.zone), contactLinks: [] });
     setMasterError('');
@@ -1020,12 +1041,14 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const saveProperty = async () => {
-    if (!selectedCustomer || masterSaving) return;
+    if (!selectedCustomer || masterSaving || masterInFlight.current) return;
+    masterInFlight.current = true;
     setMasterSaving(true);
     setMasterError('');
     try {
-      const created = await createBookingProperty(selectedCustomer.id, materializePropertyDraft(propertyDraft));
-      await refreshReferences();
+      const created = await createBookingProperty(selectedCustomer.id, materializePropertyDraft(propertyDraft), masterRequestId.current);
+      await refreshReferences().catch(() => undefined);
+      setReferences((current) => ({ ...current, properties: [...current.properties.filter((item) => item.id !== created.id), created] }));
       setPropertyId(created.id);
       setRecipientSelections([]);
       setPropertyEditorOpen(false);
@@ -1033,6 +1056,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The property could not be created.');
     } finally {
+      masterInFlight.current = false;
       setMasterSaving(false);
     }
   };
@@ -1084,6 +1108,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (!automatic) setAuthorityError('Select or add a service property first.');
       return;
     }
+    if (!locationReady) {
+      if (!automatic) setAuthorityError('Load the property locations and select a dwelling when required.');
+      return;
+    }
     if (!workValid) {
       if (!automatic) setAuthorityError(projectMode
         ? projectPlanState.error || 'Select a Project, its phase when applicable, and the whole Project slots to reserve.'
@@ -1111,6 +1139,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requestId: createOfficeLifecycleRequestId('schedule-create-check'),
         customerId: selectedCustomer.id,
         propertyId: selectedProperty.id,
+        dwellingId, requesterId, accessContactId,
         workLines: workRequestLines(),
         requestedDate: requestTarget.dateKey,
         requestedTime: requestTarget.start,
@@ -1180,7 +1209,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (validationAbortRef.current === requestController) validationAbortRef.current = null;
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, selectedSupportSlotIds, workRequestLines, workValid]);
+  }, [dwellingId, requesterId, accessContactId, locationReady, authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, selectedSupportSlotIds, workRequestLines, workValid]);
 
   useEffect(() => {
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
@@ -1269,7 +1298,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setAuthorityError('Projects management permission is required to confirm an appointment linked to a Project.');
       return;
     }
-    if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || bookingInFlight.current) return;
+    if (!locationReady || !selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || bookingInFlight.current) return;
     if (backdatedTarget && !backdatingAcknowledged) {
       setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
       return;
@@ -1286,6 +1315,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           requestId: createOfficeLifecycleRequestId('after-hours-emergency'),
           customerId: selectedCustomer.id,
           propertyId: selectedProperty.id,
+          dwellingId, requesterId, accessContactId,
           workLines: workRequestLines(),
           requestedDate: requestTarget.dateKey,
           requestedTime: requestTarget.start,
@@ -1585,9 +1615,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   {!customerProperties.length ? <div className={styles.emptyResult}>This customer has no active service property yet.</div> : null}
                   {projectMode && selectedProject && !selectedProject.siteId ? <div className={styles.previewBoundary}><strong>Project update required:</strong> this Project has no linked Service Property. Open the Project, use Edit Project to link its canonical property, then return to Scheduling.</div> : null}
                   {!projectMode ? <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button> : null}
+                  {selectedProperty ? <>
+                    <PropertyLocations key={`${customerId}:${propertyId}`} customerId={customerId} propertyId={propertyId} contacts={references.contacts} booking selectedId={dwellingId}
+                      onSelect={(id) => { setDwellingId(id); setAccessContactId(''); setRecipientSelections([]); resetCapacityValidation(); }}
+                      onLoaded={(data) => { setLocationData(data); if (data) setReferences((current) => ({ ...current, properties: current.properties.map((item) => item.id === data.property.id ? { ...item, ...data.property } : item), contactAssignments: [...current.contactAssignments.filter((item) => item.propertyId !== data.property.id), ...data.assignments] })); }} />
+                    <div className={styles.formGrid}>
+                      <label><span>Requested by · this visit</span><select value={requesterId} onChange={(event) => { setRequesterId(event.target.value); invalidateOfferValidation(); }}><option value="">Pending / not recorded</option><option value={`client:${customerId}`}>{customerLabel(selectedCustomer)} · owner</option>{references.contacts.filter((contact) => contact.clientId === customerId).map((contact) => <option key={contact.id} value={`contact:${contact.id}`}>{contact.name}</option>)}</select></label>
+                      <label><span>Access contact · this visit</span><select value={accessContactId} onChange={(event) => { setAccessContactId(event.target.value); invalidateOfferValidation(); }}><option value="">Pending / not recorded</option><option value={`client:${customerId}`}>{customerLabel(selectedCustomer)} · owner</option>{references.contacts.filter((contact) => contact.clientId === customerId).map((contact) => <option key={contact.id} value={`contact:${contact.id}`}>{contact.name}{locationData?.assignments.some((item) => item.contactId === contact.id && item.dwellingId === dwellingId) ? ' · dwelling contact' : ''}</option>)}</select></label>
+                    </div><p>These choices apply only to this visit. Ownership, dwelling contacts and billing responsibility remain separate.</p>
+                  </> : null}
                   {selectedProperty && !backdatedTarget ? <PropertyCommunicationPanel
                     client={selectedCustomer}
                     propertyId={selectedProperty.id}
+                    dwellingId={dwellingId}
                     contacts={references.contacts}
                     assignments={references.contactAssignments}
                     selections={recipientSelections}

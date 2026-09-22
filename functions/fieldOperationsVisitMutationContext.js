@@ -105,6 +105,8 @@ async function loadCurrentVisitMutationContext({
     assignment,
     canonicalVisit: projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId }),
     customerId,
+    dwellingId: text(order.dwellingId, 180),
+    locationSnapshot: order.locationSnapshot,
     historyRecords: orderedHistoryRecords,
     order,
     propertyId,

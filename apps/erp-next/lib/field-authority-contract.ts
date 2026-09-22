@@ -144,6 +144,8 @@ export type FieldVisitState = FieldPreparedVisit & {
 };
 
 export type FieldScheduleJob = {
+  dwellingId?: string;
+  locationSnapshot?: { locationLabel: string; accessInstructions: string; requester?: { name: string } | null; accessContact?: { name: string; phone: string } | null };
   id: string;
   workOrderId: string;
   appointmentId: string;
@@ -176,6 +178,7 @@ export type FieldScheduleJob = {
 };
 
 export type FieldJobDetail = FieldScheduleJob & {
+  areas?: Array<{ id: string; name: string }>;
   knownEquipment: FieldKnownEquipment[];
   visitAssets: FieldVisitAsset[];
   canAddExistingAsset: boolean;

@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { createPropertyLocationService, resolvePropertyLocation } = require('./propertyLocations');
 const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -149,6 +150,9 @@ function bookingRequestFromOffice(data = {}) {
   return normalizeBookingRequest({
     customerId: data.customerId,
     propertyId: data.propertyId,
+    dwellingId: data.dwellingId,
+    requesterId: data.requesterId,
+    accessContactId: data.accessContactId,
     workLines,
     constraints: {
       requestedDate: data.requestedDate,
@@ -1122,6 +1126,11 @@ function createOfficeBookingApi({
 
   async function execute({ action, data = {}, identity }) {
     const actor = officeActor(identity);
+    if (action === 'list_property_locations' || action === 'save_property_locations') {
+      requireOfficeRole(identity?.role);
+      const locations = createPropertyLocationService({ db });
+      return action === 'list_property_locations' ? locations.list(data) : locations.save(data, identity);
+    }
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
     if (action === OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY) return listContactDirectory(data);
@@ -1138,7 +1147,27 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.DEACTIVATE_CONTACT_ASSIGNMENT) return deactivateContactAssignment(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
-      const request = bookingRequestFromOffice(data);
+      let request = bookingRequestFromOffice(data);
+      let lifecycleAppointment;
+      if (cleanText(data.appointmentId || data.sourcePartialAppointmentId, 180)) {
+        const existing = await db.collection('appointments').doc(cleanText(data.appointmentId || data.sourcePartialAppointmentId, 180)).get();
+        if (existing.exists) {
+          const previous = existing.data();
+          lifecycleAppointment = previous;
+          if (previous.customerId !== request.customerId || previous.propertyId !== request.propertyId) {
+            throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'The lifecycle request must keep its customer and property.');
+          }
+          request = normalizeBookingRequest({ ...request, dwellingId: previous.dwellingId, requesterId: previous.requesterId, accessContactId: previous.accessContactId });
+        }
+      }
+      if (request.dwellingId || request.requesterId || request.accessContactId) {
+        const [customerSnapshot, propertySnapshot] = await Promise.all([
+          db.collection('clients').doc(request.customerId).get(), db.collection('properties').doc(request.propertyId).get(),
+        ]);
+        await resolvePropertyLocation({ db, customer: customerSnapshot.exists ? { ...customerSnapshot.data(), id: customerSnapshot.id } : null,
+          property: propertySnapshot.exists ? { ...propertySnapshot.data(), id: propertySnapshot.id } : null,
+          request: lifecycleAppointment ? { ...request, requesterId: undefined, accessContactId: undefined } : request, requireExplicit: !lifecycleAppointment });
+      }
       const bookingIntent = bookingIntentFromOffice(data);
       const backdated = bookingIntent.bookingMode === BACKDATED_BOOKING_MODE;
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
@@ -1156,6 +1185,7 @@ function createOfficeBookingApi({
         : await resolveAppointmentRecipients(db, {
           clientId: request.customerId,
           propertyId: request.propertyId,
+          dwellingId: request.dwellingId,
           selections: data.recipientSelections,
         });
       return authority.checkAvailability({
