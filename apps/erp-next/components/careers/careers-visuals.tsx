@@ -53,3 +53,4 @@ export function FunnelSteps({ step, completed, disabled, onSelect }: { step: num
       <span className={s.stepCircle}>{complete ? <CareerIcon name="check"/> : index + 1}</span><small>{label}</small>
     </button>;
   })}</nav>;
+}
