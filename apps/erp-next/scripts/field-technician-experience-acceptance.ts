@@ -1,3 +1,4 @@
+import './field-route-selection-acceptance';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { FieldScheduleJob, FieldVisitStatus } from '../lib/field-authority-contract';

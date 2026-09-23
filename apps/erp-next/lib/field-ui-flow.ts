@@ -40,7 +40,11 @@ export function fieldExperienceStepState(
 }
 
 export function isFieldJobCompleted(job: Pick<FieldScheduleJob, 'status' | 'fieldVisit'>) {
-  return job.fieldVisit?.status === 'completed' || job.status === 'Completada';
+  // Once a Field visit exists, its canonical status takes precedence over legacy labels.
+  // This is field execution completion only; it does not imply Office approval.
+  return job.fieldVisit
+    ? job.fieldVisit.status === 'completed'
+    : job.status === 'Completada';
 }
 
 export function isFieldJobInProgress(job: Pick<FieldScheduleJob, 'status' | 'fieldVisit'>) {
@@ -55,12 +59,25 @@ function isFieldJobClosed(job: Pick<FieldScheduleJob, 'status' | 'fieldVisit'>) 
     : ['Completada', 'Cancelada'].includes(job.status);
 }
 
+/** Parse only supported 24-hour clock values; never guess dates or localized times. */
+function fieldClockMinutes(value: string): number | null {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
 /** Selects the active job first, then the next scheduled job, without mutating input order. */
 export function selectNextFieldJob<T extends FieldScheduleJob>(jobs: readonly T[], nowTime: string): T | null {
   const open = jobs.filter((job) => !isFieldJobClosed(job));
   const active = open.find(isFieldJobInProgress);
   if (active) return active;
-  return open.find((job) => Boolean(job.time) && job.time >= nowTime) ?? open[0] ?? null;
+
+  // Sort a projection, not the server response or the agenda itself. Equal/unknown times
+  // retain response priority. Missing times remain unknown rather than becoming midnight.
+  const ordered = open.map((job, index) => ({ job, index, minutes: fieldClockMinutes(job.time) }))
+    .sort((left, right) => ((left.minutes ?? 1440) - (right.minutes ?? 1440)) || left.index - right.index);
+  const now = fieldClockMinutes(nowTime);
+  const upcoming = now === null ? undefined : ordered.find((entry) => entry.minutes !== null && entry.minutes >= now);
+  return upcoming?.job ?? ordered[0]?.job ?? null;
 }
 
 /** Keeps the highlighted next job from being rendered a second time in the route list. */
