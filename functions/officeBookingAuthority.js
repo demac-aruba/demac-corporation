@@ -147,6 +147,7 @@ function bookingRequestFromOffice(data = {}) {
     technicianInstructions: cleanText(line?.technicianInstructions, 1_500) || sharedInstructions,
   }));
   return normalizeBookingRequest({
+    project: data.project,
     customerId: data.customerId,
     propertyId: data.propertyId,
     dwellingId: data.dwellingId,
@@ -502,7 +503,7 @@ function createOfficeBookingApi({
 } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
-  const provider = schedulingProvider || createSchedulingProvider({ db });
+  const provider = require('./projectBookingLinks').withProjectBookingLinks({ db, provider: schedulingProvider || createSchedulingProvider({ db }) });
   const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
   const notifications = appointmentNotificationService || createAppointmentNotificationService({ db });
   let lifecycle = lifecycleAuthority;
@@ -1236,6 +1237,7 @@ function createOfficeBookingApi({
         request,
         actor,
         context: {
+          projectActorId: identity.uid,
           channel: "office",
           requestKey: `office:${identity.uid}:${requestId}:availability${backdated ? ":backdated" : ""}`,
           officeRequestId: requestId,
@@ -1263,7 +1265,7 @@ function createOfficeBookingApi({
         idempotencyKey: `office:${identity.uid}:${requestId}:${temporaryHold ? "hold" : "create"}:${offerId}:${optionId}`,
         actor,
         createMode: temporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED,
-        context: { channel: "office", officeRequestId: requestId, ...bookingIntent },
+        context: { channel: "office", projectActorId: identity.uid, officeRequestId: requestId, ...bookingIntent },
       });
       if (!result?.success || !cleanText(result.appointmentId, 180)) {
         throw new BookingAuthorityError(

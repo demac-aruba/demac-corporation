@@ -121,6 +121,8 @@ export type ProjectAssignment = {
 };
 
 export type BrowserProject = {
+  /** Present only on a verified shared planning record returned by Project Authority. */
+  serverVersion?: number;
   id: string;
   projectNumber: string;
   name: string;

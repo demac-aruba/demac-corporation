@@ -1,0 +1,16 @@
+.panel { margin: 18px 0; padding: 22px; border: 1px solid var(--border, #dbe4f2); border-radius: 16px; background: var(--surface, #fff); }
+.panel h2 { font-size: 18px; margin: 0 0 10px; }
+.panel p { font-size: 13px; line-height: 1.6; }
+.fields { border: 0; margin: 0 0 14px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.fields label { display: grid; gap: 6px; font-size: 13px; }
+.fields select, .fields input, .fields textarea { min-height: 38px; padding: 8px; border: 1px solid #c7d5e8; border-radius: 7px; color: inherit; background: inherit; width: 100%; }
+.fields textarea { min-height: 72px; }
+.fields .check { display: flex; align-items: center; }
+.check input { width: 18px; min-height: 18px; }
+.wide { grid-column: 1 / -1; }
+.panel button { padding: 10px 14px; margin-right: 8px; border: 1px solid #2168cc; border-radius: 8px; color: #fff; background: #1469e9; font-weight: 600; cursor: pointer; }
+.panel button:disabled { opacity: .55; cursor: default; }
+.review { border-left: 3px solid #1469e9; padding: 14px; background: #1469e90b; }
+.panel details { margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.panel summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 650px) { .fields { grid-template-columns: 1fr; } }

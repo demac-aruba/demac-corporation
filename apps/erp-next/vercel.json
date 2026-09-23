@@ -1,6 +1,8 @@
 {
   "git": {
     "deploymentEnabled": {
+      "feature/project-historical-bookings": false,
+      "release/project-historical-bookings": false,
       "feature/project-slot-progress": false,
       "fix/scheduling-history-attribution-cards": false,
       "fix/scheduling-linked-project-labels": false,

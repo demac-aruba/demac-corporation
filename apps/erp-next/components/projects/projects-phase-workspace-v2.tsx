@@ -11,6 +11,8 @@ import {
 } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { ProjectSlotBudgetProgress, useProjectSlotSources } from './project-slot-progress';
+import { ProjectHistoricalCorrection } from './project-historical-correction';
+import { commitSharedProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '@/lib/shared-projects';
 import { projectSlotProgress } from '@/lib/project-slot-progress';
 import {
   loadBookingMasterReferenceData,
@@ -30,10 +32,8 @@ import {
   type ProjectAssignment,
 } from '@/lib/browser-projects';
 import {
-  commitProjectsWithoutSamples,
   EMPTY_PROJECTS_STATE,
   loadProjectsWithoutSamples,
-  saveProjectsWithoutSamples,
 } from '@/lib/project-record-sanitizer';
 import {
   applyPhaseTemplate,
@@ -485,6 +485,9 @@ export function ProjectsPhaseWorkspaceV2() {
   const canManage = canView && principal.capabilities.has('projects.manage');
   const canManageRef = useRef(canManage);
   canManageRef.current = canManage;
+  const principalRef = useRef(principal.userId);
+  principalRef.current = principal.userId;
+  const [loadedFor, setLoadedFor] = useState('');
 
   const [state, setState] = useState<BrowserProjectsPreviewState>(EMPTY_PROJECTS_STATE);
   const [ready, setReady] = useState(false);
@@ -504,33 +507,46 @@ export function ProjectsPhaseWorkspaceV2() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    let active = true;
+    let sequence = 0;
+    setState(EMPTY_PROJECTS_STATE);
+    setReady(false);
     if (!canView) {
       setReady(true);
       return undefined;
     }
-    const reload = () => {
-      const loaded = loadProjectsWithoutSamples();
-      setState(loaded.state);
-      setProjectId((current) => loaded.state.projects.some((project) => project.id === current)
-        ? current
-        : loaded.state.selectedProjectId || loaded.state.projects[0]?.id || '');
-      if (!loaded.state.projects.length) setView('portfolio');
-      if (loaded.removedIds.length) {
-        setNotice(`${loaded.removedIds.length} seeded sample project${loaded.removedIds.length === 1 ? '' : 's'} removed. User-created Project records were preserved.`);
-        setNoticeTone('success');
+    const reload = async () => {
+      const attempt = ++sequence;
+      let loaded;
+      try { loaded = await loadSharedProjects(principal.userId); }
+      catch (error) {
+        if (!active || attempt !== sequence) return;
+        loaded = canManage ? loadProjectsWithoutSamples().state : EMPTY_PROJECTS_STATE;
+        setNotice(`Shared Projects are unavailable. ${error instanceof Error ? error.message : 'Try again.'}`);
+        setNoticeTone('warning');
       }
+      if (!active || attempt !== sequence) return;
+      setState(loaded);
+      setLoadedFor(principal.userId);
+      setReady(true);
+      setProjectId((current) => loaded.projects.some((project) => project.id === current)
+        ? current
+        : loaded.selectedProjectId || loaded.projects[0]?.id || '');
+      if (!loaded.projects.length) setView('portfolio');
     };
-    reload();
+    void reload();
     setCompanyTemplates(loadCompanyTemplates());
-    setReady(true);
-    const onStorage = () => reload();
+    const onStorage = () => { void reload(); };
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', onStorage);
+    window.addEventListener(PROJECTS_CHANGED_EVENT, onStorage);
     return () => {
+      active = false;
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('focus', onStorage);
+      window.removeEventListener(PROJECTS_CHANGED_EVENT, onStorage);
     };
-  }, [canView]);
+  }, [canView, canManage, principal.userId]);
 
   useEffect(() => {
     if (canManage) return;
@@ -568,7 +584,6 @@ export function ProjectsPhaseWorkspaceV2() {
   const openProject = (candidate: BrowserProject) => {
     const next = { ...state, selectedProjectId: candidate.id };
     setState(next);
-    saveProjectsWithoutSamples(next);
     setProjectId(candidate.id);
     setSelectedPhaseId('');
     setTechnicianAssignmentId('');
@@ -580,14 +595,15 @@ export function ProjectsPhaseWorkspaceV2() {
     if (!canManageRef.current) throw new Error('Projects management permission is required.');
     setBusy(true);
     try {
-      const next = await commitProjectsWithoutSamples(state, (latest) => {
+      const next = await commitSharedProjects(state, (latest) => {
         if (latest.projects.some((candidate) => candidate.projectNumber.trim().toLocaleUpperCase('en') === created.projectNumber.trim().toLocaleUpperCase('en'))) {
           throw new Error(`Project number ${created.projectNumber} already exists.`);
         }
         return { ...latest, selectedProjectId: created.id, projects: [created, ...latest.projects] };
       }, {
+        uid: principal.userId,
         authorize: () => {
-          if (!canManageRef.current) throw new Error('Projects management permission changed before save.');
+          if (!canManageRef.current || principalRef.current !== principal.userId) throw new Error('Projects management permission changed before save.');
         },
       });
       setState(next);
@@ -607,13 +623,14 @@ export function ProjectsPhaseWorkspaceV2() {
     if (!canManageRef.current) throw new Error('Projects management permission is required.');
     setBusy(true);
     try {
-      const next = await commitProjectsWithoutSamples(state, (latest) => {
+      const next = await commitSharedProjects(state, (latest) => {
         const latestProject = latest.projects.find((candidate) => candidate.id === project.id);
         if (!latestProject) throw new Error('The project is no longer available.');
         return replaceProjectInState(latest, reducer(latestProject));
       }, {
+        uid: principal.userId,
         authorize: () => {
-          if (!canManageRef.current) throw new Error('Projects management permission changed before save.');
+          if (!canManageRef.current || principalRef.current !== principal.userId) throw new Error('Projects management permission changed before save.');
         },
       });
       setState(next);
@@ -746,7 +763,7 @@ export function ProjectsPhaseWorkspaceV2() {
   };
 
   if (!canView) return <section className={styles.workspace}><article className={styles.panel}><div className={styles.emptyState}><span>PR</span><h2>Projects access required</h2><p>Your role does not have permission to view Projects.</p></div></article></section>;
-  if (!ready) return <div className={styles.loading}>Loading Projects…</div>;
+  if (!ready || loadedFor !== principal.userId) return <div className={styles.loading}>Loading Projects…</div>;
 
   if (view === 'technician' && project) {
     return <ProjectPhaseTechnicianPreview
@@ -778,7 +795,7 @@ export function ProjectsPhaseWorkspaceV2() {
 
   if (view === 'portfolio' || !project || !summary || !metrics) {
     return <section className={styles.workspace} aria-busy={busy}>
-      <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Clean phase-planning branch</strong><p>Only user-created Project records are shown. Customer selection uses canonical CRM; no seeded Project records are injected.</p></div></div>
+      <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Shared planning and historical bookings</strong><p>Shared Projects are available across sessions. Existing browser Projects can be reviewed and saved for shared access from Open Phases.</p></div></div>
       {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
       <div className={styles.metrics}>
@@ -789,7 +806,7 @@ export function ProjectsPhaseWorkspaceV2() {
       </div>
       <article className={styles.panel}>
         <div className={styles.portfolioToolbar}><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Project number, customer, location…" /></label><strong>{filtered.length} project{filtered.length === 1 ? '' : 's'}</strong></div>
-        {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>No Project records exist on this preview domain</h2><p>A Vercel preview cannot read browser storage belonging to demac-aruba.com. Nothing was copied, deleted, or changed in CRM or Scheduling. Create a Project here by selecting an actual CRM customer to validate the workflow.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
+        {!state.projects.length ? <div className={styles.emptyState}><span>PR</span><h2>No Projects available</h2><p>Create a Project by selecting its CRM customer and property. Existing browser Projects remain available on the browser where they were created until you save them for shared access.</p><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>Create Project from CRM</button></div> : <div className={styles.projectTable}>
           <div className={styles.projectTableHeader}><span>Project</span><span>Customer / Location</span><span>Physical</span><span>Van slots</span><span>Materials</span><span>Status</span><span>Action</span></div>
           {filtered.map((candidate) => {
             const candidateMetrics = projectMetrics(candidate);
@@ -833,6 +850,11 @@ export function ProjectsPhaseWorkspaceV2() {
     </div>
 
     <ProjectSlotBudgetProgress project={project} projects={state.projects} source={slotSource} />
+    {canManage ? <ProjectHistoricalCorrection key={`${principal.userId}:${project.id}`} project={project} uid={principal.userId} onSaved={(saved) => {
+      if (principalRef.current !== principal.userId) return;
+      if (saved) setState(current => replaceProjectInState(current, saved));
+      else window.dispatchEvent(new Event(PROJECTS_CHANGED_EVENT));
+    }} /> : null}
 
     <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Only the Phases experience is changed in this isolated branch.</small></div>
 
@@ -852,13 +874,13 @@ export function ProjectsPhaseWorkspaceV2() {
                 <button type="button" className={styles.phaseMain} onClick={() => setSelectedPhaseId(phase.id)}><div><strong>{phase.name}</strong><small>{phase.scopeOfWork}</small><span><Pill label={phase.workflowStatus} tone={statusTone(phase.workflowStatus)} /><Pill label={risk} tone={riskTone(risk)} /></span></div></button>
                 <div className={styles.phaseNumbers}><div><span>Planned</span><strong>{number(phase.estimatedLaborHours)}h</strong></div><div><span>Scheduled</span><strong>{number(scheduled, 1)}h</strong></div><div><span>Actual</span><strong>{number(phase.actualLaborHours, 1)}h</strong></div><div><span>Available</span><strong>{number(remaining, 1)}h</strong></div></div>
                 <div className={styles.phaseProgress}><span>{percent(progress)} · {phase.progressMethod}</span><Progress value={progress} tone={risk === 'On Track' ? 'green' : risk === 'At Risk' ? 'amber' : 'red'} /><small>{dateLabel(phase.startsOn)} – {dateLabel(phase.endsOn)}</small></div>
-                <div className={styles.phaseActions}><button type="button" onClick={() => setPhaseDialog({ mode: 'edit', phaseId: phase.id })} disabled={!canManage}>Edit</button><button type="button" onClick={() => setSchedulePhaseId(phase.id)} disabled={!canManage || phase.workflowStatus === 'Completed' || phase.workflowStatus === 'Cancelled'}>Plan Visit</button><button type="button" onClick={() => void completePhase(phase)} disabled={!canManage || phase.workflowStatus === 'Completed'}>Complete</button><button type="button" onClick={() => void removePhase(phase)} disabled={!canManage}>Delete</button></div>
+                <div className={styles.phaseActions}><button type="button" onClick={() => setPhaseDialog({ mode: 'edit', phaseId: phase.id })} disabled={!canManage}>Edit</button><button type="button" onClick={() => project.serverVersion ? window.location.assign('/scheduling/') : setSchedulePhaseId(phase.id)} disabled={!canManage || phase.workflowStatus === 'Completed' || phase.workflowStatus === 'Cancelled'}>{project.serverVersion ? 'Open Scheduling' : 'Plan Visit'}</button><button type="button" onClick={() => void completePhase(phase)} disabled={!canManage || Boolean(project.serverVersion) || phase.workflowStatus === 'Completed'}>Complete</button><button type="button" onClick={() => void removePhase(phase)} disabled={!canManage}>Delete</button></div>
               </article>;
             })}
           </div>}
         </article>
 
-        {selectedPhase ? <article className={styles.panel}><div className={styles.panelHeader}><div><span>Phase activity</span><h2>{selectedPhase.name}</h2><p>Planned visits and technician progress associated with this phase.</p></div><button type="button" className={styles.secondaryButton} onClick={() => void copyBriefing(selectedPhase)}>Copy Technician Briefing</button></div>{selectedAssignments.length ? <div className={styles.assignmentList}>{selectedAssignments.map((assignment) => <div key={assignment.id}><div><strong>{assignment.scheduledDate ? dateLabel(assignment.scheduledDate) : 'Date pending'} · {assignment.vanId.replace('VAN-', 'Van ')}</strong><small>{assignment.scheduledHours}h · {assignment.technicianIds.join(' · ') || 'Crew not entered'}</small></div><Pill label={assignment.postedAt ? 'Posted' : assignment.status} tone={assignment.postedAt ? 'green' : assignment.status === 'Paused' ? 'amber' : 'blue'} /><button type="button" className={styles.primaryButton} onClick={() => { setTechnicianAssignmentId(assignment.id); setView('technician'); }}>Open Technician View</button></div>)}</div> : <div className={styles.emptyInline}><p>No visits have been planned for this phase.</p><button type="button" className={styles.secondaryButton} onClick={() => setSchedulePhaseId(selectedPhase.id)} disabled={!canManage}>Plan First Visit</button></div>}</article> : null}
+        {selectedPhase ? <article className={styles.panel}><div className={styles.panelHeader}><div><span>Phase activity</span><h2>{selectedPhase.name}</h2><p>Planned visits and technician progress associated with this phase.</p></div><button type="button" className={styles.secondaryButton} onClick={() => void copyBriefing(selectedPhase)}>Copy Technician Briefing</button></div>{selectedAssignments.length ? <div className={styles.assignmentList}>{selectedAssignments.map((assignment) => <div key={assignment.id}><div><strong>{assignment.scheduledDate ? dateLabel(assignment.scheduledDate) : 'Date pending'} · {assignment.vanId.replace('VAN-', 'Van ')}</strong><small>{assignment.scheduledHours}h · {assignment.technicianIds.join(' · ') || 'Crew not entered'}</small></div><Pill label={assignment.postedAt ? 'Posted' : assignment.status} tone={assignment.postedAt ? 'green' : assignment.status === 'Paused' ? 'amber' : 'blue'} /><button type="button" className={styles.primaryButton} onClick={() => { setTechnicianAssignmentId(assignment.id); setView('technician'); }}>Open Technician View</button></div>)}</div> : <div className={styles.emptyInline}><p>No visits have been planned for this phase.</p><button type="button" className={styles.secondaryButton} onClick={() => project.serverVersion ? window.location.assign('/scheduling/') : setSchedulePhaseId(selectedPhase.id)} disabled={!canManage}>{project.serverVersion ? 'Open Scheduling' : 'Plan First Visit'}</button></div>}</article> : null}
       </main>
 
       <aside className={styles.rightRail}>

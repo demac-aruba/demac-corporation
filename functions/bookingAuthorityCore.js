@@ -105,6 +105,10 @@ function normalizeWorkLines(value) {
 
 function normalizeBookingRequest(value = {}) {
   return {
+    ...(value.project ? { project: {
+      id: requireText(value.project.id, 'project.id', 180), phaseId: requireText(value.project.phaseId, 'project.phaseId', 180),
+      version: positiveInteger(value.project.version),
+    } } : {}),
     customerId: requireText(value.customerId, "customerId", 160),
     propertyId: requireText(value.propertyId, "propertyId", 160),
     ...(cleanText(value.dwellingId, 180) ? { dwellingId: cleanText(value.dwellingId, 180) } : {}),

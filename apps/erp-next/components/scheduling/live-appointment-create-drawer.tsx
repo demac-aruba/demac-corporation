@@ -4,6 +4,7 @@ import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-b
 import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-confirmation';
 import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
 import { projectSlotLabel } from '@/lib/project-slot-label';
+import { commitSharedProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '@/lib/shared-projects';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PropertyLocations } from '../crm/property-locations';
@@ -15,10 +16,7 @@ import type { PropertyLocationData } from '../../lib/property-locations';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import {
   BROWSER_PROJECTS_PREVIEW_KEY,
-  commitBrowserProjectsPreviewMutation,
-  createProjectsPreviewState,
   linkProjectSchedulingAssignment,
-  loadBrowserProjectsPreviewState,
   planProjectScheduling,
   projectIsSchedulable,
   searchProjectsForScheduling,
@@ -546,17 +544,28 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setProjectsReady(false);
       return undefined;
     }
-    const loadProjects = () => {
-      setProjectsState(loadBrowserProjectsPreviewState(createProjectsPreviewState()));
-      setProjectsReady(true);
+    let active = true;
+    let sequence = 0;
+    setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+    setProjectsReady(false);
+    const loadProjects = async () => {
+      const attempt = ++sequence;
+      try {
+        const loaded = await loadSharedProjects(principal.userId);
+        if (active && attempt === sequence) { setProjectsState(loaded); setProjectsReady(true); }
+      } catch (error) {
+        if (active && attempt === sequence) { setProjectsReady(false); setAuthorityError(error instanceof Error ? error.message : 'Shared Projects could not be loaded.'); }
+      }
     };
-    loadProjects();
+    void loadProjects();
     const handleStorage = (event: StorageEvent) => {
       if (event.key === BROWSER_PROJECTS_PREVIEW_KEY) loadProjects();
     };
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, [canViewProjects, isAfterHours]);
+    const handleShared = () => { void loadProjects(); };
+    window.addEventListener(PROJECTS_CHANGED_EVENT, handleShared);
+    return () => { active = false; window.removeEventListener('storage', handleStorage); window.removeEventListener(PROJECTS_CHANGED_EVENT, handleShared); };
+  }, [canViewProjects, canManageProjects, isAfterHours, principal.userId]);
 
   useEffect(() => {
     if (canViewProjects || appointmentSource !== 'project') return;
@@ -777,7 +786,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return [...grouped.values()].sort((left, right) => left.vanName.localeCompare(right.vanName));
   }, [selectedSupportSlotIds, supportSlotCandidates]);
   const capacitySignature = [appointmentSource, customerId, propertyId, dwellingId, requesterId, accessContactId, Number(locationReady), workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
-  const offerSignature = [capacitySignature, `support:${supportSelectionSignature}`, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim()].join('|');
+  const offerSignature = [capacitySignature, `support:${supportSelectionSignature}`, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim(),
+    projectMode && selectedProject?.serverVersion ? `${selectedProject.id}:${selectedProjectPhase?.id || 'GENERAL-PROJECT-WORK'}:${selectedProject.serverVersion}` : '',
+  ].join('|');
   offerSignatureRef.current = offerSignature;
   const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
   const activeValidation = capacityValidation?.offerSignature === offerSignature ? capacityValidation : null;
@@ -807,7 +818,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const budgetAcknowledgementRequired = Boolean(bookingBudgetPlan && (bookingBudgetPlan.laborBudget.overBudgetHoursAfter > 0
     || (bookingBudgetPlan.phaseLaborBudget?.overBudgetHoursAfter ?? 0) > 0));
   // A selection, offer, actor or forecast change retires the open decision permanently.
-  useEffect(() => { setBudgetConfirmation(null); }, [budgetSignature]);
+  useEffect(() => {
+    setBudgetConfirmation(current => current?.signature === budgetSignature ? current : null);
+  }, [budgetSignature]);
   const workValid = projectMode
     ? Boolean(selectedProject
       && projectWorkPreset
@@ -1122,6 +1135,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     });
     try {
       const result = await checkOfficeCreateAvailability({
+        ...(projectMode && selectedProject?.serverVersion ? { project: { id: selectedProject.id, phaseId: selectedProjectPhase?.id || 'GENERAL-PROJECT-WORK', version: selectedProject.serverVersion } } : {}),
         requestId: createOfficeLifecycleRequestId('schedule-create-check'),
         customerId: selectedCustomer.id,
         propertyId: selectedProperty.id,
@@ -1223,7 +1237,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     if (!projectMode) return true;
     if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId || !selectedProject || !projectPlan) return false;
     try {
-      const nextState = await commitBrowserProjectsPreviewMutation(projectsState, (latestProjectsState) => {
+      if (selectedProject.serverVersion) {
+        const shared = await loadSharedProjects(principal.userId);
+        if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId) return false;
+        const saved = shared.projects.find(project => project.id === selectedProject.id);
+        const linked = input.workOrderIds.length > 0 && input.workOrderIds.every(id => saved?.assignments.some(link => link.workOrderId === id && link.appointmentId === input.appointmentId));
+        if (linked) setProjectsState(shared);
+        return linked;
+      }
+      const nextState = await commitSharedProjects(projectsState, (latestProjectsState) => {
         const latestProject = latestProjectsState.projects.find((project) => project.id === selectedProject.id);
         if (!latestProject
           || latestProject.customerId !== selectedCustomer?.id
@@ -1256,6 +1278,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           });
         }, latestProjectsState);
       }, {
+        uid: principal.userId,
         authorize: () => {
           if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId) {
             throw new Error('Projects management permission changed before the Scheduling link was saved.');

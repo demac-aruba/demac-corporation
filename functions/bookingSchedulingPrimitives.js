@@ -396,6 +396,8 @@ module.exports = {
   endTime,
   hashId,
   isHalfDay,
+  minutesTime,
+  timeMinutes,
   normalizePhone,
   normalizeRouteConfig,
   normalizeText,
