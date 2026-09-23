@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import { BROWSER_PROJECTS_PREVIEW_KEY } from '../../lib/browser-projects';
-import { loadBrowserValue } from '../../lib/browser-store';
+import { loadSharedProjects, PROJECTS_CHANGED_EVENT } from '../../lib/shared-projects';
 import { schedulingProjectLabel, type SchedulingProjectLabel } from '../../lib/scheduling-project-labels';
 import {
   liveCompanyClosureReason,
@@ -221,19 +221,33 @@ function LiveSchedulingSession() {
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const canView = principal.active && principal.capabilities.has('scheduling.view');
   const canViewProjects = principal.active && principal.capabilities.has('projects.view');
+  const projectPrincipal = `${principal.userId}:${canViewProjects}`;
+  const projectPrincipalRef = useRef(projectPrincipal);
+  projectPrincipalRef.current = projectPrincipal;
+  const projectLoadSequence = useRef(0);
   const refreshProjectLabels = useCallback(() => {
-    setProjectState(canViewProjects ? loadBrowserValue<unknown>(BROWSER_PROJECTS_PREVIEW_KEY, null) : null);
-  }, [canViewProjects]);
+    const sequence = ++projectLoadSequence.current;
+    if (!canViewProjects) { setProjectState(null); return; }
+    void loadSharedProjects(principal.userId).then(state => {
+      if (projectPrincipalRef.current === projectPrincipal && sequence === projectLoadSequence.current) setProjectState(state);
+    }).catch(() => {
+      if (projectPrincipalRef.current === projectPrincipal && sequence === projectLoadSequence.current) setProjectState(null);
+    });
+  }, [canViewProjects, principal.userId, principal.capabilities, projectPrincipal]);
   useEffect(() => {
+    setProjectState(null);
     refreshProjectLabels();
     const onStorage = (event: StorageEvent) => {
       if (event.key === null || event.key === BROWSER_PROJECTS_PREVIEW_KEY) refreshProjectLabels();
     };
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', refreshProjectLabels);
+    window.addEventListener(PROJECTS_CHANGED_EVENT, refreshProjectLabels);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('focus', refreshProjectLabels);
+      window.removeEventListener(PROJECTS_CHANGED_EVENT, refreshProjectLabels);
+      projectLoadSequence.current += 1;
     };
   }, [refreshProjectLabels]);
   const authScope = `${principal.userId}:${principal.active}:${[...principal.capabilities].sort().join(',')}`;

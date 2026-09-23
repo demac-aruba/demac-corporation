@@ -12,9 +12,11 @@ const { build } = require(path.join(tools, 'node_modules/esbuild'));
 const { chromium } = require(path.join(tools, 'node_modules/playwright'));
 fs.mkdirSync(output, { recursive: true });
 const stubs = {
+  'session': `export async function requireFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}`,
   'auth-provider': `import {useSyncExternalStore} from 'react';
     const listeners=new Set();let principal={userId:'synthetic-operator',displayName:'Viewer',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.view'])};
     window.switchPrincipal=(value)=>{principal={...principal,...value};for(const fn of listeners)fn();};
+    window.getSyntheticUid=()=>principal.userId;
     const refreshPrincipal=async()=>window.switchPrincipal({active:false});
     export function useAuth(){return {principal:useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn)},()=>principal),refreshPrincipal};}`,
   'live-scheduling-fast': `import {createSchedulingAttributionCache} from './lib/scheduling-attribution';
@@ -79,6 +81,10 @@ async function runCase(browser, origin, label, viewport) {
   page.on('pageerror',e=>errors.push(e.message));
   await context.route('**/*',route=>{
     if(route.request().url().startsWith(origin+'/'))return route.continue();
+    if(route.request().url()==='https://us-central1-demo-demac-scheduling.cloudfunctions.net/projectAuthority') {
+      assert.equal(route.request().postDataJSON().action,'list');
+      return route.fulfill({json:{success:true,projects:[]}});
+    }
     external.push(route.request().url());return route.abort();
   });
   await page.goto(origin);
@@ -172,6 +178,7 @@ async function main(){
   await build({absWorkingDir:APP,tsconfig:path.join(APP,'tsconfig.json'),stdin:{contents:entry,loader:'tsx',resolveDir:APP},outfile:path.join(output,'app.js'),bundle:true,platform:'browser',format:'iife',jsx:'automatic',
     define:{'process.env':JSON.stringify({NODE_ENV:'production',NEXT_PUBLIC_FIREBASE_PROJECT_ID:'demo-demac-scheduling',NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED:'false'})},
     plugins:[{name:'synthetic-read-boundary',setup(b){b.onResolve({filter:/.*/},args=>{
+      if(args.importer.endsWith('shared-projects.ts')&&path.basename(args.path)==='session')return {path:'session',namespace:'synthetic'};
       if(!args.importer.endsWith('live-scheduling-overview.tsx'))return;
       const key=path.basename(args.path);if(stubs[key])return {path:key,namespace:'synthetic'};
     });b.onLoad({filter:/.*/,namespace:'synthetic'},args=>({contents:stubs[args.path],loader:'tsx',resolveDir:APP}));}}]});

@@ -6,7 +6,9 @@
       "fix/scheduling-linked-project-labels": false,
       "feature/property-dwellings-preview": false,
       "feature/project-slot-progress": false,
-      "fix/project-slot-load-latency": false
+      "fix/project-slot-load-latency": false,
+      "feature/project-historical-bookings": false,
+      "release/project-historical-bookings": false
     }
   },
   "framework": null,

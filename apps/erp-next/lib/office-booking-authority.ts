@@ -493,6 +493,7 @@ export function deactivateOfficeContactAssignment(input: {
 }
 
 export async function checkOfficeCreateAvailability(input: {
+  project?: { id: string; phaseId: string; version: number };
   sourcePartialAppointmentId?: string;
   dwellingId?: string;
   requesterId?: string;

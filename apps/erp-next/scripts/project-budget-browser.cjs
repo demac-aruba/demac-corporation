@@ -23,6 +23,7 @@ const fixture = {
   materialBudget: null, materialActual: 0, assignedVans: [], phases: [], assignments: [], materials: [], expenses: [], costEntries: [],
 };
 const stubs = {
+  'session': `export async function requireFirebaseWebSession(){return {uid:'SYNTHETIC-ACTOR',idToken:'synthetic-project-token'};}`,
   'auth-provider': `const principal = {userId:'SYNTHETIC-ACTOR',active:true, role:'operations', displayName:'Synthetic operator', capabilities:new Set(window.__readOnly ? ['projects.view'] : ['projects.view','projects.manage'])}; export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[{id:'CUSTOMER-BROWSER-TEST',name:'Synthetic customer',active:true}],properties:[{id:'PROPERTY-BROWSER-TEST',clientId:'CUSTOMER-BROWSER-TEST',name:'Synthetic site',address:'Synthetic site',active:true}]};}
@@ -82,6 +83,7 @@ async function main() {
     plugins:[{name:'synthetic-authority-boundary',setup(builder){
       builder.onResolve({filter:/.*/}, args=>{
         const key=path.basename(args.path);
+        if(key==='session'&&args.importer.endsWith('shared-projects.ts'))return {path:key,namespace:'budget-test-stub'};
         const locationAuthority=key==='office-booking-authority'&&(args.importer.endsWith('property-locations.ts')||args.importer.endsWith('property-locations.tsx'));
         if(!args.importer.endsWith('live-appointment-create-drawer.tsx')&&!locationAuthority)return;
         if(stubs[key])return {path:key,namespace:'budget-test-stub'};
@@ -109,6 +111,11 @@ async function main() {
           const unexpected=[];const errors=[];
           await context.route('**/*',route=>{
             if(new URL(route.request().url()).origin===url)return route.continue();
+            if(route.request().url()==='https://us-central1-demo-demac-projects.cloudfunctions.net/projectAuthority') {
+              assert.equal(route.request().headers().authorization,'Bearer synthetic-project-token');
+              assert.equal(route.request().postDataJSON().action,'list');
+              return route.fulfill({json:{success:true,projects:[]}});
+            }
             unexpected.push(route.request().url());return route.abort();
           });
           await context.addInitScript(({project,scenario})=>{

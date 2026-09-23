@@ -236,6 +236,10 @@ function createBookingAuthority({
 
   async function checkAvailability({ request, actor = {}, context = {} } = {}) {
     const normalizedRequest = normalizeBookingRequest(request);
+    if (normalizedRequest.project && !availabilityProvider.supportsProjectLinks) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'Shared Projects require the office Project booking workflow.');
+    }
+    if (normalizedRequest.project) await availabilityProvider.authorizeProjectRequest({ request: normalizedRequest, context });
     const now = asDate(clock());
     const requestKey = cleanText(context.requestKey || context.inboundMessageId || context.idempotencyKey, 500);
     const offerId = canonicalOfferIdentity(requestKey);
@@ -361,6 +365,10 @@ function createBookingAuthority({
         );
       }
       const replay = await getAppointment(record.appointmentId);
+      if (replay.projectId) {
+        if (availabilityProvider.authorizeProjectReplay) await availabilityProvider.authorizeProjectReplay({ appointment: replay, actor });
+        else if (!availabilityProvider.supportsHistoricalProjects) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'Project booking replay requires Project Authority.');
+      }
       return {
         success: true,
         replayed: true,
@@ -373,6 +381,9 @@ function createBookingAuthority({
 
     const initialOfferSnapshot = await offerRef.get();
     const initialOffer = initialOfferSnapshot.exists ? { id: initialOfferSnapshot.id, ...initialOfferSnapshot.data() } : null;
+    if (initialOffer?.metadata?.projectHistory && !availabilityProvider.supportsHistoricalProjects) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'Historical Project offers must be confirmed through Project Authority.');
+    }
     const initiallySelected = validateOfferSelection({ offer: initialOffer, offerVersion, optionId, now });
     assertBackdatedCreateIntent({ offer: initialOffer, context, createMode: normalizedCreateMode });
 
@@ -431,6 +442,7 @@ function createBookingAuthority({
           );
         }
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
+        if (replay.projectId && availabilityProvider.authorizeProjectReplay) await availabilityProvider.authorizeProjectReplay({ appointment: replay, actor, transaction });
         return {
           success: true,
           replayed: true,
@@ -443,6 +455,7 @@ function createBookingAuthority({
 
       if (appointmentSnapshot.exists) {
         const existing = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
+        if (existing.projectId && availabilityProvider.authorizeProjectReplay) await availabilityProvider.authorizeProjectReplay({ appointment: existing, actor, transaction });
         if (existing.idempotencyKeyHash !== identity.idempotencyKeyHash) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -540,6 +553,9 @@ function createBookingAuthority({
         now,
         optionOverride: refreshedOption,
       });
+      const projectCommit = availabilityProvider.prepareCommit
+        ? await availabilityProvider.prepareCommit({ transaction, now, appointmentId: identity.appointmentId, request, context, option: refreshedOption }) : null;
+      if (request.project && !projectCommit) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'Shared Project linkage must be committed with the appointment.');
       const notificationRecipients = backdatedMetadata
         ? []
         : notificationRecipientsFrom(currentOffer?.metadata?.notificationRecipients);
@@ -568,6 +584,7 @@ function createBookingAuthority({
       const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
         ...appointment,
+        ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { locationSnapshot } : {}),
         status: normalizedCreateMode,
         notificationRecipients,
@@ -591,9 +608,11 @@ function createBookingAuthority({
       });
 
       transaction.set(appointmentRef, appointmentRecord);
+      if (projectCommit) projectCommit.write({ workOrders, createMode: normalizedCreateMode });
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
+          ...(projectCommit?.fields || {}),
           ...(locationSnapshot ? { dwellingId: locationSnapshot.dwellingId || '', locationSnapshot,
             requesterId: request.requesterId || '', accessContactId: request.accessContactId || '' } : {}),
           bookingAuthorityVersion: BOOKING_AUTHORITY_VERSION,

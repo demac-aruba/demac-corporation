@@ -30,7 +30,7 @@ for (let i = 1; i <= 3; i++) docs[`staffProfiles/TECH-${i}`] = { id: `TECH-${i}`
 docs['employeeTimesheets/TECH-1_2026-09-01'] = { id: 'TECH-1_2026-09-01', employeeId: 'TECH-1', date: '2026-09-01', attendanceStatus: 'Present', clockInTime: '08:00', clockOutTime: '17:00' };
 const stubs = {
   auth: `import {useState,useEffect} from 'react'; export function useAuth(){const [p,setP]=useState(window.__principal);useEffect(()=>{const fn=()=>setP({...window.__principal,capabilities:new Set(window.__principal.capabilities)});window.addEventListener('auth-test',fn);return()=>window.removeEventListener('auth-test',fn);},[]);return {principal:p};}`,
-  session: `export async function requireFirebaseWebSession(){return {idToken:'synthetic-test-token'};}`,
+  session: `export async function requireFirebaseWebSession(){return {uid:window.__principal.userId,idToken:'synthetic-test-token'};}`,
 };
 async function main() {
   await build({ absWorkingDir: APP, stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import ProjectsPage from './app/(erp)/projects/page';import './app/globals.css';createRoot(document.getElementById('app')).render(<ProjectsPage/>);`, loader: 'tsx', resolveDir: APP },
@@ -39,7 +39,7 @@ async function main() {
     plugins: [{ name: 'synthetic-read-boundary', setup(builder) {
       builder.onResolve({ filter: /auth-provider|\/session$/ }, (args) => {
         if (args.path.endsWith('auth-provider')) return { path: 'auth', namespace: 'slot-test' };
-        if (args.importer.endsWith('firestore-rest.ts')) return { path: 'session', namespace: 'slot-test' };
+        if (args.importer.endsWith('firestore-rest.ts') || args.importer.endsWith('shared-projects.ts')) return { path: 'session', namespace: 'slot-test' };
       });
       builder.onLoad({ filter: /.*/, namespace: 'slot-test' }, (args) => ({ contents: stubs[args.path], loader: 'js', resolveDir: APP }));
     } }],
@@ -62,6 +62,11 @@ async function main() {
           await context.route('**/*', async (route) => {
             const request = route.request(), requestUrl = new URL(request.url());
             if (requestUrl.origin === url) return route.continue();
+            if (request.url() === 'https://us-central1-demo-demac-slot-progress.cloudfunctions.net/projectAuthority') {
+              assert.equal(request.headers().authorization, 'Bearer synthetic-test-token');
+              assert.equal(request.postDataJSON().action, 'list');
+              return route.fulfill({ json: { success: true, projects: [] } });
+            }
             if (requestUrl.origin !== 'https://firestore.googleapis.com') { unexpected.push(request.url()); return route.abort(); }
             assert.equal(request.headers().authorization, 'Bearer synthetic-test-token');
             const prefix = 'projects/demo-demac-slot-progress/databases/(default)/documents/';

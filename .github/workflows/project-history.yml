@@ -1,0 +1,79 @@
+name: Project historical bookings
+on:
+  pull_request:
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy.cjs', '.github/workflows/project-history.yml']
+  push:
+    branches: [feature/project-historical-bookings, release/project-historical-bookings, main]
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy.cjs', '.github/workflows/project-history.yml']
+permissions:
+  contents: read
+jobs:
+  historical-project-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Install isolated browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/project-history-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          "$RUNNER_TEMP/project-history-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Syntax and existing booking regression
+        run: |
+          npm run validate:firebase --prefix functions
+          npm run test:booking-authority --prefix functions
+          node --test functions/officeBookingAuthority*.test.js
+          node --check functions/projectAuthority.js
+          node --check functions/projectRecords.js
+          node --check functions/projectBookingLinks.js
+          node --check functions/projectHistoricalBooking.js
+          npm run typecheck --prefix apps/erp-next
+      - name: Shared persistence, historical correction, roles, concurrency and two browser sessions
+        env:
+          GCLOUD_PROJECT: demo-demac-project-history
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8398
+          BUDGET_TEST_TOOLS: ${{ runner.temp }}/project-history-tools
+          PROJECT_HISTORY_OUTPUT: ${{ runner.temp }}/project-history-evidence
+        run: >-
+          npx --yes firebase-tools@15.30.0 emulators:exec --only firestore
+          --project demo-demac-project-history --config firebase.project-history-test.json
+          "node --test functions/projectHistoricalBooking.emulator.test.cjs && node apps/erp-next/scripts/project-history-browser.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-history-evidence
+          path: ${{ runner.temp }}/project-history-evidence
+          if-no-files-found: warn
+  approved-backend-release:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/project-historical-bookings' && github.event_name == 'push'
+    needs: historical-project-acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Verify current source and deploy only Project and Office authorities
+        run: node scripts/project-history-approved-deploy.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-history-backend-release
+          path: ${{ runner.temp }}/project-history-release.json
+          if-no-files-found: warn
