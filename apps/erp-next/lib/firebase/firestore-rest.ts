@@ -121,6 +121,45 @@ export async function getFirestoreDocument<T extends { id: string }>(collectionP
   return { ...decodeFirestoreFields(document.fields ?? {}), id } as T;
 }
 
+/** Application batch bound; Firestore Rules still enforce their own access-call limits. */
+export const FIRESTORE_BATCH_GET_LIMIT = 20;
+
+/** Exact document reads with the current user's token and normal Firestore Rules. */
+export async function batchGetFirestoreDocuments<T extends { id: string }>(
+  collectionPath: string, ids: string[], options: { fieldPaths?: string[]; signal?: AbortSignal } = {},
+): Promise<Record<string, T | null>> {
+  const result: Record<string, T | null> = Object.create(null);
+  const unique = [...new Set(ids)];
+  if (!unique.length) return result;
+  const segments = collectionPath.split('/');
+  if (unique.length > FIRESTORE_BATCH_GET_LIMIT || segments.length % 2 !== 1
+    || [...segments, ...unique].some((part) => !part || part === '.' || part === '..' || part.includes('/'))) {
+    throw new Error('Invalid bounded document read.');
+  }
+  options.signal?.throwIfAborted();
+  const url = baseUrl();
+  // Resource names in the JSON body are literal names, not URL-encoded paths.
+  const prefix = `${url.slice('https://firestore.googleapis.com/v1/'.length)}/${collectionPath}/`;
+  const requested = new Map(unique.map((id) => [`${prefix}${id}`, id]));
+  const response = await authenticatedFetch(`${url}:batchGet`, {
+    method: 'POST', signal: options.signal,
+    body: JSON.stringify({ documents: [...requested.keys()],
+      ...(options.fieldPaths?.length ? { mask: { fieldPaths: options.fieldPaths } } : {}) }),
+  });
+  if (!response.ok) throw new Error(await readError(response, 'Unable to load document batch.'));
+  const rows: unknown = await response.json();
+  if (!Array.isArray(rows)) throw new Error('Invalid document batch response.');
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || (!!row.found === !!row.missing)) throw new Error('Invalid document batch result.');
+    const name = row.found?.name ?? row.missing;
+    const id = requested.get(name);
+    if (id === undefined || Object.hasOwn(result, id)) throw new Error('Unexpected document batch identity.');
+    result[id] = row.found ? { ...decodeFirestoreFields(row.found.fields ?? {}), id } as T : null;
+  }
+  // An omitted response is unknown, never a confirmed missing document.
+  return result;
+}
+
 export async function listFirestoreCollection<T extends { id: string }>(collectionPath: string, pageSize = 250): Promise<T[]> {
   const result: T[] = [];
   let pageToken = '';

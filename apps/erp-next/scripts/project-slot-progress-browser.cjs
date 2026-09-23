@@ -30,16 +30,16 @@ for (let i = 1; i <= 3; i++) docs[`staffProfiles/TECH-${i}`] = { id: `TECH-${i}`
 docs['employeeTimesheets/TECH-1_2026-09-01'] = { id: 'TECH-1_2026-09-01', employeeId: 'TECH-1', date: '2026-09-01', attendanceStatus: 'Present', clockInTime: '08:00', clockOutTime: '17:00' };
 const stubs = {
   auth: `import {useState,useEffect} from 'react'; export function useAuth(){const [p,setP]=useState(window.__principal);useEffect(()=>{const fn=()=>setP({...window.__principal,capabilities:new Set(window.__principal.capabilities)});window.addEventListener('auth-test',fn);return()=>window.removeEventListener('auth-test',fn);},[]);return {principal:p};}`,
-  firestore: `export async function getFirestoreDocument(collection,id){const key=collection+'/'+id;window.__reads.push(key);const value=structuredClone(window.__docs[key]??null);await new Promise(r=>setTimeout(r,window.__slow||5));if(window.__fail===key)throw Error('Synthetic read failure');return value;}`,
+  session: `export async function requireFirebaseWebSession(){return {idToken:'synthetic-test-token'};}`,
 };
 async function main() {
   await build({ absWorkingDir: APP, stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import ProjectsPage from './app/(erp)/projects/page';import './app/globals.css';createRoot(document.getElementById('app')).render(<ProjectsPage/>);`, loader: 'tsx', resolveDir: APP },
     outfile: path.join(scratch, 'app.js'), bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic',
-    define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-demac-slot-progress' }) },
+    define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-demac-slot-progress', NEXT_PUBLIC_FIREBASE_API_KEY: 'synthetic', NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'synthetic.invalid', NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'synthetic.invalid', NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: 'synthetic', NEXT_PUBLIC_FIREBASE_APP_ID: 'synthetic' }) },
     plugins: [{ name: 'synthetic-read-boundary', setup(builder) {
-      builder.onResolve({ filter: /auth-provider|firestore-rest/ }, (args) => {
+      builder.onResolve({ filter: /auth-provider|\/session$/ }, (args) => {
         if (args.path.endsWith('auth-provider')) return { path: 'auth', namespace: 'slot-test' };
-        if (args.importer.endsWith('live-project-slot-progress.ts')) return { path: 'firestore', namespace: 'slot-test' };
+        if (args.importer.endsWith('firestore-rest.ts')) return { path: 'session', namespace: 'slot-test' };
       });
       builder.onLoad({ filter: /.*/, namespace: 'slot-test' }, (args) => ({ contents: stubs[args.path], loader: 'js', resolveDir: APP }));
     } }],
@@ -59,7 +59,37 @@ async function main() {
         for (const [device, width] of [['desktop', 1440], ['mobile', 390]]) {
           const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
           const unexpected = [], errors = [];
-          await context.route('**/*', (route) => { if (new URL(route.request().url()).origin === url) return route.continue(); unexpected.push(route.request().url()); return route.abort(); });
+          await context.route('**/*', async (route) => {
+            const request = route.request(), requestUrl = new URL(request.url());
+            if (requestUrl.origin === url) return route.continue();
+            if (requestUrl.origin !== 'https://firestore.googleapis.com') { unexpected.push(request.url()); return route.abort(); }
+            assert.equal(request.headers().authorization, 'Bearer synthetic-test-token');
+            const prefix = 'projects/demo-demac-slot-progress/databases/(default)/documents/';
+            const isBatch = requestUrl.pathname === '/v1/' + prefix.slice(0, -1) + ':batchGet';
+            const body = isBatch ? request.postDataJSON() : null;
+            assert.equal(request.method(), isBatch ? 'POST' : 'GET');
+            if (isBatch) {
+              assert.ok(body.documents.length <= 20);
+              assert.deepEqual([...body.mask.fieldPaths].sort(), ['appointmentId','clientId','propertyId','date','time','vanId','status','scheduledSlots','technicianIds'].sort());
+              assert.ok(body.documents.every(name => name.startsWith(prefix + 'workOrders/')));
+            }
+            const keys = isBatch ? body.documents.map(name => name.slice(prefix.length)) : [decodeURIComponent(requestUrl.pathname.slice(('/v1/' + prefix).length))];
+            const state = await request.frame().evaluate((keys) => {
+              window.__requests = (window.__requests || 0) + 1; window.__reads.push(...keys);
+              return {values: keys.map(key => window.__docs[key] ?? null), delay: window.__slow || 5, fail: keys.includes(window.__fail)};
+            }, keys);
+            await new Promise(resolve => setTimeout(resolve, state.delay));
+            if (state.fail) return route.fulfill({status: 403, json: {error:{message:'Synthetic denied read'}}});
+            function encode(value) {
+              if (value === null) return {nullValue:'NULL_VALUE'};
+              if (Array.isArray(value)) return {arrayValue:{values:value.map(encode)}};
+              if (typeof value === 'number') return {integerValue:String(value)};
+              return {stringValue:value};
+            }
+            const documents = state.values.map((value, i) => value ? {name: prefix + keys[i], fields: Object.fromEntries(Object.entries(value).filter(([key]) => !isBatch || body.mask.fieldPaths.includes(key)).map(([key,value]) => [key,encode(value)]))} : null);
+            if (isBatch) return route.fulfill({json: documents.map((doc, i) => doc ? {found: doc} : {missing: prefix + keys[i]}).reverse()});
+            return route.fulfill({status: documents[0] ? 200 : 404, json: documents[0] || {}});
+          });
           await context.addInitScript(({ project, docs }) => {
             localStorage.setItem('demac.erp-next.projects.preview.v1', JSON.stringify({ version: 1, selectedProjectId: project.id, projects: [project] }));
             window.__docs = docs; window.__reads = []; window.__principal = { userId: 'SYNTHETIC-OWNER', displayName: 'Synthetic owner', role: 'super_admin', active: true,
@@ -71,6 +101,7 @@ async function main() {
             const budget = page.getByRole('region', { name: 'Van slot budget · Synthetic VRF Project' });
             await budget.getByText('75 / 66 slots', { exact: true }).waitFor();
             await budget.getByText('+9 slots over budget', { exact: true }).waitFor();
+            assert.equal(await page.evaluate(() => window.__requests), 1, '13 linked orders load in one real REST batch.');
             assert.equal(await budget.getByRole('progressbar').getAttribute('aria-valuenow'), '100');
             const color = await budget.getByRole('progressbar').locator('i').evaluate((e) => getComputedStyle(e).backgroundColor);
             assert.equal(color, 'rgb(224, 79, 95)');
