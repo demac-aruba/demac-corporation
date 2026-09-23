@@ -205,6 +205,19 @@ test("operational move and details edit classification preserve their lifecycle 
   }), true);
 });
 
+test('a later canonical reschedule clears the current overtime estimate but preserves the historical acceptance', async () => {
+  const acceptance = { accepted: true, capacityEnd: '17:30' };
+  const { db, lifecycle } = fixture({
+    'appointments/APT-LIVE-1': { ...appointmentSeed(), operationalMoveOvertime: acceptance, lifecycleHistory: [{ kind: 'operational_move', possibleOvertime: acceptance }] },
+    'bookingOffers/OFR-RESCHEDULE-1': openOffer(),
+  });
+  const result = await lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: 'OFR-RESCHEDULE-1', offerVersion: 1, optionId: 'OPT-NEW', reason: 'Return to ordinary schedule', actor: { id: 'owner-1' } });
+  assert.equal(result.appointment.operationalMoveOvertime, null);
+  assert.equal(db.read('appointments/APT-LIVE-1').operationalMoveOvertime, null);
+  assert.equal(db.read('workOrders/WO-APT-LIVE-1-1').operationalMoveOvertime, null);
+  assert.deepEqual(db.read('appointments/APT-LIVE-1').lifecycleHistory[0].possibleOvertime, acceptance);
+});
+
 test("details edit may change workload but never date, start time, or primary Van", () => {
   assert.doesNotThrow(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
     date: "2098-12-20",

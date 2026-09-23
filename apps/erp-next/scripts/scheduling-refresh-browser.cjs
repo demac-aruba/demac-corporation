@@ -70,6 +70,7 @@ window.projectState={version:1,selectedProjectId:'SYNTHETIC-PROJECT',projects:[{
  assignments:['SYNTHETIC-WO-0','SYNTHETIC-WO-1'].map(workOrderId=>({projectId:'SYNTHETIC-PROJECT',appointmentId:'SYNTHETIC-APT',workOrderId,phaseId:'phase-1'}))
 }]};
 localStorage.setItem(window.projectKey,JSON.stringify(window.projectState));
+window.overtimeRecords=projectLiveSchedulingAppointments([{id:'SYNTHETIC-OT-WO',appointmentId:'SYNTHETIC-OT-APT',date,time:'14:30',vanId:'VAN-2',status:'confirmed',appointmentPresetId:'standard_service',appointmentWorkLabel:'Standard service',appointmentDurationMode:'per_unit',appointmentDurationMinutes:180,appointmentEndTime:'17:30',appointmentCapacityEndTime:'17:30',scheduledSlots:3,quantity:3,operationalMoveOvertime:{accepted:true,capacityEnd:'17:30'}}],[],[]);
 const root=createRoot(document.getElementById('app'));window.unmount=()=>root.unmount();root.render(<React.StrictMode><div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div></React.StrictMode>);`;
 
 async function runCase(browser, origin, label, viewport) {
@@ -126,6 +127,14 @@ async function runCase(browser, origin, label, viewport) {
   assert.doesNotMatch(await page.locator('body').innerText(),/Renamed synthetic project|Installation/);
   await page.evaluate(()=>window.switchPrincipal({capabilities:new Set(['scheduling.view','scheduling.manage','projects.view'])}));
   await page.waitForFunction(()=>document.querySelector('[data-schedule-job]')?.textContent.includes('Renamed synthetic project'));
+  // Integration with main must preserve its accepted overtime while retaining new card semantics.
+  await page.evaluate(()=>{window.records=structuredClone(window.overtimeRecords);window.dispatchEvent(new Event('focus'));});
+  await page.getByText(/Posible overtime aceptado/).waitFor();
+  assert.equal(await cards.count(),1);
+  const overtimeText=await cards.first().innerText();
+  assert.match(overtimeText,/3 slots reserved/);assert.match(overtimeText,/5:30 PM/);
+  await page.evaluate(()=>{window.records=structuredClone(window.originalRecords);window.dispatchEvent(new Event('focus'));});
+  await page.waitForFunction(()=>document.querySelectorAll('[data-schedule-job]').length===3);
   // Old-week operational reads and attribution must not repopulate a new week.
   await page.evaluate(()=>{window.readDelay=800;window.clockOffset+=301000;window.attributionDelay=1800;window.dispatchEvent(new Event('focus'));});
   await page.getByRole('button',{name:'›',exact:true}).click();

@@ -41,13 +41,6 @@ same artifact. Roll back to dpl_9L3HKUX8HvZxhBMfPvaY4amH1U5A if needed.
 
 ## Explicit remaining limitations
 
-Release sequencing update: PR #518 merged while this task was validating. The final
-frontend candidate therefore includes its bounded release source 2e9c6981 plus the
-unchanged Project-label patch 600a79fa. Do not promote it until the Property backend
-and frontend publication completes. This preserves the new Property editor and keeps
-pending overtime excluded. The final deployment IDs and verification are in the
-owner-facing publication record.
-
 The link is available only on the origin/browser where Projects saved it. This does
 not add canonical Project persistence, historical Project booking, historical crew
 resolution, or cross-browser identity. The supplied Projects screenshot proves the
