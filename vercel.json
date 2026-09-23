@@ -2,15 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "git": {
     "deploymentEnabled": {
-      "feature/project-slot-progress": false,
       "fix/scheduling-history-attribution-cards": false,
       "fix/scheduling-linked-project-labels": false,
-      "release/scheduling-linked-project-labels": false,
       "feature/property-dwellings-preview": false,
+      "feature/project-slot-progress": false,
       "fix/project-slot-load-latency": false
     }
   },
   "framework": null,
+  "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "installCommand": "npm install --prefix apps/erp-next --no-audit --no-fund",
   "buildCommand": "npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build",
   "outputDirectory": "apps/erp-next/out",

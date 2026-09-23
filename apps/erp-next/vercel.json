@@ -1,15 +1,15 @@
 {
   "git": {
     "deploymentEnabled": {
-      "feature/project-slot-progress": false,
       "fix/scheduling-history-attribution-cards": false,
       "fix/scheduling-linked-project-labels": false,
-      "release/scheduling-linked-project-labels": false,
       "feature/property-dwellings-preview": false,
+      "feature/project-slot-progress": false,
       "fix/project-slot-load-latency": false
     }
   },
   "framework": "nextjs",
+  "ignoreCommand": "git log -1 --format=%B | grep -Fq '[merge-only]'",
   "buildCommand": "npm run build",
   "installCommand": "npm install --no-audit --no-fund"
 }

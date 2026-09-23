@@ -3,6 +3,7 @@ import {
   liveOperationalStartTimes,
   liveOperationalWindowAllows,
   liveVanIsHalfDay,
+  liveVanHalfDaySchedule,
   liveVanOperationallyAvailable,
   type LiveOperationalCapacityState,
 } from './live-operational-capacity';
@@ -77,14 +78,17 @@ export function liveOperationalMoveCapacityCandidates(
   for (const van of previewVans.filter((resource) => resource.active)) {
     if (!liveVanOperationallyAvailable(capacityState, van.id, day.dateKey)) continue;
     const halfDay = liveVanIsHalfDay(capacityState, van.id, day.dateKey);
-    const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts);
+    const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts)
+      .filter((start) => liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, minutesToTime(timeToMinutes(start) + 60)));
     for (const start of starts) {
       const end = minutesToTime(timeToMinutes(start) + durationMinutes);
       const startIndex = starts.indexOf(start);
       const ownedStarts = startIndex < 0 ? [] : starts.slice(startIndex, startIndex + capacitySlotCount);
-      if (ownedStarts.length !== capacitySlotCount) continue;
-      if (timeToMinutes(end) > dayEnd) continue;
-      if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
+      const ordinaryEnd = halfDay ? timeToMinutes(liveVanHalfDaySchedule(capacityState, van.id, day.dateKey)?.workdayEnd || '13:00') : dayEnd;
+      const possibleOvertime = ownedStarts.length < capacitySlotCount || timeToMinutes(end) > ordinaryEnd;
+      if (possibleOvertime && (van.id === appointment.assignments[0].vanId || !ownedStarts.length || timeToMinutes(end) >= 24 * 60 || appointment.status !== 'confirmed')) continue;
+      if (possibleOvertime && starts.slice(startIndex).some((value, i, tail) => i > 0 && timeToMinutes(value) - timeToMinutes(tail[i - 1]) !== 60)) continue;
+      if (!possibleOvertime && !liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && (
         elapsedTimeOverlaps(start, end, job)
         || ownedStarts.some((ownedStart) => jobOwnsCapacityStart(job, ownedStart))
@@ -97,9 +101,10 @@ export function liveOperationalMoveCapacityCandidates(
         segment: halfDay ? halfDayForTime(start) : timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60 ? 'full_day' : halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: elapsed work and owned service-capacity slots both fit'],
+        reasons: [possibleOvertime ? 'Possible overtime: canonical preparation and explicit consent required' : 'Manual operational move: elapsed work and owned service-capacity slots both fit'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
+        ...(possibleOvertime ? { possibleOvertime: { requiredSlots: capacitySlotCount, ordinarySlots: ownedStarts.length } } : {}),
       });
     }
   }
@@ -125,7 +130,7 @@ export function projectCommittedLiveMove(args: {
   dateKey: string;
   actor?: AppointmentActor;
 }) {
-  return applyAppointmentScheduleChange({
+  const result = applyAppointmentScheduleChange({
     record: args.appointment,
     slot: args.slot,
     dateKey: args.dateKey,
@@ -133,4 +138,13 @@ export function projectCommittedLiveMove(args: {
     actor: args.actor,
     reason: 'Confirmed live drag-and-drop operational move',
   });
+  if (args.slot.possibleOvertime) {
+    result.record.assignments = result.record.assignments.map((job) => {
+      const starts = [...(job.capacitySlotStarts || [])];
+      if (!starts.length) starts.push(args.slot.start);
+      while (starts.length < args.slot.possibleOvertime!.requiredSlots) starts.push(minutesToTime(timeToMinutes(starts[starts.length - 1]) + 60));
+      return { ...job, possibleOvertime: true, capacitySlotStarts: starts };
+    });
+  }
+  return result;
 }

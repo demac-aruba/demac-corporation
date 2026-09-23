@@ -95,6 +95,7 @@ export type BookingRequest = {
 };
 
 export type CandidateSlot = {
+  possibleOvertime?: { requiredSlots: number; ordinarySlots: number };
   vanId: string;
   start: string;
   end: string;
