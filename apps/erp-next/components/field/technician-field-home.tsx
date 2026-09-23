@@ -1036,13 +1036,13 @@ function DetailView({
             const state = step.id === activeStage ? 'current' : 'upcoming';
             return (
               <button
-                className={state === 'current' ? styles.flowStepCurrent : state === 'complete' ? styles.flowStepComplete : styles.flowStep}
+                className={state === 'current' ? styles.flowStepCurrent : styles.flowStep}
                 key={step.id}
                 type="button"
                 aria-current={state === 'current' ? 'step' : undefined}
                 onClick={() => setActiveStage(step.id)}
               >
-                <b>{state === 'complete' ? '✓' : index + 1}</b>
+                <b>{index + 1}</b>
                 <span>{step.label}</span>
               </button>
             );
