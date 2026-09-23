@@ -106,11 +106,20 @@ async function readerChecks() {
     if (id === 'DENIED') throw new Error('Permission denied');
     return { id } as T;
   };
-  await assert.rejects(loadProjectSlotSources({ ...principal, active: false }, ['A'], read), /Forbidden/);
-  await assert.rejects(loadProjectSlotSources({ ...principal, capabilities: roleCapabilities.finance }, ['A'], read), /Forbidden/);
+  const batches: string[][] = [];
+  const readBatch = async <T extends { id: string }>(collection: string, ids: string[]): Promise<Record<string, T | null>> => {
+    batches.push(ids); concurrent++; maximum = Math.max(maximum, concurrent);
+    await new Promise((resolve) => setTimeout(resolve, 1)); concurrent--;
+    return Object.fromEntries(ids.filter((id) => id !== 'DENIED').map((id) => [id, { id } as T]));
+  };
+  await assert.rejects(loadProjectSlotSources({ ...principal, active: false }, ['A'], readBatch), /Forbidden/);
+  await assert.rejects(loadProjectSlotSources({ ...principal, capabilities: roleCapabilities.finance }, ['A'], readBatch), /Forbidden/);
   assert.equal(reads.length, 0);
-  const data = await loadProjectSlotSources(principal, ['A', 'A', 'DENIED', ...Array.from({ length: 20 }, (_, i) => `WO-${i}`)], read);
-  assert.equal(reads.length, 22); assert.ok(maximum <= 6); assert.equal(data.DENIED.failed, true);
+  assert.equal(batches.length, 0);
+  const data = await loadProjectSlotSources(principal, ['A', 'A', 'DENIED', ...Array.from({ length: 20 }, (_, i) => `WO-${i}`)], readBatch);
+  assert.deepEqual(batches.map((batch) => batch.length), [20, 2]); assert.ok(maximum <= 3); assert.equal(data.DENIED.failed, true);
+  await loadProjectSlotSources(principal, Array.from({ length: 200 }, (_, i) => `WO-${i}`), readBatch);
+  assert.equal(maximum, 3, 'Large histories must still bound concurrent batches.');
   reads.length = 0;
   await loadProjectSlotPeople({ ...principal, role: 'operations', capabilities: roleCapabilities.operations }, calculate().rows, read);
   assert.deepEqual(reads.sort(), ['staffProfiles/T1', 'staffProfiles/T2', 'staffProfiles/T3']);
@@ -119,11 +128,15 @@ async function readerChecks() {
   assert.equal(reads.filter((path) => path.startsWith('employeeTimesheets/')).length, 6);
   const abort = new AbortController();
   reads.length = 0;
-  const pending = loadProjectSlotSources(principal, Array.from({ length: 30 }, (_, i) => `WO-${i}`), read, abort.signal);
+  const pending = loadProjectSlotPeople(principal, Array.from({ length: 30 }, (_, i) => ({ ...calculate().rows[0], technicianIds: [`TECH-${i}`], date: '' })), read, abort.signal);
   abort.abort();
   await pending;
   assert.equal(reads.length, 6, 'Abort must stop subsequent batches; already-issued reads may finish.');
-  console.log('PASS: direct reads, capability denial, bounded concurrency, deduplication and payroll privacy');
+  const batchAbort = new AbortController(); batches.length = 0;
+  const pendingBatch = loadProjectSlotSources(principal, Array.from({ length: 100 }, (_, i) => `WO-${i}`), readBatch, batchAbort.signal);
+  batchAbort.abort(); await pendingBatch;
+  assert.equal(batches.length, 3, 'Abort must prevent subsequent batch requests.');
+  console.log('PASS: exact reads, capability denial, bounded batches/concurrency, deduplication, abort and payroll privacy');
   console.log(`Project slot progress: ${passed + 1} acceptance groups passed.`);
 }
 readerChecks().catch((error) => { console.error(error); process.exitCode = 1; });

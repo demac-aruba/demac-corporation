@@ -1,4 +1,4 @@
-import { getFirestoreDocument } from './firebase/firestore-rest';
+import { batchGetFirestoreDocuments, FIRESTORE_BATCH_GET_LIMIT, getFirestoreDocument } from './firebase/firestore-rest';
 import { requireCapability, type AuthPrincipal } from './security';
 import {
   type ProjectSlotWorkOrder, type ProjectSlotRead, type ProjectSlotRow,
@@ -6,6 +6,7 @@ import {
 } from './project-slot-progress';
 
 type DocumentReader = typeof getFirestoreDocument;
+const SLOT_FIELDS = ['appointmentId', 'clientId', 'propertyId', 'date', 'time', 'vanId', 'status', 'scheduledSlots', 'technicianIds'];
 /** Bounded concurrency and exact IDs: no collection scan, date cutoff or stored counter. */
 async function readDocuments<T extends { id: string }>(collection: string, ids: string[], read: DocumentReader, signal?: AbortSignal) {
   const result: Record<string, ProjectSlotRead<T>> = Object.create(null);
@@ -24,9 +25,24 @@ function requireProgressAccess(principal: AuthPrincipal) {
   requireCapability(principal, 'projects.view');
   requireCapability(principal, 'work_orders.view');
 }
-export async function loadProjectSlotSources(principal: AuthPrincipal, ids: string[], read: DocumentReader = getFirestoreDocument, signal?: AbortSignal) {
+export async function loadProjectSlotSources(principal: AuthPrincipal, ids: string[], read = batchGetFirestoreDocuments, signal?: AbortSignal) {
   requireProgressAccess(principal);
-  return readDocuments<ProjectSlotWorkOrder>('workOrders', ids, read, signal);
+  const result: Record<string, ProjectSlotRead<ProjectSlotWorkOrder>> = Object.create(null);
+  const unique = [...new Set(ids)];
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(3, Math.ceil(unique.length / FIRESTORE_BATCH_GET_LIMIT)) }, async () => {
+    while (!signal?.aborted && cursor < unique.length) {
+      const batch = unique.slice(cursor, cursor += FIRESTORE_BATCH_GET_LIMIT);
+      try {
+        const values = await read<ProjectSlotWorkOrder>('workOrders', batch, { fieldPaths: SLOT_FIELDS, signal });
+        for (const id of batch) result[id] = Object.hasOwn(values, id)
+          ? { value: values[id] } : { value: null, failed: true };
+      } catch {
+        for (const id of batch) result[id] = { value: null, failed: true };
+      }
+    }
+  }));
+  return result;
 }
 export async function loadProjectSlotPeople(principal: AuthPrincipal, rows: ProjectSlotRow[], read: DocumentReader = getFirestoreDocument, signal?: AbortSignal): Promise<ProjectSlotPeople> {
   requireProgressAccess(principal);

@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/lib/browser-projects.ts'
+      - 'apps/erp-next/lib/firebase/firestore-rest.ts'
       - 'apps/erp-next/lib/project-labor-budget.ts'
       - 'apps/erp-next/lib/*project-slot-progress.ts'
       - 'apps/erp-next/lib/project-phase-planner.ts'
@@ -16,6 +17,7 @@ on:
     branches: [main]
     paths:
       - 'apps/erp-next/lib/project-labor-budget.ts'
+      - 'apps/erp-next/lib/firebase/firestore-rest.ts'
       - 'apps/erp-next/lib/*project-slot-progress.ts'
       - 'apps/erp-next/lib/office-booking-authority.ts'
       - 'apps/erp-next/scripts/project-budget*'
