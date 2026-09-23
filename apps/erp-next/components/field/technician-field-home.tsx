@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
+import { FieldDayOverview } from './field-day-overview';
+import { FieldPortalHeader, FieldPortalIdentity, FieldPortalNavigation, FieldJobContext, fieldPortalStyles, type FieldPortalTab } from './field-portal-chrome';
 import { arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
   addFieldReportFinding,
@@ -167,7 +169,7 @@ function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacing
 }
 
 function roleLabel(value: FieldScheduleJob['responsibility']) {
-  if (value === 'lead') return 'Líder';
+  if (value === 'lead') return 'Técnico responsable';
   if (value === 'helper') return 'Ayudante';
   if (value === 'office') return 'Oficina';
   return 'Técnico';
@@ -305,6 +307,7 @@ function mapHref(job: Pick<FieldScheduleJob, 'latitude' | 'longitude' | 'address
 }
 
 function contactLinks(job: FieldScheduleJob) {
+  if (process.env.NEXT_PUBLIC_ISOLATED_PREVIEW === 'true') return { call: '', whatsapp: '', map: '' };
   return {
     call: callHref(job.arrivalPhone),
     whatsapp: whatsappHref(job.arrivalWhatsapp || job.arrivalPhone),
@@ -949,6 +952,7 @@ function DetailView({
   onDiscardOutboxConflict,
   onBack,
 }: DetailViewProps) {
+  const { principal: currentPrincipal } = useAuth();
   const canonicalStage = fieldExperienceStageForStatus(job?.fieldVisit?.status);
   const [activeStage, setActiveStage] = useState<FieldExperienceStage>(canonicalStage);
 
@@ -963,7 +967,7 @@ function DetailView({
           <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
           <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
         </header>
-        <main className={styles.mobileContent}>
+        <main className={`${styles.mobileContent} ${fieldPortalStyles.detailSurface}`}>
           <section className={styles.panel}>
             <div className={error ? styles.error : styles.loading}>
               {loading ? 'Cargando información del trabajo…' : error || 'No se pudo abrir este trabajo.'}
@@ -1014,32 +1018,22 @@ function DetailView({
           : '';
 
   return (
-    <div className={styles.technicianApp} data-field-experience-stage={activeStage}>
-      <header className={styles.mobileHeader}>
-        <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
-        <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
-        <span className={styles.headerStatus}>{visitStatusLabel(job.fieldVisit?.status)}</span>
-      </header>
+    <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`} data-field-experience-stage={activeStage}>
+      <FieldPortalHeader title={job.fieldVisit?.status === 'in_progress' ? 'Trabajo en curso' : 'Detalle del trabajo'} onBack={onBack} />
 
       <main className={styles.mobileContent}>
-        <section className={styles.jobHero}>
-          <div className={styles.heroTopline}>
-            <span>{job.time || 'Hora pendiente'}{job.endTime ? ` – ${job.endTime}` : ''}</span>
-            <span>{job.vanId || 'Sin Van'}</span>
-          </div>
-          <h1>{job.customerName}</h1>
-          <p>{job.propertyName || job.address || 'Ubicación pendiente'}</p>
-          <div className={styles.heroWork}>{workSummary(job)}</div>
+        <FieldJobContext job={job} />
+        <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
           <div className={styles.quickActions}>
             {links.call ? <a href={links.call}>Llamar</a> : null}
             {links.whatsapp ? <a href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
             {links.map ? <a href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
           </div>
-        </section>
+
 
         <nav className={styles.flowStepper} aria-label="Pasos del trabajo">
           {FIELD_EXPERIENCE_STAGES.map((step, index) => {
-            const state = fieldExperienceStepState(step.id, activeStage);
+            const state = step.id === activeStage ? 'current' : 'upcoming';
             return (
               <button
                 className={state === 'current' ? styles.flowStepCurrent : state === 'complete' ? styles.flowStepComplete : styles.flowStep}
@@ -1189,7 +1183,7 @@ function DetailView({
       </main>
 
       {activeStage !== 'close' ? (
-        <div className={styles.stickyActionBar}>
+        <div className={`${styles.stickyActionBar} ${fieldPortalStyles.detailSticky}`}>
           {primaryTransition ? (
             <button className={styles.primaryWorkAction} disabled={mutationBusy} type="button" onClick={() => onTransition({ target: primaryTransition })}>
               {transitioning === primaryTransition ? 'Procesando…' : primaryTransitionLabel}
@@ -1206,7 +1200,9 @@ function DetailView({
 }
 
 export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableAdminSimulation?: boolean }) {
-  const { principal } = useAuth();
+  const { principal, signOut } = useAuth();
+  const [portalTab, setPortalTab] = useState<FieldPortalTab>('home');
+  const [showDetail, setShowDetail] = useState(false);
   const adminSimulation = canUseFieldAdminSimulation(principal.role, enableAdminSimulation);
   const [clockNow, setClockNow] = useState(() => new Date());
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
@@ -2516,6 +2512,8 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   const routeJobs = useMemo(() => fieldRouteWithoutNextJob(todayJobs, nextJob), [nextJob, todayJobs]);
 
   const openJob = (workOrderId: string) => {
+    setPortalTab('jobs');
+    setShowDetail(true);
     selectedWorkOrderRef.current = workOrderId;
     setSelectedOwnerUserId(principalFieldIdentityKey);
     setSelectedWorkOrderId(workOrderId);
@@ -2537,9 +2535,18 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     }
   }
 
-  if (!adminSimulation && selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
-    const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
-    return (
+  if (!adminSimulation) {
+    const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey && detail?.workOrderId === selectedWorkOrderId ? detail : null;
+    const hasSelectedJob = selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey;
+    const navigate = (tab: FieldPortalTab) => { setPortalTab(tab); setShowDetail(false); };
+    return <>
+      <div hidden={Boolean(hasSelectedJob && showDetail)}>
+        <FieldDayOverview tab={portalTab} identity={principal} date={today} jobs={todayJobs} nextJob={nextJob}
+          loading={loading} error={scheduleError} stale={Boolean(scheduleOfflineCapturedAt)}
+          synchronization={<OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
+          onRetry={() => void loadSchedule()} onOpen={openJob} onNavigate={navigate} onSignOut={() => { if (outboxSummary.total === 0 || window.confirm('Hay capturas pendientes de sincronizar en este dispositivo. Se conservarán para tu cuenta. ¿Cerrar sesión?')) signOut(); }} />
+      </div>
+      {hasSelectedJob ? <div hidden={!showDetail}>
       <DetailView
         job={authorizedDetail}
         loading={detailLoading}
@@ -2602,9 +2609,11 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         onSubmitOfficeReview={() => void runSubmitOfficeReview()}
         onSyncOutbox={() => void syncOutbox()}
         onDiscardOutboxConflict={(id) => void discardOutboxConflict(id)}
-        onBack={closeJob}
+        onBack={() => { setShowDetail(false); setPortalTab('home'); }}
       />
-    );
+      </div> : null}
+      <FieldPortalNavigation active={showDetail ? 'jobs' : portalTab} onNavigate={navigate} />
+    </>;
   }
 
   return (

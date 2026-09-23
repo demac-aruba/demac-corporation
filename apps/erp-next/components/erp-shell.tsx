@@ -119,17 +119,9 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (technicianFieldShell) {
     return (
       <div className="technician-frame">
-        <button
-          className="technician-logout"
-          type="button"
-          onClick={logout}
-          title={`Cerrar sesión · ${principal.displayName}`}
-          aria-label={`Cerrar sesión de ${principal.displayName}`}
-        >
-          <span aria-hidden="true">{initials(principal.displayName)}</span>
-          <strong>Salir</strong>
-        </button>
-        <main className="technician-content">{children}</main>
+        {/* The Field portal exposes personal sign-out in its own Profile tab. */}
+
+        <div className="technician-content">{children}</div>
       </div>
     );
   }

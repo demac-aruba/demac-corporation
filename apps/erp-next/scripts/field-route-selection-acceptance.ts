@@ -127,4 +127,10 @@ check('selection does not mutate input records or reorder the displayed route', 
   assert.equal(JSON.stringify(jobs), before);
   assert.deepEqual(fieldRouteWithoutNextJob(jobs, upcoming), [later, completed]);
 });
+check('submitted work remains in history but is not the next execution', () => {
+  const submitted = job('submitted', '08:00', 'En proceso', 'ready_for_office_review');
+  assert.equal(selectNextFieldJob([submitted], '10:00'), null);
+  assert.equal(selectNextFieldJob([submitted, upcoming], '10:00'), upcoming);
+  assert.deepEqual(fieldRouteWithoutNextJob([submitted, upcoming], upcoming), [submitted]);
+});
 console.log(`Field route selection acceptance passed (${passed} cases).`);

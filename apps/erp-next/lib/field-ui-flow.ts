@@ -67,7 +67,7 @@ function fieldClockMinutes(value: string): number | null {
 
 /** Selects the active job first, then the next scheduled job, without mutating input order. */
 export function selectNextFieldJob<T extends FieldScheduleJob>(jobs: readonly T[], nowTime: string): T | null {
-  const open = jobs.filter((job) => !isFieldJobClosed(job));
+  const open = jobs.filter((job) => !isFieldJobClosed(job) && job.fieldVisit?.status !== 'ready_for_office_review');
   const active = open.find(isFieldJobInProgress);
   if (active) return active;
 

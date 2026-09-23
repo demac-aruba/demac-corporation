@@ -1,0 +1,186 @@
+name: Technician App isolated review
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/field/**'
+      - 'apps/erp-next/lib/field-*'
+      - 'apps/erp-next/app/login/**'
+      - 'apps/erp-next/components/erp-shell.tsx'
+      - 'functions/fieldOperationsAuthorityCore*'
+      - 'functions/test-support/technician*'
+      - '.github/workflows/technician-app-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technician-app-isolated-review-526
+  cancel-in-progress: true
+
+jobs:
+  isolated-review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/technician-app-20260923' && github.event.pull_request.number == 526
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GCLOUD_PROJECT: demo-demac-dwellings
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8297
+      FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9297
+      FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:9397
+      NEXT_PUBLIC_ISOLATED_PREVIEW: 'true'
+      NEXT_PUBLIC_FIREBASE_API_KEY: demo-key
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-dwellings.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-dwellings
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-dwellings.appspot.com
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000'
+      NEXT_PUBLIC_FIREBASE_APP_ID: demo-dwellings
+      NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: ''
+      NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false'
+      NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: preview
+      NEXT_TELEMETRY_DISABLED: '1'
+      FIELD_ADMIN_SIMULATOR_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install existing app and isolated tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GOOGLE_APPLICATION_CREDENTIALS:-}"
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix functions --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/field-tools" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0 esbuild@0.25.9
+          "$RUNNER_TEMP/field-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+          echo "FIELD_PORTAL_TEST_TOOLS=$RUNNER_TEMP/field-tools" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/field-tools/node_modules/playwright" >> "$GITHUB_ENV"
+          echo "PREVIEW_CREDENTIALS_FILE=$RUNNER_TEMP/field-private-access.json" >> "$GITHUB_ENV"
+          echo "PREVIEW_EVIDENCE_DIR=$RUNNER_TEMP/field-evidence" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/field-evidence" "$RUNNER_TEMP/field-share"
+      - name: Preserve all existing required build and targeted gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck --prefix apps/erp-next
+          npm run test:field-experience --prefix apps/erp-next
+          npm run test:field-security --prefix apps/erp-next
+          npm run test:field-offline --prefix apps/erp-next
+          npm run validate:firebase --prefix functions
+          npm run test:field-authority --prefix functions
+          FIELD_PORTAL_EVIDENCE="$PREVIEW_EVIDENCE_DIR/components" node apps/erp-next/scripts/field-portal-browser.cjs
+          npm run build --prefix apps/erp-next
+      - name: Start only loopback demo emulators and generate private synthetic identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/field-tools/node_modules/.bin/firebase" emulators:start --only auth,firestore,storage --project demo-demac-dwellings --config firebase.dwellings-preview.json --export-on-exit=../dwellings-emulator-data > "$RUNNER_TEMP/field-emulators.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/field-emulator.pid"
+          for i in $(seq 1 120); do
+            curl --fail --silent http://127.0.0.1:4497/emulators > "$RUNNER_TEMP/field-emulators.json" && node -e "const x=require(process.env.RUNNER_TEMP+'/field-emulators.json');if(!x.auth||!x.firestore||!x.storage)process.exit(1)" && break
+            sleep 2
+          done
+          node - <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const accounts=[['demo-tech','technician','DRIVER-1','DEMO · Técnico'],['demo-helper','technician','HELPER-1','DEMO · Ayudante'],['demo-office','operations','','DEMO · Oficina'],['demo-outsider','technician','DRIVER-4','DEMO · No asignado']].map(([uid,role,staffId,name])=>({uid,role,staffId,name,email:uid+'@demac-preview.invalid',password:crypto.randomBytes(24).toString('base64url')}));
+          for(const a of accounts)console.log('::add-mask::'+a.password);
+          fs.writeFileSync(process.env.PREVIEW_CREDENTIALS_FILE,JSON.stringify({synthetic:true,accounts}),{mode:0o600});
+          fs.appendFileSync(process.env.GITHUB_ENV,'DWELLINGS_PREVIEW_PASSWORD='+accounts[0].password+'\n');
+          NODE
+      - name: Seed the isolated backend and serve the actual compiled app
+        shell: bash
+        run: |
+          set -euo pipefail
+          node functions/test-support/dwellingsSeed.cjs
+          node functions/test-support/technicianPortalSeed.cjs
+          node functions/test-support/dwellingsPreviewServer.cjs > "$RUNNER_TEMP/field-gateway.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/field-gateway.pid"
+          for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4397/__preview/health && break; sleep 1; done
+          node functions/test-support/technicianPortalGatewayCheck.cjs
+          node functions/test-support/technicianPortalBrowser.cjs
+      - name: Publish temporary isolated review gateway only
+        id: share
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location 'https://github.com/cloudflare/cloudflared/releases/download/2026.9.1/cloudflared-linux-amd64' -o "$RUNNER_TEMP/cloudflared"
+          echo "03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc  $RUNNER_TEMP/cloudflared" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          "$RUNNER_TEMP/cloudflared" tunnel --url http://127.0.0.1:4397 --no-autoupdate --protocol http2 > "$RUNNER_TEMP/field-tunnel.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/field-tunnel.pid"
+          for i in $(seq 1 60); do
+            PREVIEW_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUNNER_TEMP/field-tunnel.log" | head -1 || true)"
+            if [ -n "$PREVIEW_URL" ] && curl --fail --silent "$PREVIEW_URL/__preview/health" > /dev/null; then break; fi
+            sleep 2
+          done
+          test -n "$PREVIEW_URL"
+          export PREVIEW_URL
+          PREVIEW_READ_ONLY=true node functions/test-support/technicianPortalGatewayCheck.cjs
+          node functions/test-support/technicianPortalBrowser.cjs
+          node - <<'NODE'
+          const fs=require('fs');
+          const meta={url:process.env.PREVIEW_URL,commit:process.env.SOURCE_SHA,synthetic:true,authenticated:true,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+90*60*1000).toISOString(),scope:'Incremental login/home/agenda/profile/job-context review. Procedures 14/9, shared parts and persistent binary capture are not complete.'};
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/field-share/preview.json',JSON.stringify(meta,null,2));
+          const access=JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE));
+          fs.writeFileSync(process.env.PREVIEW_CREDENTIALS_FILE,JSON.stringify({...access,...meta}),{mode:0o600});
+          NODE
+          node functions/test-support/technicianPreviewEnvelope.cjs "$PREVIEW_CREDENTIALS_FILE" "$RUNNER_TEMP/field-share/access.enc.json"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Retain verified preview link and encrypted access (no plaintext credentials)
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-preview-access-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/field-share/
+          retention-days: 1
+          if-no-files-found: error
+      - name: Retain actual synthetic browser and API evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-preview-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/field-evidence/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Bounded owner review window (90 minutes)
+        if: steps.share.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            sleep 60
+            kill -0 "$(cat "$RUNNER_TEMP/field-gateway.pid")"
+            kill -0 "$(cat "$RUNNER_TEMP/field-tunnel.pid")"
+          done
+      - name: Stop temporary services and encrypt emulator snapshot
+        if: always()
+        shell: bash
+        run: |
+          for name in field-tunnel field-gateway; do
+            test ! -f "$RUNNER_TEMP/$name.pid" || kill "$(cat "$RUNNER_TEMP/$name.pid")" || true
+          done
+          test ! -f "$RUNNER_TEMP/field-emulator.pid" || kill -INT "$(cat "$RUNNER_TEMP/field-emulator.pid")" || true
+          sleep 5
+          if [ -d ../dwellings-emulator-data ]; then
+            mkdir -p "$RUNNER_TEMP/field-snapshot"
+            tar -czf "$RUNNER_TEMP/field-state.tar.gz" -C .. dwellings-emulator-data
+            node functions/test-support/technicianPreviewEnvelope.cjs "$RUNNER_TEMP/field-state.tar.gz" "$RUNNER_TEMP/field-snapshot/state.enc.json"
+          fi
+      - name: Retain encrypted synthetic snapshot only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-preview-encrypted-state-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/field-snapshot/
+          retention-days: 3
+          if-no-files-found: ignore

@@ -337,6 +337,34 @@ function projectScheduleJob({ order, client, property, appointment, identity, as
   };
 }
 
+/** Minimal assignment-scoped display metadata; never an authorization source. */
+async function assignedCrewPresentation(db, order, assignment, cache = new Map()) {
+  if (!assignment.assigned || !['daily_assignment', 'regular_crew', 'office'].includes(assignment.source)) return undefined;
+  const context = assignment.context;
+  const vanId = canonicalVanReference(order.vanId, context);
+  const membership = context.memberships.find((member) => canonicalVanReference(member.vanId, context) === vanId);
+  const van = context.vans.find((candidate) => canonicalVanReference(candidate.id, context) === vanId);
+  if (!membership || !van) return undefined;
+  const slots = [
+    [membership.driverStaffId, 'lead'],
+    [membership.helperStaffId, 'helper'],
+    [membership.additionalHelperStaffId, 'helper'],
+  ];
+  const seen = new Set();
+  const members = [];
+  for (const [rawId, responsibility] of slots) {
+    const staffId = text(rawId, 180);
+    if (!staffId || seen.has(staffId)) continue;
+    seen.add(staffId);
+    if (!cache.has(staffId)) cache.set(staffId, getDocument(db, 'staffProfiles', staffId));
+    const staff = await cache.get(staffId);
+    const name = text(staff?.name || staff?.displayName, 240);
+    if (!staff || staff.active === false || !name) continue;
+    members.push({ staffId, name, responsibility });
+  }
+  return { vanId, vanName: text(van.name, 120) || vanId, members };
+}
+
 async function loadRelatedMaps(db, orders) {
   const ids = (key) => unique(orders.map((order) => order[key]));
   async function mapCollection(collection, values) {
@@ -362,6 +390,7 @@ function assignmentWithContext(identity, order, dateKey, context) {
 async function loadAssignedSchedule(db, identity, startDate, endDate) {
   const dates = dateRange(startDate, endDate, 7);
   const rows = [];
+  const crewDisplayCache = new Map();
   for (const dateKey of dates) {
     const context = await loadCrewContext(db, dateKey);
     const orders = (await loadAssignedOrdersForDate(db, identity, dateKey, context)).filter(scheduleVisibleWorkOrder);
@@ -369,14 +398,15 @@ async function loadAssignedSchedule(db, identity, startDate, endDate) {
     for (const order of orders) {
       const assignment = assignmentWithContext(identity, order, dateKey, context);
       if (!assignment.assigned) continue;
-      rows.push(projectScheduleJob({
+      const crew = await assignedCrewPresentation(db, order, assignment, crewDisplayCache);
+      rows.push({ ...projectScheduleJob({
         order,
         client: maps.clients.get(text(order.clientId, 180)),
         property: maps.properties.get(text(order.propertyId, 180)),
         appointment: maps.appointments.get(text(order.appointmentId, 180)),
         identity,
         assignment,
-      }));
+      }), ...(crew ? { crew } : {}) });
     }
   }
   return rows.sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)));
@@ -438,7 +468,9 @@ async function loadAssignedJob(db, identity, workOrderId) {
         };
       });
   }
+  const crew = await assignedCrewPresentation(db, order, assignment);
   return {
+    ...(crew ? { crew } : {}),
     ...projectScheduleJob({
       order,
       client: maps.clients.get(text(order.clientId, 180)),

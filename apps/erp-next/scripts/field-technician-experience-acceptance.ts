@@ -1,3 +1,4 @@
+import './field-portal-presentation-acceptance';
 import './field-route-selection-acceptance';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
