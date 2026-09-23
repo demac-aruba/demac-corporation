@@ -1,0 +1,15 @@
+/* Careers footer only. Marketing pages retain the existing public footer. */
+.footer{background:var(--public-navy);color:#fff;padding:25px max(20px,calc((100vw - 1104px)/2));margin-top:24px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #ffffff26}
+.footer :global(.public-brand){color:#fff}
+.footer :global(.public-brand strong){color:#fff;font-size:30px}
+.footer :global(.public-brand small){color:#fff;opacity:.85}
+.footer :global(.public-snow){color:#fff;font-size:32px;width:32px}
+.top>p{max-width:220px;text-align:right;font-size:.75rem;letter-spacing:.07em;line-height:1.7;margin:0}
+.bottom{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:12px;font-size:.75rem}
+.bottom nav{display:flex;gap:20px}
+.bottom a{color:#fff;display:inline-flex;align-items:center;min-height:44px;text-decoration:none}
+.bottom a:hover{text-decoration:underline}
+.bottom a:focus-visible{outline:2px solid #fff;outline-offset:4px}
+.bottom small{color:#dce8f7;font-size:.6875rem}
+@media(max-width:600px){.top{align-items:flex-start}.top>p{font-size:.6875rem;max-width:120px}.footer :global(.public-brand strong){font-size:26px}.footer :global(.public-brand small){font-size:6px}.bottom{flex-wrap:wrap;gap:4px}.bottom small{width:100%;line-height:1.6}.footer{padding-bottom:20px}}

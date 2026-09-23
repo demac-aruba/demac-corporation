@@ -92,11 +92,11 @@ export function CareersPreview() {
   function reviewView(next: CareerRoute) { if (tools.current) tools.current.open = false; navigation.navigate(next); }
   const openJobs = vacancies.filter(job => job.status === 'Open' && (!department || job.department === department) && (!search || `${job.title} ${job.summary}`.toLowerCase().includes(search.toLowerCase())));
   const departments = Array.from(new Set(vacancies.map(job => job.department))).sort();
-  return <main className={`${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v3" data-career-view={view} onClickCapture={event => {
+  return <main className={`${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v3" data-careers-increment="questions-v4" data-career-view={view} onClickCapture={event => {
     const anchor = event.target instanceof Element ? event.target.closest('a') : null;
     if (anchor && !anchor.hasAttribute('download') && !anchor.href.startsWith('blob:') && (hasDraft || applications.length) && !window.confirm('Leave this preview? The application details in this session will be cleared.')) { event.preventDefault(); event.stopPropagation(); }
   }}>
-    <div className={s.previewRibbon}><span><i aria-hidden="true"/>Preview v3 · Test data only</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView({ view: 'jobs' })}>Candidate view</button><button type="button" className={s.primary} onClick={() => reviewView({ view: 'admin', tab: 'applications' })}>Recruitment preview</button></div></details></div>
+    <div className={s.previewRibbon}><span><i aria-hidden="true"/>Preview V4 · Test data only</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView({ view: 'jobs' })}>Candidate view</button><button type="button" className={s.primary} onClick={() => reviewView({ view: 'admin', tab: 'applications' })}>Recruitment preview</button></div></details></div>
     <CareersHeader compactLabel={view === 'jobs' || view === 'detail' ? undefined : view === 'admin' ? 'Recruitment' : 'Careers'}/>
     {!navigation.ready && <div className={s.container} role="status">Opening Careers…</div>}
     {navigation.ready && view === 'jobs' && <>

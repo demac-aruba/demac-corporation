@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
-import { PublicBrand, PublicHeader, PublicFooter } from '../public/public-site-shell';
+import Link from 'next/link';
+import chrome from './careers-chrome.module.css';
+import { PublicBrand, PublicHeader } from '../public/public-site-shell';
 import s from './careers.module.css';
 
 /** The existing website owns its chrome; Careers owns the application content.
@@ -12,4 +14,10 @@ function BrandChrome({ children }: { children: ReactNode }) {
 export function CareersHeader({ compactLabel }: { compactLabel?: string }) {
   return <BrandChrome>{compactLabel ? <header className={s.compactHeader}><PublicBrand/><span>{compactLabel}</span></header> : <PublicHeader active="careers"/>}</BrandChrome>;
 }
-export function CareersFooter() { return <BrandChrome><PublicFooter/></BrandChrome>; }
+/** No marketing widgets or data requests on the application route. */
+export function CareersFooter() {
+  return <BrandChrome><footer className={chrome.footer}>
+    <div className={chrome.top}><PublicBrand/><p>A COOLER ARUBA<br/>TOGETHER</p></div>
+    <div className={chrome.bottom}><nav aria-label="Careers footer"><Link href="/careers">Careers</Link><Link href="/contact">Contact</Link></nav><small>© {new Date().getFullYear()} DEMAC. All rights reserved.</small></div>
+  </footer></BrandChrome>;
+}
