@@ -9,6 +9,8 @@ export interface CareerRoute {
   role?: string;
   step?: number;
   reviewing?: boolean;
+  question?: string;
+  returnToReview?: boolean;
   receipt?: string;
   tab?: RecruitmentTab;
   candidate?: string;
@@ -16,9 +18,9 @@ export interface CareerRoute {
 interface Entry { id: number; parent: number | null; route: CareerRoute; scroll: number; focus: string | null }
 const stateKey = 'demacCareersNavigation';
 const stages = ['details', 'experience', 'documents', 'review'];
-const ownedParams = ['view', 'role', 'step', 'receipt', 'tab', 'candidate'];
+const ownedParams = ['view', 'role', 'step', 'question', 'returnTo', 'receipt', 'tab', 'candidate'];
 export function routeKey(route: CareerRoute): string {
-  return [route.view, route.role || '', route.step ?? '', route.reviewing ? 'review' : '', route.receipt || '', route.tab || '', route.candidate || ''].join('|');
+  return JSON.stringify([route.view, route.role || '', route.step ?? '', route.reviewing ? 'review' : '', route.question || '', !!route.returnToReview, route.receipt || '', route.tab || '', route.candidate || '']);
 }
 function readRoute(): CareerRoute {
   const params = new URLSearchParams(window.location.search);
@@ -31,13 +33,17 @@ function readRoute(): CareerRoute {
   if (!role) return { view: 'jobs' };
   if (!params.has('step')) return { view: 'detail', role };
   const index = stages.indexOf(params.get('step') || '');
-  return { view: 'form', role, step: Math.max(0, Math.min(index, 2)), reviewing: index === 3 };
+  return { view: 'form', role, step: Math.max(0, Math.min(index, 2)), reviewing: index === 3, question: params.get('question') || undefined, returnToReview: params.get('returnTo') === 'review' };
 }
 function routeUrl(route: CareerRoute): string {
   const url = new URL(window.location.href);
   ownedParams.forEach(key => url.searchParams.delete(key));
   if (route.view === 'detail' || route.view === 'form') url.searchParams.set('role', route.role || '');
-  if (route.view === 'form') url.searchParams.set('step', stages[route.reviewing ? 3 : route.step || 0]);
+  if (route.view === 'form') {
+    url.searchParams.set('step', stages[route.reviewing ? 3 : route.step || 0]);
+    if (route.question) url.searchParams.set('question', route.question);
+    if (route.returnToReview && !route.reviewing) url.searchParams.set('returnTo', 'review');
+  }
   if (route.view === 'success') url.searchParams.set('receipt', route.receipt || '');
   if (route.view === 'admin') {
     url.searchParams.set('view', 'admin');
@@ -102,7 +108,7 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
       entry.route = resolved;
       entries.current.set(entry.id, entry);
       if (!existing || routeKey(requested) !== routeKey(resolved)) {
-        window.history.replaceState({ [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
+        window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
       }
       publish(entry, true);
     };
@@ -121,7 +127,7 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     savePosition();
     const entry: Entry = { id: ++sequence.current, parent: replace ? current.current?.parent ?? null : current.current?.id ?? null, route: resolved, scroll: 0, focus: null };
     entries.current.set(entry.id, entry);
-    window.history[replace ? 'replaceState' : 'pushState']({ [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
+    window.history[replace ? 'replaceState' : 'pushState']({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
     publish(entry, false);
   }, [publish, savePosition]);
   const backTo = useCallback((fallback: CareerRoute) => {

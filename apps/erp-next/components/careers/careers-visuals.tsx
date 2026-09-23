@@ -43,6 +43,13 @@ export function VacancyFacts({ vacancy }: { vacancy: Vacancy }) {
 export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
   return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · Selected for review</small></div><button type="button" className={s.iconButton} aria-label={`Remove ${file.name}`} onClick={onRemove}><CareerIcon name="close"/></button></div>;
 }
-export function FunnelSteps({ step, disabled, onSelect }: { step: number; disabled: boolean; onSelect: (index: number) => void }) {
-  return <nav className={s.steps} aria-label="Application progress">{['Your details', 'Experience', 'Documents'].map((label, index) => <button key={label} type="button" data-step-state={index < step ? 'complete' : index === step ? 'active' : 'upcoming'} disabled={index > step || disabled} onClick={() => onSelect(index)} aria-current={index === step ? 'step' : undefined} aria-label={`Step ${index + 1}: ${label}${index < step ? ', completed' : ''}`} className={index <= step ? s.stepActive : s.step}><span className={s.stepCircle}>{index < step ? <CareerIcon name="check"/> : index + 1}</span><small>{label}</small></button>)}</nav>;
-}
+export function FunnelSteps({ step, completed, disabled, onSelect }: { step: number; completed: boolean[]; disabled: boolean; onSelect: (index: number) => void }) {
+  return <nav className={s.steps} aria-label="Application progress">{['Your details', 'Experience', 'Documents & review'].map((label, index) => {
+    const complete = index !== step && completed[index];
+    const accessible = index <= step || completed.slice(0, index).every(Boolean);
+    return <button key={label} type="button" data-step-state={index === step ? 'active' : complete ? 'complete' : 'upcoming'} disabled={!accessible || disabled}
+      onClick={() => onSelect(index)} aria-current={index === step ? 'step' : undefined}
+      aria-label={`Step ${index + 1}: ${label}${complete ? ', completed' : ''}`} className={index === step || complete ? s.stepActive : s.step}>
+      <span className={s.stepCircle}>{complete ? <CareerIcon name="check"/> : index + 1}</span><small>{label}</small>
+    </button>;
+  })}</nav>;

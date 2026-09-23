@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CareersHeader, CareersFooter } from './careers-chrome';
-import { copyForSubmission, emptyDraft, exampleVacancies, totalFileBytes, validateStep, type ApplicationDraft, type PreviewApplication, type Vacancy } from '../../lib/careers-preview';
+import { copyForSubmission, emptyDraft, exampleVacancies, totalFileBytes, validateStep, validateApplication, type ApplicationDraft, type PreviewApplication, type Vacancy } from '../../lib/careers-preview';
 import { ApplicationFunnel } from './application-funnel';
+import { formScreens, normalizeFormTarget } from '../../lib/careers-form-flow';
 import { RecruitmentPreview } from './recruitment-preview';
 import { Field } from './careers-ui';
 import { BackControl, CareerIcon, VacancyFacts } from './careers-visuals';
@@ -29,13 +30,7 @@ export function CareersPreview() {
       if (requested.view === 'detail' || job.status !== 'Open') return { view: 'detail', role: job.id };
       const snapshot = snapshots.current.get(job.id) || job;
       const draft = live.current.drafts[job.id] || emptyDraft();
-      let step = Math.max(0, Math.min(requested.step || 0, 2));
-      let reviewing = !!requested.reviewing;
-      for (let previous = 0; previous < step; previous += 1) {
-        if (Object.keys(validateStep(draft, snapshot, previous)).length) { step = previous; reviewing = false; break; }
-      }
-      if (reviewing && (step !== 2 || Object.keys(validateStep(draft, snapshot, 2)).length || totalFileBytes(draft) > 30 * 1024 * 1024)) reviewing = false;
-      return { view: 'form', role: job.id, step, reviewing };
+      return { view: 'form', role: job.id, ...normalizeFormTarget(formScreens(snapshot, draft), requested, validateApplication(draft, snapshot)) };
     }
     if (requested.view === 'success') return live.current.applications.some(item => item.id === requested.receipt) ? requested : { view: 'jobs' };
     if (requested.view === 'admin') return { view: 'admin', tab: requested.tab || 'applications', candidate: live.current.applications.some(item => item.id === requested.candidate) ? requested.candidate : undefined };
@@ -120,13 +115,10 @@ export function CareersPreview() {
         <section><h2>What you’ll do</h2><ul>{selected.responsibilities.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section>
         <section><h2>What we’re looking for</h2><ul>{selected.requirements.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section>
         <section className={s.prepareDocuments}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>Documents to prepare</h2><p>A recent photo{selected.cvRequired ? ' and your CV' : ''}. Add relevant certificates or courses, when available.</p><small>CV {selected.cvRequired ? 'required' : 'optional'} · Certificates optional · No professional photo needed</small></div></section>
-      </div><aside className={s.prepareCard}><span className={s.eyebrow}>YOUR APPLICATION</span><h2>Three simple steps.</h2><ol><li>Your details</li><li>Experience & role questions</li><li>Photo, documents & review</li></ol><small><CareerIcon name="lock"/>No account or password needed.</small></aside></div>
+      </div><aside className={s.prepareCard}><span className={s.eyebrow}>YOUR APPLICATION</span><h2>One question at a time.</h2><ol><li>Your details</li><li>Experience & role questions</li><li>Photo, documents & review</li></ol><small><CareerIcon name="lock"/>No account or password needed.</small></aside></div>
       <div className={s.applyBar}><div><strong>{selected.title}</strong><small>{selected.location} · {selected.contract}</small></div><button type="button" className={s.primary} onClick={start}>{submittedByRole.current.has(selected.id) ? 'View confirmation' : drafts[selected.id] ? 'Continue application' : 'Apply now'}<CareerIcon name="arrow"/></button></div></section>
     </>}
-    {navigation.ready && view === 'form' && selected && <ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} completed={submittedByRole.current.has(selected.id)} onChange={next => changeDraft(selected.id, next)} onStep={(step, reviewing = false) => navigation.navigate({ view: 'form', role: selected.id, step, reviewing })} onBack={() => {
-      const step = route.step || 0;
-      navigation.backTo(route.reviewing ? { view: 'form', role: selected.id, step: 2, reviewing: false } : step > 0 ? { view: 'form', role: selected.id, step: step - 1, reviewing: false } : { view: 'detail', role: selected.id });
-    }} onBackToJob={() => navigation.backTo({ view: 'detail', role: selected.id })} onSubmit={submit}/>}
+    {navigation.ready && view === 'form' && selected && <ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={submittedByRole.current.has(selected.id)} onChange={next => changeDraft(selected.id, next)} onStep={target => navigation.navigate({ view: 'form', role: selected.id, ...target })} onBack={target => navigation.backTo(target ? { view: 'form', role: selected.id, ...target } : { view: 'detail', role: selected.id })} onBackToJob={() => navigation.backTo({ view: 'detail', role: selected.id })} onSubmit={submit}/>}
     {navigation.ready && view === 'success' && submitted && <section className={s.successPage}><div className={s.successIcon}><CareerIcon name="check"/></div><span className={s.eyebrow}>PREVIEW COMPLETE</span><h1 data-career-page-title tabIndex={-1}>Application completed</h1><p>Thank you for your interest in joining the DEMAC team.</p><strong className={s.successRole}>{submitted.vacancy.title}</strong>
       <dl className={s.receiptCard}><div><CareerIcon name="file"/><dt>Reference number</dt><dd>{submitted.id}</dd></div><div><CareerIcon name="mail"/><dt>Your email</dt><dd>{submitted.draft.email}</dd></div></dl>
       <div className={s.informationCard}><span className={s.iconTile}><CareerIcon name="mail"/></span><div><strong>Confirmation email · Preview only</strong><p>No email has been sent. This test profile is available in Recruitment in this tab.</p></div></div>

@@ -72,6 +72,13 @@ export function validateStep(draft: ApplicationDraft, vacancy: Vacancy, step: nu
   }
   return errors;
 }
+/** Complete existing validation, also used to guard question-level navigation.
+ * The backend independently validates again when a candidate submits. */
+export function validateApplication(draft: ApplicationDraft, vacancy: Vacancy, review = false): Errors {
+  const errors = { ...validateStep(draft, vacancy, 0), ...validateStep(draft, vacancy, 1), ...validateStep(draft, vacancy, 2, review) };
+  if (totalFileBytes(draft) > 30 * 1024 * 1024) errors.cv = 'The combined files must be smaller than 30 MB.';
+  return errors;
+}
 export function fileError(file: Pick<File, 'name' | 'size'>, kind: 'cv' | 'document' | 'photo'): string | null {
   if (!file.size) return 'This file is empty. Please choose another file.';
   if (file.size > 10 * 1024 * 1024) return 'Choose a file smaller than 10 MB.';

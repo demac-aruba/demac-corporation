@@ -1,59 +1,58 @@
 'use client';
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { dialingCodes, fileError, phoneInternational, totalFileBytes, validateStep, visibleQuestions, type ApplicationDraft, type Errors, type Question, type Vacancy } from '../../lib/careers-preview';
+import { fileError, totalFileBytes, validateApplication, type ApplicationDraft, type Errors, type Vacancy } from '../../lib/careers-preview';
+import { formScreens, targetFor, screenErrors, previousFormTarget, questionProgress, type FormTarget, type FormScreen } from '../../lib/careers-form-flow';
 import { prepareProfilePhoto } from './profile-photo';
-import { Alert, CountrySelect, Field, countryName, focusError } from './careers-ui';
+import { Alert, countryName, focusError } from './careers-ui';
 import { BackControl, CareerIcon, FunnelSteps, ReadyFile } from './careers-visuals';
+import { FunnelQuestion } from './funnel-question';
 import s from './careers.module.css';
 
-type Props = { vacancy: Vacancy; draft: ApplicationDraft; step: number; reviewing: boolean; completed?: boolean;
-  onChange: (draft: ApplicationDraft) => void; onStep: (step: number, reviewing?: boolean) => void;
-  onBack: () => void; onBackToJob: () => void; onSubmit: () => string | null | Promise<string | null>;
+type Props = { vacancy: Vacancy; draft: ApplicationDraft; step: number; reviewing: boolean; question?: string; returnToReview?: boolean; completed?: boolean;
+  onChange: (draft: ApplicationDraft) => void; onStep: (target: FormTarget) => void;
+  onBack: (target?: FormTarget) => void; onBackToJob: () => void; onSubmit: () => string | null | Promise<string | null>;
   live?: { privacyText: string; status: string }; };
-const titles = ['Your details', 'Your experience', 'Photo & documents'];
-function QuestionField({ question: q, value, error, onChange }: { question: Question; value: string | string[] | undefined; error?: string; onChange: (value: string | string[]) => void }) {
-  const id = `q-${q.id}`;
-  if (q.kind === 'multiselect' || q.kind === 'yesno') {
-    const options = q.kind === 'yesno' ? ['Yes', 'No'] : (q.options || []);
-    return <fieldset className={s.choiceField} id={id} tabIndex={-1} aria-describedby={error ? `${id}-error` : undefined}><legend>{q.label}{!q.required && <span className={s.optional}> (optional)</span>}</legend><div className={s.choices}>{options.map(option => {
-      const checked = Array.isArray(value) ? value.includes(option) : value === option;
-      return <label className={checked ? s.choiceSelected : s.choice} key={option}><input type={q.kind === 'yesno' ? 'radio' : 'checkbox'} name={id} checked={checked} onChange={() => onChange(q.kind === 'yesno' ? option : checked ? (Array.isArray(value) ? value.filter(v => v !== option) : []) : [...(Array.isArray(value) ? value : []), option])}/>{option}</label>;
-    })}</div>{error && <small className={s.error} id={`${id}-error`} role="alert">{error}</small>}</fieldset>;
-  }
-  const shared = { id, value: typeof value === 'string' ? value : '', 'aria-invalid': !!error, 'aria-describedby': error ? `${id}-error` : undefined, onChange: (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => onChange(event.target.value) };
-  return <Field id={id} label={q.label} optional={!q.required} error={error}>{q.kind === 'select' ? <select {...shared}><option value="">Select an answer</option>{q.options?.map(option => <option key={option} value={option}>{option}</option>)}</select> : q.kind === 'textarea' ? <textarea {...shared} rows={3} maxLength={1200}/> : <input {...shared} type={q.kind === 'number' || q.kind === 'date' || q.kind === 'url' ? q.kind : 'text'} min={q.kind === 'number' ? 0 : undefined} maxLength={q.kind === 'number' ? undefined : 240}/>}</Field>;
-}
-export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit, live }: Props) {
+
+export function ApplicationFunnel({ vacancy, draft, step, reviewing, question, returnToReview = false, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit, live }: Props) {
   const [errors, setErrors] = useState<Errors>({});
   const [fileIssue, setFileIssue] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
   const busy = photoBusy || submitting;
-  const [otherDial, setOtherDial] = useState(!dialingCodes.some(([code]) => code === draft.dialCode));
   const photoGeneration = useRef(0);
   const latestDraft = useRef(draft);
   latestDraft.current = draft;
+  const screens = formScreens(vacancy, draft);
+  const active = screens.find(screen => reviewing ? screen.kind === 'review' : screen.id === question)
+    || screens.find(screen => screen.stage === step)!;
+  const progress = questionProgress(screens, active);
+  const allErrors = validateApplication(draft, vacancy, reviewing);
+  const stageComplete = [0, 1, 2].map(stage => !screens.some(screen => screen.stage === stage && screen.kind !== 'review' && Object.keys(screenErrors(screen, allErrors)).length > 0));
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { setErrors({}); setFileIssue(''); heading.current?.focus({ preventScroll: true }); }, [step, reviewing, vacancy.version]);
+  useEffect(() => { setErrors({}); setFileIssue(''); heading.current?.focus({ preventScroll: true }); }, [active.id, vacancy.version]);
   useEffect(() => () => { photoGeneration.current += 1; }, []);
   function patch<K extends keyof ApplicationDraft>(key: K, value: ApplicationDraft[K]) {
     if (completed) return;
     onChange({ ...draft, [key]: value });
     if (errors[key]) setErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
   }
-  function move(next: number, review = false) { setErrors({}); setFileIssue(''); onStep(next, review); }
+  function move(screen: FormScreen, edit = false) { setErrors({}); setFileIssue(''); onStep(targetFor(screen, edit)); }
   async function next() {
-    if (inFlight.current) return;
+    if (inFlight.current || photoBusy) return;
     if (completed) { await onSubmit(); return; }
-    const found = validateStep(draft, vacancy, step, reviewing);
-    if (totalFileBytes(draft) > 30 * 1024 * 1024) found.cv = 'The combined files must be smaller than 30 MB.';
-    if (Object.keys(found).length) { setErrors(found); focusError(found); return; }
-    if (step < 2) { move(step + 1); return; }
-    if (!reviewing) { move(2, true); return; }
-    const all = { ...validateStep(draft, vacancy, 0), ...validateStep(draft, vacancy, 1), ...validateStep(draft, vacancy, 2, true) };
-    if (Object.keys(all).length) { setErrors(all); return; }
+    const found = reviewing ? allErrors : screenErrors(active, allErrors);
+    if (Object.keys(found).length) {
+      setErrors(found);
+      const first = screens.find(screen => screen.kind !== 'review' && Object.keys(screenErrors(screen, found)).length > 0);
+      if (reviewing && first) { onStep(targetFor(first, true)); return; }
+      focusError(found); return;
+    }
+    if (!reviewing) {
+      const nextScreen = returnToReview ? screens[screens.length - 1] : screens[screens.findIndex(screen => screen.id === active.id) + 1];
+      move(nextScreen); return;
+    }
     inFlight.current = true; setSubmitting(true);
     try { const issue = await onSubmit(); if (issue) setFileIssue(issue); }
     catch (error) { setFileIssue(error instanceof Error ? error.message : 'Unable to submit. Please retry.'); }
@@ -85,37 +84,30 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
     onChange(updated);
     setErrors(previous => { const copy = { ...previous }; delete copy.cv; return copy; });
   }
-  const input = (id: keyof ApplicationDraft, type = 'text', autoComplete?: string) => ({ id, type, autoComplete, value: String(draft[id] ?? ''), onChange: (event: ChangeEvent<HTMLInputElement>) => patch(id, event.target.value), 'aria-invalid': !!errors[id], 'aria-describedby': errors[id] ? `${id}-error` : undefined });
+
   const requiredReady = Number(!!draft.photo) + Number(!!draft.cv || (!vacancy.cvRequired && draft.noCv));
-  const backLabel = reviewing ? 'Back to documents' : step === 2 ? 'Back to experience' : step === 1 ? 'Back to your details' : 'Back to position details';
-  return <div className={s.funnelLayout}>
-    <aside className={s.roleAside}><div className={s.navigationRow} data-career-navrow><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span>Position details</span></div><span className={s.eyebrow}>YOU ARE APPLYING FOR</span><h2>{vacancy.title}</h2><p>{vacancy.location} · {vacancy.contract}</p><hr/><strong>A few steps.<br/>A new opportunity.</strong><p>Share your experience and tell us what you can bring to the team.</p><small><CareerIcon name="lock"/>No account or password needed.</small></aside>
+  const previous = previousFormTarget(screens, active, returnToReview);
+  const backLabel = returnToReview ? 'Back to review' : reviewing ? 'Back to documents' : previous ? 'Back to previous question' : 'Back to position details';
+  function answerFor(screen: FormScreen): string {
+    const value = screen.question ? draft.answers[screen.question.id] : screen.field ? draft[screen.field] : '';
+    if (screen.field === 'phone') return `${draft.dialCode} ${draft.phone}`;
+    if (['nationality', 'applyingFrom', 'residence'].includes(screen.field || '')) return countryName(String(value));
+    return Array.isArray(value) ? value.join(', ') : typeof value === 'boolean' ? value ? 'Yes' : 'No' : String(value || 'Not provided');
+  }
+  return <div className={s.funnelLayout} data-careers-form-flow="questions-v4">
     <section className={s.formPanel} aria-label="Application form">
-      <div className={s.mobileRole}><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span><small>APPLYING FOR</small><strong>{vacancy.title}</strong></span></div>
-      <FunnelSteps step={step} disabled={busy} onSelect={index => move(index)}/>
-      <div className={s.formHeading}><span className={s.eyebrow}>STEP {step + 1} OF 3{reviewing ? ' · FINAL REVIEW' : ''}</span><h1 data-career-page-title ref={heading} tabIndex={-1}>{reviewing ? 'Review your application' : titles[step]}</h1><p>{reviewing ? 'Everything in one place. Make any final changes before you send.' : step === 0 ? 'Let’s start with the best way to reach you.' : step === 1 ? 'Tell us what you do best.' : 'Your profile photo, CV and relevant qualifications.'}</p></div>
+      <div className={s.questionRole}><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span><small>APPLYING FOR</small><strong>{vacancy.title}</strong></span></div>
+      <FunnelSteps step={active.stage} completed={stageComplete} disabled={busy} onSelect={stage => move(screens.find(screen => screen.stage === stage)!)}/>
+      <div className={s.formHeading}><span className={s.eyebrow}>{active.kind === 'review' ? 'FINAL REVIEW' : active.kind === 'documents' ? 'PHOTO & DOCUMENTS' : `QUESTION ${progress.position} OF ${progress.total} · ${progress.stagePosition} OF ${progress.stageTotal} IN THIS SECTION`}</span><h1 id="career-question-heading" data-career-page-title ref={heading} tabIndex={-1}>{active.label}</h1>{reviewing && <p>Review your original answers. Edit any question before you send.</p>}</div>
       {completed && <div className={s.informationCard} role="status"><CareerIcon name="check"/><div><strong>{live ? 'This application has been received.' : 'This preview application is already completed.'}</strong><p>Your details remain available for review. Back and Forward will not create another application.</p></div></div>}
-      {step === 0 && !completed && <div className={s.informationCard}><span className={s.iconTile}><CareerIcon name="person"/></span><div><strong>Let’s get to know you</strong><p>A few details so we can stay in touch.</p></div></div>}
       {fileIssue && <Alert>{fileIssue}</Alert>}
-      <form noValidate onSubmit={event => { event.preventDefault(); if (!busy) void next(); }}>
+      <form noValidate onKeyDown={event => {
+        if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
+      }} onSubmit={event => { event.preventDefault(); if (!busy) void next(); }}>
         <fieldset className={s.formFieldset} disabled={completed || submitting} data-career-form-fields aria-label="Application details">
-        {step === 0 && <div className={s.formFields}>
-          <div className={s.twoColumns}><Field id="givenName" label="First name" error={errors.givenName}><input {...input('givenName', 'text', 'given-name')} maxLength={80}/></Field><Field id="familyName" label="Last name" error={errors.familyName}><input {...input('familyName', 'text', 'family-name')} maxLength={100}/></Field></div>
-          <Field id="email" label="Email address" error={errors.email} hint="For updates about your application."><input {...input('email', 'email', 'email')} inputMode="email" maxLength={254}/></Field>
-          <div className={s.phoneRow}><Field id="dialCode" label="Country code" error={errors.dialCode}><select id="dialCode" value={otherDial ? 'other' : draft.dialCode} onChange={event => { const other = event.target.value === 'other'; setOtherDial(other); patch('dialCode', other ? '' : event.target.value); }} aria-invalid={!!errors.dialCode}>{dialingCodes.map(([code, country]) => <option key={code} value={code}>{code} · {country}</option>)}<option value="other">Other code</option></select>{otherDial && <input type="tel" aria-label="Other country calling code" value={draft.dialCode} onChange={event => patch('dialCode', event.target.value)} placeholder="+…" maxLength={5}/>}</Field><Field id="phone" label="Phone number" error={errors.phone}><input {...input('phone', 'tel', 'tel-national')} maxLength={24}/></Field></div>
-          <label className={s.checkbox}><input type="checkbox" checked={draft.whatsapp} onChange={event => patch('whatsapp', event.target.checked)}/>This number is also on WhatsApp</label>
-          <Field id="nationality" label="Nationality" error={errors.nationality}><CountrySelect id="nationality" value={draft.nationality} onChange={value => patch('nationality', value)} error={errors.nationality}/></Field>
-          <Field id="applyingFrom" label="Country you are applying from" error={errors.applyingFrom}><CountrySelect id="applyingFrom" value={draft.applyingFrom} onChange={value => patch('applyingFrom', value)} error={errors.applyingFrom}/></Field>
-          <label className={s.checkbox}><input type="checkbox" checked={draft.sameResidence} onChange={event => patch('sameResidence', event.target.checked)}/>I also live in this country</label>
-          {!draft.sameResidence && <Field id="residence" label="Country of residence" error={errors.residence}><CountrySelect id="residence" value={draft.residence} onChange={value => patch('residence', value)} error={errors.residence}/></Field>}
-          <Field id="city" label="City" error={errors.city}><input {...input('city', 'text', 'address-level2')} maxLength={120}/></Field>
-        </div>}
-        {step === 1 && <div className={s.formFields}>
-          <div className={s.twoColumns}><Field id="totalExperience" label="Total years of work experience" error={errors.totalExperience}><input {...input('totalExperience', 'number')} min="0" max="70" step="0.5" inputMode="decimal"/></Field><Field id="relevantExperience" label="Years relevant to this role" error={errors.relevantExperience}><input {...input('relevantExperience', 'number')} min="0" max="70" step="0.5" inputMode="decimal"/></Field></div>
-          {visibleQuestions(vacancy, draft).map(q => <QuestionField key={q.id} question={q} value={draft.answers[q.id]} error={errors[`q-${q.id}`]} onChange={value => { onChange({ ...draft, answers: { ...draft.answers, [q.id]: value } }); setErrors(previous => { const copy = { ...previous }; delete copy[`q-${q.id}`]; return copy; }); }}/>) }
-          <div id="languages" tabIndex={-1}><QuestionField question={{ id: 'languages', label: 'Which languages do you speak?', kind: 'multiselect', required: true, options: ['English', 'Spanish', 'Papiamento', 'Dutch', 'Other'] }} value={draft.languages} error={errors.languages} onChange={value => patch('languages', Array.isArray(value) ? value : [value])}/></div>
-          <Field id="availability" label="When could you start?" error={errors.availability}><select id="availability" value={draft.availability} onChange={event => patch('availability', event.target.value)} aria-invalid={!!errors.availability}><option value="">Select availability</option><option>Immediately</option><option>Within 2 weeks</option><option>Within 1 month</option><option>More than 1 month</option><option>To be discussed</option></select></Field>
-        </div>}
+        {(active.kind === 'profile' || active.kind === 'role') && <FunnelQuestion key={active.id} screen={active} draft={draft} errors={errors} onChange={updated => {
+          if (!completed) { onChange(updated); setErrors({}); }
+        }}/>}
         {step === 2 && !reviewing && <div className={s.documentStack}>
           <div className={s.sectionHeading}><h2>Upload documents</h2><span className={requiredReady === 2 ? s.readyBadge : s.badge}>{requiredReady} / 2 ready</span></div>
           <section className={s.uploadCard} aria-labelledby="photo-title"><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="person"/></span><div><h2 id="photo-title">Profile photo <span className={s.requiredMark}>*</span></h2><p>A recent photo of you. No professional photo needed.</p></div>{draft.photo && !photoBusy && <span className={s.greenCheck} aria-label="Photo selected"><CareerIcon name="check"/></span>}</div>
@@ -141,16 +133,22 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
           </section>
           <p className={s.previewNotice}><CareerIcon name="lock"/>{live ? 'Selected files will be uploaded and security-checked when you submit.' : 'Preview: selected files stay in this tab. Nothing is uploaded or scanned.'}</p>
         </div>}
-        {step === 2 && reviewing && <div className={s.formFields}>
-          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="person"/>Contact details</h2><button type="button" className={s.textButton} onClick={() => move(0)}>Edit</button></div><div className={s.profileHeading}>{draft.photo && <img className={s.avatar} src={draft.photo.dataUrl} alt="Your profile photo"/>}<div><strong>{draft.givenName} {draft.familyName}</strong><p>{draft.email}</p><p>{phoneInternational(draft)}</p></div></div><p>{draft.city}, {countryName(draft.sameResidence ? draft.applyingFrom : draft.residence)}</p><p>Nationality: {countryName(draft.nationality)}</p></section>
-          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="briefcase"/>Experience</h2><button type="button" className={s.textButton} onClick={() => move(1)}>Edit</button></div><p>{draft.totalExperience} years total · {draft.relevantExperience} years relevant</p><p>{draft.languages.join(', ')} · {draft.availability}</p><dl className={s.answers}>{visibleQuestions(vacancy, draft).map(q => <div key={q.id}><dt>{q.label}</dt><dd>{Array.isArray(draft.answers[q.id]) ? (draft.answers[q.id] as string[]).join(', ') : draft.answers[q.id] || 'Not provided'}</dd></div>)}</dl></section>
-          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="file"/>Documents</h2><button type="button" className={s.textButton} onClick={() => move(2)}>Edit</button></div><p className={s.readyLine}><CareerIcon name="check"/>Recent profile photo selected</p><p className={s.readyLine}><CareerIcon name="check"/>{draft.cv?.name || 'CV optional for this role'}</p>{draft.documents.map((file, index) => <p className={s.readyLine} key={`${file.name}-${index}`}><CareerIcon name="check"/>{file.name}</p>)}</section>
+        {reviewing && <div className={s.formFields}>
+          {([0, 1] as const).map(stage => <section className={s.reviewCard} key={stage}>
+            <div className={s.sectionHeading}><h2><CareerIcon name={stage === 0 ? 'person' : 'briefcase'}/>{stage === 0 ? 'Contact details' : 'Experience'}</h2></div>
+            {stage === 0 && draft.photo && <img className={s.avatar} src={draft.photo.dataUrl} alt="Your profile photo"/>}
+            <dl className={`${s.answers} ${s.editableAnswers}`}>{screens.filter(screen => screen.stage === stage).map(screen => <div key={screen.id}>
+              <dt>{screen.label}</dt><dd>{answerFor(screen)}</dd><button type="button" className={s.textButton} aria-label={`Edit ${screen.label}`} onClick={() => move(screen, true)}>Edit</button>
+            </div>)}</dl>
+          </section>)}
+          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="file"/>Documents</h2><button type="button" className={s.textButton} onClick={() => move(screens.find(screen => screen.kind === 'documents')!, true)}>Edit</button></div><p className={s.readyLine}><CareerIcon name="check"/>Recent profile photo selected</p><p className={s.readyLine}><CareerIcon name="check"/>{draft.cv?.name || 'CV optional for this role'}</p>{draft.documents.map((file, index) => <p className={s.readyLine} key={`${file.name}-${index}`}><CareerIcon name="check"/>{file.name}</p>)}</section>
           <details className={s.privacy}><summary>{live ? 'Recruitment privacy notice' : 'How this preview uses your information'}</summary><p style={{ whiteSpace: 'pre-wrap' }}>{live ? live.privacyText : 'This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.'}</p></details>
           <label className={s.checkbox}><input id="privacy" type="checkbox" checked={draft.privacy} onChange={event => patch('privacy', event.target.checked)} aria-invalid={!!errors.privacy}/>{live ? 'I have read the recruitment privacy notice.' : 'I have read the preview privacy information.'}</label>{errors.privacy && <small className={s.error} role="alert">{errors.privacy}</small>}
           <label className={s.checkbox}><input type="checkbox" checked={draft.futureTalent} onChange={event => patch('futureTalent', event.target.checked)}/>{live ? 'Keep my profile for future openings (optional).' : 'Keep my profile for future openings (optional; simulated in preview).'}</label>
         </div>}
         </fieldset>
-        <div className={s.formActions}><BackControl label={backLabel} disabled={busy} onClick={onBack}/><button className={s.primary} type="submit" disabled={busy}>{submitting ? (live?.status || 'Submitting…') : photoBusy ? 'Preparing photo…' : completed ? 'View confirmation' : reviewing ? (live ? 'Submit application' : 'Submit preview application') : step === 2 ? 'Review application' : 'Continue'}{!photoBusy && <CareerIcon name="arrow"/>}</button></div>
+        <div className={s.formActions}><BackControl label={backLabel} disabled={busy} onClick={() => onBack(previous)}/><button className={s.primary} type="submit" disabled={busy}>{submitting ? (live?.status || 'Submitting…') : photoBusy ? 'Preparing photo…' : completed ? 'View confirmation' : reviewing ? (live ? 'Submit application' : 'Submit preview application') : returnToReview ? 'Return to review' : active.kind === 'documents' ? 'Review application' : 'Continue'}{!photoBusy && <CareerIcon name="arrow"/>}</button></div>
+        <p className={s.previewNotice}><CareerIcon name="lock"/>Your answers and selected files stay in this tab while you apply. Reloading or closing it clears this draft.</p>
       </form>
     </section>
   </div>;
