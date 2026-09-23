@@ -29,12 +29,15 @@ async function verifyAuth(name) {
     const candidate = text(fs.readFileSync(path.join('functions', file)));
     assert.ok(deployed === base || deployed === candidate, file + ': deployed source changed; reconcile before release');
   }
-  let existingProject;
   result.stage = 'verify-existing-project';
-  try { existingProject = describe('projectAuthority'); } catch (error) {
-    // Only a verified NOT_FOUND permits creation. Permission/network errors stop the release.
-    if (!String(error.stderr || '').includes('NOT_FOUND')) throw error;
-  }
+  // A successful, untruncated v2 inventory proves absence without parsing CLI error text.
+  // Require the already verified Office resource in the same inventory; permission, network,
+  // malformed and wrong-project results must stop before any deployment.
+  const inventory = JSON.parse(run(['functions', 'list', '--project=' + project, '--regions=us-central1', '--v2', '--format=json(name)']));
+  assert.ok(Array.isArray(inventory) && inventory.some(fn => fn.name === previous.name), 'Verified Office resource is missing from function inventory');
+  const projectName = previous.name.replace(/\/officeBookingAuthority$/, '/projectAuthority');
+  assert.notEqual(projectName, previous.name, 'Unexpected Office resource identity');
+  const existingProject = inventory.some(fn => fn.name === projectName) ? describe('projectAuthority') : undefined;
   if (existingProject) {
     const existingSource = existingProject.buildConfig.source.storageSource;
     const existingZip = path.join(process.env.RUNNER_TEMP, 'current-project-source.zip');
@@ -60,4 +63,4 @@ async function verifyAuth(name) {
     console.log(name + ': ACTIVE; anonymous access rejected.');
   }
   result.stage = 'complete'; record();
-})().catch(error => { result.error = error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : 'Release stopped; inspect the bounded deployment job.'; record(); console.error(result.error); process.exitCode = 1; });
+})().catch(error => { result.error = error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : 'Release stopped at ' + result.stage + '; inspect the bounded deployment job.'; record(); console.error(result.error); process.exitCode = 1; });

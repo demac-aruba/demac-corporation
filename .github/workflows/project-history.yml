@@ -1,10 +1,10 @@
 name: Project historical bookings
 on:
   pull_request:
-    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy.cjs', '.github/workflows/project-history.yml']
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
   push:
     branches: [feature/project-historical-bookings, release/project-historical-bookings, main]
-    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy.cjs', '.github/workflows/project-history.yml']
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
 permissions:
   contents: read
 jobs:
@@ -29,6 +29,7 @@ jobs:
           "$RUNNER_TEMP/project-history-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
       - name: Syntax and existing booking regression
         run: |
+          node --test scripts/project-history-approved-deploy.test.cjs
           npm run validate:firebase --prefix functions
           npm run test:booking-authority --prefix functions
           node --test functions/officeBookingAuthority*.test.js
