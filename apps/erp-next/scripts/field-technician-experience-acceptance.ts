@@ -1,3 +1,4 @@
+import './field-preview-build-safety-acceptance';
 import './field-portal-presentation-acceptance';
 import './field-route-selection-acceptance';
 import assert from 'node:assert/strict';
