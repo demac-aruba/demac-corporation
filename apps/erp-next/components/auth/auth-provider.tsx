@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isFirebaseClientConfigured } from '@/lib/firebase/client-config';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
-import { clearFirebaseWebSession, loadFirebaseWebSession, signInWithFirebaseEmail, FirebaseSessionSupersededError } from '@/lib/firebase/session';
+import { clearFirebaseWebSession, loadFirebaseWebSession, signInWithFirebaseEmail, FirebaseSessionSupersededError, onFirebaseSessionInvalidated } from '@/lib/firebase/session';
 import { roleLabels, type AuthPrincipal } from '@/lib/security';
 import { isTransientFirebaseError } from '@/lib/firebase/request-error';
 import recoveryStyles from './auth-recovery.module.css';
@@ -129,9 +129,10 @@ export function AuthProvider({ children }: Readonly<{ children: React.ReactNode 
   }, [lockSession, verifySession]);
 
   useEffect(() => {
+    const unsubscribe = onFirebaseSessionInvalidated(() => lockSession('Your sign-in must be verified again.', 'error'));
     void loadExistingSession().catch(() => undefined);
-    return () => { operation.current += 1; };
-  }, [loadExistingSession]);
+    return () => { operation.current += 1; unsubscribe(); };
+  }, [loadExistingSession, lockSession]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const id = ++operation.current;

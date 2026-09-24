@@ -104,6 +104,12 @@ const waitFor=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await new Promis
       await page.getByRole('button',{name:'Sign out',exact:true}).click();await locked();state.holdProfile=false;state.pending.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(100);assert.equal(await authState(),'signed_out:ready:signed-out');assert.equal(await saved(),null);checks.push('late profile success cannot undo sign-out');
       await login();await page.getByLabel('Capture draft').fill('private to first identity');state.holdProfile=true;state.profileStatus=403;await page.getByRole('button',{name:'Refresh profile',exact:true}).click();await waitFor(()=>state.pending.length===1);
       const old=state;reset();await page.getByRole('button',{name:'Sign in helper',exact:true}).click();await expected('synthetic-helper');old.pending.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(100);await expected('synthetic-helper');assert.equal((await saved()).uid,'synthetic-helper');assert.equal(await page.getByLabel('Capture draft').inputValue(),'');checks.push('late old-account denial cannot clear new login or expose old capture');
+      await page.evaluate(async()=>{
+        const module=window.authHarness.session;const old=module.loadFirebaseWebSession();module.persistFirebaseWebSession({...old,expiresAt:Date.now()-1});
+        try {await module.requireFirebaseWebSession();}catch{}
+      });
+      await locked();assert.equal(await saved(),null);assert.equal(await page.getByLabel('Capture draft').count(),0);checks.push('invalid refresh from an API consumer locks mounted AuthProvider');
+      await login();
       await page.getByRole('button',{name:'Sign out',exact:true}).click();await locked();await page.reload();await locked();assert.equal(await saved(),null);checks.push('explicit sign-out remains signed out after reload');
       assert.deepEqual(outside,[]);assert.deepEqual(errors,[]);checks.push('no external requests, uncaught browser errors, or horizontal overflow');
       report.browsers.push({engine:name,viewport:'390x844 emulated',checks,status:'passed'});record();console.log(`PASS actual AuthProvider component: ${name} (${checks.length} groups).`);

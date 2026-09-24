@@ -83,6 +83,18 @@ module.exports = async function runSessionChecks(session, transport) {
       session.clearFirebaseWebSession(); wait.resolve(new Response(JSON.stringify({localId:'synthetic-tech',email:'tech@demac-preview.invalid',idToken:'synthetic-id',refreshToken:'synthetic-ref',expiresIn:'3600'})));
       await rejected; assert.equal(session.loadFirebaseWebSession(),null);
     });
+    await run('API-side rejected credentials notify mounted consumers',async()=>{
+      seed(); let notifications=0; const stop=session.onFirebaseSessionInvalidated(()=>{notifications++;});
+      global.fetch=async()=>new Response(JSON.stringify({error:{message:'INVALID_REFRESH_TOKEN'}}),{status:400});
+      try { await assert.rejects(session.requireFirebaseWebSession()); assert.equal(notifications,1); assert.equal(session.loadFirebaseWebSession(),null); } finally { stop(); }
+    });
+    await run('transient API failure does not invalidate mounted consumers',async()=>{
+      seed();let notifications=0;const stop=session.onFirebaseSessionInvalidated(()=>{notifications++;});global.fetch=async()=>new Response('{}',{status:503});
+      try { await assert.rejects(session.requireFirebaseWebSession());assert.equal(notifications,0);assert.ok(session.loadFirebaseWebSession()); } finally { stop(); }
+    });
+    await run('invalid JSON content is not reflected in a parser error',async()=>{
+      await assert.rejects(transport.readFirebaseJson(new Response('sensitive-response-fragment')),(error)=>error.message==='The server returned an invalid response.');
+    });
     await run('invalid cached shape is not a session',async()=>{
       data.set('demac.erp-next.firebase.session.v1',JSON.stringify({uid:'invented'})); assert.equal(session.loadFirebaseWebSession(),null); assert.equal(data.size,0);
     });

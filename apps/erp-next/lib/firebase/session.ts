@@ -5,6 +5,14 @@ import { fetchFirebaseResponse, firebaseResponseError, isTransientFirebaseError,
 const SESSION_KEY = 'demac.erp-next.firebase.session.v1';
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 let generation = 0;
+const invalidationListeners = new Set<() => void>();
+
+/** Notify mounted consumers when an API caller encounters invalid credentials. */
+export function onFirebaseSessionInvalidated(listener: () => void) {
+  invalidationListeners.add(listener);
+  return () => { invalidationListeners.delete(listener); };
+}
+
 let refreshFlight: { generation: number; identity: string; promise: Promise<FirebaseWebSession> } | null = null;
 
 export type FirebaseWebSession = {
@@ -125,7 +133,10 @@ export function refreshFirebaseWebSession(session: FirebaseWebSession): Promise<
       if (!stillCurrent()) throw new FirebaseSessionSupersededError();
       // A timeout/5xx is not revocation. Keep the refresh credential for a later
       // explicit retry, but never return an expired token as a successful refresh.
-      if (!isTransientFirebaseError(error)) clearFirebaseWebSession();
+      if (!isTransientFirebaseError(error)) {
+        try { clearFirebaseWebSession(); }
+        finally { for (const listener of invalidationListeners) { try { listener(); } catch { /* A UI subscriber cannot restore a rejected session. */ } } }
+      }
       throw error;
     }
   })();

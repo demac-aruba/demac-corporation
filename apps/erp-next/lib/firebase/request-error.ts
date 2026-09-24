@@ -49,6 +49,7 @@ export async function readFirebaseJson<T>(response: Response): Promise<T> {
     if (error instanceof TypeError || (error instanceof Error && error.name === 'AbortError')) {
       throw new FirebaseRequestError('The response could not be completed. Retry when connected.', 0);
     }
+    if (error instanceof SyntaxError) throw new Error('The server returned an invalid response.');
     throw error;
   }
 }
