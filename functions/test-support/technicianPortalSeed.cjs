@@ -28,7 +28,8 @@ async function main() {
     ['DEMO-FIELD-3', '13:00', '14:00', locations[3], 'Confirmada'],
   ];
   const batch = db.batch();
-  batch.set(db.doc('services/SYNTHETIC-SERVICE'), { name: 'DEMO · Standard Service', type: 'Service', category: 'Maintenance', durationMinutes: 60, active: true });
+  // Field requires canonical service metadata; a legacy-only label is not a catalog option.
+  batch.set(db.doc('services/SYNTHETIC-SERVICE'), { name: 'DEMO · Standard Service', type: 'Service', category: 'Maintenance', durationMinutes: 60, active: true, serviceDefinition: { version: 1, bookingCode: 'demo_standard_service', duration: { mode: 'per_unit', minutes: 60 } } });
   batch.set(db.doc('vans/VAN-1'), { name: 'DEMO · Van 1' }, { merge: true });
   for (const [id, time, endTime, location, status] of plan) {
     const dwellingId = location.dwellingIds[id.endsWith('3') ? 2 : 1];
