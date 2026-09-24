@@ -2,6 +2,7 @@
 // End-to-end tests use local demo emulators; no production records or messages.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {chromium,webkit}=require('playwright');
+const flow=require('../../apps/erp-next/scripts/careers-question-driver.cjs');
 const project='demo-demac-careers';
 for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_STORAGE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^127\.0\.0\.1:\d+$/.test(process.env[key]||''))throw Error('Local demo emulators required.');
 if(process.env.GCLOUD_PROJECT!==project)throw Error('Production is forbidden in this test.');
@@ -83,22 +84,31 @@ async function context(browser,admin,viewport){
       await row.getByRole('button',{name:'Edit position',exact:true}).click();await office.getByLabel('Publication status',{exact:true}).selectOption('Open');await office.getByRole('button',{name:'Save & open vacancy',exact:true}).click();
       await office.getByText(title,{exact:true}).waitFor();await shot(office,'02-vacancies');
       await person.goto(`${site}/careers/`);await person.getByRole('heading',{name:title,exact:true}).waitFor();
-      await person.getByRole('article').filter({has:person.getByRole('heading',{name:title,exact:true})}).getByRole('button',{name:'View position',exact:true}).click();
+      await person.getByRole('article').filter({has:person.getByRole('heading',{name:title,exact:true})}).getByRole('button',{name:`View ${title}`,exact:true}).click();
       assert(!(await person.locator('body').innerText()).includes('QA PRIVATE NOTE'),'private vacancy notes excluded');
       assert(await person.locator('[data-career-icon]').evaluateAll(icons=>icons.every(icon=>!icon.closest('.public-site'))),'Careers controls are outside marketing illustration styles');
       await person.getByRole('button',{name:'Apply now',exact:true}).click();
-      for(const [id,value]of Object.entries({givenName:'QA',familyName:`Candidate ${name}`,email:`candidate-${name}@example.test`,phone:'2025550101',city:'Test City'}))await person.locator(`#${id}`).fill(value);
-      await person.locator('#dialCode').selectOption('+1');await person.locator('#nationality').selectOption('NL');await person.locator('#applyingFrom').selectOption('AW');
-      await person.getByRole('button',{name:'Continue',exact:true}).click();await person.locator('#totalExperience').fill('6');await person.locator('#relevantExperience').fill('3');
-      await person.getByRole('group',{name:'Have you worked on VRF systems?',exact:true}).getByLabel('Yes',{exact:true}).check();await person.locator('#q-languages').getByLabel('English',{exact:true}).check();await person.locator('#availability').selectOption('Within 2 weeks');
-      await person.getByLabel('Earliest start date',{exact:true}).fill('2026-10-01');
-      await person.getByLabel('Portfolio URL',{exact:true}).fill('javascript:alert(1)');
-      await person.getByRole('button',{name:'Continue',exact:true}).click();
+      // Exercise the public, server-backed one-question flow through real controls.
+      // Every transition checks the stable question route and that no second
+      // conceptual question is mounted. No prefilled browser state is injected.
+      await flow.details(person,{first:'QA',last:`Candidate ${name}`,email:`candidate-${name}@example.test`,nationality:'NL'});
+      await person.locator('#totalExperience').fill('6');await flow.next(person);
+      await flow.question(person,'profile:relevantExperience');await person.locator('#relevantExperience').fill('3');await flow.next(person);
+      await person.getByRole('group',{name:'Have you worked on VRF systems?',exact:true}).getByLabel('Yes',{exact:true}).check();await flow.next(person);
+      const startDate=person.getByLabel('Earliest start date',{exact:true});
+      assert.equal(await startDate.getAttribute('type'),'date');await startDate.fill('2026-10-01');await flow.next(person);
+      const portfolio=person.getByLabel('Portfolio URL',{exact:true});
+      assert.equal(await portfolio.getAttribute('type'),'url');await portfolio.fill('javascript:alert(1)');
+      const invalidUrl=person.url();await person.getByRole('button',{name:'Continue',exact:true}).click();
       await person.getByText('Enter a valid http or https web address.',{exact:true}).waitFor();
-      assert.equal(await person.getByLabel('Earliest start date',{exact:true}).getAttribute('type'),'date');
-      assert.equal(await person.getByLabel('Portfolio URL',{exact:true}).getAttribute('type'),'url');
-      await person.getByLabel('Portfolio URL',{exact:true}).fill('https://example.test/portfolio');
-      await person.getByRole('button',{name:'Continue',exact:true}).click();
+      assert.equal(person.url(),invalidUrl,'invalid URL cannot advance to another question');
+      await portfolio.fill('https://example.test/portfolio');await flow.next(person);
+      await flow.question(person,'profile:languages');const languagesUrl=person.url();
+      await person.locator('#languages').getByLabel('English',{exact:true}).check();
+      await person.locator('#languages').getByLabel('Spanish',{exact:true}).check();
+      assert.equal(person.url(),languagesUrl,'multiple selections wait for explicit Continue');await flow.next(person);
+      await flow.question(person,'profile:availability');await person.locator('#availability').getByLabel('Within 2 weeks',{exact:true}).check();await flow.next(person);
+      await person.getByRole('heading',{name:'Photo & documents',exact:true}).waitFor();
       const png=await require('sharp')({create:{width:96,height:96,channels:3,background:'#cbddee'}}).png().toBuffer();
       await person.locator('#photo').setInputFiles({name:'qa.png',mimeType:'image/png',buffer:png});await person.getByText('Photo selected for review',{exact:true}).waitFor();
       await person.locator('#cv').setInputFiles({name:'qa-cv.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% QA test file\n%%EOF')});
@@ -110,11 +120,19 @@ async function context(browser,admin,viewport){
       await service.saveVacancy('qa-admin',{id:oldJob.id,requestId:crypto.randomUUID(),expectedVersion:oldJob.version,vacancy:{...oldJob,questions:oldJob.questions.map(q=>q.kind==='url'?{...q,label:'Portfolio URL (current)'}:q)}});
       await person.getByRole('button',{name:'Submit application',exact:true}).click();
       await person.getByRole('button',{name:'Review updated position',exact:true}).click();
-      await person.getByLabel('Portfolio URL (current)',{exact:true}).waitFor();
+      // Revisit each retained answer on its own screen, then answer only the
+      // redefined question. Its old answer must not be silently reinterpreted.
+      const dateId=oldJob.questions.find(q=>q.kind==='date').id;
+      const urlId=oldJob.questions.find(q=>q.kind==='url').id;
+      await flow.walkTo(person,`role:${dateId}`);
+      assert.equal(await person.getByLabel('Earliest start date',{exact:true}).inputValue(),'2026-10-01');await flow.next(person);
+      await flow.question(person,`role:${urlId}`);
       assert.equal(await person.getByLabel('Portfolio URL (current)',{exact:true}).inputValue(),'');
-      assert.equal(await person.getByLabel('Earliest start date',{exact:true}).inputValue(),'2026-10-01');
-      await person.getByLabel('Portfolio URL (current)',{exact:true}).fill('https://example.test/reviewed-portfolio');
-      await person.getByRole('button',{name:'Continue',exact:true}).click();
+      await person.getByLabel('Portfolio URL (current)',{exact:true}).fill('https://example.test/reviewed-portfolio');await flow.next(person);
+      await flow.question(person,'profile:languages');
+      for(const language of ['English','Spanish'])assert(await person.locator('#languages').getByLabel(language,{exact:true}).isChecked(),'language selection survives vacancy revision');
+      await flow.next(person);await flow.question(person,'profile:availability');
+      assert(await person.locator('#availability').getByLabel('Within 2 weeks',{exact:true}).isChecked(),'availability survives vacancy revision');await flow.next(person);
       await person.getByAltText('Your selected profile photo').waitFor();
       await person.getByText('qa-cv.pdf',{exact:true}).waitFor();
       await person.getByRole('button',{name:'Review application',exact:true}).click();
@@ -136,7 +154,7 @@ async function context(browser,admin,viewport){
       await shot(office,'06-profile');await office.setViewportSize({width:390,height:844});await shot(office,'07-profile-mobile');
       const snapshot=await db.collection(COLLECTIONS.applications).where('profile.email','==',`candidate-${name}@example.test`).get();assert.equal(snapshot.size,1);assert.equal((await db.collection(COLLECTIONS.mail).doc(snapshot.docs[0].id).get()).data().status,'queued');
       for(const collection of ['appointments','customers','staffProfiles'])assert.equal((await db.collection(collection).get()).size,0);
-      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','shared date and URL types validated before submit','stale vacancy recovery preserves details/files and clears redefined answers/consent','style ownership excludes marketing SVG rules','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
+      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','single-question routes with explicit multiple-choice Continue','shared date and URL types validated before submit','stale vacancy recovery preserves details/files and clears redefined answers/consent','style ownership excludes marketing SVG rules','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
     }catch(error){for(const [label,page]of [['office',office],['candidate',person]])await page.screenshot({path:path.join(output,`${name}-${label}-FAIL.png`),fullPage:true}).catch(()=>{});results.push({name,result:'FAIL',error:String(error),pageErrors:errors});console.error(error);}
     finally{await admin.close();await candidate.close().catch(()=>{});await browser.close();fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(results,null,2));}
   }

@@ -60,6 +60,14 @@ const report = [];
       check(await page.getByRole('button', { name: /^View / }).count() === 9, 'nine preview vacancies');
       const ribbon = await page.locator('details').filter({ has: page.locator('summary', { hasText: 'Review tools' }) }).evaluate(el => el.parentElement.getBoundingClientRect().height);
       check(ribbon <= 52, 'preview ribbon stays compact');
+      if (test.width >= 380 && test.width <= 760) {
+        const cards = await page.getByRole('article').evaluateAll(items => items.map(item => {
+          const title = item.querySelector('h2').getBoundingClientRect();
+          const button = item.querySelector('button').getBoundingClientRect();
+          return { separated: title.right <= button.left, aligned: Math.max(title.top, button.top) < Math.min(title.bottom, button.bottom), target: button.width >= 44 && button.height >= 44 };
+        }));
+        check(cards.length === 9 && cards.every(card => card.separated && card.aligned && card.target), 'compact phone cards pair each title with its touch-sized action without overlap');
+      }
       await shot('01-jobs');
       await page.getByRole('button', { name: 'View VRF Specialist', exact: true }).click();
       await page.getByRole('heading', { name: 'VRF Specialist', exact: true }).waitFor();
