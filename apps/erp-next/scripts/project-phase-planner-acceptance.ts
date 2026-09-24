@@ -45,6 +45,7 @@ assert.match(workspaceSource, /onClick=\{\(\) => setEditProjectOpen\(true\)\}/, 
 assert.match(workspaceSource, /editBrowserProject\(/, 'Edits must use the governed Project edit reducer.');
 assert.match(workspaceSource, /commitSharedProjects\(/, 'Edits must persist through the shared Project save path.');
 assert.match(workspaceSource, /name="technicianInstructions"/, 'The editor must expose default instructions for future technician visits.');
+assert.match(workspaceSource, /name="managerName"/, 'The editor must expose the Project manager.');
 assert.doesNotMatch(workspaceSource, /FEATURE PREVIEW|isolated (feature )?branch/, 'The active Projects screen must not display a stale feature-preview banner or isolated-branch copy.');
 
 const fixture = projectFixture();
@@ -59,15 +60,18 @@ const baseEdit = {
   technicianInstructions: fixture.technicianInstructions,
 };
 const attached = editBrowserProject(sharedDraftState, {
-  ...baseEdit, description: 'Revised project scope', technicianInstructions: 'Enter through the west gate.',
+  ...baseEdit, managerName: 'Updated Manager', description: 'Revised project scope', technicianInstructions: 'Enter through the west gate.',
 }).projects[0];
 assert.equal(attached.siteId, fixture.siteId, 'A published Draft without activity may attach its first canonical Property.');
 assert.equal(attached.technicianInstructions, 'Enter through the west gate.', 'Project edits must persist technician instructions.');
 assert.equal(attached.description, 'Revised project scope', 'Project edits must persist revised scope.');
+assert.equal(attached.managerName, 'Updated Manager', 'Project edits must persist the responsible manager.');
 assert.equal(attached.customerId, fixture.customerId, 'Project editing must preserve canonical customer identity.');
 assert.throws(() => editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, siteId: 'PROPERTY-2' }), /shared Project is locked/, 'A published Project Property cannot be switched after its first link.');
 assert.throws(() => editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, estimatedWorkDays: 10 }), /Reducing a shared Project slot budget/, 'The editor must fail closed on a published budget decrease until canonical Scheduling verifies it.');
 assert.equal(editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, estimatedWorkDays: 12 }).projects[0].estimatedSlots, 72, 'Published work-day increases must recalculate the one-hour slot plan.');
+const legacyServiceBudget = { ...fixture, type: 'Service Project', materialBudget: 42 };
+assert.equal(editBrowserProject({ version: 1, selectedProjectId: fixture.id, projects: [legacyServiceBudget] }, { ...baseEdit, type: 'Service Project', materialBudget: null, name: 'Renamed service' }).projects[0].materialBudget, 42, 'An unrelated Service Project edit must not silently erase an existing material budget.');
 const exactSeed = { ...fixture, id: 'DEMO-PRJ-VRF-001', projectNumber: 'PRJ-1007', name: 'Seeded sample' };
 const userCreatedLegacyId = { ...fixture, id: 'DEMO-PRJ-1788364800000', projectNumber: 'PRJ-1013', name: 'User-created project' };
 const sanitized = sanitizeProjectsState({

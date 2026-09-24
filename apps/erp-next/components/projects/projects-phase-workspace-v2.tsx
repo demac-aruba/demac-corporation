@@ -548,6 +548,7 @@ function CanonicalEditProjectDialog({ project, busy, onClose, onSave }: {
       await onSave({
         projectId: project.id,
         name: String(form.get('name') ?? ''),
+        managerName: String(form.get('managerName') ?? ''),
         description: String(form.get('description') ?? ''),
         type,
         siteId,
@@ -586,6 +587,7 @@ function CanonicalEditProjectDialog({ project, busy, onClose, onSave }: {
           <label><span>Project type{identityLocked ? ' · locked' : ''}</span><select name="type" value={projectType} onChange={(event) => setProjectType(event.target.value)} disabled={identityLocked}><option>Installation Project</option><option>Service Project</option><option>VRF Project</option><option>Maintenance Contract</option></select></label>
           <label><span>Status{statusLocked ? ' · locked' : ''}</span><select name="status" defaultValue={project.status} disabled={statusLocked}>{project.status === 'Completed' ? <option>Completed</option> : editableProjectStatuses.map((option) => <option key={option}>{option}</option>)}</select></label>
           <label><span>Priority</span><select name="priority" defaultValue={project.priority}>{projectPriorities.map((option) => <option key={option}>{option}</option>)}</select></label>
+          <label><span>Project manager</span><input name="managerName" maxLength={180} defaultValue={project.managerName} placeholder="Not assigned" /></label>
           <label><span>Total units *</span><input name="totalUnits" type="number" min={project.completedUnits} step="1" required defaultValue={project.totalUnits} /></label>
           <label><span>Start date *</span><input name="startsOn" type="date" required defaultValue={project.startsOn} /></label>
           <label><span>Estimated completion *</span><input name="estimatedCompletionOn" type="date" required defaultValue={project.estimatedCompletionOn} /></label>
@@ -593,7 +595,7 @@ function CanonicalEditProjectDialog({ project, busy, onClose, onSave }: {
           <label><span>Labor capacity · 6 one-hour slots/day</span><input value={capacity ? `${capacity.estimatedSlots} slots / ${capacity.estimatedLaborHours}h` : ''} readOnly /></label>
           <label className={styles.formWide}><span>Project description</span><textarea name="description" rows={3} maxLength={5000} defaultValue={project.description} placeholder="Project objective and general scope" /></label>
           <label className={styles.formWide}><span>Technician instructions · default for future visits</span><textarea name="technicianInstructions" rows={4} maxLength={2000} defaultValue={project.technicianInstructions ?? ''} placeholder="Access, safety, site, customer, and reporting instructions" /></label>
-          {projectTypeUsesMaterialBudget(projectType) ? <label className={styles.formWide}><span>Material budget (Afl.) · optional</span><input name="materialBudget" type="number" min="0" step="0.01" defaultValue={project.materialBudget ?? ''} placeholder="No material budget set" /></label> : <div className={`${styles.formWide} ${customerStyles.inlineNote}`}>Service Projects do not require a material-budget baseline.</div>}
+          {projectTypeUsesMaterialBudget(projectType) ? <label className={styles.formWide}><span>Material budget (Afl.) · optional</span><input name="materialBudget" type="number" min="0" step="0.01" defaultValue={project.materialBudget ?? ''} placeholder="No material budget set" /></label> : <div className={`${styles.formWide} ${customerStyles.inlineNote}`}>{projectType === project.type ? 'Service Projects do not require a material-budget baseline. Any existing Service Project budget stays unchanged.' : 'Switching to a Service Project removes the old material-budget baseline; recorded actual costs remain unchanged.'}</div>}
         </div>
         <div className={customerStyles.dataRule}><strong>CANONICAL LINKS STAY INTACT</strong><p>Project number and customer cannot change. A shared Project’s existing Service Property is locked. Scheduling uses updated instructions for new visits; existing bookings are not rewritten.</p></div>
         {project.serverVersion ? <div className={customerStyles.inlineNote}>For a shared Project, this editor can increase the approved slot plan but cannot reduce it yet. A reduction needs a canonical Scheduling budget check.</div> : committedHours > 0 || allocatedPhaseHours > 0 ? <div className={customerStyles.inlineNote}>The plan must cover {number(Math.max(committedHours, allocatedPhaseHours), 1)}h already committed or allocated to phases.</div> : null}

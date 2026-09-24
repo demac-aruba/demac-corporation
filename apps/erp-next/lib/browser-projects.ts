@@ -208,6 +208,7 @@ export type BrowserProjectEditInput = {
   projectId: string;
   name: string;
   description?: string;
+  managerName?: string;
   type: string;
   siteId: string;
   location: string;
@@ -475,6 +476,7 @@ export function editBrowserProject(
   if (projectIndex < 0) throw new Error(`Project ${projectId || '(missing id)'} is not available in this preview.`);
   const project = state.projects[projectIndex];
   const name = normalizedProjectEditText(input.name, 'Project name', 180);
+  const managerName = normalizedProjectEditText((input.managerName ?? project.managerName)?.trim() || 'Not assigned', 'Project manager', 180);
   const type = normalizedProjectEditText(input.type, 'Project type', 80);
   if (!editableProjectTypes.has(type)) throw new Error(`Project type ${type} is not supported.`);
   const siteId = typeof input.siteId === 'string' ? input.siteId.trim() : '';
@@ -517,7 +519,7 @@ export function editBrowserProject(
   }
   const materialBudget = projectTypeUsesMaterialBudget(type)
     ? normalizeOptionalMaterialBudget(input.materialBudget)
-    : null;
+    : type === project.type ? project.materialBudget : null;
   const technicianInstructions = normalizedTechnicianInstructions(input.technicianInstructions);
   const previousAutomaticDescription = `${project.name} · ${project.type}.`;
   if (input.description !== undefined && typeof input.description !== 'string') {
@@ -535,6 +537,7 @@ export function editBrowserProject(
   const nextProject: BrowserProject = {
     ...project,
     name,
+    managerName,
     type,
     description,
     siteId,
@@ -550,6 +553,7 @@ export function editBrowserProject(
   };
   if (
     project.name === nextProject.name
+    && project.managerName === nextProject.managerName
     && project.type === nextProject.type
     && project.description === nextProject.description
     && project.siteId === nextProject.siteId
