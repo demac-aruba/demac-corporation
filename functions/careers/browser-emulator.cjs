@@ -63,6 +63,29 @@ async function context(browser,admin,viewport){
     for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>dismissDialog?d.dismiss():d.accept());}
     async function shot(page,label){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');}
     async function settled(){await office.getByText('Loading from DEMAC…',{exact:true}).waitFor({state:'hidden'});}
+    // A title also appears as the English source inside the Spanish editor. It is
+    // not a save acknowledgement. Wait for the real write, list route and row
+    // before reloading, then independently read the canonical emulator record.
+    async function saveFromEditor(button,status,title,spanishTitle,expectedVersion){
+      const responsePromise=office.waitForResponse(response=>{
+        if(response.url()!==`${api}/careersAdmin`||response.request().method()!=='POST')return false;
+        return response.request().postDataJSON()?.action==='vacancies.save';
+      });
+      await office.getByRole('button',{name:button,exact:true}).click();
+      const response=await responsePromise,body=await response.json();
+      assert.equal(response.status(),200,'the server must acknowledge the vacancy write');
+      assert.equal(body.ok,true,'failed saves must never be treated as committed');
+      assert.equal(body.result.version,expectedVersion,'each save advances the canonical version exactly once');
+      await office.waitForURL(url=>url.pathname==='/recruitment/'&&url.searchParams.get('tab')==='vacancies'&&!url.searchParams.has('edit'),{waitUntil:'domcontentloaded'});
+      await office.getByRole('button',{name:'＋ New vacancy',exact:true}).waitFor();
+      await office.getByText(title,{exact:true}).waitFor();
+      const saved=await service.getVacancy('qa-admin',body.result.id);
+      assert.equal(saved.status,status);assert.equal(saved.version,expectedVersion);
+      assert.equal(saved.title,title);assert.equal(saved.translations.es.title,spanishTitle);
+      const duplicates=await db.collection(COLLECTIONS.jobs).where('title','==',title).get();
+      assert.equal(duplicates.size,1,'saving or reloading must not duplicate a vacancy');
+      return saved;
+    }
     try{
       const title=`QA VRF Specialist ${name}`;
       await office.goto(`${site}/recruitment/`);await office.getByRole('button',{name:'＋ New vacancy',exact:true}).click();
@@ -94,8 +117,8 @@ async function context(browser,admin,viewport){
       ]) await office.getByLabel(label,{exact:true}).fill(value);
       const reviewed=office.getByLabel('I reviewed this Spanish translation against the current English version.',{exact:true});
       await reviewed.check();await shot(office,'01-vacancy-editor');
-      await office.getByRole('button',{name:'Save draft',exact:true}).click();
-      await office.getByText(title,{exact:true}).waitFor();await office.reload();await office.getByText(title,{exact:true}).waitFor();
+      await saveFromEditor('Save draft','Draft',title,spanishTitle,1);
+      await office.reload({waitUntil:'domcontentloaded'});await office.getByRole('button',{name:'＋ New vacancy',exact:true}).waitFor();await office.getByText(title,{exact:true}).waitFor();
       const row=()=>office.locator('div').filter({has:office.getByText(title,{exact:true})}).filter({has:office.getByRole('button',{name:'Edit position',exact:true})}).last();
       await row().getByRole('button',{name:'Edit position',exact:true}).click();await settled();
       await office.getByRole('button',{name:'Español — Traducción',exact:true}).click();
@@ -120,12 +143,12 @@ async function context(browser,admin,viewport){
       assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle);
       dismissDialog=true;await office.getByRole('button',{name:'Reload',exact:true}).click();dismissDialog=false;
       assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle,'cancelled Reload retains every edited field');
-      await office.getByRole('button',{name:'Save draft',exact:true}).click();await office.getByText(title,{exact:true}).waitFor();
+      await saveFromEditor('Save draft','Draft',title,spanishTitle,2);
       cfg=(await service.getSettings('qa-admin')).settings;
       await service.saveSettings('qa-admin',{requestId:crypto.randomUUID(),expectedVersion:cfg.version,settings:{...cfg,intakeEnabled:true}});
       await row().getByRole('button',{name:'Edit position',exact:true}).click();await settled();
-      await office.getByLabel('Publication status',{exact:true}).selectOption('Open');await office.getByRole('button',{name:'Save & open vacancy',exact:true}).click();
-      await office.getByText(title,{exact:true}).waitFor();await shot(office,'02-vacancies');
+      await office.getByLabel('Publication status',{exact:true}).selectOption('Open');
+      await saveFromEditor('Save & open vacancy','Open',title,spanishTitle,3);await shot(office,'02-vacancies');
       const published=(await service.publicJobs()).jobs.find(j=>j.title===title);
       assert.equal(published.translations.es.title,spanishTitle);assert.equal(published.editorialVersion,2);
       assert.deepEqual(published.availableLocales,['en','es']);

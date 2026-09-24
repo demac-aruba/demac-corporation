@@ -53,7 +53,9 @@ const results = [];
       check(facts.every(f => f.box.height <= 160), 'fact cards do not grow into oversized desktop illustrations');
     }
     try {
-      await page.goto(`${base}/careers/`, { waitUntil: 'networkidle' });
+      // Network idleness is not application readiness. Each destination below
+      // must expose its actual heading/control before assertions can proceed.
+      await page.goto(`${base}/careers/`, { waitUntil: 'domcontentloaded' });
       const job = page.getByRole('button', { name: 'View HVAC Technician', exact: true });
       await job.waitFor();
       await job.focus();
@@ -136,18 +138,18 @@ const results = [];
       const state = await page.evaluate(() => JSON.stringify(history.state));
       check(!state.includes('navigation@example.test') && !state.includes('2025550101') && !state.includes('data:image') && !state.includes('test-cv.pdf'), 'history state contains no private draft fields or files');
       const direct = await context.newPage();
-      await direct.goto(`${base}/about/`, { waitUntil: 'networkidle' });
-      await direct.goto(`${base}/careers/?role=vrf-specialist&step=review`, { waitUntil: 'networkidle' });
+      await direct.goto(`${base}/about/`, { waitUntil: 'domcontentloaded' });
+      await direct.goto(`${base}/careers/?role=vrf-specialist&step=review`, { waitUntil: 'domcontentloaded' });
       await direct.getByRole('heading', { name: 'What is your first name?', exact: true }).waitFor();
       check(new URL(direct.url()).searchParams.get('step') === 'details', 'deep link cannot bypass required form steps');
       await direct.goBack();
       check(new URL(direct.url()).pathname === '/about/', 'initial replaceState does not trap Back inside Careers');
-      await direct.goto(`${base}/careers/?role=vrf-specialist`, { waitUntil: 'networkidle' });
+      await direct.goto(`${base}/careers/?role=vrf-specialist`, { waitUntil: 'domcontentloaded' });
       await direct.getByRole('heading', { name: 'VRF Specialist', exact: true }).waitFor();
-      await direct.reload({ waitUntil: 'networkidle' });
+      await direct.reload({ waitUntil: 'domcontentloaded' });
       await direct.getByRole('heading', { name: 'VRF Specialist', exact: true }).waitFor();
       check(true, 'a direct position URL survives refresh without becoming the catalogue');
-      await direct.goto(`${base}/careers/?role=unknown-role`, { waitUntil: 'networkidle' });
+      await direct.goto(`${base}/careers/?role=unknown-role`, { waitUntil: 'domcontentloaded' });
       await direct.getByRole('heading', { name: 'Careers', exact: true }).waitFor();
       check(!new URL(direct.url()).searchParams.has('role'), 'unknown role URLs recover to the catalogue');
       await direct.close();
