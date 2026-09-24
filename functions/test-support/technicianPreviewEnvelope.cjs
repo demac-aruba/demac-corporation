@@ -6,5 +6,9 @@ if (!input || !output) throw new Error('Expected private input and encrypted out
 const key = crypto.randomBytes(32), iv = crypto.randomBytes(12);
 const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
 const data = Buffer.concat([cipher.update(fs.readFileSync(input)), cipher.final()]);
-const wrapped = crypto.publicEncrypt({ key: fs.readFileSync(path.join(__dirname, 'technicianPreviewPublicKey.pub')), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, key);
-fs.writeFileSync(output, JSON.stringify({ algorithm: 'RSA-OAEP-SHA256/AES-256-GCM', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), key: wrapped.toString('base64'), ciphertext: data.toString('base64') }));
+const wrap = (name) => crypto.publicEncrypt({ key: fs.readFileSync(path.join(__dirname, name)), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, key).toString('base64');
+const wrapped = wrap('technicianPreviewPublicKey.pub');
+// Preserve the current recipient and the original owner-review session recipient.
+// Both are public keys only; no production credentials or private key enters the job.
+const recoveryKey = wrap('technicianPreviewOriginalReviewKey.pub');
+fs.writeFileSync(output, JSON.stringify({ algorithm: 'RSA-OAEP-SHA256/AES-256-GCM', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), key: wrapped, recoveryKey, ciphertext: data.toString('base64') }));
