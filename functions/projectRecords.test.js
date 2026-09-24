@@ -118,6 +118,23 @@ test('direct planning API cannot change identity or lifecycle after Project acti
   assert.deepEqual(db.read('projectRecords/PROJECT-1'), existing);
 });
 
+test('an active Project can still update future-visit instructions without rewriting its booking plan', async () => {
+  const db = new FakeDb();
+  const existing = draft({ siteId: 'PROPERTY-1', status: 'Active', serverVersion: 1,
+    type: 'Service Project', location: 'Existing CRM location', scheduledFutureHours: 2,
+    technicianInstructions: 'Old instructions' });
+  db.records.set('projectRecords/PROJECT-1', existing);
+  const records = createProjectRecords({ db });
+  const result = await records.save({ project: { ...existing, name: 'Updated Project Name',
+    description: 'Revised scope', technicianInstructions: 'Use the west gate' },
+  expectedVersion: 1, requestId: 'edit-instructions-1' }, 'manager-1');
+  assert.equal(result.project.name, 'Updated Project Name');
+  assert.equal(result.project.description, 'Revised scope');
+  assert.equal(result.project.technicianInstructions, 'Use the west gate');
+  assert.equal(result.project.scheduledFutureHours, 2);
+  assert.equal(result.project.siteId, existing.siteId);
+});
+
 test('direct planning API cannot mark an unexecuted Project Completed', async () => {
   const db = new FakeDb();
   const existing = draft({ siteId: 'PROPERTY-1', serverVersion: 1 });
