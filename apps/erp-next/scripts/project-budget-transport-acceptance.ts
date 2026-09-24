@@ -7,8 +7,14 @@ const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
 const originalProject = firebaseClientConfig.projectId;
 firebaseClientConfig.projectId = 'demo-budget-transport';
+const syntheticSession = { uid: 'SYNTHETIC-ACTOR', email: 'synthetic@demac-preview.invalid', idToken: 'synthetic-test-token', refreshToken: 'synthetic-refresh-never-used', expiresAt: Date.now() + 3_600_000 } satisfies import('../lib/firebase/session').FirebaseWebSession;
+const sessionData = new Map([['demac.erp-next.firebase.session.v1', JSON.stringify(syntheticSession)]]);
 globalThis.window = {
-  sessionStorage: { getItem: () => JSON.stringify({ uid: 'SYNTHETIC-ACTOR', idToken: 'synthetic-test-token', expiresAt: Date.now() + 3_600_000 }) },
+  sessionStorage: {
+    getItem: (key: string) => sessionData.get(key) ?? null,
+    setItem: (key: string, value: string) => { sessionData.set(key, value); },
+    removeItem: (key: string) => { sessionData.delete(key); },
+  },
   setTimeout, clearTimeout,
 } as unknown as Window & typeof globalThis;
 const request = { requestId: 'SYNTHETIC-REQUEST', offerId: 'SYNTHETIC-OFFER', offerVersion: 1, optionId: 'SYNTHETIC-OPTION' };
