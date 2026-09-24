@@ -25,11 +25,15 @@ import { primeLiveSchedulingReferenceCache } from '@/lib/live-scheduling-fast';
 import {
   normalizeOptionalMaterialBudget,
   projectCapacityPlan,
+  projectHasOperationalActivity,
   projectMetrics,
   projectTypeUsesMaterialBudget,
+  editBrowserProject,
   type BrowserProject,
+  type BrowserProjectEditInput,
   type BrowserProjectsPreviewState,
   type ProjectAssignment,
+  type ProjectStatus,
 } from '@/lib/browser-projects';
 import {
   EMPTY_PROJECTS_STATE,
@@ -471,9 +475,130 @@ function CanonicalCreateProjectDialog({
           <label className={styles.formWide}><span>Project description</span><textarea name="description" rows={3} placeholder="Project objective and general scope" /></label>
           <label className={styles.formWide}><span>Project instructions for all technicians</span><textarea name="technicianInstructions" rows={4} maxLength={2000} placeholder="Access, safety, site, customer, and reporting instructions" /></label>
         </div>
-        <div className={customerStyles.dataRule}><strong>ONE CUSTOMER ID · ONE PROPERTY ID</strong><p>Existing customers and properties are selected from canonical CRM. Project phase planning remains isolated in this feature branch and does not change the live agenda until a separately approved integration is implemented.</p></div>
+        <div className={customerStyles.dataRule}><strong>CANONICAL CUSTOMER AND PROPERTY</strong><p>Existing customers and properties come from CRM. Phase planning here does not reserve Van capacity; book real visits through Scheduling.</p></div>
         {saveError ? <div className={styles.formError} role="alert">{saveError}</div> : null}
         <footer><button type="button" className={styles.secondaryButton} onClick={onClose} disabled={saving || busy}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={saving || busy || loading || Boolean(loadError) || !customerReady || !validWorkDays}>{saving ? 'Saving…' : 'Create Project'}</button></footer>
+      </form>
+    </section>
+  </div>;
+}
+
+const editableProjectStatuses: ProjectStatus[] = ['Draft', 'Planned', 'Active', 'On Hold', 'Near Completion', 'Cancelled'];
+const projectPriorities: BrowserProject['priority'][] = ['Low', 'Normal', 'High', 'Critical'];
+
+function CanonicalEditProjectDialog({ project, busy, onClose, onSave }: {
+  project: BrowserProject;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (input: BrowserProjectEditInput) => Promise<void>;
+}) {
+  const [references, setReferences] = useState<BookingMasterReferenceData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [projectType, setProjectType] = useState(project.type);
+  const [workDays, setWorkDays] = useState(String(project.estimatedWorkDays));
+  const [propertyId, setPropertyId] = useState(project.siteId);
+  const hasActivity = projectHasOperationalActivity(project);
+  const identityLocked = hasActivity || project.status === 'Completed';
+  const canChangeProperty = !identityLocked && (!project.serverVersion || !project.siteId);
+  const statusLocked = hasActivity || project.status === 'Completed' || !project.siteId;
+  const parsedWorkDays = Number(workDays);
+  const capacity = Number.isInteger(parsedWorkDays) && parsedWorkDays > 0 ? projectCapacityPlan(parsedWorkDays) : null;
+  const committedHours = project.actualLaborHours + project.scheduledFutureHours;
+  const allocatedPhaseHours = project.phases.reduce((sum, phase) => sum + phase.estimatedLaborHours, 0);
+  const minimumWorkDays = Math.max(1, Math.ceil(Math.max(committedHours, allocatedPhaseHours) / 6), project.serverVersion ? project.estimatedWorkDays : 1);
+
+  const refreshReferences = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    try {
+      setReferences(await loadBookingMasterReferenceData());
+    } catch (cause) {
+      setLoadError(cause instanceof Error ? cause.message : 'Canonical CRM could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (canChangeProperty) void refreshReferences();
+  }, [canChangeProperty, refreshReferences]);
+
+  const properties = propertiesForCustomer(references, project.customerId);
+  const selectedProperty = properties.find((candidate) => candidate.id === propertyId);
+  const propertyUnavailable = canChangeProperty && Boolean(propertyId) && Boolean(references) && !selectedProperty;
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving || busy) return;
+    const form = new FormData(event.currentTarget);
+    setSaveError('');
+    setSaving(true);
+    try {
+      if (!capacity) throw new Error('Estimated work days must be a positive whole number.');
+      if (canChangeProperty && (!references || loadError)) throw new Error('Verify this customer’s Service Properties in CRM before saving.');
+      if (propertyUnavailable) throw new Error('Select an active Service Property belonging to this Project customer.');
+      const siteId = canChangeProperty ? propertyId : project.siteId;
+      const type = identityLocked ? project.type : projectType;
+      const location = selectedProperty
+        ? text(selectedProperty.address) || text(selectedProperty.zone) || text(selectedProperty.name) || project.location
+        : siteId === project.siteId ? project.location : 'Property to be confirmed';
+      await onSave({
+        projectId: project.id,
+        name: String(form.get('name') ?? ''),
+        description: String(form.get('description') ?? ''),
+        type,
+        siteId,
+        location,
+        status: statusLocked ? project.status : String(form.get('status') ?? project.status) as ProjectStatus,
+        priority: String(form.get('priority') ?? project.priority) as BrowserProject['priority'],
+        totalUnits: Number(form.get('totalUnits')),
+        materialBudget: projectTypeUsesMaterialBudget(type)
+          ? normalizeOptionalMaterialBudget(form.get('materialBudget')) : null,
+        startsOn: String(form.get('startsOn') ?? ''),
+        estimatedCompletionOn: String(form.get('estimatedCompletionOn') ?? ''),
+        estimatedWorkDays: parsedWorkDays,
+        technicianInstructions: String(form.get('technicianInstructions') ?? ''),
+      });
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : 'The Project changes could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className={styles.overlay} role="presentation" onMouseDown={(event) => {
+    if (event.target === event.currentTarget && !saving && !busy) onClose();
+  }}>
+    <section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="edit-project-title" aria-describedby="edit-project-description">
+      <header><div><span>{project.projectNumber} · Project details</span><h2 id="edit-project-title">Edit Project</h2><p id="edit-project-description">Update the plan and default instructions for future technician visits. Existing Appointments and Work Orders keep their historical details.</p></div><button type="button" aria-label="Close Edit Project" onClick={onClose} disabled={saving || busy}>×</button></header>
+      <form onSubmit={submit}>
+        <div className={styles.formGrid}>
+          <label className={styles.formWide}><span>Project name *</span><input name="name" required autoFocus maxLength={180} defaultValue={project.name} /></label>
+          <label><span>Project number · locked</span><input value={project.projectNumber} readOnly /></label>
+          <label><span>Customer · locked CRM identity</span><input value={project.customerName} readOnly /></label>
+          {canChangeProperty ? <label className={styles.formWide}><span>Property / service location{project.serverVersion ? ' · one-time Draft link' : ''}</span><select name="propertyId" value={propertyId} onChange={(event) => setPropertyId(event.target.value)} disabled={loading || Boolean(loadError)}><option value="">Select later — Project remains Draft</option>{propertyId && !selectedProperty && references ? <option value={propertyId}>{project.location} · current link unavailable in CRM</option> : null}{properties.map((property) => <option key={property.id} value={property.id}>{text(property.name) || 'Property'} · {text(property.address) || text(property.zone) || property.id}</option>)}</select></label> : <label className={styles.formWide}><span>Property / service location · locked</span><input value={project.location} readOnly /></label>}
+          {canChangeProperty && loading ? <div className={`${styles.formWide} ${customerStyles.inlineNote}`}>Loading this customer’s active Service Properties…</div> : null}
+          {canChangeProperty && loadError ? <div className={`${styles.formWide} ${customerStyles.inlineError}`} role="alert"><span>{loadError}</span><button type="button" onClick={() => void refreshReferences()}>Retry CRM</button></div> : null}
+          {propertyUnavailable ? <div className={`${styles.formWide} ${customerStyles.inlineError}`} role="alert"><span>The selected Service Property is inactive or unavailable. Choose an active property before saving.</span></div> : null}
+          <label><span>Project type{identityLocked ? ' · locked' : ''}</span><select name="type" value={projectType} onChange={(event) => setProjectType(event.target.value)} disabled={identityLocked}><option>Installation Project</option><option>Service Project</option><option>VRF Project</option><option>Maintenance Contract</option></select></label>
+          <label><span>Status{statusLocked ? ' · locked' : ''}</span><select name="status" defaultValue={project.status} disabled={statusLocked}>{project.status === 'Completed' ? <option>Completed</option> : editableProjectStatuses.map((option) => <option key={option}>{option}</option>)}</select></label>
+          <label><span>Priority</span><select name="priority" defaultValue={project.priority}>{projectPriorities.map((option) => <option key={option}>{option}</option>)}</select></label>
+          <label><span>Total units *</span><input name="totalUnits" type="number" min={project.completedUnits} step="1" required defaultValue={project.totalUnits} /></label>
+          <label><span>Start date *</span><input name="startsOn" type="date" required defaultValue={project.startsOn} /></label>
+          <label><span>Estimated completion *</span><input name="estimatedCompletionOn" type="date" required defaultValue={project.estimatedCompletionOn} /></label>
+          <label><span>Estimated work days *</span><input name="estimatedWorkDays" type="number" min={minimumWorkDays} step="1" required value={workDays} onChange={(event) => setWorkDays(event.target.value)} /></label>
+          <label><span>Labor capacity · 6 one-hour slots/day</span><input value={capacity ? `${capacity.estimatedSlots} slots / ${capacity.estimatedLaborHours}h` : ''} readOnly /></label>
+          <label className={styles.formWide}><span>Project description</span><textarea name="description" rows={3} maxLength={5000} defaultValue={project.description} placeholder="Project objective and general scope" /></label>
+          <label className={styles.formWide}><span>Technician instructions · default for future visits</span><textarea name="technicianInstructions" rows={4} maxLength={2000} defaultValue={project.technicianInstructions ?? ''} placeholder="Access, safety, site, customer, and reporting instructions" /></label>
+          {projectTypeUsesMaterialBudget(projectType) ? <label className={styles.formWide}><span>Material budget (Afl.) · optional</span><input name="materialBudget" type="number" min="0" step="0.01" defaultValue={project.materialBudget ?? ''} placeholder="No material budget set" /></label> : <div className={`${styles.formWide} ${customerStyles.inlineNote}`}>Service Projects do not require a material-budget baseline.</div>}
+        </div>
+        <div className={customerStyles.dataRule}><strong>CANONICAL LINKS STAY INTACT</strong><p>Project number and customer cannot change. A shared Project’s existing Service Property is locked. Scheduling uses updated instructions for new visits; existing bookings are not rewritten.</p></div>
+        {project.serverVersion ? <div className={customerStyles.inlineNote}>For a shared Project, this editor can increase the approved slot plan but cannot reduce it yet. A reduction needs a canonical Scheduling budget check.</div> : committedHours > 0 || allocatedPhaseHours > 0 ? <div className={customerStyles.inlineNote}>The plan must cover {number(Math.max(committedHours, allocatedPhaseHours), 1)}h already committed or allocated to phases.</div> : null}
+        {saveError ? <div className={styles.formError} role="alert">{saveError}</div> : null}
+        <footer><button type="button" className={styles.secondaryButton} onClick={onClose} disabled={saving || busy}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={saving || busy || !capacity || Boolean(loadError) || (canChangeProperty && !references) || propertyUnavailable}>{saving || busy ? 'Saving…' : 'Save changes'}</button></footer>
       </form>
     </section>
   </div>;
@@ -495,6 +620,7 @@ export function ProjectsPhaseWorkspaceV2() {
   const [projectId, setProjectId] = useState('');
   const [query, setQuery] = useState('');
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [phaseDialog, setPhaseDialog] = useState<{ mode: 'create' | 'edit'; phaseId?: string } | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
@@ -551,6 +677,7 @@ export function ProjectsPhaseWorkspaceV2() {
   useEffect(() => {
     if (canManage) return;
     setCreateProjectOpen(false);
+    setEditProjectOpen(false);
     setPhaseDialog(null);
     setTemplatesOpen(false);
     setSaveTemplateOpen(false);
@@ -587,6 +714,7 @@ export function ProjectsPhaseWorkspaceV2() {
     setProjectId(candidate.id);
     setSelectedPhaseId('');
     setTechnicianAssignmentId('');
+    setEditProjectOpen(false);
     setView('planner');
     setNotice('');
   };
@@ -638,6 +766,16 @@ export function ProjectsPhaseWorkspaceV2() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveProjectDetails = async (input: BrowserProjectEditInput) => {
+    const updated = await commitProject((latest) => editBrowserProject({
+      version: 1,
+      selectedProjectId: latest.id,
+      projects: [latest],
+    }, input).projects[0]);
+    setEditProjectOpen(false);
+    showNotice(`${updated.projectNumber} was updated. New Scheduling visits use the latest Project details and technician instructions; existing bookings were not rewritten.`);
   };
 
   const savePhase = async (input: PhaseDraftInput) => {
@@ -712,7 +850,7 @@ export function ProjectsPhaseWorkspaceV2() {
     const assignment = updated.assignments.find((candidate) => !before.has(candidate.id));
     setSchedulePhaseId('');
     if (assignment) setTechnicianAssignmentId(assignment.id);
-    showNotice('Phase capacity was reserved in this feature branch only. The live Scheduling agenda was not changed.');
+    showNotice('This simulated phase visit did not reserve capacity in the live Scheduling agenda.');
   };
 
   const updateAssignment = async (assignmentId: string, status: ProjectAssignment['status']) => {
@@ -736,7 +874,7 @@ export function ProjectsPhaseWorkspaceV2() {
         postedAt: new Date().toISOString(),
         technicianName: principal.displayName,
       }));
-      showNotice('Actual time and phase progress were posted once inside this feature branch.');
+      showNotice('Simulated technician progress was recorded in phase planning, not in the live Field app.');
     } catch (cause) {
       showNotice(cause instanceof Error ? cause.message : 'The assignment could not be completed.', 'warning');
       throw cause;
@@ -795,7 +933,6 @@ export function ProjectsPhaseWorkspaceV2() {
 
   if (view === 'portfolio' || !project || !summary || !metrics) {
     return <section className={styles.workspace} aria-busy={busy}>
-      <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Shared planning and historical bookings</strong><p>Shared Projects are available across sessions. Existing browser Projects can be reviewed and saved for shared access from Open Phases.</p></div></div>
       {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
       <header className={styles.pageHeader}><div><span>Commercial & Project Operations</span><h1>Projects</h1><p>Select an existing Project or create one by choosing its canonical CRM customer and property. Then define the phases according to your own execution plan.</p></div><div className={styles.headerActions}><button type="button" className={styles.primaryButton} onClick={() => setCreateProjectOpen(true)} disabled={!canManage}>＋ Create Project</button></div></header>
       <div className={styles.metrics}>
@@ -832,11 +969,10 @@ export function ProjectsPhaseWorkspaceV2() {
   const completedPhases = phases.filter((phase) => phase.workflowStatus === 'Completed').length;
 
   return <section className={styles.workspace} aria-busy={busy}>
-    <div className={styles.featureBanner}><div><span>FEATURE PREVIEW</span><strong>Projects · Integrated Phase Planning</strong><p>This branch adds phase controls to the selected Project. Existing customer and property identity remains canonical in CRM.</p></div></div>
     {!canManage ? <div className={`${styles.notice} ${styles.noticeWarning}`}><span>i</span><p>Your account has read-only Projects access.</p></div> : null}
     {notice ? <div className={`${styles.notice} ${noticeTone === 'warning' ? styles.noticeWarning : ''}`}><span>{noticeTone === 'warning' ? '!' : '✓'}</span><p>{notice}</p><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
 
-    <header className={styles.pageHeader}><div><nav><button type="button" onClick={() => setView('portfolio')}>Projects</button><span>›</span><span>{project.projectNumber}</span></nav><div className={styles.titleLine}><h1>{project.name}</h1><Pill label={project.status} tone={projectStatusTone(project.status)} /></div><p>{project.projectNumber} · {project.type} · {project.location}</p></div><div className={styles.headerActions}><button type="button" className={styles.secondaryButton} onClick={() => setView('portfolio')}>← Portfolio</button><button type="button" className={styles.primaryButton} onClick={() => setPhaseDialog({ mode: 'create' })} disabled={!canManage}>＋ Create Custom Phase</button></div></header>
+    <header className={styles.pageHeader}><div><nav><button type="button" onClick={() => setView('portfolio')}>Projects</button><span>›</span><span>{project.projectNumber}</span></nav><div className={styles.titleLine}><h1>{project.name}</h1><Pill label={project.status} tone={projectStatusTone(project.status)} /></div><p>{project.projectNumber} · {project.type} · {project.location}</p></div><div className={styles.headerActions}><button type="button" className={styles.secondaryButton} onClick={() => setView('portfolio')}>← Portfolio</button><button type="button" className={styles.secondaryButton} onClick={() => setEditProjectOpen(true)} disabled={!canManage}>✎ Edit Project</button><button type="button" className={styles.primaryButton} onClick={() => setPhaseDialog({ mode: 'create' })} disabled={!canManage}>＋ Create Custom Phase</button></div></header>
 
     <div className={styles.projectContext}><label><span>Current project</span><select value={project.id} onChange={(event) => { const next = state.projects.find((candidate) => candidate.id === event.target.value); if (next) openProject(next); }}>{state.projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.projectNumber} · {candidate.name}</option>)}</select></label><div><span>Customer</span><strong>{project.customerName}</strong></div><div><span>Project manager</span><strong>{project.managerName}</strong></div><div><span>Project dates</span><strong>{dateLabel(project.startsOn)} – {dateLabel(project.estimatedCompletionOn)}</strong></div></div>
 
@@ -857,7 +993,7 @@ export function ProjectsPhaseWorkspaceV2() {
       slotSource.refresh();
     }} /> : null}
 
-    <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Only the Phases experience is changed in this isolated branch.</small></div>
+    <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Phase planning is available here; other sections are not active yet.</small></div>
 
     <div className={styles.mainLayout}>
       <main className={styles.mainColumn}>
@@ -890,6 +1026,7 @@ export function ProjectsPhaseWorkspaceV2() {
       </aside>
     </div>
 
+    {editProjectOpen ? <CanonicalEditProjectDialog key={`${project.id}:${project.serverVersion ?? 0}`} project={project} busy={busy} onClose={() => setEditProjectOpen(false)} onSave={saveProjectDetails} /> : null}
     {phaseDialog ? <PhaseDialog project={project} phase={editPhase} busy={busy} onClose={() => setPhaseDialog(null)} onSave={savePhase} /> : null}
     {templatesOpen ? <TemplateDialog project={project} suggested={suggestedPhaseTemplates} company={companyTemplates} busy={busy} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} onDeleteCompany={deleteCompanyTemplate} /> : null}
     {saveTemplateOpen ? <SaveTemplateDialog project={project} busy={busy} onClose={() => setSaveTemplateOpen(false)} onSave={saveCompanyTemplate} /> : null}

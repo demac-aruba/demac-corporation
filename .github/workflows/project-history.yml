@@ -32,6 +32,7 @@ jobs:
           node --test scripts/project-history-approved-deploy.test.cjs
           npm run validate:firebase --prefix functions
           npm run test:booking-authority --prefix functions
+          node --test functions/projectRecords.test.js
           node --test functions/bookingProjectHistoricalCapacity.test.js
           node --test functions/officeBookingAuthority*.test.js
           node --check functions/projectAuthority.js

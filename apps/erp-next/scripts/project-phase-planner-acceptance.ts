@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import type { BrowserProject } from '../lib/browser-projects';
+import { editBrowserProject, projectHasOperationalActivity, type BrowserProject } from '../lib/browser-projects';
 import {
   allocateTemplateHours,
   applyPhaseTemplate,
@@ -40,8 +40,34 @@ assert.match(workspaceSource, /matchingCustomers\(references, customerQuery\)/, 
 assert.match(workspaceSource, /createOfficeCustomer/, 'An explicit no-match selection must retain canonical customer creation.');
 assert.match(workspaceSource, /Property \/ service location/, 'The selected CRM customer must expose its canonical Service Properties.');
 assert.match(workspaceSource, /if \(!createCustomer\) throw new Error\('Select an existing CRM customer/, 'Free-text customer names must not silently create or link Projects.');
+assert.match(workspaceSource, /<CanonicalEditProjectDialog/, 'The active Projects screen must open its Edit Project dialog.');
+assert.match(workspaceSource, /onClick=\{\(\) => setEditProjectOpen\(true\)\}/, 'The active Project header must expose Edit Project.');
+assert.match(workspaceSource, /editBrowserProject\(/, 'Edits must use the governed Project edit reducer.');
+assert.match(workspaceSource, /commitSharedProjects\(/, 'Edits must persist through the shared Project save path.');
+assert.match(workspaceSource, /name="technicianInstructions"/, 'The editor must expose default instructions for future technician visits.');
+assert.doesNotMatch(workspaceSource, /FEATURE PREVIEW|isolated (feature )?branch/, 'The active Projects screen must not display a stale feature-preview banner or isolated-branch copy.');
 
 const fixture = projectFixture();
+const propertyFreeSharedDraft = { ...fixture, siteId: '', location: 'Property to be confirmed', serverVersion: 1 };
+const sharedDraftState = { version: 1 as const, selectedProjectId: fixture.id, projects: [propertyFreeSharedDraft] };
+const baseEdit = {
+  projectId: fixture.id, name: fixture.name, description: fixture.description,
+  type: fixture.type, siteId: fixture.siteId, location: fixture.location,
+  status: fixture.status, priority: fixture.priority, totalUnits: fixture.totalUnits,
+  materialBudget: fixture.materialBudget, startsOn: fixture.startsOn,
+  estimatedCompletionOn: fixture.estimatedCompletionOn, estimatedWorkDays: fixture.estimatedWorkDays,
+  technicianInstructions: fixture.technicianInstructions,
+};
+const attached = editBrowserProject(sharedDraftState, {
+  ...baseEdit, description: 'Revised project scope', technicianInstructions: 'Enter through the west gate.',
+}).projects[0];
+assert.equal(attached.siteId, fixture.siteId, 'A published Draft without activity may attach its first canonical Property.');
+assert.equal(attached.technicianInstructions, 'Enter through the west gate.', 'Project edits must persist technician instructions.');
+assert.equal(attached.description, 'Revised project scope', 'Project edits must persist revised scope.');
+assert.equal(attached.customerId, fixture.customerId, 'Project editing must preserve canonical customer identity.');
+assert.throws(() => editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, siteId: 'PROPERTY-2' }), /shared Project is locked/, 'A published Project Property cannot be switched after its first link.');
+assert.throws(() => editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, estimatedWorkDays: 10 }), /Reducing a shared Project slot budget/, 'The editor must fail closed on a published budget decrease until canonical Scheduling verifies it.');
+assert.equal(editBrowserProject({ ...sharedDraftState, projects: [attached] }, { ...baseEdit, estimatedWorkDays: 12 }).projects[0].estimatedSlots, 72, 'Published work-day increases must recalculate the one-hour slot plan.');
 const exactSeed = { ...fixture, id: 'DEMO-PRJ-VRF-001', projectNumber: 'PRJ-1007', name: 'Seeded sample' };
 const userCreatedLegacyId = { ...fixture, id: 'DEMO-PRJ-1788364800000', projectNumber: 'PRJ-1013', name: 'User-created project' };
 const sanitized = sanitizeProjectsState({
@@ -68,6 +94,12 @@ const custom = createProjectPhase(fixture, {
   responsibleManager: 'Project Manager', workflowStatus: 'Ready to Schedule',
 }, '2026-09-03T20:00:00.000Z');
 const customPhase = projectPhases(custom)[0];
+const quietPhase = { ...customPhase, status: 'Planned' as const, workflowStatus: 'Ready to Schedule' as const, progress: 0, fieldReports: [], actualLaborHours: 0, actualMaterialCost: 0, unitsCompleted: 0 };
+assert.equal(projectHasOperationalActivity({ ...fixture, phases: [quietPhase] }), false, 'An unexecuted planned phase must not lock Project structure.');
+assert.equal(projectHasOperationalActivity({ ...fixture, phases: [{ ...quietPhase, progress: 1 }] }), true, 'Recorded phase progress must lock Project structure.');
+assert.equal(projectHasOperationalActivity({ ...fixture, phases: [{ ...quietPhase, fieldReports: [{}] }] }), true, 'A phase field report must lock Project structure.');
+assert.equal(projectHasOperationalActivity({ ...fixture, phases: [{ ...quietPhase, workflowStatus: 'In Progress' }] }), true, 'An active phase workflow must lock Project structure.');
+assert.throws(() => editBrowserProject({ version: 1, selectedProjectId: fixture.id, projects: [{ ...fixture, phases: [{ ...quietPhase, progress: 1 }] }] }, { ...baseEdit, siteId: 'PROPERTY-2', location: 'New location' }), /cannot change after Scheduling work or actual cost exists/, 'Generic editing must not move a Project Property after phase progress was recorded.');
 assert.equal(phaseCapacitySummary(custom).allocated, 18, 'Custom phase must reserve only its approved capacity.');
 assert.equal(phaseCapacitySummary(custom).unallocated, 48, 'Unallocated Project capacity must remain available.');
 assert.equal(customPhase.checklist.length, 3, 'Checklist progress must retain each custom item.');
@@ -126,4 +158,4 @@ assert.equal(companyTemplate.phases.length, templatePhases.length, 'Company temp
 const reordered = reorderProjectPhases(templated, templatePhases.map((phase) => phase.id).reverse());
 assert.deepEqual(projectPhases(reordered).map((phase) => phase.id), templatePhases.map((phase) => phase.id).reverse(), 'Phase reordering must be stable and explicit.');
 
-console.log('Project Phase Planner acceptance passed: canonical CRM customer search, explicit customer creation, property selection, exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
+console.log('Project Phase Planner acceptance passed: canonical CRM customer search, shared Edit Project and technician instructions, one-time Property attachment, published budget-decrease guard, exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
