@@ -6,7 +6,9 @@ import { emptyDraft, validateApplication, type ApplicationDraft } from '../../li
 import { ApplicationFunnel } from './application-funnel';
 import { formScreens, normalizeFormTarget } from '../../lib/careers-form-flow';
 import { recoverRevisedDraft } from '../../lib/careers-recovery';
-import { BackControl, CareerIcon, VacancyFacts } from './careers-visuals';
+import { ApplicationReceipt, VacancyCatalogue, VacancyProfile } from './careers-pages';
+import { defaultCareersContent, normalizeCareersContent } from '../../lib/public-website-content';
+import { loadPublishedWebsiteContent } from '../../lib/public-website-public';
 import { useCareersNavigation, type CareerRoute } from './use-careers-navigation';
 import s from './careers.module.css';
 async function sha(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>) { const out = await crypto.subtle.digest('SHA-256', bytes); return Array.from(new Uint8Array(out), n => n.toString(16).padStart(2, '0')).join(''); }
@@ -15,6 +17,13 @@ export function CareersPublic() {
   const [data, setData] = useState<PublicJobs | null>(null), [error, setError] = useState(''), [status, setStatus] = useState(''), [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState<Record<string, ApplicationDraft>>({}), [receipts, setReceipts] = useState<Record<string, Receipt>>({});
   const [needsRevision, setNeedsRevision] = useState(false), [revisionNotice, setRevisionNotice] = useState('');
+  const [department, setDepartment] = useState('');
+  const [presentation, setPresentation] = useState(defaultCareersContent);
+  useEffect(() => {
+    let active = true;
+    void loadPublishedWebsiteContent().then(value => { if (active) setPresentation(normalizeCareersContent(value.careers)); });
+    return () => { active = false; };
+  }, []);
   const sessions = useRef(new Map<string, ApplicantSession>()), loading = useRef(false);
   const current = useRef({ data, drafts, receipts }); current.current = { data, drafts, receipts };
   function normalize(route: CareerRoute): CareerRoute {
@@ -88,6 +97,9 @@ export function CareersPublic() {
     finally { loading.current = false; }
   }
   function complete(receipt: Receipt) { if (!job) return; const saved = { ...current.current.receipts, [job.id]: receipt }; current.current = { ...current.current, receipts: saved }; setReceipts(saved); nav.navigate({ view: 'success', receipt: receipt.id }); }
+  const receivedRole = Object.keys(receipts).find(id => receipts[id].id === route.receipt);
+  const receivedJob = data?.jobs.find(value => value.id === receivedRole);
+  const receivedDraft = receivedRole ? drafts[receivedRole] : undefined;
   const form = route.view === 'form' && job && data?.privacy;
   return <main className={`${s.root}`} data-careers-version="premium-v3">
     <CareersHeader compactLabel={form ? 'Careers' : undefined}/>
@@ -95,10 +107,10 @@ export function CareersPublic() {
     {needsRevision && <section className={s.container}><div className={s.alert} role="alert"><p>This position or its privacy notice was updated. Review the latest version without losing your contact details or selected files.</p><button type="button" className={s.secondary} onClick={() => void reviewUpdatedPosition()}>Review updated position</button></div></section>}
     {error && <section className={s.container}><div className={s.alert} role="alert">{error}</div><button className={s.secondary} onClick={() => void refresh()}>Try again</button></section>}
     {!data && !error && <section className={s.container}><p role="status">Loading opportunities…</p></section>}
-    {data && route.view === 'jobs' && <><section className={s.careerHero}><div className={s.heroInner}><span className={s.eyebrow}>BUILD YOUR NEXT CHAPTER</span><h1 tabIndex={-1}>Careers</h1><h2>Join the DEMAC team.</h2><p>Bring your skills. Make a difference in Aruba.</p></div></section><section className={s.container}><div className={s.catalogueHeader}><h2>Open positions</h2></div><label className={s.field}>Search opportunities<input value={query} onChange={e => setQuery(e.target.value)} type="search" placeholder="Position or department" /></label><div className={s.vacancyGrid} style={{ marginTop: 24 }}>{data.jobs.filter(j => `${j.title} ${j.department}`.toLowerCase().includes(query.toLowerCase())).map(j => <article className={s.jobCard} key={j.id}><h2>{j.title}</h2><div className={s.meta}><span>{j.department}</span><span>{j.location}</span><span>{j.contract}</span></div><p>{j.summary}</p><button className={s.jobLink} data-career-focus={`job-${j.id}`} onClick={() => nav.navigate({ view: 'detail', role: j.id })}>View position<CareerIcon name="arrow"/></button></article>)}</div>{!data.jobs.length && <div className={s.empty}><h2>{data.available ? 'No openings at the moment' : 'Applications are temporarily unavailable'}</h2><p>{data.available ? 'Please check back for future opportunities.' : 'Recruitment is not accepting new applications right now. Please try again later.'}</p></div>}</section></>}
-    {route.view === 'detail' && job && <><section className={s.careerHero}><div className={s.heroInner}><BackControl label="Back to open positions" onClick={() => nav.backTo({ view: 'jobs' })}/><h1 tabIndex={-1}>{job.title}</h1><p>{job.summary}</p></div></section><section className={`${s.container} ${s.rolePage}`}><VacancyFacts vacancy={job}/><div className={s.roleDescription}><section><h2>About the role</h2><p>{job.summary}</p></section>{[['What you’ll do', job.responsibilities], ['What we’re looking for', job.requirements], ['Preferred qualifications', job.desired]].map(([heading, values]) => (values as string[])?.length ? <section key={String(heading)}><h2>{heading as string}</h2><ul>{(values as string[]).map((value, i) => <li key={i}>{value}</li>)}</ul></section> : null)}<section><h2>Documents to prepare</h2><p>A recent photo{job.cvRequired ? ' and your CV' : ''}. Relevant certificates and courses are optional.</p></section></div><div className={s.applyBar}><strong>{job.title}</strong><button className={s.primary} onClick={() => nav.navigate({ view: 'form', role: job.id, step: 0 })}>{received ? 'Review application' : 'Apply now'}<CareerIcon name="arrow"/></button></div></section></>}
+    {data && route.view === 'jobs' && <VacancyCatalogue jobs={data.jobs} query={query} department={department} onQuery={setQuery} onDepartment={setDepartment} onSelect={value => nav.navigate({ view: 'detail', role: value.id })} available={data.available} content={presentation}/>}
+    {route.view === 'detail' && job && <VacancyProfile vacancy={job} onBack={() => nav.backTo({ view: 'jobs' })} onApply={() => nav.navigate({ view: 'form', role: job.id, step: 0 })} applyLabel={received ? 'Review application' : 'Apply now'} content={presentation}/>}
     {form && job && data?.privacy && <ApplicationFunnel key={job.id} vacancy={job} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={!!received} onChange={change} onStep={target => nav.navigate({ view: 'form', role: job.id, ...target })} onBackToJob={() => nav.backTo({ view: 'detail', role: job.id })} onBack={target => nav.backTo(target ? { view: 'form', role: job.id, ...target } : { view: 'detail', role: job.id })} onSubmit={submit} live={{ privacyText: data.privacy.text, status }}/>}
-    {route.view === 'success' && received && <section className={s.successPage}><div className={s.successIcon}><CareerIcon name="check"/></div><h1 tabIndex={-1}>Application received</h1><p>Thank you for your interest in joining DEMAC.</p><div className={s.receiptCard}><strong>{received.reference}</strong><p>Your application and documents have been received.</p></div><p>Our team will contact you if your application advances to the next stage.</p><p className={s.helper}>Confirmation email status: {received.emailStatus}. Delivery is not guaranteed by submission.</p><button className={s.primary} onClick={() => nav.navigate({ view: 'jobs' })}>Explore opportunities<CareerIcon name="arrow"/></button></section>}
+    {route.view === 'success' && received && <ApplicationReceipt reference={received.reference} email={receivedDraft?.email || ''} jobTitle={receivedJob?.title || ''} emailNotice="Your application is saved. Submission does not confirm email delivery." onExplore={() => nav.navigate({ view: 'jobs' })} content={presentation}/>}
     {!form && <CareersFooter/>}
   </main>;
 }

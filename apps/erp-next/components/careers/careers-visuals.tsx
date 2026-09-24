@@ -27,7 +27,7 @@ export function CareerIcon({ name, className }: { name: IconName; className?: st
   return <svg data-career-icon={name} className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 export function BackControl({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
-  return <button className={s.backControl} type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/></button>;
+  return <button className={s.backControl} type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/><span className={s.backText}>Back</span></button>;
 }
 export function IconTile({ name, children }: { name: IconName; children?: ReactNode }) {
   return <span className={s.iconTile}><CareerIcon name={name}/>{children}</span>;
@@ -36,7 +36,8 @@ export function VacancyFacts({ vacancy }: { vacancy: Vacancy }) {
   const experience = vacancy.requirements.find(item => /\b\d+\+?\s+years?\b/i.test(item));
   const facts: [IconName, string, string][] = [
     ['location', 'Location', vacancy.location], ['briefcase', 'Department', vacancy.department],
-    ['clock', 'Type', vacancy.contract], ['chart', 'Experience', experience || 'See requirements'],
+    ['clock', 'Type', vacancy.contract],
+    ...(experience ? [['chart', 'Experience', experience] as [IconName, string, string]] : []),
   ];
   return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{label}</dt><dd>{value}</dd></div></div>)}</dl>;
 }

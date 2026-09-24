@@ -135,6 +135,7 @@ const report = [];
       check(await page.getByText('PREVIEW-0001', { exact: true }).count() === 1, 'one confirmation reference');
       check(await page.getByText(/No email has been sent/).count() === 1, 'success does not fabricate email delivery');
       await shot('08-complete');
+      await page.locator('summary').filter({ hasText: 'Review tools' }).click();
       await page.getByRole('button', { name: 'Review this candidate', exact: true }).click();
       await page.locator('#profile-stage').selectOption('Interview');
       await page.locator('#recruiter-note').fill('Test note. Verify the new mobile presentation.');

@@ -7,13 +7,14 @@ import { loadWebsiteDraft, loadWebsitePublishedForManager, publishWebsiteContent
 import { uploadPublicWebsiteImage } from '@/lib/firebase/storage-rest';
 import {
   cloneWebsiteContent,
+  defaultCareersContent,
   defaultPublicWebsiteContent,
   WEBSITE_DRAFT_ID,
   type PublicWebsiteContent,
   type WebsiteHeroSlide,
 } from '@/lib/public-website-content';
 
-type StudioTab = 'hero' | 'contact';
+type StudioTab = 'hero' | 'contact' | 'careers';
 type PreviewDevice = 'desktop' | 'mobile';
 
 function errorText(error: unknown) {
@@ -216,6 +217,7 @@ export function WebsiteManagerWorkspace() {
 
       <div className="website-manager-tabs" role="tablist" aria-label="Website Manager sections">
         <button type="button" className={tab === 'hero' ? 'is-active' : ''} onClick={() => setTab('hero')}>Hero Slider</button>
+        <button type="button" className={tab === 'careers' ? 'is-active' : ''} onClick={() => setTab('careers')}>Careers</button>
         <button type="button" className={tab === 'contact' ? 'is-active' : ''} onClick={() => setTab('contact')}>Global Information</button>
       </div>
 
@@ -288,6 +290,18 @@ export function WebsiteManagerWorkspace() {
             <div className={`website-manager-preview-frame is-${device}`}><PublicHeroSlider previewContent={draft} compactPreview /></div>
           </section>
         </div>
+      ) : tab === 'careers' ? (
+        <section className="panel">
+          <header className="panel-head"><div><h2>Careers presentation</h2><span>Global Careers artwork and introductory copy. Job descriptions and questions remain in Recruitment.</span></div></header>
+          <p>Use approved public artwork. The bundled illustration is provisional, not a photo of DEMAC premises or employees. Preview builds use bundled content, never live candidate data.</p>
+          <div className="website-manager-fields two website-manager-global-fields">
+            {(['eyebrow', 'title', 'subtitle', 'description', 'imageUrl', 'roleImageUrl'] as const).map(key => <label key={key}>
+              <span>{{ eyebrow: 'Eyebrow', title: 'Page title', subtitle: 'Subtitle', description: 'Introduction', imageUrl: 'Careers hero image URL', roleImageUrl: 'Default position image URL' }[key]}</span>
+              <input value={(draft.careers ?? defaultCareersContent)[key]} onChange={event => setDraft(current => ({ ...current, careers: { ...(current.careers ?? defaultCareersContent), [key]: event.target.value } }))}/>
+            </label>)}
+          </div>
+          <p>Save Draft and Publish above use the existing Website Manager workflow. No vacancy is opened by publishing this content.</p>
+        </section>
       ) : (
         <section className="panel website-manager-global">
           <header className="panel-head"><div><h2>Global Website Information</h2><span>Central values used by customer-facing contact and footer experiences.</span></div></header>

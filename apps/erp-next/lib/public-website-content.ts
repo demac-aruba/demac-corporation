@@ -19,6 +19,39 @@ export type WebsiteHeroSlide = {
   mobilePosition: string;
 };
 
+export type WebsiteCareersContent = {
+  eyebrow: string; title: string; subtitle: string; description: string;
+  imageUrl: string; roleImageUrl: string;
+};
+
+/** Existing bundled artwork, not a photograph of DEMAC's premises or staff. */
+export const defaultCareersContent: WebsiteCareersContent = {
+  eyebrow: 'BUILD A COOLER TOMORROW', title: 'Careers', subtitle: 'Join the DEMAC team.',
+  description: 'Great people. Real impact. A cooler Aruba.',
+  imageUrl: '/website/hero/hero-residential.webp',
+  roleImageUrl: '/website/hero/hero-residential.webp',
+};
+
+export function normalizeCareersContent(value: unknown): WebsiteCareersContent {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const result = { ...defaultCareersContent };
+  for (const key of Object.keys(result) as (keyof WebsiteCareersContent)[]) {
+    const raw = source[key];
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const text = raw.trim();
+    if (key === 'imageUrl' || key === 'roleImageUrl') {
+      // Accept public HTTPS or site-local artwork, not script/data URLs or credentials.
+      try {
+        const url = new URL(text, 'https://website.invalid');
+        if (url.protocol !== 'https:' || url.username || url.password || text.startsWith('//') || /[\\\s]/.test(text)) continue;
+        if (!text.startsWith('/') && !text.startsWith('https://')) continue;
+        result[key] = text.slice(0, 2048);
+      } catch { /* Preserve the bundled, offline-safe image. */ }
+    } else result[key] = text.slice(0, 500);
+  }
+  return result;
+}
+
 export type PublicWebsiteContent = {
   id: string;
   version: number;
@@ -27,6 +60,7 @@ export type PublicWebsiteContent = {
     transitionMs: number;
     slides: WebsiteHeroSlide[];
   };
+  careers?: WebsiteCareersContent;
   contact: {
     officeAddress: string;
     weekdayHours: string;
@@ -187,6 +221,7 @@ export function normalizePublicWebsiteContent(value: unknown, id = WEBSITE_PUBLI
       transitionMs: numberValue(hero.transitionMs, fallback.hero.transitionMs, 250, 1800),
       slides,
     },
+    careers: normalizeCareersContent(source.careers),
     contact: {
       officeAddress: stringValue(contact.officeAddress, fallback.contact.officeAddress),
       weekdayHours: stringValue(contact.weekdayHours, fallback.contact.weekdayHours),
