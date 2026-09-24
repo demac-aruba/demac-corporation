@@ -68,7 +68,7 @@ export function ProjectHistoricalCorrection({ project, uid, onSaved }: { project
         <button disabled={busy} onClick={() => void run(async () => { const saved = await saveSharedProject(publishDraft, uid); if (mounted.current) onSaved(saved); })}>Save shared Project</button>
       </> : <button disabled={busy} onClick={() => void run(async () => { await saveSharedProject(project, uid, true); if (mounted.current) setPublishDraft(project); })}>Review shared Project</button>}
     </> : <>
-      <p>Choose a cancelled booking and record the slots actually used. Its original date and crew are preserved. Attendance and payroll are unchanged.</p>
+      <p>Choose a cancelled booking to create a smaller reservation for its original date and crew. This corrects booked Van slots, not verified hours worked by each technician. Attendance, Field records, billing and payroll are unchanged.</p>
       <fieldset disabled={busy || Boolean(offer)} className={styles.fields}>
         <label>Cancelled booking<select value={sourceId} onChange={event => { setSourceId(event.target.value); setStart(sources.find(item => item.appointmentId === event.target.value)?.starts[0] || '08:30'); }}>
           <option value="">Select a cancelled booking</option>{sources.map(item => <option key={item.appointmentId} value={item.appointmentId}>{item.date} · {item.vanName} · {item.slots} slots · {item.appointmentId}</option>)}
@@ -78,10 +78,10 @@ export function ProjectHistoricalCorrection({ project, uid, onSaved }: { project
           <label>Start<select value={start} onChange={event => setStart(event.target.value)}>{source.starts.map(time => <option key={time}>{time}</option>)}</select></label>
           <label>Replacement slots<input type="number" min={1} max={source.slots} step={1} value={slots} onChange={event => setSlots(Number(event.target.value))} /></label>
           <label className={styles.wide}>Correction reason<textarea maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} /></label>
-          <label className={`${styles.wide} ${styles.check}`}><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />I verified this past date, crew and slot count. No customer notification will be sent.</label>
+          <label className={`${styles.wide} ${styles.check}`}><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />I verified this past date, crew and replacement slot count. No customer notification will be sent.</label>
         </> : null}
       </fieldset>
-      {!sources.length ? <p>No eligible cancelled bookings. Cancel the incorrect booking in Scheduling first, then reload this Project. Corrections currently require one recorded Van per original booking.</p> : null}
+      {!sources.length ? <p>No eligible cancelled bookings. For an unworked, unbilled booking, cancel the incorrect reservation in Scheduling first, then reload this Project. Do not cancel a completed, invoiced or paid job to change technician hours; that requires a separate actual-work review. Replacements currently require one recorded Van per original booking.</p> : null}
       {offer ? <div className={styles.review}>
         <strong>{offer.options[0].date} · {offer.options[0].time}–{offer.options[0].capacityEndTime}</strong>
         <p>{source?.slots} original slots (cancelled) → {offer.options[0].assignments[0].slots} replacement slots.</p>
