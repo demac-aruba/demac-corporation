@@ -1,12 +1,14 @@
+import type { EditorialTranslation } from '../../../functions/careers/editorial-contract';
 import { COUNTRY_CODES, validateDetails, validateExperience, visibleQuestions as visibleFormQuestions, type FormQuestion } from '../../../functions/careers/form-contract.js';
 /** UI draft types and shared validation. Preview fixtures are never persisted. */
 export type QuestionKind = FormQuestion['kind'];
 export interface Question {
-  id: string; label: string; kind: QuestionKind; required: boolean;
+  id: string; label: string; help?: string; kind: QuestionKind; required: boolean;
   options?: string[];
   when?: { questionId: string; value: string };
 }
 export interface Vacancy {
+  editorialVersion?: number; translations?: { es?: EditorialTranslation }; availableLocales?: ('en' | 'es')[];
   id: string; title: string; department: string; location: string;
   contract: string; summary: string; responsibilities: string[];
   requirements: string[]; status: 'Open' | 'Draft' | 'Paused' | 'Closed' | 'Archived';

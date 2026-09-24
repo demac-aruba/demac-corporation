@@ -59,7 +59,8 @@ async function context(browser,admin,viewport){
   for(const [name,type]of [['chromium',chromium],['webkit',webkit]]){
     const browser=await type.launch({headless:true}),admin=await context(browser,true,{width:1440,height:1000}),candidate=await context(browser,false,{width:390,height:844});
     const office=await admin.newPage(),person=await candidate.newPage(),errors=[];
-    for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());}
+    let dismissDialog=false;
+    for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>dismissDialog?d.dismiss():d.accept());}
     async function shot(page,label){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');}
     async function settled(){await office.getByText('Loading from DEMAC…',{exact:true}).waitFor({state:'hidden'});}
     try{
@@ -78,11 +79,56 @@ async function context(browser,admin,viewport){
         await office.getByLabel('Question',{exact:true}).nth(index).fill(label);
         await office.getByLabel('Answer format',{exact:true}).nth(index).selectOption(kind);
       }
-      await shot(office,'01-vacancy-editor');await office.getByRole('button',{name:'Save vacancy',exact:true}).click();
+      // Authenticated, manually authored Spanish lives on the same record. No AI or
+      // browser-injected translations; every field below uses the actual editor.
+      await office.getByRole('button',{name:'Español — Traducción',exact:true}).click();
+      await office.getByRole('button',{name:'Add Spanish translation',exact:true}).click();
+      const spanishTitle=`Especialista VRF QA ${name}`;
+      for(const [label,value] of [
+        ['Título del puesto · Español',spanishTitle],['Departamento · Español','Técnica'],['Ubicación · Español','Aruba'],
+        ['Contratación · Español','Tiempo completo'],['Acerca del puesto · Español','Puesto de prueba creado desde la administración.'],
+        ['Responsabilidades · Una por línea','Inspeccionar y mantener equipos.\nDocumentar el trabajo técnico.'],
+        ['Requisitos esenciales · Una por línea','Experiencia pertinente.'],
+        ['Pregunta 1 · Español','¿Has trabajado con sistemas VRF?'],['Yes · Español','Sí'],['No · Español','No'],
+        ['Pregunta 2 · Español','Fecha de inicio más temprana'],['Pregunta 3 · Español','URL del portafolio'],
+      ]) await office.getByLabel(label,{exact:true}).fill(value);
+      const reviewed=office.getByLabel('I reviewed this Spanish translation against the current English version.',{exact:true});
+      await reviewed.check();await shot(office,'01-vacancy-editor');
+      await office.getByRole('button',{name:'Save draft',exact:true}).click();
       await office.getByText(title,{exact:true}).waitFor();await office.reload();await office.getByText(title,{exact:true}).waitFor();
-      const row=office.locator('div').filter({has:office.getByText(title,{exact:true})}).filter({has:office.getByRole('button',{name:'Edit position',exact:true})}).last();
-      await row.getByRole('button',{name:'Edit position',exact:true}).click();await office.getByLabel('Publication status',{exact:true}).selectOption('Open');await office.getByRole('button',{name:'Save & open vacancy',exact:true}).click();
+      const row=()=>office.locator('div').filter({has:office.getByText(title,{exact:true})}).filter({has:office.getByRole('button',{name:'Edit position',exact:true})}).last();
+      await row().getByRole('button',{name:'Edit position',exact:true}).click();await settled();
+      await office.getByRole('button',{name:'Español — Traducción',exact:true}).click();
+      assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle);
+      assert(await reviewed.isChecked(),'reviewed translation survives a real server reload');
+      await office.getByLabel('About the role',{exact:true}).fill('Test role created through the administrative interface. Updated.');
+      await office.getByLabel('Publication status',{exact:true}).selectOption('Open');
+      assert(!(await reviewed.isChecked()),'English editing invalidates the previous Spanish review');
+      assert(await office.getByRole('button',{name:'Save & open vacancy',exact:true}).isDisabled(),'stale review is explained before publication');
+      dismissDialog=true;const editUrl=office.url();
+      await office.getByRole('button',{name:'Open Careers Settings',exact:true}).click();
+      dismissDialog=false;assert.equal(office.url(),editUrl,'cancelling the warning preserves the editor');
+      assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle);
+      await reviewed.check();await shot(office,'01b-spanish-reviewed');
+      await office.setViewportSize({width:390,height:844});await shot(office,'01c-spanish-mobile');await office.setViewportSize({width:1440,height:1000});
+      // Configuration changes after preflight must still be rejected by the server,
+      // retaining the editor and offering an explicit draft save rather than data loss.
+      let cfg=(await service.getSettings('qa-admin')).settings;
+      await service.saveSettings('qa-admin',{requestId:crypto.randomUUID(),expectedVersion:cfg.version,settings:{...cfg,intakeEnabled:false}});
+      await office.getByRole('button',{name:'Save & open vacancy',exact:true}).click();
+      await office.getByRole('alert').filter({hasText:'Complete Careers setup'}).waitFor();
+      assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle);
+      dismissDialog=true;await office.getByRole('button',{name:'Reload',exact:true}).click();dismissDialog=false;
+      assert.equal(await office.getByLabel('Título del puesto · Español',{exact:true}).inputValue(),spanishTitle,'cancelled Reload retains every edited field');
+      await office.getByRole('button',{name:'Save draft',exact:true}).click();await office.getByText(title,{exact:true}).waitFor();
+      cfg=(await service.getSettings('qa-admin')).settings;
+      await service.saveSettings('qa-admin',{requestId:crypto.randomUUID(),expectedVersion:cfg.version,settings:{...cfg,intakeEnabled:true}});
+      await row().getByRole('button',{name:'Edit position',exact:true}).click();await settled();
+      await office.getByLabel('Publication status',{exact:true}).selectOption('Open');await office.getByRole('button',{name:'Save & open vacancy',exact:true}).click();
       await office.getByText(title,{exact:true}).waitFor();await shot(office,'02-vacancies');
+      const published=(await service.publicJobs()).jobs.find(j=>j.title===title);
+      assert.equal(published.translations.es.title,spanishTitle);assert.equal(published.editorialVersion,2);
+      assert.deepEqual(published.availableLocales,['en','es']);
       await person.goto(`${site}/careers/`);await person.getByRole('heading',{name:title,exact:true}).waitFor();
       await person.getByRole('article').filter({has:person.getByRole('heading',{name:title,exact:true})}).getByRole('button',{name:`View ${title}`,exact:true}).click();
       assert(!(await person.locator('body').innerText()).includes('QA PRIVATE NOTE'),'private vacancy notes excluded');
@@ -117,7 +163,7 @@ async function context(browser,admin,viewport){
       // keeps contact/files and never reinterprets an answer to a changed question.
       const jobs=await db.collection(COLLECTIONS.jobs).where('title','==',title).get();
       const oldJob=jobs.docs[0].data();
-      await service.saveVacancy('qa-admin',{id:oldJob.id,requestId:crypto.randomUUID(),expectedVersion:oldJob.version,vacancy:{...oldJob,questions:oldJob.questions.map(q=>q.kind==='url'?{...q,label:'Portfolio URL (current)'}:q)}});
+      await service.saveVacancy('qa-admin',{id:oldJob.id,requestId:crypto.randomUUID(),expectedVersion:oldJob.version,vacancy:{...oldJob,translations:{es:{...oldJob.translations.es,status:'Draft'}},questions:oldJob.questions.map(q=>q.kind==='url'?{...q,label:'Portfolio URL (current)'}:q)}});
       await person.getByRole('button',{name:'Submit application',exact:true}).click();
       await person.getByRole('button',{name:'Review updated position',exact:true}).click();
       // Revisit each retained answer on its own screen, then answer only the
@@ -154,7 +200,7 @@ async function context(browser,admin,viewport){
       await shot(office,'06-profile');await office.setViewportSize({width:390,height:844});await shot(office,'07-profile-mobile');
       const snapshot=await db.collection(COLLECTIONS.applications).where('profile.email','==',`candidate-${name}@example.test`).get();assert.equal(snapshot.size,1);assert.equal((await db.collection(COLLECTIONS.mail).doc(snapshot.docs[0].id).get()).data().status,'queued');
       for(const collection of ['appointments','customers','staffProfiles'])assert.equal((await db.collection(collection).get()).size,0);
-      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','single-question routes with explicit multiple-choice Continue','shared date and URL types validated before submit','stale vacancy recovery preserves details/files and clears redefined answers/consent','style ownership excludes marketing SVG rules','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
+      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','Spanish editing and review persist on one vacancy','stale Spanish blocks Open but permits Draft','cancelled Settings and Reload retain unsaved editor','late setup rejection preserves translations and allows explicit draft save','single-question routes with explicit multiple-choice Continue','shared date and URL types validated before submit','stale vacancy recovery preserves details/files and clears redefined answers/consent','style ownership excludes marketing SVG rules','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
     }catch(error){for(const [label,page]of [['office',office],['candidate',person]])await page.screenshot({path:path.join(output,`${name}-${label}-FAIL.png`),fullPage:true}).catch(()=>{});results.push({name,result:'FAIL',error:String(error),pageErrors:errors});console.error(error);}
     finally{await admin.close();await candidate.close().catch(()=>{});await browser.close();fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(results,null,2));}
   }

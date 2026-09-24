@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const C = require('./core');
+const Editorial = require('./editorial-contract');
 const COLLECTIONS = Object.freeze({ jobs:'careersVacancies', applications:'careersApplications', sessions:'careersSessions', settings:'careersSettings', operations:'careersOperations', audit:'careersAudit', mail:'careersEmailJobs', rate:'careersRateLimits', deletions:'careersFileDeletions' });
 function createService({ db, files, infrastructure, now = Date.now }) {
   const ref = (kind,key) => db.collection(COLLECTIONS[kind]).doc(C.id(key));
@@ -77,12 +78,14 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     return adminMutation(uid,p.requestId,'vacancy.save',{key,clean,expectedVersion:p.expectedVersion},async tx=>{
       const document=ref('jobs',key), existing=(await tx.get(document)).data();
       C.requireValue((existing?.version || 0)===p.expectedVersion,'This vacancy changed. Reload before saving.','version-conflict',409);
+      const editorial = Editorial.reconcileEditorial(clean, existing);
       if(clean.status==='Open') {
+        if (editorial.translations.es?.status === 'Approved') C.requireValue(!Editorial.translationIssues(editorial).length, 'Spanish needs review before opening. Save a draft or review the translation.', 'translation-review-required', 409);
         const config=(await tx.get(configRef)).data();
         C.requireValue(config?.intakeEnabled===true && configReady(config).length===0,'Complete Careers setup before opening a vacancy.','setup-required',409);
       }
       const version=(existing?.version || 0)+1;
-      tx.set(document,{...clean,id:key,version,createdAt:existing?.createdAt || at(),createdBy:existing?.createdBy || uid,updatedAt:at(),updatedBy:uid});
+      tx.set(document,{...editorial,id:key,version,createdAt:existing?.createdAt || at(),createdBy:existing?.createdBy || uid,updatedAt:at(),updatedBy:uid});
       return {id:key,version};
     });
   }

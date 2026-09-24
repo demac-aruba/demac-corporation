@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { phoneInternational, stages, validateVacancy, visibleQuestions, type PreviewApplication, type Question, type QuestionKind, type Stage, type Vacancy } from '../../lib/careers-preview';
 import { Alert, CountrySelect, Field, FileLink, countryName, sizeLabel } from './careers-ui';
 import s from './careers.module.css';
+import { EditorialPanel } from '../recruitment/editorial-panel';
+import { reconcileEditorial, translationIssues } from '../../../../functions/careers/editorial-contract';
 
 type Props = { vacancies: Vacancy[]; applications: PreviewApplication[]; onVacancies: (items: Vacancy[]) => void; onApplications: (items: PreviewApplication[]) => void; initialApplication?: string; onTryApplication: () => void };
 export function RecruitmentPreview({ vacancies, applications, onVacancies, onApplications, initialApplication, onTryApplication }: Props) {
@@ -27,15 +29,18 @@ export function RecruitmentPreview({ vacancies, applications, onVacancies, onApp
   });
   function updateApplication(application: PreviewApplication) { onApplications(applications.map(item => item.id === application.id ? application : item)); }
   function selectTab(next: typeof tab) { setTab(next); setSelectedId(''); setEditing(null); setIssue(''); }
-  function saveVacancy() {
+  function saveVacancy(status?: Vacancy['status']) {
     if (!editing) return;
-    const cleaned = { ...editing, title: editing.title.trim(), questions: editing.questions.map(q => ({ ...q, label: q.label.trim(), options: q.options?.map(option => option.trim()).filter(Boolean) })) };
+    const cleaned = { ...editing, ...(status ? { status } : {}), title: editing.title.trim(), questions: editing.questions.map(q => ({ ...q, label: q.label.trim(), options: q.options?.map(option => option.trim()).filter(Boolean) })) };
     const error = validateVacancy(cleaned);
     if (error) { setIssue(error); return; }
     const previous = vacancies.find(item => item.id === cleaned.id);
-    const next = { ...cleaned, version: previous ? previous.version + 1 : 1 };
+    try {
+    const next = { ...reconcileEditorial(cleaned, previous), version: previous ? previous.version + 1 : 1 };
+    if (next.status === 'Open' && next.translations.es?.status === 'Approved' && translationIssues(next).length) { setIssue('Spanish needs review. Save as Draft or review the translation.'); return; }
     onVacancies(previous ? vacancies.map(item => item.id === next.id ? next : item) : [...vacancies, next]);
     setEditing(null); setIssue('');
+    } catch (error) { setIssue(error instanceof Error ? error.message : 'Check the editorial translation.'); }
   }
   function patchQuestion(index: number, patch: Partial<Question>) { if (editing) setEditing({ ...editing, questions: editing.questions.map((q, at) => at === index ? { ...q, ...patch } : q) }); }
   function moveQuestion(index: number, offset: number) { if (!editing) return; const questions = [...editing.questions]; const next = index + offset; if (next < 0 || next >= questions.length) return; [questions[index], questions[next]] = [questions[next], questions[index]]; setEditing({ ...editing, questions }); }
@@ -83,7 +88,7 @@ export function RecruitmentPreview({ vacancies, applications, onVacancies, onApp
         {['select', 'multiselect'].includes(q.kind) && <Field id={`options-${q.id}`} label="Options · one per line"><textarea id={`options-${q.id}`} rows={3} value={q.options?.join('\n') || ''} onChange={event => patchQuestion(index, { options: event.target.value.split('\n') })} /></Field>}
         <Field id={`condition-${q.id}`} label="When to show this question"><select id={`condition-${q.id}`} value={q.when?.questionId || ''} onChange={event => patchQuestion(index, { when: event.target.value ? { questionId: event.target.value, value: 'Yes' } : undefined })}><option value="">Always</option>{editing.questions.slice(0, index).filter(item => item.kind === 'yesno').map(item => <option key={item.id} value={item.id}>When “{item.label}” is Yes</option>)}</select></Field>
       </section>)}
-      <div className={s.formActions}><button type="button" className={s.secondary} onClick={() => setEditing(null)}>Cancel</button><button type="button" className={s.primary} onClick={saveVacancy}>Save in preview →</button></div><p className={s.helper}>A new form version applies to future preview applications. Existing submissions keep their original questions and answers.</p>
+      <EditorialPanel vacancy={editing} original={vacancies.find(item => item.id === editing.id)} onChange={setEditing}/><div className={s.formActions}><button type="button" className={s.secondary} onClick={() => setEditing(null)}>Cancel</button><button type="button" className={s.secondary} onClick={() => saveVacancy('Draft')}>Save draft in preview</button><button type="button" className={s.primary} onClick={() => saveVacancy()}>Save in preview →</button></div><p className={s.helper}>A new form version applies to future preview applications. Existing submissions keep their original questions and answers.</p>
     </section>}
     {tab === 'settings' && <div className={s.detailGrid}>
       <section className={s.reviewCard}><h2>Careers email</h2><p>Choose the address DEMAC will use. No email is sent or configuration changed in this preview.</p><Field id="careers-sender" label="From address"><input id="careers-sender" type="email" value={sender} placeholder="Choose your Careers email" onChange={event => setSender(event.target.value)} /></Field><Field id="careers-reply" label="Reply-to address"><input id="careers-reply" type="email" value={replyTo} placeholder="Where candidates should reply" onChange={event => setReplyTo(event.target.value)} /></Field><p className={s.helper}>Activation requires approved sender, verified domain, delivery service and durable queue.</p><span className={s.badge}>Not connected · Preview only</span></section>

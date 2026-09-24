@@ -83,3 +83,28 @@ test('cleanup distinguishes expired drafts from submitted application documents'
   time+=86400001;await assert.rejects(service.getApplication('qa-admin',r.id),{status:404});await workers.cleanup();
   assert.equal((await db.collection(N.applications).doc(r.id).get()).exists,false);const [exists]=await bucket.file(cv.path).exists();assert.equal(exists,false);
 });
+
+test('editorial translations persist with transactional revisions and remain private until approved', async () => {
+  const E = require('./editorial-contract'), key = requestId();
+  const original = job();
+  const es = { ...E.emptyTranslation(original), title: 'Técnico QA', department: 'Técnica', location: 'Aruba', contract: 'Contrato de prueba',
+    summary: 'Solo para pruebas.', responsibilities: ['Responsabilidad de prueba'], requirements: ['Requisito de prueba'],
+    questions: [ { id: 'has-vrf', label: '¿Experiencia en VRF?', help: '', optionLabels: { Yes: 'Sí', No: 'No' } },
+      { id: 'detail', label: 'Describe tu experiencia', help: '', optionLabels: {} } ] };
+  const absentSetup = createService({ ...args, infrastructure: { ...infra, blockers: () => ['Test setup missing.'] } });
+  await absentSetup.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 0, vacancy: { ...original, translations: { es } } });
+  const saved = await other.getVacancy('qa-admin', key);
+  assert.equal(saved.translations.es.title, es.title); assert.equal(saved.editorialVersion, 1);
+  assert.deepEqual(C.publicVacancy(saved).translations, {});
+  const revised = { ...saved, title: 'Updated English role', translations: { es: { ...es, status: 'Approved' } }, status: 'Open' };
+  await assert.rejects(service.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 1, vacancy: revised }), { code: 'translation-review-required' });
+  assert.deepEqual(await other.getVacancy('qa-admin', key), saved, 'rejected publication makes no partial write');
+  const request = { id: key, requestId: requestId(), expectedVersion: 1, vacancy: { ...revised, status: 'Draft' } };
+  const results = await Promise.allSettled([service.saveVacancy('qa-admin', request), other.saveVacancy('qa-admin', { ...request, requestId: requestId() })]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1, 'two translators cannot silently overwrite one another');
+  const final = await other.getVacancy('qa-admin', key);
+  assert.equal(final.version, 2); assert.equal(final.editorialVersion, 2); assert.equal(final.translations.es.sourceVersion, 1);
+  const legacy = { ...final }; delete legacy.translations;
+  await service.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 2, vacancy: legacy });
+  assert.equal((await other.getVacancy('qa-admin', key)).translations.es.title, es.title, 'older editors cannot erase translations by omission');
+});
