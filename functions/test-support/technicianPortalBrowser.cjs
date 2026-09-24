@@ -1,6 +1,6 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const { chromium, webkit } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const base = process.env.PREVIEW_URL || 'http://127.0.0.1:4397';
+const base = process.env.PREVIEW_URL || 'http://127\.0\.0\.1:4397'.replace(/\\/g, '');
 if (!/^http:\/\/127\.0\.0\.1:4397$/.test(base) && !/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(base)) throw new Error('Only the isolated gateway is allowed.');
 const credentials = JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE, 'utf8'));
 const output = process.env.PREVIEW_EVIDENCE_DIR;
@@ -50,7 +50,8 @@ const results = [];
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name} job overflow`);
       await page.screenshot({ path: path.join(output, `04-trabajo-${name}.png`) });
       assert.equal(actions.slice(beforeOpen).some((action) => !['get_job','get_schedule'].includes(action)), false, 'opening a job cannot mutate the visit');
-      await page.getByRole('button', { name: 'Servicio', exact: true }).click();
+      // The visible ordinal is part of this real button's accessible name.
+      await page.getByRole('navigation', { name: 'Pasos del trabajo' }).getByRole('button', { name: '2 Servicio', exact: true }).click();
       await page.getByText('DEMO · Sala', { exact: false }).first().waitFor();
       // Tab round trip does not unmount the selected job or reset its service panel.
       await page.getByRole('button', { name: 'Perfil', exact: true }).click();
