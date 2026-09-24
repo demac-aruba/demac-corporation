@@ -8,6 +8,13 @@ const {
 } = require("./bookingCapacityAvailability");
 const { isHalfDay, occupiedSlots, resolveAssignment } = require("./bookingSchedulingPrimitives");
 
+test('bounded overtime ownership stays occupied when service effort is shorter than its assigned spots', () => {
+  const { workOrderCapacityInterval } = require('./bookingCapacityAvailability');
+  const interval = workOrderCapacityInterval({ time: '14:30', scheduledSlots: 3, appointmentDurationMinutes: 90, operationalMoveOvertime: { accepted: true, capacityEnd: '17:30' } }, [], false);
+  assert.equal(interval.end, 16 * 60);
+  assert.equal(interval.capacityEnd, 17 * 60 + 30);
+});
+
 test("operational capacity matches LIVE cancelled/rescheduled status semantics", () => {
   assert.equal(workOrderBlocksOperationalMoveCapacity({ appointmentId: "APT-1", status: "Confirmada" }), true);
   assert.equal(workOrderBlocksOperationalMoveCapacity({ appointmentId: "APT-1", status: "Pendiente" }), true);

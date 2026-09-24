@@ -67,6 +67,7 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   CANCEL_APPOINTMENT: "cancel_appointment",
   RESCHEDULE_APPOINTMENT: "reschedule_appointment",
   MOVE_APPOINTMENT: "move_appointment",
+  PREPARE_MOVE: "prepare_appointment_move",
   ADD_ADHOC_SUPPORT: "add_adhoc_support",
 });
 
@@ -1316,9 +1317,9 @@ function createOfficeBookingApi({
         },
       });
     }
-    if (action === OFFICE_BOOKING_ACTIONS.MOVE_APPOINTMENT) {
+    if (action === OFFICE_BOOKING_ACTIONS.MOVE_APPOINTMENT || action === OFFICE_BOOKING_ACTIONS.PREPARE_MOVE) {
       const requestId = officeRequestId(data.requestId);
-      return getOperationalMove().moveAppointment({
+      return getOperationalMove()[action === OFFICE_BOOKING_ACTIONS.PREPARE_MOVE ? 'prepareMove' : 'moveAppointment']({
         appointmentId: data.appointmentId,
         requestId,
         requestedDate: data.requestedDate,
@@ -1327,6 +1328,7 @@ function createOfficeBookingApi({
         reason: data.reason,
         note: data.note,
         actor,
+        overtimeConsent: data.overtimeConsent,
       });
     }
     if (action === OFFICE_BOOKING_ACTIONS.ADD_ADHOC_SUPPORT) {

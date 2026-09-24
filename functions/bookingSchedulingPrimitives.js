@@ -380,6 +380,7 @@ function addressSimilarity(left, right) {
 }
 
 module.exports = {
+  bookingSlots,
   AFTERNOON_SLOTS,
   EXTRA_MORNING_SLOT,
   MAX_SEARCH_DAYS,

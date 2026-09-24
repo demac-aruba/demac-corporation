@@ -3,12 +3,13 @@ const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
 const { createBookingAuthority } = require('./bookingAuthorityFirestore');
 const { createProjectRecords, authorize, identifier, fail } = require('./projectRecords');
-const { createHistoricalProjectProvider, normalizeCorrection, readEvidence } = require('./projectHistoricalBooking');
-const { lockId } = require('./projectHistoricalBooking');
+const { createProjectHistoricalCapacityAuthority } = require('./bookingProjectHistoricalCapacity');
+const { createHistoricalProjectProvider, normalizeCorrection, readEvidence, lockId } = require('./projectHistoricalBooking');
 const { REGULAR_SLOTS, EXTRA_MORNING_SLOT } = require('./bookingSchedulingPrimitives');
 
 function createProjectApi({ db, verifyIdToken, clock = () => new Date() }) {
   const records = createProjectRecords({ db, clock });
+  const historicalCapacity = createProjectHistoricalCapacityAuthority({ db, clock });
   async function handle(request) {
     if (request.method === 'OPTIONS') return { status: 204, body: null };
     if (request.method !== 'POST') return { status: 405, body: { success: false, error: { message: 'POST is required.' } } };
@@ -23,6 +24,8 @@ function createProjectApi({ db, verifyIdToken, clock = () => new Date() }) {
       let result;
       if (action === 'list') result = await records.list(uid);
       else if (action === 'save') result = await records.save(data, uid);
+      else if (action === 'history_capacity_sources') result = await historicalCapacity.sources(uid, data.projectId);
+      else if (action === 'history_adjust_capacity') result = await historicalCapacity.adjust(uid, data);
       else if (action === 'history_sources') {
         const snapshot = await db.collection('projectRecords').doc(identifier(data.projectId)).get();
         if (!snapshot.exists) fail('Publish the Project before correcting historical bookings.');
@@ -47,7 +50,9 @@ function createProjectApi({ db, verifyIdToken, clock = () => new Date() }) {
         }) })) };
       }
       else if (action === 'history_preview') {
-        if (data.backdatingAcknowledged !== true) fail('Acknowledge the historical correction before continuing.');
+        // Recovery only: readEvidence requires an already-cancelled source and no
+        // replacement claim. Confirmed bookings use history_adjust_capacity.
+        if (data.backdatingAcknowledged !== true) fail('Acknowledge the historical recovery before continuing.');
         identifier(data.requestId);
         const input = normalizeCorrection(data);
         const evidence = await readEvidence(db, input, uid, clock());
@@ -62,11 +67,18 @@ function createProjectApi({ db, verifyIdToken, clock = () => new Date() }) {
           context: { channel: 'office', requestKey: `project-history:${uid}:${data.requestId}`, bookingMode: 'backdated', backdatingAcknowledged: true },
         });
       } else if (action === 'history_confirm') {
-        if (data.backdatingAcknowledged !== true) fail('Acknowledge the historical correction before continuing.');
+        if (data.backdatingAcknowledged !== true || data.noBillingAcknowledged !== true) {
+          fail('Acknowledge historical recovery and verify there is no invoice or payment, including outside DEMAC ERP.');
+        }
         identifier(data.requestId); identifier(data.offerId);
         const offerSnap = await db.collection('bookingOffers').doc(data.offerId).get();
         const history = offerSnap.exists && offerSnap.data().metadata?.projectHistory;
-        if (!history || history.actorId !== uid) fail('This historical offer is not available to your session.', 'permission_denied');
+        if (!history || history.actorId !== uid || history.noBillingAcknowledged !== true) {
+          fail('This historical recovery offer is not available to your session.', 'permission_denied');
+        }
+        if (history.overBudgetAcknowledged && data.overBudgetAcknowledged !== true) {
+          fail('Acknowledge the approved Project slot budget overrun before confirming recovery.');
+        }
         const provider = createHistoricalProjectProvider({ db, input: history, uid });
         const authority = createBookingAuthority({ db, availabilityProvider: provider, clock });
         result = await authority.createAppointment({ offerId: data.offerId, offerVersion: data.offerVersion, optionId: data.optionId,

@@ -15,6 +15,7 @@ const {
   validateCapacityLocks,
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
+const { assertNoLinkedCommercialEvidence, assertNoFieldExecutionEvidence, assertNoProjectAssignmentExecution } = require("./projectCommercialGuard");
 
 const APPOINTMENT_LIFECYCLE_VERSION = 8;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
@@ -229,6 +230,48 @@ function createBookingAppointmentLifecycle({
       const appointment = activeAppointment(snapshot, id);
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(appointment.status, 40).toLowerCase())) {
         return { success: true, replayed: true, appointmentId: id, appointment };
+      }
+
+      // Published legacy Project links have a claim even when the old Appointment has
+      // no projectId. Regular bookings keep their existing cancellation behavior.
+      const claim = await transaction.get(db.collection("projectBookingClaims").doc(id));
+      const appointmentProjectId = cleanText(appointment.projectId, 180);
+      const claimedProjectId = cleanText(claim.exists ? claim.data()?.projectId : "", 180);
+      if ((claim.exists && (!claimedProjectId || cleanText(claim.data()?.appointmentId, 180) !== id
+          || (appointmentProjectId && appointmentProjectId !== claimedProjectId)))
+        || (appointmentProjectId && !claim.exists)) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "Project booking identity must be reconciled before cancellation.", { reason: "project-cancellation-identity-conflict" });
+      }
+      if (appointmentProjectId || claimedProjectId) {
+        const workOrderIds = Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : [];
+        if (!workOrderIds.length || workOrderIds.some((workOrderId) => !cleanText(workOrderId, 180))
+          || new Set(workOrderIds).size !== workOrderIds.length) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "Project Work Order links must be reconciled before cancellation.", { reason: "project-cancellation-work-order-conflict" });
+        }
+        const projectSnapshot = await transaction.get(db.collection("projectRecords").doc(claimedProjectId));
+        const project = projectSnapshot.exists ? projectSnapshot.data() : null;
+        const links = Array.isArray(project?.assignments)
+          ? project.assignments.filter((link) => link.appointmentId === id) : [];
+        if (!project || project.id !== claimedProjectId || links.length !== workOrderIds.length
+          || links.some((link) => !workOrderIds.includes(link.workOrderId)
+            || (claim.data()?.phaseId && link.phaseId !== claim.data().phaseId))) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "Published Project assignment must be reconciled before cancellation.", { reason: "project-cancellation-assignment-conflict" });
+        }
+        links.forEach(assertNoProjectAssignmentExecution);
+        for (const workOrderId of workOrderIds) {
+          const orderSnapshot = await transaction.get(db.collection(collections.workOrders).doc(workOrderId));
+          const order = orderSnapshot.exists ? orderSnapshot.data() : null;
+          if (!order || cleanText(order.appointmentId, 180) !== id) {
+            throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+              "Project Work Order identity must be reconciled before cancellation.", { reason: "project-cancellation-work-order-conflict" });
+          }
+          await assertNoFieldExecutionEvidence({ db, get: (ref) => transaction.get(ref), appointment, order, workOrderId, appointmentId: id });
+          await assertNoLinkedCommercialEvidence({ db, get: (ref) => transaction.get(ref),
+            appointment, order, workOrderId, appointmentId: id });
+        }
       }
 
       const actorInfo = actorFields(actor);
@@ -666,6 +709,7 @@ function createBookingAppointmentLifecycle({
         constraints: currentRequest.constraints,
         notes: currentRequest.notes,
         assignments: refreshedOption.assignments,
+        ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
         primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
         workOrderIds,
         capacityLockIds: newLocks.map((lock) => lock.id),
@@ -687,6 +731,7 @@ function createBookingAppointmentLifecycle({
       for (const workOrder of workOrders) {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
+          ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
           status: currentTemporaryHold ? "Reserva temporal" : "Confirmada",
           bookingOfferId: canonicalOfferId,
           updatedAt: now.toISOString(),
@@ -754,6 +799,7 @@ function createBookingAppointmentLifecycle({
           constraints: currentRequest.constraints,
           notes: currentRequest.notes,
           assignments: refreshedOption.assignments,
+          ...(current.operationalMoveOvertime ? { operationalMoveOvertime: null } : {}),
           primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
           workOrderIds,
           capacityLockIds: newLocks.map((lock) => lock.id),

@@ -41,6 +41,65 @@ export async function saveSharedProject(project: BrowserProject, uid: string, dr
   if (!dryRun) window.dispatchEvent(new Event(PROJECTS_CHANGED_EVENT));
   return result.project;
 }
+
+export type HistoricalProjectCapacitySource = {
+  appointmentId: string;
+  workOrderId: string;
+  date: string;
+  vanId: string;
+  vanName: string;
+  technicianIds: string[];
+  technicianNames: string[];
+  start: string;
+  currentSlots: number;
+  eligible: boolean;
+  reason?: string;
+};
+
+export type HistoricalProjectCapacitySources = {
+  success: true;
+  project: BrowserProject;
+  budgetSlots: number;
+  usedSlots: number;
+  sources: HistoricalProjectCapacitySource[];
+};
+
+export function loadHistoricalProjectCapacitySources(projectId: string, uid: string) {
+  return projectApi<HistoricalProjectCapacitySources>('history_capacity_sources', { projectId }, uid);
+}
+
+export type AdjustHistoricalProjectCapacityInput = {
+  projectId: string;
+  appointmentId: string;
+  expectedVersion: number;
+  slots: number;
+  reason: string;
+  requestId: string;
+  overBudgetAcknowledged: boolean;
+  noBillingAcknowledged: boolean;
+};
+
+export type AdjustHistoricalProjectCapacityResult = {
+  success: true;
+  replayed: boolean;
+  project: BrowserProject;
+  appointmentId: string;
+  workOrderId: string;
+  previousSlots: number | null;
+  currentSlots: number | null;
+  replayedEntry?: { previousSlots: number; currentSlots: number };
+  budgetSlots: number;
+  usedBefore: number;
+  usedAfter: number;
+  overBudget: number;
+};
+
+export async function adjustHistoricalProjectCapacity(input: AdjustHistoricalProjectCapacityInput, uid: string) {
+  const result = await projectApi<AdjustHistoricalProjectCapacityResult>('history_adjust_capacity', input, uid);
+  window.dispatchEvent(new Event(PROJECTS_CHANGED_EVENT));
+  return result;
+}
+
 export async function commitSharedProjects(
   fallback: BrowserProjectsPreviewState,
   mutation: (latest: BrowserProjectsPreviewState) => BrowserProjectsPreviewState,

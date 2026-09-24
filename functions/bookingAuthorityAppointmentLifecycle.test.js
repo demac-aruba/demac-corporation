@@ -7,6 +7,11 @@ const {
   normalizeChangeKind,
   scheduleChangeNeedsCustomerFollowUp,
 } = require("./bookingAuthorityAppointmentLifecycle");
+const { officeReviewDocumentId } = require("./fieldOperationsOfficeReview");
+const { initialVisitDocumentId } = require("./fieldOperationsAuthorityWorkVisit");
+const projectSeed = () => ({ id: "PROJECT-1", assignments: [{ projectId: "PROJECT-1", phaseId: "PHASE-1",
+  appointmentId: "APT-LIVE-1", workOrderId: "WO-APT-LIVE-1-1", actualHours: 0,
+  unitsCompleted: 0, status: "Scheduled" }] });
 
 class FakeSnapshot {
   constructor(id, value) {
@@ -34,17 +39,37 @@ class FakeDocRef {
 class FakeCollectionRef {
   constructor(db, name) { this.db = db; this.name = name; }
   doc(id) { return new FakeDocRef(this.db, this.name, id); }
+  where(field, operator, value) {
+    assert.equal(operator, "==");
+    return new FakeQuery(this.db, this.name, field, value);
+  }
+}
+
+class FakeQuery {
+  constructor(db, collection, field, value, max = Infinity) {
+    Object.assign(this, { db, collection, field, value, max });
+  }
+  limit(max) { return new FakeQuery(this.db, this.collection, this.field, this.value, max); }
+  async get() {
+    if (this.db.failQueries.has(`${this.collection}.${this.field}`)) throw new Error("Commercial query unavailable");
+    const prefix = `${this.collection}/`;
+    const docs = [...this.db.store.entries()]
+      .filter(([path, record]) => path.startsWith(prefix) && record?.[this.field] === this.value)
+      .slice(0, this.max)
+      .map(([path, record]) => new FakeSnapshot(path.slice(prefix.length), record));
+    return { empty: docs.length === 0, docs };
+  }
 }
 
 class FakeTransaction {
   constructor(db) { this.db = db; this.writes = []; }
   async get(ref) { return ref.get(); }
   set(ref, value, options) { this.writes.push({ ref, value, options }); }
-  async commit() { for (const write of this.writes) await write.ref.set(write.value, write.options); }
+  async commit() { for (const write of this.writes) { await write.ref.set(write.value, write.options); this.db.writes += 1; } }
 }
 
 class FakeFirestore {
-  constructor(seed = {}) { this.store = new Map(Object.entries(seed)); }
+  constructor(seed = {}) { this.store = new Map(Object.entries(seed)); this.writes = 0; this.failQueries = new Set(); }
   collection(name) { return new FakeCollectionRef(this, name); }
   async runTransaction(callback) {
     const transaction = new FakeTransaction(this);
@@ -205,6 +230,19 @@ test("operational move and details edit classification preserve their lifecycle 
   }), true);
 });
 
+test('a later canonical reschedule clears the current overtime estimate but preserves the historical acceptance', async () => {
+  const acceptance = { accepted: true, capacityEnd: '17:30' };
+  const { db, lifecycle } = fixture({
+    'appointments/APT-LIVE-1': { ...appointmentSeed(), operationalMoveOvertime: acceptance, lifecycleHistory: [{ kind: 'operational_move', possibleOvertime: acceptance }] },
+    'bookingOffers/OFR-RESCHEDULE-1': openOffer(),
+  });
+  const result = await lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: 'OFR-RESCHEDULE-1', offerVersion: 1, optionId: 'OPT-NEW', reason: 'Return to ordinary schedule', actor: { id: 'owner-1' } });
+  assert.equal(result.appointment.operationalMoveOvertime, null);
+  assert.equal(db.read('appointments/APT-LIVE-1').operationalMoveOvertime, null);
+  assert.equal(db.read('workOrders/WO-APT-LIVE-1-1').operationalMoveOvertime, null);
+  assert.deepEqual(db.read('appointments/APT-LIVE-1').lifecycleHistory[0].possibleOvertime, acceptance);
+});
+
 test("details edit may change workload but never date, start time, or primary Van", () => {
   assert.doesNotThrow(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
     date: "2098-12-20",
@@ -243,6 +281,74 @@ test("cancelling an appointment releases capacity and cancels linked work orders
   assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").status, "Cancelada");
   assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, false);
   assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
+});
+
+test("Project-linked cancellation blocks independent commercial evidence but leaves regular cancellation unchanged", async () => {
+  const invoice = { workOrderId: "WO-APT-LIVE-1-1", status: "paid" };
+  const regular = fixture({ "invoices/INV-1": invoice });
+  assert.equal((await regular.lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Customer cancelled" })).success, true);
+
+  const claim = { projectId: "PROJECT-1", appointmentId: "APT-LIVE-1" };
+  const scenarios = [
+    ["invoices/INV-1", invoice],
+    ["payments/PAY-1", { appointmentId: "APT-LIVE-1", status: "allocated" }],
+    ["fieldBillingCandidates/FBC-1", { workOrderId: "WO-APT-LIVE-1-1" }],
+    [`fieldOfficeReviews/${officeReviewDocumentId("WO-APT-LIVE-1-1")}`, { status: "approved" }],
+    [`fieldOfficeReviews/${officeReviewDocumentId("WO-APT-LIVE-1-1")}`, { status: "pending" }],
+    [`fieldOfficeReviews/${officeReviewDocumentId("WO-APT-LIVE-1-1")}`, { status: "returned" }],
+    ["workVisits/VISIT-1", { workOrderId: "WO-APT-LIVE-1-1", status: "in_progress" }],
+    ["workVisits/VISIT-1", { appointmentId: "APT-LIVE-1", status: "pending" }],
+    [`workVisits/${initialVisitDocumentId("WO-APT-LIVE-1-1")}`, { status: "not_started" }],
+  ];
+  for (const [path, record] of scenarios) {
+    const { db, lifecycle } = fixture({ "projectBookingClaims/APT-LIVE-1": claim,
+      "projectRecords/PROJECT-1": projectSeed(), [path]: record });
+    await assert.rejects(() => lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct historical Project slots" }), /commercial|financial|Field|execution/i, path);
+    assert.equal(db.read("appointments/APT-LIVE-1").status, "confirmed", path);
+    assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").status, "Confirmada", path);
+    assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, true, path);
+    assert.equal(db.writes, 0, path);
+  }
+});
+
+test("Project cancellation rejects executed Work Order status and timestamps even without a Visit document", async () => {
+  const claim = { projectId: "PROJECT-1", appointmentId: "APT-LIVE-1" };
+  for (const patch of [{ status: "En proceso" }, { actualStartedAt: "2098-12-20T12:30:00.000Z" },
+    { actualCompletedAt: "2098-12-20T15:30:00.000Z" }, { workAlreadyPerformed: true }]) {
+    const { db, lifecycle } = fixture({ "projectBookingClaims/APT-LIVE-1": claim,
+      "projectRecords/PROJECT-1": projectSeed() });
+    db.store.set("workOrders/WO-APT-LIVE-1-1", { ...db.read("workOrders/WO-APT-LIVE-1-1"), ...patch });
+    await assert.rejects(() => lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct Project slots" }), /Field execution/i);
+    assert.equal(db.writes, 0);
+    assert.equal(db.read("appointments/APT-LIVE-1").status, "confirmed");
+  }
+});
+
+test("Project cancellation checks direct Project identity, fails closed on query outage, and replays without another write", async () => {
+  const appointment = { ...appointmentSeed(), projectId: "PROJECT-1" };
+  const claim = { projectId: "PROJECT-1", appointmentId: "APT-LIVE-1" };
+  const { db, lifecycle } = fixture({
+    "appointments/APT-LIVE-1": appointment,
+    "projectBookingClaims/APT-LIVE-1": claim,
+    "projectRecords/PROJECT-1": projectSeed(),
+  });
+  db.failQueries.add("invoices.workOrderId");
+  await assert.rejects(() => lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct Project slots" }), /Commercial query unavailable/);
+  assert.equal(db.writes, 0);
+  assert.equal(db.read("appointments/APT-LIVE-1").status, "confirmed");
+  db.failQueries.clear();
+  const result = await lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct Project slots" });
+  assert.equal(result.replayed, false);
+  const writes = db.writes;
+  db.store.set("invoices/INV-LATER", { workOrderId: "WO-APT-LIVE-1-1", status: "paid" });
+  db.failQueries.add("invoices.workOrderId");
+  const replay = await lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct Project slots" });
+  assert.equal(replay.replayed, true);
+  assert.equal(db.writes, writes);
+
+  const inconsistent = fixture({ "appointments/APT-LIVE-1": appointment });
+  await assert.rejects(() => inconsistent.lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Correct Project slots" }), /identity.*reconciled/i);
+  assert.equal(inconsistent.db.writes, 0);
 });
 
 test("customer reschedule revalidates capacity and preserves Work Order fields owned by other domains", async () => {

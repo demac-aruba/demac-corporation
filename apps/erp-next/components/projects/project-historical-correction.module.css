@@ -5,7 +5,7 @@
 .fields label { display: grid; gap: 6px; font-size: 13px; }
 .fields select, .fields input, .fields textarea { min-height: 38px; padding: 8px; border: 1px solid #c7d5e8; border-radius: 7px; color: inherit; background: inherit; width: 100%; }
 .fields textarea { min-height: 72px; }
-.fields .check { display: flex; align-items: center; }
+.check { display: flex; align-items: center; gap: 8px; }
 .check input { width: 18px; min-height: 18px; }
 .wide { grid-column: 1 / -1; }
 .panel button { padding: 10px 14px; margin-right: 8px; border: 1px solid #2168cc; border-radius: 8px; color: #fff; background: #1469e9; font-weight: 600; cursor: pointer; }

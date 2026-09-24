@@ -2,6 +2,8 @@
 
 Status: implementation in progress under explicit owner authorization.
 
+The historical cancel-and-replacement design below is superseded for **new corrections of confirmed bookings** by `project-in-place-slot-correction.md`. Existing replacement records remain readable. `history_preview` and `history_confirm` are retained narrowly to recover a Project booking already cancelled before the new in-place workflow; the new UI does not cancel a confirmed booking to invoke them. The Project registry and explicit import decisions in this document remain applicable.
+
 Browser-only Project identity cannot safely authorize historical bookings or survive another session. Introduce server-owned `projectRecords` for planning metadata and canonical booking links. It does not become an authority for attendance, payroll, invoices or Field actuals. Existing browser records are imported only by an explicit owner action after validation; a dry run precedes import and the local copy remains recoverable.
 
 The service uses fresh provisioned user roles, optimistic record versions, unique number/link claims and bounded payloads. Direct client Firestore access is not added. Planning phases and bounded assignment links remain embedded for the current small portfolio; record and array limits fail explicitly rather than silently truncate. A later subcollection migration is required before these limits are reached.
