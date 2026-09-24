@@ -37,11 +37,14 @@ async function seed() {
     'clients/DEMO-C': { name: 'Synthetic customer', active: true }, 'properties/DEMO-P': { clientId: 'DEMO-C', address: 'Synthetic site', active: true },
     'staffProfiles/DEMO-TECH-OLD': { name: 'Synthetic historical technician' },
     'vans/DEMO-VAN': { active: false, driverStaffId: 'DEMO-TODAY' },
-    'appointments/DEMO-OLD': { appointmentId: 'DEMO-OLD', customerId: 'DEMO-C', propertyId: 'DEMO-P', status: 'cancelled', date: '2026-09-21', startTime: '08:30', endTime: '16:30',
+    'appointments/DEMO-OLD': { appointmentId: 'DEMO-OLD', projectId: project.id, customerId: 'DEMO-C', propertyId: 'DEMO-P', primaryVanId: 'DEMO-VAN', status: 'confirmed', date: '2026-09-21', startTime: '08:30', endTime: '16:30', capacityEndTime: '16:30',
       workOrderIds: ['DEMO-OLD-WO'], capacityLockIds: REGULAR_SLOTS.map(slot => lockId('2026-09-21', 'DEMO-VAN', slot)),
-      assignments: [{ vanId: 'DEMO-VAN', vanName: 'Historical Van', technicianIds: ['DEMO-TECH-OLD'], quantity: 1, slots: 6, durationMinutes: 360, fullDay: true, time: '08:30', endTime: '16:30', role: 'primary' }] },
-    'workOrders/DEMO-OLD-WO': { appointmentId: 'DEMO-OLD', clientId: 'DEMO-C', propertyId: 'DEMO-P', date: '2026-09-21', time: '08:30', appointmentCapacityEndTime: '16:30',
-      vanId: 'DEMO-VAN', technicianIds: ['DEMO-TECH-OLD'], status: 'Cancelada', scheduledSlots: 6 },
+      assignments: [{ vanId: 'DEMO-VAN', vanName: 'Historical Van', technicianIds: ['DEMO-TECH-OLD'], quantity: 1, slots: 6, durationMinutes: 480, fullDay: true, time: '08:30', endTime: '16:30', capacityEndTime: '16:30', role: 'primary' }] },
+    'workOrders/DEMO-OLD-WO': { appointmentId: 'DEMO-OLD', clientId: 'DEMO-C', propertyId: 'DEMO-P', date: '2026-09-21', time: '08:30', appointmentEndTime: '16:30', appointmentCapacityEndTime: '16:30',
+      vanId: 'DEMO-VAN', technicianIds: ['DEMO-TECH-OLD'], status: 'Confirmada', scheduledSlots: 6 },
+  };
+  for (const slot of REGULAR_SLOTS) records[`bookingCapacityLocks/${lockId('2026-09-21', 'DEMO-VAN', slot)}`] = {
+    appointmentId: 'DEMO-OLD', date: '2026-09-21', vanId: 'DEMO-VAN', slot, active: true,
   };
   await Promise.all(Object.entries(records).map(([key, value]) => db.doc(key).set(value)));
 }
@@ -70,7 +73,7 @@ async function main() {
         if (remote.hostname === `us-central1-${PROJECT}.cloudfunctions.net` && remote.pathname === '/projectAuthority') {
           const input = JSON.parse(body || '{}');
           const result = await api.handle({ method: req.method, headers: req.headers, body: input });
-          if (input.action === 'history_confirm' && result.status === 200 && loseNextConfirmation) {
+          if (input.action === 'history_adjust_capacity' && result.status === 200 && loseNextConfirmation) {
             loseNextConfirmation = false; res.statusCode = 503; return res.end(JSON.stringify({ success: false, error: { message: 'Synthetic response lost after commit. Retry this save.' } }));
           }
           res.statusCode = result.status; return res.end(JSON.stringify(result.body));
@@ -102,18 +105,19 @@ async function main() {
       await page.goto(url); await page.getByRole('button', { name: 'Open Phases', exact: true }).click();
       await page.getByRole('button', { name: 'Review shared Project', exact: true }).click();
       await page.getByRole('button', { name: 'Save shared Project', exact: true }).click();
-      const panel = page.getByRole('region', { name: 'Historical Project correction' });
-      await panel.getByLabel('Cancelled booking').selectOption('DEMO-OLD');
-      await panel.getByLabel('Replacement slots').fill('2');
-      await panel.getByLabel('Correction reason').fill('Only two historical slots were used.');
-      await panel.getByRole('checkbox').check(); await panel.getByRole('button', { name: 'Review correction', exact: true }).click();
-      await panel.getByText('6 original slots (cancelled) → 2 replacement slots.').waitFor();
+      const panel = page.getByRole('region', { name: 'Historical Project slot correction' });
+      await panel.getByLabel('Past Project booking').selectOption('DEMO-OLD');
+      await panel.getByLabel('Booked Van slots after correction').selectOption('2');
+      await panel.getByLabel('Reason for correction').fill('Only two historical slots were reserved.');
+      await panel.getByLabel('I verified this booking has no invoice or payment, including outside DEMAC ERP.').check();
+      await panel.getByText('Project consumption: 6 → 2 of 6 approved slots.', { exact: false }).waitFor();
       await page.screenshot({ path: path.join(artifacts, `${name}-review.png`), fullPage: true });
       assert.ok(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
-      await panel.getByRole('button', { name: 'Save historical replacement', exact: true }).click();
+      await panel.getByRole('button', { name: 'Save slot correction', exact: true }).click();
       if (name === 'chromium-desktop') {
         await panel.getByText('Synthetic response lost after commit. Retry this save.').waitFor();
-        await panel.getByRole('button', { name: 'Retry the same save', exact: true }).click();
+        await panel.getByRole('button', { name: 'Save slot correction', exact: true }).click();
+        await panel.getByText('Original correction recovered', { exact: false }).waitFor();
       }
       await page.getByText('2 / 6 slots', { exact: true }).waitFor();
       await page.reload(); await page.getByText('2 / 6 slots', { exact: true }).waitFor();
@@ -123,8 +127,27 @@ async function main() {
       await other.getByRole('button', { name: 'More info' }).click();
       await other.getByText('Synthetic historical technician', { exact: false }).first().waitFor();
       await other.screenshot({ path: path.join(artifacts, `${name}-second-session.png`), fullPage: true });
-      assert.equal((await db.collection('appointments').get()).size, 2); assert.deepEqual(errors, []);
-      evidence.push({ name, sharedPublish: true, historical6To2: true, reload: true, emptyBrowserSecondSession: true, errors });
+      const booking = (await db.doc('appointments/DEMO-OLD').get()).data();
+      const order = (await db.doc('workOrders/DEMO-OLD-WO').get()).data();
+      const shared = (await db.doc(`projectRecords/${project.id}`).get()).data();
+      const legacy = await api.handle({ method: 'POST', headers: { authorization: 'Bearer demo-owner' }, body: {
+        action: 'history_preview', data: { projectId: project.id, sourceAppointmentId: 'DEMO-OLD',
+          phaseId: 'GENERAL-PROJECT-WORK', expectedVersion: shared.serverVersion, start: '08:30', slots: 1,
+          reason: 'Confirmed appointments must be corrected in place.', requestId: 'legacy-confirmed-test',
+          backdatingAcknowledged: true, noBillingAcknowledged: true },
+      } });
+      assert.equal(legacy.status, 400, 'legacy replacement must reject a confirmed booking');
+      assert.match(legacy.body.error.message, /cancelled booking/i);
+      assert.equal(booking.status, 'confirmed'); assert.equal(booking.assignments[0].slots, 2);
+      assert.equal(order.scheduledSlots, 2); assert.equal(shared.estimatedSlots, 6);
+      assert.equal(shared.assignments.length, 1); assert.equal(shared.assignments[0].scheduledSlots, 2);
+      assert.equal((await db.collection('appointments').get()).size, 1);
+      assert.equal((await db.collection('workOrders').get()).size, 1);
+      assert.equal((await db.collection('projectCapacityCorrections').get()).size, 1);
+      assert.equal((await db.collection('bookingCapacityLocks').where('active', '==', true).get()).size, 2);
+      assert.deepEqual(errors, []);
+      evidence.push({ name, sharedPublish: true, historical6To2InPlace: true, replayRecovered: name === 'chromium-desktop',
+        legacyConfirmedRecoveryDenied: true, sameBookingAndWorkOrder: true, reload: true, emptyBrowserSecondSession: true, errors });
       await browser.close();
     }
     fs.writeFileSync(path.join(artifacts, 'browser-results.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));

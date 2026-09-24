@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { ProjectSlotBudgetProgress, useProjectSlotSources } from './project-slot-progress';
-import { ProjectHistoricalCorrection } from './project-historical-correction';
+import { ProjectCapacityCorrection } from './project-capacity-correction';
 import { commitSharedProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '@/lib/shared-projects';
 import { projectSlotProgress } from '@/lib/project-slot-progress';
 import {
@@ -850,10 +850,11 @@ export function ProjectsPhaseWorkspaceV2() {
     </div>
 
     <ProjectSlotBudgetProgress project={project} projects={state.projects} source={slotSource} />
-    {canManage ? <ProjectHistoricalCorrection key={`${principal.userId}:${project.id}`} project={project} uid={principal.userId} onSaved={(saved) => {
+    {canManage ? <ProjectCapacityCorrection key={`${principal.userId}:${project.id}`} project={project} uid={principal.userId} onSaved={(saved) => {
       if (principalRef.current !== principal.userId) return;
       if (saved) setState(current => replaceProjectInState(current, saved));
       else window.dispatchEvent(new Event(PROJECTS_CHANGED_EVENT));
+      slotSource.refresh();
     }} /> : null}
 
     <div className={styles.tabs}><button type="button" disabled>Overview</button><button type="button" className={styles.activeTab}>Phases</button><button type="button" disabled>Materials</button><button type="button" disabled>Expenses</button><button type="button" disabled>Financials</button><span /><small>Only the Phases experience is changed in this isolated branch.</small></div>
