@@ -1,6 +1,6 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const { chromium, webkit } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const base = process.env.PREVIEW_URL || 'http://127\.0\.0\.1:4397'.replace(/\\/g, '');
+const base = process.env.PREVIEW_URL || 'http://127.0.0.1:4397';
 if (!/^http:\/\/127\.0\.0\.1:4397$/.test(base) && !/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(base)) throw new Error('Only the isolated gateway is allowed.');
 const credentials = JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE, 'utf8'));
 const output = process.env.PREVIEW_EVIDENCE_DIR;
@@ -35,6 +35,7 @@ const results = [];
       await page.getByRole('heading', { name: 'Portal del Técnico', exact: true }).waitFor();
       await page.getByRole('button', { name: /Continuar trabajo|Abrir próximo trabajo/, exact: true }).waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name} home overflow`);
+      assert.equal(await page.evaluate(() => { const n=document.querySelector('[data-preview-notice]')?.getBoundingClientRect(); const nav=document.querySelector('nav[aria-label="Navegación del portal"]')?.getBoundingClientRect(); return Boolean(n && nav && (n.bottom <= nav.top || n.top >= nav.bottom)); }), true, 'preview notice must not cover navigation labels');
       await page.screenshot({ path: path.join(output, `01-inicio-${name}.png`) });
       await page.getByRole('button', { name: 'Agenda', exact: true }).click();
       await page.getByRole('heading', { name: 'Mi agenda', exact: true }).waitFor();
