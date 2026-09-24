@@ -13,7 +13,7 @@ The reviewer did not implement the runtime changes. This review is a code verdic
 ## Scope reviewed
 
 - Request/acceptance criteria: `docs/ai/tasks/project-history-finance-guard-20260923.md`.
-- Diff/commit: uncommitted `fix/project-history-commercial-guard-20260923` based on `38542864`.
+- Diff/commit: PR #528 head `a9420692464f00c6e423ea3fa02c05df2f539658` on `fix/project-history-commercial-guard-20260923`.
 - Affected callers/integrations: Project API, Booking Authority Appointment/WO/locks, Project planning links, Field, local ERP financial mirrors, ERP Next UI and CI.
 - Authorities and rule IDs: Booking Authority, Project Registry, Field Operations, operational Finance, QBO accounting; OPS-SCHED/OPS-TEAM.
 
@@ -33,18 +33,19 @@ The reviewer did not implement the runtime changes. This review is a code verdic
 ## Verification
 
 - Independently run: `npm run test:booking-authority` in `functions` (172/172 PASS, using the existing local dependency path), `npm run typecheck` in `apps/erp-next` (PASS), `npm run validate:firebase` (PASS), release-guard unit tests (6/6 PASS), `node --check` on the emulator/browser scripts and `projectSlotUsage.js` (PASS), and `git diff --check` (PASS). Builder reports the combined focused service/lifecycle set 24/24 PASS; the reviewer separately observed the in-place focal suite 9/9 PASS before the final frozen delta, which is included in the later 172-test run.
+- Independently verified GitHub [Project historical bookings run 36005092833](https://github.com/demac-aruba/demac-corporation/actions/runs/36005092833): `completed/success` for exact PR head `a9420692464f00c6e423ea3fa02c05df2f539658`. Its `historical-project-acceptance` job includes the final ERP build, isolated Firestore emulator suite and Chromium/WebKit two-session browser acceptance; the required job passed and published its evidence artifact. The release job is intentionally not run on a pull request.
 - Security and permission cases: Project-only identity, fresh role, direct-write deny emulator case.
 - Business-invariant cases: exact same Appointment/WO, whole slots and lunch anchors, budget acknowledgement, posted/unposted Project summary, no Field/financial actual mutations.
 - Retry/concurrency/idempotency cases: exact replay after later billing and another correction; divergent request ID, lock/WO conflicts, transaction evidence reads.
 - Failure/recovery cases: failed/malformed evidence and ambiguous lock/claim block before writes; retry same request ID after uncertain response. The restored legacy API is limited to an already-cancelled, unexecuted and unbilled Project source; the in-place path remains mandatory for confirmed bookings.
-- Unverified areas: isolated Firestore emulator/browser CI (Java is unavailable on this host), production ERP build on the final diff, and external QBO state. The revised bounded release guard has unit coverage, but its live cloud-source checks cannot be proven by local mocks.
+- Unverified areas: external QBO state and production release/smoke checks. The revised bounded release guard has unit coverage, but its live cloud-source checks execute only in the approved deployment workflow, not in this PR run.
 
 ## Decision
 
 - [ ] Pass
-- [ ] Pass with recorded follow-up
-- [x] Block / changes required
+- [x] Pass with recorded follow-up
+- [ ] Block / changes required
 
-Code review found no remaining new P1/P2 correctness defect in the scoped in-place operation or guarded legacy recovery. **Merge/deploy remains blocked pending the required isolated Firestore emulator, two-browser-session and final ERP build CI gates.** A green unit suite or this review is not a substitute. The owner's selected scope corrects booked Van slots, not individual technician actual hours, Field records, Attendance, payroll or QBO; do not describe it as a complete actual-work correction. Finance/owner must revisit manual no-billing attestation before external billing goes live. No rollout date established.
+Code review found no remaining new P1/P2 correctness defect in the scoped in-place operation or guarded legacy recovery. The required build, isolated emulator and two-browser-session CI gates passed on the exact reviewed PR head, so this technical review no longer blocks merge of that head. This does **not** establish that production is deployed or authorize deployment. The owner's selected scope corrects booked Van slots, not individual technician actual hours, Field records, Attendance, payroll or QBO; do not describe it as a complete actual-work correction. External QBO absence remains an operator attestation under the current no-active-billing policy, not a verified integration. Finance/owner must revisit that control before external billing goes live. Preexisting Project-linked reschedule synchronization and large-selector pagination remain follow-ups.
 
 Human approval still required before production deployment or any irreversible action.

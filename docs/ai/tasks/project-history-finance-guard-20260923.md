@@ -29,7 +29,7 @@
 - [x] Every new correction requires `noBillingAcknowledged`; this is an operator attestation, not QBO verification. Local evidence still blocks.
 - [x] Same `requestId`/payload replays without new writes, even after later billing; divergent reuse conflicts. Replay exposes the original `replayedEntry` separately from current canonical state.
 - [x] Legacy recovery refuses a confirmed booking; an already-cancelled clean booking can be recovered only after fresh claim/Field/commercial checks, manual no-billing attestation and a reconciled Project counter.
-- [ ] Isolated Firestore emulator/browser CI and independent adversarial review complete before merge.
+- [x] Isolated Firestore emulator/browser CI and independent adversarial review complete before merge (PR #528, run 36005092833).
 
 ## Plan and risk
 
@@ -41,5 +41,5 @@
 
 - Automated gates: `node --test bookingProjectHistoricalCapacity.test.js`, full Booking Authority regression, `npm run validate:firebase`, isolated Firestore emulator and ERP browser acceptance in CI, ERP typecheck/build.
 - Manual scenarios: no production records used or changed.
-- Evidence/results: focused synthetic tests pass locally; complete gate status recorded in review handoff/CI when available.
-- Not run and why: isolated emulator is unavailable on this Windows host without Java; production smoke/deploy are outside this branch task and require human approval.
+- Evidence/results: local Booking Authority 172/172, focused service 9/9, Firebase validation, ERP typecheck and release guard 6/6 passed. PR #528 run 36005092833 passed the final build, Firestore emulator and Chromium/WebKit browser acceptance; independent verdict is in the linked review.
+- Not run and why: the isolated emulator is unavailable on this Windows host without Java; its required CI run passed. Production smoke/deploy have not yet run and require the approved release path.
