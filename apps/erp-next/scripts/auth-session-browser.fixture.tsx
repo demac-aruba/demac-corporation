@@ -3,14 +3,17 @@ import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AuthProvider, useAuth } from '../components/auth/auth-provider';
 import * as session from '../lib/firebase/session';
+import * as field from '../lib/field-authority';
+import * as offline from '../lib/field-offline';
+import { FIELD_AUTHORITY_API_VERSION } from '../lib/field-authority-contract';
 
 declare global {
   interface Window {
-    authHarness: { current: ReturnType<typeof useAuth> | null; session: typeof session };
+    authHarness: { current: ReturnType<typeof useAuth> | null; session: typeof session; field: typeof field; offline: typeof offline; apiVersion: typeof FIELD_AUTHORITY_API_VERSION };
     draftMounts: number;
   }
 }
-window.authHarness = { current: null, session };
+window.authHarness = { current: null, session, field, offline, apiVersion: FIELD_AUTHORITY_API_VERSION };
 window.draftMounts = 0;
 function Capture() {
   const [draft, setDraft] = useState('');

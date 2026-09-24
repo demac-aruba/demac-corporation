@@ -26,7 +26,7 @@ const css=built.outputFiles.find(file=>file.path.endsWith('.css')).text;
 const report={kind:'component and deterministic transport fault injection; not backend/public acceptance',unitCases:0,browsers:[],status:'running'};
 const record=()=>fs.writeFileSync(path.join(output,'auth-session-results.json'),JSON.stringify(report,null,2));record();
 let state;
-const reset=()=>{state={profileStatus:200,profileInactive:false,role:'technician',staff:true,profiles:0,holdProfile:false,pending:[]};};reset();
+const reset=()=>{state={refreshStatus:400,fieldRequests:0,profileStatus:200,profileInactive:false,role:'technician',staff:true,profiles:0,holdProfile:false,pending:[]};};reset();
 const server=http.createServer(async(req,res)=>{
   if(req.url==='/fixture.js'){res.setHeader('content-type','text/javascript');return res.end(js);}
   if(req.url==='/fixture.css'){res.setHeader('content-type','text/css');return res.end(css);}
@@ -38,7 +38,8 @@ const server=http.createServer(async(req,res)=>{
     let raw='';for await(const chunk of req)raw+=chunk;const input=JSON.parse(raw);const uid=input.email.startsWith('helper')?'synthetic-helper':'synthetic-tech';
     return send(200,{localId:uid,email:input.email,idToken:`synthetic-${uid}-token`,refreshToken:`synthetic-${uid}-refresh`,expiresIn:'3600'});
   }
-  if(req.url.includes('securetoken.googleapis.com'))return send(400,{error:{message:'INVALID_REFRESH_TOKEN'}});
+  if(req.url.includes('securetoken.googleapis.com'))return send(state.refreshStatus,{error:{message:state.refreshStatus===400?'INVALID_REFRESH_TOKEN':'UNAVAILABLE'}});
+  if(req.url.includes('fieldOperationsAuthority')) {state.fieldRequests++;return send(500,{error:{message:'Unexpected Field API request in auth fault fixture'}});}
   if(req.url.includes('/documents/users/')){
     state.profiles++;const savedState=state;
     if(savedState.holdProfile)await new Promise(resolve=>savedState.pending.push(resolve));
@@ -104,6 +105,28 @@ const waitFor=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await new Promis
       await page.getByRole('button',{name:'Sign out',exact:true}).click();await locked();state.holdProfile=false;state.pending.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(100);assert.equal(await authState(),'signed_out:ready:signed-out');assert.equal(await saved(),null);checks.push('late profile success cannot undo sign-out');
       await login();await page.getByLabel('Capture draft').fill('private to first identity');state.holdProfile=true;state.profileStatus=403;await page.getByRole('button',{name:'Refresh profile',exact:true}).click();await waitFor(()=>state.pending.length===1);
       const old=state;reset();await page.getByRole('button',{name:'Sign in helper',exact:true}).click();await expected('synthetic-helper');old.pending.splice(0).forEach(resolve=>resolve());await page.waitForTimeout(100);await expected('synthetic-helper');assert.equal((await saved()).uid,'synthetic-helper');assert.equal(await page.getByLabel('Capture draft').inputValue(),'');checks.push('late old-account denial cannot clear new login or expose old capture');
+      state.refreshStatus=503;
+      const queued=await page.evaluate(async()=>{
+        const {session:module,field,offline,apiVersion}=window.authHarness;const old=module.loadFirebaseWebSession();module.persistFirebaseWebSession({...old,expiresAt:Date.now()-1});
+        const before=await offline.getFieldOutboxSummary(old.uid);const errors=[];
+        for(let i=0;i<2;i++)try{await field.setFieldReportFreeText('DEMO-VISIT','DEMO-INTERVENTION','DEMO-NOTES','DEMO · pending capture',1,'synthetic-auth-outbox-v1');}catch(error){errors.push({queued:error instanceof offline.FieldOfflineQueuedError,id:error.outboxId});}
+        const after=await offline.getFieldOutboxSummary(old.uid);const other=await offline.getFieldOutboxSummary('synthetic-tech');
+        await offline.cacheFieldRead(old.uid,'schedule:2026-09-24:2026-09-24',{success:true,version:apiVersion,jobs:[]});
+        const schedule=await field.getFieldSchedule('2026-09-24');
+        return {errors,before,after,other,stale:Boolean(schedule.offlineCache?.capturedAt),credentialRetained:module.loadFirebaseWebSession()?.uid===old.uid};
+      });
+      assert.equal(queued.errors.length,2);assert.ok(queued.errors.every(error=>error.queued));assert.equal(queued.errors[0].id,queued.errors[1].id);
+      assert.equal(queued.after.pending-queued.before.pending,1);assert.equal(queued.other.total,0);assert.equal(queued.stale,true);assert.equal(queued.credentialRetained,true);assert.equal(state.fieldRequests,0);await expected('synthetic-helper');
+      checks.push('typed transient refresh feeds the real IndexedDB Field outbox once, keeps user scope and marks cached reads stale');
+      state.refreshStatus=400;
+      const denied=await page.evaluate(async()=>{
+        const {session:module,field,offline}=window.authHarness;const old=module.loadFirebaseWebSession();const before=await offline.getFieldOutboxSummary(old.uid);
+        let queued=false;try{await field.setFieldReportFreeText('DEMO-VISIT','DEMO-INTERVENTION','DEMO-NOTES','Must not queue under denied session',1,'synthetic-denied-outbox-v1');}catch(error){queued=error instanceof offline.FieldOfflineQueuedError;}
+        return {queued,before,after:await offline.getFieldOutboxSummary(old.uid),session:module.loadFirebaseWebSession()};
+      });
+      await locked();assert.equal(denied.queued,false);assert.deepEqual(denied.after,denied.before);assert.equal(denied.session,null);assert.equal(state.fieldRequests,0);
+      checks.push('rejected credentials do not queue a new Field command or clear previously pending captures');
+      await login();
       await page.evaluate(async()=>{
         const module=window.authHarness.session;const old=module.loadFirebaseWebSession();module.persistFirebaseWebSession({...old,expiresAt:Date.now()-1});
         try {await module.requireFirebaseWebSession();}catch{}

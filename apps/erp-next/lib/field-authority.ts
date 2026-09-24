@@ -1,4 +1,5 @@
 import { firebaseTransportUrl } from './firebase/isolated-preview';
+import { isTransientFirebaseError } from './firebase/request-error';
 import { firebaseClientConfig } from './firebase/client-config';
 import { loadFirebaseWebSession, requireFirebaseWebSession, type FirebaseWebSession } from './firebase/session';
 import {
@@ -292,7 +293,7 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 function retryableRequestError(error: unknown) {
-  return error instanceof FieldAuthorityRequestError && error.retryable;
+  return (error instanceof FieldAuthorityRequestError && error.retryable) || isTransientFirebaseError(error);
 }
 
 function browserTransportFailure(error: unknown) {
