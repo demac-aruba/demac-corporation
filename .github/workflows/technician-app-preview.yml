@@ -78,6 +78,7 @@ jobs:
           npm run validate:firebase --prefix functions
           npm run test:field-authority --prefix functions
           FIELD_PORTAL_EVIDENCE="$PREVIEW_EVIDENCE_DIR/components" node apps/erp-next/scripts/field-portal-browser.cjs
+          FIELD_SERVICE_EVIDENCE="$PREVIEW_EVIDENCE_DIR/service-components" node apps/erp-next/scripts/field-service-browser.cjs
           npm run build --prefix apps/erp-next
       - name: Start only loopback demo emulators and generate private synthetic identities
         shell: bash
@@ -107,6 +108,7 @@ jobs:
           for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4397/__preview/health && break; sleep 1; done
           node functions/test-support/technicianPortalGatewayCheck.cjs
           node functions/test-support/technicianPortalBrowser.cjs
+          node functions/test-support/technicianServiceBrowser.cjs
       - name: Publish temporary isolated review gateway only
         id: share
         shell: bash
@@ -128,9 +130,10 @@ jobs:
           export PREVIEW_URL
           PREVIEW_READ_ONLY=true node functions/test-support/technicianPortalGatewayCheck.cjs
           node functions/test-support/technicianPortalBrowser.cjs
+          node functions/test-support/technicianServiceBrowser.cjs
           node - <<'NODE'
           const fs=require('fs');
-          const meta={url:process.env.PREVIEW_URL,commit:process.env.SOURCE_SHA,synthetic:true,authenticated:true,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+90*60*1000).toISOString(),scope:'Incremental login/home/agenda/profile/job-context review. Procedures 14/9, shared parts and persistent binary capture are not complete.'};
+          const meta={url:process.env.PREVIEW_URL,commit:process.env.SOURCE_SHA,synthetic:true,authenticated:true,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+90*60*1000).toISOString(),scope:'Incremental login/home/agenda/profile/job-context and catalog service selection. Procedures 14/9, shared parts and persistent binary capture are not complete.'};
           fs.writeFileSync(process.env.RUNNER_TEMP+'/field-share/preview.json',JSON.stringify(meta,null,2));
           const access=JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE));
           fs.writeFileSync(process.env.PREVIEW_CREDENTIALS_FILE,JSON.stringify({...access,...meta}),{mode:0o600});
