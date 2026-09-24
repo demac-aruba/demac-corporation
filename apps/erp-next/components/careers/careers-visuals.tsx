@@ -1,3 +1,5 @@
+'use client';
+import { useCareersLanguage } from './careers-language';
 import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
 import { sizeLabel } from './careers-ui';
@@ -27,19 +29,21 @@ export function CareerIcon({ name, className }: { name: IconName; className?: st
   return <svg data-career-icon={name} className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 export function BackControl({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
-  return <button className={s.backControl} type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/><span className={s.backText}>Back</span></button>;
+  const { text } = useCareersLanguage();
+  return <button className={s.backControl} type="button" data-career-back aria-label={text(label)} title={text(label)} onClick={onClick} disabled={disabled}><CareerIcon name="back"/><span className={s.backText}>{text('Back')}</span></button>;
 }
 export function IconTile({ name, children }: { name: IconName; children?: ReactNode }) {
   return <span className={s.iconTile}><CareerIcon name={name}/>{children}</span>;
 }
-export function VacancyFacts({ vacancy }: { vacancy: Vacancy }) {
+export function VacancyFacts({ vacancy, presentation = vacancy }: { vacancy: Vacancy; presentation?: Vacancy }) {
+  const { text } = useCareersLanguage();
   const experience = vacancy.requirements.find(item => /\b\d+\+?\s+years?\b/i.test(item));
   const facts: [IconName, string, string][] = [
-    ['location', 'Location', vacancy.location], ['briefcase', 'Department', vacancy.department],
-    ['clock', 'Type', vacancy.contract],
-    ...(experience ? [['chart', 'Experience', experience] as [IconName, string, string]] : []),
+    ['location', 'Location', presentation.location], ['briefcase', 'Department', presentation.department],
+    ['clock', 'Type', presentation.contract],
+    ...(experience ? [['chart', 'Experience', presentation.requirements[vacancy.requirements.indexOf(experience)] || experience] as [IconName, string, string]] : []),
   ];
-  return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{label}</dt><dd>{value}</dd></div></div>)}</dl>;
+  return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{text(label)}</dt><dd>{value}</dd></div></div>)}</dl>;
 }
 export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
   return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · Selected for review</small></div><button type="button" className={s.iconButton} aria-label={`Remove ${file.name}`} onClick={onRemove}><CareerIcon name="close"/></button></div>;

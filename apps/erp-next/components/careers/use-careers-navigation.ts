@@ -1,5 +1,6 @@
 'use client';
 
+import { CAREERS_LOCALE_KEY, isCareersLocale, localeUrl, resolveCareersLocale, type CareersLocale } from '../../lib/careers-locale';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export type CareerView = 'jobs' | 'detail' | 'form' | 'success' | 'admin';
@@ -35,7 +36,7 @@ function readRoute(): CareerRoute {
   const index = stages.indexOf(params.get('step') || '');
   return { view: 'form', role, step: Math.max(0, Math.min(index, 2)), reviewing: index === 3, question: params.get('question') || undefined, returnToReview: params.get('returnTo') === 'review' };
 }
-function routeUrl(route: CareerRoute): string {
+function routeUrl(route: CareerRoute, locale?: CareersLocale): string {
   const url = new URL(window.location.href);
   ownedParams.forEach(key => url.searchParams.delete(key));
   if (route.view === 'detail' || route.view === 'form') url.searchParams.set('role', route.role || '');
@@ -51,10 +52,12 @@ function routeUrl(route: CareerRoute): string {
     if (route.candidate) url.searchParams.set('candidate', route.candidate);
   }
   url.hash = '';
-  return `${url.pathname}${url.search}`;
+  return locale ? localeUrl(url.href, locale) : `${url.pathname}${url.search}`;
 }
 /** Route identifiers only in history; draft data and files remain in tab memory. */
 export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRoute) {
+  const [locale, setLanguage] = useState<CareersLocale>('en');
+  const selectedLocale = useRef<CareersLocale>('en');
   const [screen, setScreen] = useState<{ route: CareerRoute; ready: boolean; revision: number }>({ route: { view: 'jobs' }, ready: false, revision: 0 });
   const normalizer = useRef(normalize);
   normalizer.current = normalize;
@@ -89,6 +92,10 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
   }, [screen.ready, screen.revision]);
   useEffect(() => {
     const pathname = window.location.pathname;
+    let saved: string | null = null;
+    try { saved = window.localStorage.getItem(CAREERS_LOCALE_KEY); } catch { /* Language works without storage. */ }
+    selectedLocale.current = resolveCareersLocale(new URLSearchParams(window.location.search).get('lang'), saved, navigator.languages || [navigator.language]);
+    setLanguage(selectedLocale.current);
     const previousRestoration = window.history.scrollRestoration;
     window.history.scrollRestoration = 'manual';
     session.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -96,7 +103,7 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     entries.current.set(initial.id, initial);
     // A child effect can precede Next's history patch. Preserve the router's
     // existing initial-entry state; dropping it makes Back reload the whole app.
-    window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: initial.id } }, '', routeUrl(initial.route));
+    window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: initial.id } }, '', routeUrl(initial.route, selectedLocale.current));
     publish(initial, false);
     const onPopState = () => {
       if (window.location.pathname !== pathname) return;
@@ -107,8 +114,8 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
       const entry: Entry = existing || { id: ++sequence.current, parent: null, route: resolved, scroll: 0, focus: null };
       entry.route = resolved;
       entries.current.set(entry.id, entry);
-      if (!existing || routeKey(requested) !== routeKey(resolved)) {
-        window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
+      if (!existing || routeKey(requested) !== routeKey(resolved) || new URLSearchParams(window.location.search).get('lang') !== selectedLocale.current) {
+        window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved, selectedLocale.current));
       }
       publish(entry, true);
     };
@@ -127,7 +134,7 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     savePosition();
     const entry: Entry = { id: ++sequence.current, parent: replace ? current.current?.parent ?? null : current.current?.id ?? null, route: resolved, scroll: 0, focus: null };
     entries.current.set(entry.id, entry);
-    window.history[replace ? 'replaceState' : 'pushState']({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved));
+    window.history[replace ? 'replaceState' : 'pushState']({ ...window.history.state, [stateKey]: { session: session.current, id: entry.id } }, '', routeUrl(resolved, selectedLocale.current));
     publish(entry, false);
   }, [publish, savePosition]);
   const backTo = useCallback((fallback: CareerRoute) => {
@@ -142,5 +149,18 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     }
     navigate(fallback);
   }, [navigate, savePosition]);
-  return { ...screen, navigate, backTo };
+  const setLocale = useCallback((next: CareersLocale) => {
+    if (!isCareersLocale(next)) return;
+    selectedLocale.current = next;
+    try { window.localStorage.setItem(CAREERS_LOCALE_KEY, next); } catch { /* Preference is optional. */ }
+    // This is not a new route: preserve the current entry, focus, scroll and all Next history state.
+    window.history.replaceState(window.history.state, '', localeUrl(window.location.href, next));
+    setLanguage(next);
+  }, []);
+  useEffect(() => {
+    const previous = document.documentElement.lang;
+    document.documentElement.lang = locale;
+    return () => { document.documentElement.lang = previous; };
+  }, [locale]);
+  return { ...screen, locale, setLocale, navigate, backTo };
 }

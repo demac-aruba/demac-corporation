@@ -1,4 +1,6 @@
 'use client';
+import { CareersLanguage } from './careers-language';
+import { careersText } from '../../lib/careers-locale';
 import { useEffect, useRef, useState } from 'react';
 import { CareersHeader, CareersFooter } from './careers-chrome';
 import { CareersError, careersPublic, uploadApplicantDocument, type PublicJobs, type ApplicantSession, type Receipt, type DocumentRecord } from '../../lib/firebase/careers';
@@ -101,16 +103,17 @@ export function CareersPublic() {
   const receivedJob = data?.jobs.find(value => value.id === receivedRole);
   const receivedDraft = receivedRole ? drafts[receivedRole] : undefined;
   const form = route.view === 'form' && job && data?.privacy;
-  return <main className={`${s.root}`} data-careers-version="premium-v3">
+  return <CareersLanguage locale={nav.locale} onChange={nav.setLocale} disabled={!!status || !nav.ready}><main lang={nav.locale} className={`${s.root}`} data-careers-version="premium-v3">
     <CareersHeader compactLabel={form ? 'Careers' : undefined}/>
     {revisionNotice && <section className={s.container}><p className={s.informationCard} role="status">{revisionNotice}</p></section>}
     {needsRevision && <section className={s.container}><div className={s.alert} role="alert"><p>This position or its privacy notice was updated. Review the latest version without losing your contact details or selected files.</p><button type="button" className={s.secondary} onClick={() => void reviewUpdatedPosition()}>Review updated position</button></div></section>}
     {error && <section className={s.container}><div className={s.alert} role="alert">{error}</div><button className={s.secondary} onClick={() => void refresh()}>Try again</button></section>}
-    {!data && !error && <section className={s.container}><p role="status">Loading opportunities…</p></section>}
+    {!data && !error && <section className={s.container}><p role="status">{careersText(nav.locale, 'Loading opportunities…')}</p></section>}
     {data && route.view === 'jobs' && <VacancyCatalogue jobs={data.jobs} query={query} department={department} onQuery={setQuery} onDepartment={setDepartment} onSelect={value => nav.navigate({ view: 'detail', role: value.id })} available={data.available} content={presentation}/>}
     {route.view === 'detail' && job && <VacancyProfile vacancy={job} onBack={() => nav.backTo({ view: 'jobs' })} onApply={() => nav.navigate({ view: 'form', role: job.id, step: 0 })} applyLabel={received ? 'Review application' : 'Apply now'} content={presentation}/>}
-    {form && job && data?.privacy && <ApplicationFunnel key={job.id} vacancy={job} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={!!received} onChange={change} onStep={target => nav.navigate({ view: 'form', role: job.id, ...target })} onBackToJob={() => nav.backTo({ view: 'detail', role: job.id })} onBack={target => nav.backTo(target ? { view: 'form', role: job.id, ...target } : { view: 'detail', role: job.id })} onSubmit={submit} live={{ privacyText: data.privacy.text, status }}/>}
+    {nav.locale === 'es' && form && <p className={s.previewNotice} lang="es">{careersText('es', 'Application form currently available in English. Language selection will not clear your answers or files.')}</p>}
+    {form && job && data?.privacy && <div lang="en"><ApplicationFunnel key={job.id} vacancy={job} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={!!received} onChange={change} onStep={target => nav.navigate({ view: 'form', role: job.id, ...target })} onBackToJob={() => nav.backTo({ view: 'detail', role: job.id })} onBack={target => nav.backTo(target ? { view: 'form', role: job.id, ...target } : { view: 'detail', role: job.id })} onSubmit={submit} live={{ privacyText: data.privacy.text, status }}/></div>}
     {route.view === 'success' && received && <ApplicationReceipt reference={received.reference} email={receivedDraft?.email || ''} jobTitle={receivedJob?.title || ''} emailNotice="Your application is saved. Submission does not confirm email delivery." onExplore={() => nav.navigate({ view: 'jobs' })} content={presentation}/>}
     {!form && <CareersFooter/>}
-  </main>;
+  </main></CareersLanguage>;
 }
