@@ -1,0 +1,37 @@
+name: Careers isolated local tooling
+
+# Dependency artifacts only. No deployment, secrets, candidate data or write token.
+on:
+  push:
+    branches: [feature/careers-v4-20260923]
+    paths: ['.github/workflows/careers-local-tooling.yml']
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install dependencies of the existing applications
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix functions --no-audit --no-fund
+      - name: Package installed dependencies without configuration or credentials
+        run: |
+          mkdir -p "$RUNNER_TEMP/careers-local-tooling"
+          git rev-parse HEAD > "$RUNNER_TEMP/careers-local-tooling/source-commit.txt"
+          node --version > "$RUNNER_TEMP/careers-local-tooling/node-version.txt"
+          tar -czf "$RUNNER_TEMP/careers-local-tooling/dependencies.tar.gz" apps/erp-next/node_modules functions/node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: careers-local-tooling-${{ github.sha }}
+          path: ${{ runner.temp }}/careers-local-tooling/
+          retention-days: 1
+          if-no-files-found: error
