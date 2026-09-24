@@ -1,5 +1,9 @@
 name: Technician App isolated review
 
+# Owner direction (2026-09-24): use DEMAC GitHub/Vercel only for publication.
+# This workflow now runs isolated loopback checks only; it publishes no endpoint.
+# Public preview acceptance remains BLOCKED, not waived or represented as passing.
+
 on:
   pull_request:
     paths:
@@ -24,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      PREVIEW_URL: 'http://127.0.0.1:4397'
       GCLOUD_PROJECT: demo-demac-dwellings
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8297
       FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9297
@@ -66,7 +71,7 @@ jobs:
           echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/field-tools/node_modules/playwright" >> "$GITHUB_ENV"
           echo "PREVIEW_CREDENTIALS_FILE=$RUNNER_TEMP/field-private-access.json" >> "$GITHUB_ENV"
           echo "PREVIEW_EVIDENCE_DIR=$RUNNER_TEMP/field-evidence" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/field-evidence" "$RUNNER_TEMP/field-share"
+          mkdir -p "$RUNNER_TEMP/field-evidence"
       - name: Preserve all existing required build and targeted gates
         shell: bash
         run: |
@@ -109,44 +114,12 @@ jobs:
           node functions/test-support/technicianPortalGatewayCheck.cjs
           node functions/test-support/technicianPortalBrowser.cjs
           node functions/test-support/technicianServiceBrowser.cjs
-      - name: Publish temporary isolated review gateway only
-        id: share
+      - name: Public preview acceptance blocked pending approved Vercel environment
         shell: bash
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
-          curl --fail --silent --show-error --location 'https://github.com/cloudflare/cloudflared/releases/download/2026.9.1/cloudflared-linux-amd64' -o "$RUNNER_TEMP/cloudflared"
-          echo "03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc  $RUNNER_TEMP/cloudflared" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/cloudflared"
-          "$RUNNER_TEMP/cloudflared" tunnel --url http://127.0.0.1:4397 --no-autoupdate --protocol http2 > "$RUNNER_TEMP/field-tunnel.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/field-tunnel.pid"
-          for i in $(seq 1 60); do
-            PREVIEW_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUNNER_TEMP/field-tunnel.log" | head -1 || true)"
-            if [ -n "$PREVIEW_URL" ] && curl --fail --silent "$PREVIEW_URL/__preview/health" > /dev/null; then break; fi
-            sleep 2
-          done
-          test -n "$PREVIEW_URL"
-          export PREVIEW_URL
-          PREVIEW_READ_ONLY=true node functions/test-support/technicianPortalGatewayCheck.cjs
-          node functions/test-support/technicianPortalBrowser.cjs
-          node functions/test-support/technicianServiceBrowser.cjs
-          node - <<'NODE'
-          const fs=require('fs');
-          const meta={url:process.env.PREVIEW_URL,commit:process.env.SOURCE_SHA,synthetic:true,authenticated:true,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+90*60*1000).toISOString(),scope:'Incremental login/home/agenda/profile/job-context and catalog service selection. Procedures 14/9, shared parts and persistent binary capture are not complete.'};
-          fs.writeFileSync(process.env.RUNNER_TEMP+'/field-share/preview.json',JSON.stringify(meta,null,2));
-          const access=JSON.parse(fs.readFileSync(process.env.PREVIEW_CREDENTIALS_FILE));
-          fs.writeFileSync(process.env.PREVIEW_CREDENTIALS_FILE,JSON.stringify({...access,...meta}),{mode:0o600});
-          NODE
-          node functions/test-support/technicianPreviewEnvelope.cjs "$PREVIEW_CREDENTIALS_FILE" "$RUNNER_TEMP/field-share/access.enc.json"
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-      - name: Retain verified preview link and encrypted access (no plaintext credentials)
-        uses: actions/upload-artifact@v4
-        with:
-          name: technician-preview-access-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/field-share/
-          retention-days: 1
-          if-no-files-found: error
+          echo "::error::Public preview withdrawn by owner direction. No approved DEMAC Vercel preview has been verified."
+          echo "Loopback checks are not public-preview acceptance. Do not merge or publish to production."
+          exit 1
       - name: Retain actual synthetic browser and API evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -155,21 +128,11 @@ jobs:
           path: ${{ runner.temp }}/field-evidence/
           retention-days: 7
           if-no-files-found: warn
-      - name: Bounded owner review window (90 minutes)
-        if: steps.share.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 90); do
-            sleep 60
-            kill -0 "$(cat "$RUNNER_TEMP/field-gateway.pid")"
-            kill -0 "$(cat "$RUNNER_TEMP/field-tunnel.pid")"
-          done
       - name: Stop temporary services and encrypt emulator snapshot
         if: always()
         shell: bash
         run: |
-          for name in field-tunnel field-gateway; do
+          for name in field-gateway; do
             test ! -f "$RUNNER_TEMP/$name.pid" || kill "$(cat "$RUNNER_TEMP/$name.pid")" || true
           done
           test ! -f "$RUNNER_TEMP/field-emulator.pid" || kill -INT "$(cat "$RUNNER_TEMP/field-emulator.pid")" || true
