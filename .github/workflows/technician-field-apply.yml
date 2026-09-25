@@ -1,0 +1,130 @@
+name: Technician verified backend object transport
+
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-field-apply.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-verified-tree:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/technician-app-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 497513a2951b0377e008e9bca96ff4a8dc9ecf79
+          persist-credentials: false
+      - name: Materialize verified source objects without executing application code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, re, subprocess, urllib.request
+          from pathlib import Path
+          ROOT = Path.cwd()
+          BASE = '497513a2951b0377e008e9bca96ff4a8dc9ecf79'
+          SHA256 = 'be24a2897d45c1138c498ce4b3e31b4f03675c1d70673d52b33d766c92f88303'
+          OWN = '.github/workflows/technician-field-apply.yml'
+          PREFIX = 'https://api.github.com/repos/demac-aruba/demac-corporation'
+          CHUNKS = ['1b691762c8cf3b7250e8e17028503c80668e0c29','1c2fa8c05aef32a3b5704d053e930f6d0a27ed2f','f4309b30f3bdb9f98a8e4be105e93226843835a0']
+          ALLOWED = set('''.github/workflows/technician-field-backend.yml
+          docs/ai/tasks/technician-field-backend-integration.md
+          functions/fieldOperationsAuthority.js
+          functions/fieldOperationsAuthority.test.js
+          functions/fieldOperationsAuthorityCore.js
+          functions/fieldOperationsAuthorityCore.test.js
+          functions/fieldOperationsEquipmentRegistration.test.js
+          functions/fieldOperationsInterventionMutation.js
+          functions/fieldOperationsOfficeReview.js
+          functions/fieldOperationsProcedureMedia.js
+          functions/fieldOperationsProcedureMedia.test.js
+          functions/fieldOperationsProcedureWorkflow.js
+          functions/fieldOperationsProcedureWorkflow.test.js
+          functions/fieldOperationsScopeChanges.test.js
+          functions/fieldOperationsServiceProtocol.js
+          functions/fieldOperationsVisitAssets.test.js
+          functions/fieldOperationsVisitInterventions.js
+          functions/fieldOperationsVisitInterventions.test.js
+          functions/fieldOperationsVisitMutationContext.js
+          functions/package.json
+          functions/test-support/fieldProcedureEmulator.cjs
+          functions/test-support/fieldProcedureFixture.cjs'''.splitlines())
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          def request(method, path, body=None):
+              is_read = method == 'GET' and (path == '/git/ref/heads/feature/technician-app-20260923' or re.fullmatch(r'/git/(commits|blobs)/[0-9a-f]{40}',path))
+              is_write = method == 'POST' and path in ('/git/blobs','/git/trees')
+              if not (is_read or is_write):
+                  raise RuntimeError('Request outside source-object transport scope')
+              req = urllib.request.Request(PREFIX+path, method=method,
+                  data=None if body is None else json.dumps(body).encode(),
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with opener.open(req, timeout=60) as response:
+                  return json.load(response)
+          def git(*args, data=None):
+              return subprocess.run(['git',*args], input=data, capture_output=True, check=True).stdout
+          def blob_sha(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          head = os.environ['GITHUB_SHA']
+          ref = request('GET','/git/ref/heads/feature/technician-app-20260923')
+          commit = request('GET','/git/commits/'+head)
+          if ref['object']['sha'] != head or [p['sha'] for p in commit['parents']] != [BASE]:
+              raise RuntimeError('Branch changed or unexpected source parent; reconcile instead of overwriting')
+          if git('rev-parse','HEAD').decode().strip() != BASE or git('status','--porcelain'):
+              raise RuntimeError('Checkout is not the exact clean baseline')
+          data = bytearray()
+          for sha in CHUNKS:
+              obj = request('GET','/git/blobs/'+sha)
+              if obj.get('encoding') != 'base64' or obj.get('sha') != sha:
+                  raise RuntimeError('Unexpected object')
+              chunk = base64.b64decode(obj['content'])
+              if blob_sha(chunk) != sha:
+                  raise RuntimeError('Transport object hash mismatch')
+              data.extend(chunk)
+          decoder = lzma.LZMADecompressor(memlimit=128*1024*1024)
+          decoded = decoder.decompress(bytes(data),max_length=2*1024*1024)
+          if not decoder.eof or decoder.unused_data or hashlib.sha256(decoded).hexdigest() != SHA256:
+              raise RuntimeError('Incomplete or unverified source payload')
+          payload = json.loads(decoded)
+          if payload['base'] != BASE or len(payload['files']) != len(ALLOWED) or {x['path'] for x in payload['files']} != ALLOWED:
+              raise RuntimeError('Manifest does not match approved files')
+          git('apply','--check','--index','-',data=payload['patch'].encode())
+          git('apply','--index','-',data=payload['patch'].encode())
+          changed = set(git('diff','--cached','--name-only','-z').decode().strip('\0').split('\0'))
+          if changed != ALLOWED:
+              raise RuntimeError('Patch changed an unexpected path')
+          entries = []
+          for item in payload['files']:
+              path = ROOT/item['path']
+              if path.is_symlink() or not path.is_file():
+                  raise RuntimeError('Only regular source files permitted')
+              content = path.read_bytes()
+              if len(content) != item['size'] or blob_sha(content) != item['sha']:
+                  raise RuntimeError('Final source differs from the tested manifest: '+item['path'])
+              obj = request('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
+              if obj['sha'] != item['sha']:
+                  raise RuntimeError('Published source object mismatch')
+              entries.append({'path':item['path'],'mode':'100644','type':'blob','sha':obj['sha']})
+          entries.append({'path':OWN,'mode':'100644','type':'blob','sha':None})
+          tree = request('POST','/git/trees',{'base_tree':commit['tree']['sha'],'tree':entries})
+          output = Path(os.environ['RUNNER_TEMP'])/'field-product-tree'
+          output.mkdir()
+          report = {'base':BASE,'transportCommit':head,'tree':tree['sha'],'payloadSha256':SHA256,'files':payload['files'],'removedTransport':OWN,'branchUpdated':False,'applicationExecuted':False}
+          (output/'product-tree.json').write_text(json.dumps(report,indent=2))
+          print('Verified 22 source objects; prepared tree '+tree['sha']+'; no branch, cloud or deployment changes.')
+          PY
+      - name: Retain exact prepared tree and source hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-field-product-tree-${{ github.sha }}
+          path: ${{ runner.temp }}/field-product-tree/
+          if-no-files-found: error
+          retention-days: 3
