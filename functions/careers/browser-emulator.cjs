@@ -20,7 +20,7 @@ const server=http.createServer(async(req,res)=>{
   const handler=handlers[req.url];if(!handler){res.writeHead(404);res.end();return;}
   let raw=Buffer.alloc(0);for await(const chunk of req){raw=Buffer.concat([raw,chunk]);if(raw.length>15*1024*1024){res.writeHead(413);res.end();return;}}
   try{
-    const request={method:req.method,body:raw.length?JSON.parse(raw):{},rawBody:raw,ip:clients.address(req.headers[clients.header]),get:k=>req.headers[k.toLowerCase()],is:type=>String(req.headers['content-type']||'').startsWith(type)};
+    const request={method:req.method,body:raw.length?JSON.parse(raw):{},rawBody:raw,ip:clients.requestAddress(req.method,req.headers[clients.header]),get:k=>req.headers[k.toLowerCase()],is:type=>String(req.headers['content-type']||'').startsWith(type)};
     const response={set(k,v){res.setHeader(k,v);return this;},status(n){res.statusCode=n;return this;},json(body){
       // Return a deterministic gateway error after the real transaction commits.
       // Closing a socket instead allows Chromium to retry invisibly at HTTP level.

@@ -15,6 +15,13 @@ function createBrowserClients() {
     if (!clients.has(token)) throw Error('Unregistered emulator browser client.');
     return clients.get(token);
   }
-  return { header, register, address };
+  function requestAddress(method, token) {
+    // Browsers create CORS preflights outside Playwright's intercepted POST.
+    // They carry no test-client token. The unchanged HTTP handler validates
+    // their Origin and returns before auth, rate limiting or service access.
+    if (method === 'OPTIONS') return '127.0.0.1';
+    return address(token);
+  }
+  return { header, register, address, requestAddress };
 }
 module.exports = { createBrowserClients };
