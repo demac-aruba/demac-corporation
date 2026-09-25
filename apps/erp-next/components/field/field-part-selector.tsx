@@ -58,11 +58,11 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
   async function mutate(command: FieldPartCommand, original?: Pending) {
     if (writeLock.current || !alive.current || (!fresh && !original)) return;
     const pending = original || {command,requestId:`field-part-${crypto.randomUUID()}`};
-    writeLock.current = true; requestVersion.current += 1; setBusy(true); setFresh(false); setError(''); setNotice('');
+    writeLock.current = true; const mutationVersion = ++requestVersion.current; setBusy(true); setFresh(false); setError(''); setNotice('');
     try {
       const next = await updateFieldProcedurePart(currentTarget,pending.command,pending.requestId);
       if (!alive.current) return;
-      setSnapshot(next); setFresh(navigator.onLine && document.visibilityState === 'visible'); setRetry(null); setReason('');
+      setSnapshot(next); setFresh(mutationVersion === requestVersion.current && navigator.onLine && document.visibilityState === 'visible'); setRetry(null); setReason('');
       setNotice(command.action==='claim_part' ? 'Parte asignada por el servidor. No se inició ni se cerró el servicio.' : command.action==='release_part' ? 'Parte liberada. La contribución anterior permanece en el historial.' : 'Protocolo preparado desde el catálogo autorizado.');
     } catch (e) {
       if (!alive.current) return;

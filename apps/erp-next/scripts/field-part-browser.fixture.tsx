@@ -11,7 +11,9 @@ const demoJob = {
  crew:{vanId:'VAN-1',vanName:'DEMO · Van 1',members:[{staffId:'staff-tech',name:'DEMO Technician',responsibility:'lead'},{staffId:'staff-helper',name:'DEMO Helper',responsibility:'helper'}]},
 } as FieldScheduleJob;
 function setSession(uid:string) {
- persistFirebaseWebSession({uid,email:`${uid}@example.invalid`,idToken:uid,refreshToken:'synthetic-unused-refresh',expiresAt:Date.now()+3_600_000,displayName:uid==='test-tech'?'DEMO Technician':'DEMO Helper'});
+ // Explicit synthetic account metadata; this fixture does not verify a real email or grant server authority.
+ const syntheticSession={uid,email:`${uid}@example.invalid`,emailVerified:true,idToken:uid,refreshToken:'synthetic-unused-refresh',expiresAt:Date.now()+3_600_000,displayName:uid==='test-tech'?'DEMO Technician':'DEMO Helper'};
+ persistFirebaseWebSession(syntheticSession);
 }
 function App() {
  const [uid,setUid]=useState(new URLSearchParams(location.search).get('actor')||'test-tech');

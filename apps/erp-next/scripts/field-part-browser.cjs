@@ -94,6 +94,16 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      await winner.getByText('Liberar mi parte',{exact:true}).click();
      assert.equal(await winner.getByRole('button',{name:'Liberar sin borrar el historial',exact:true}).isDisabled(),true);
      await refresh(winner);
+     // A response arriving after disconnection/reconnection cannot claim fresh coordination.
+     let resume;const interrupted=new Promise(r=>resume=r);fault={uid:owner,action:'record_procedure_action',hold:interrupted};
+     await winner.getByLabel('Motivo de la transferencia').fill('Transferencia durante interrupción sintética');
+     const interruptedRequest=winner.waitForRequest(r=>r.method()==='POST');
+     await winner.getByRole('button',{name:'Liberar sin borrar el historial',exact:true}).click();await interruptedRequest;
+     await winner.evaluate(()=>{window.dispatchEvent(new Event('offline'));window.dispatchEvent(new Event('online'));});resume();
+     await winner.getByText('Parte liberada. La contribución anterior permanece en el historial.',{exact:true}).waitFor();
+     await winner.getByText(/Coordinación sin confirmar/).waitFor();
+     assert.equal(await winner.getByRole('button',{name:'Tomar evaporadora',exact:true}).isDisabled(),true);
+     await refresh(winner);
      // Delayed response must not restore old context or undo a subsequent revocation/account change.
      let release;const hold=new Promise(r=>release=r);fault={action:'get_procedure_workspace',uid:owner,hold};
      const delayed=winner.waitForResponse(r=>r.request().method()==='POST'&&r.request().postDataJSON()?.action==='get_procedure_workspace'&&r.request().headers().authorization==='Bearer '+owner);
@@ -107,11 +117,11 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      assert.equal(state.store.all('workVisits').length,1);assert.equal(state.store.all('workInterventions').length,1);assert.equal(state.store.get('workInterventions','WI-1').status,'in_progress');
      for(const collection of ['fieldEvidence','invoices','stockMovements','whatsappOutboundQueue','fieldOfficeReviews'])assert.equal(state.store.all(collection).length,0);
      assert.deepEqual(errors,[]);assert.deepEqual(outside,[]);
-     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors']});
+     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors']});
      console.log(`PASS shared parts ${browserName} ${label}`);await context.close();
     }
    }finally{await browser.close();}
   }
-  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({synthetic:true,backend:'loopback HTTP with deterministic database/auth fixtures',notClaimed:['hosted-preview','real-Firebase-auth','Firestore-emulator','physical-devices','procedure-media-capture-UI'],reports},null,2));
+  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({sourceHead:require('node:child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),synthetic:true,backend:'loopback HTTP with deterministic database/auth fixtures',notClaimed:['hosted-preview','real-Firebase-auth','Firestore-emulator','physical-devices','procedure-media-capture-UI'],reports},null,2));
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.closeAllConnections();server.close();});
