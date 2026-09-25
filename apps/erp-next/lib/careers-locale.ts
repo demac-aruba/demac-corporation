@@ -183,7 +183,7 @@ const spanish: Record<string, string> = {
   "Unable to open this photo.": "No se pudo abrir esta foto.",
   "Unable to submit. Please retry.": "No se pudo enviar. Reinténtalo.",
   "Application completed": "Solicitud de prueba completada",
-  "Application received": "¡Solicitud recibida!",
+  "Application submitted": "¡Solicitud enviada!",
   "Thank you for applying to join the DEMAC team.": "Gracias por postularte para formar parte del equipo DEMAC.",
   "You completed the preview application for": "Completaste la solicitud de prueba para",
   "We have received your application for": "Hemos recibido tu solicitud para",
