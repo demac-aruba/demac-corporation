@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { validateWorkflow, protocolForService, initialWorkflow } = require('./fieldOperationsServiceProtocol');
 const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
@@ -144,6 +145,7 @@ function projectWorkIntervention(record, expectedContext = {}) {
     plannedWorkLineId,
     serviceCatalogItemId,
     interventionType: text(record?.interventionType, 240),
+    ...(record.procedureWorkflow ? { procedureWorkflow: validateWorkflow(record.procedureWorkflow) } : {}),
     origin,
     requestedBy: requestedBy || undefined,
     status,
@@ -513,6 +515,7 @@ function createPlannedWorkInterventionCommand({
 
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
+      const procedureDefinition = protocolForService(fieldSnapshotRecord(serviceSnapshot));
       const stored = fieldFirestoreData({
         id: interventionId,
         fieldAuthorityVersion: FIELD_WORK_INTERVENTION_STORAGE_VERSION,
@@ -528,6 +531,7 @@ function createPlannedWorkInterventionCommand({
         plannedWorkLineId: normalizedPlannedWorkLineId,
         serviceCatalogItemId: normalizedServiceId,
         interventionType: canonicalService.label,
+        ...(procedureDefinition ? { procedureWorkflow: initialWorkflow(procedureDefinition) } : {}),
         origin: 'planned',
         requestedBy: 'office',
         status: 'confirmed',

@@ -1,0 +1,71 @@
+name: Technician existing preview candidate inspection
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-preview-candidate.yml']
+permissions:
+  contents: read
+jobs:
+  inspect-existing-candidate:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/technician-app-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Metadata only. No checkout, app execution, token export or cloud writes.
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Inspect the exact existing Office preview candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          from datetime import datetime, timezone
+          cmd = ['gcloud', 'run', 'services', 'describe', 'officebookingauthoritypreview', '--project=demac-corporation', '--region=us-central1', '--format=json', '--quiet']
+          completed = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+          report = {'source':os.environ['GITHUB_SHA'], 'checkedAt':datetime.now(timezone.utc).isoformat(), 'readOnly':True, 'candidate':'officebookingauthoritypreview', 'status':'unverified', 'reuseApproved':False}
+          if completed.returncode == 0:
+              service = json.loads(completed.stdout)
+              template = service.get('spec', {}).get('template', {}).get('spec', {})
+              containers = template.get('containers', [])
+              report['containerCount'] = len(containers)
+              report['ready'] = service.get('status', {}).get('latestReadyRevisionName') == service.get('status', {}).get('latestCreatedRevisionName')
+              report['hasVolumeMounts'] = bool(template.get('volumes'))
+              report['containers'] = []
+              # Never publish raw config, URLs, credentials, tokens, secret refs or other values.
+              for container in containers:
+                  env = {item['name']:item for item in container.get('env', []) if isinstance(item.get('name'),str)}
+                  info = {'configurationKeys':sorted(env), 'safeResourceIdentifiers':{}, 'hasSecretReferences':any(bool(v.get('valueFrom')) for v in env.values())}
+                  for name in ['GOOGLE_CLOUD_PROJECT','GCLOUD_PROJECT','FIRESTORE_DATABASE_ID','DATABASE_ID','FIREBASE_PROJECT_ID','FIREBASE_STORAGE_BUCKET','FUNCTION_TARGET','FIELD_FIRESTORE_DATABASE_ID','OFFICE_BOOKING_DATABASE_ID']:
+                      value = env.get(name, {}).get('value')
+                      if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9()._-]{1,150}',value): info['safeResourceIdentifiers'][name] = value
+                  config = env.get('FIREBASE_CONFIG', {}).get('value', '')
+                  if config:
+                      try:
+                          parsed = json.loads(config)
+                          for name in ['projectId','storageBucket','databaseId']:
+                              value = parsed.get(name)
+                              if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9()._-]{1,150}',value): info['safeResourceIdentifiers']['FIREBASE_CONFIG.'+name]=value
+                      except (ValueError, AttributeError): info['firebaseConfigReadable'] = False
+                  report['containers'].append(info)
+              report['status'] = 'metadata_read_not_isolation_verified'
+          else:
+              report['status'] = 'metadata_read_failed'
+              report['commandExitCode'] = completed.returncode
+          report['limits'] = ['No requests to application endpoints, customer documents, users or IAM policies.', 'No permissions, services, billing, Vercel settings or data changed.', 'Resource names and environment identifiers do not establish isolation or a working Field backend.']
+          out=Path(os.environ['RUNNER_TEMP'])/'existing-preview-candidate';out.mkdir()
+          (out/'candidate.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          if completed.returncode: raise SystemExit('Candidate inspection failed; no reuse attempted.')
+          PY
+      - name: Retain only sanitized candidate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-existing-preview-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/existing-preview-candidate/
+          retention-days: 3
+          if-no-files-found: error

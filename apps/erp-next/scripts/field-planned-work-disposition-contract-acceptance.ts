@@ -82,4 +82,35 @@ assertThrows(() => parseFieldRecordPlannedWorkDispositionResponse({
   success: true, version: 1, replayed: false, disposition: { ...disposition, reasonCode: 'invented' }, allowedActions: ['read'],
 }), 'mutation response rejects invented reason vocabulary');
 
+// The backend hides write options when this participant cannot reconcile planned work.
+// Read access to the same job must remain valid without inventing helper privileges.
+const helperReadJob = {
+  ...pendingJob,
+  responsibility: 'helper',
+  allowedActions: ['read', 'execute', 'evidence.add'],
+  canAddExistingAsset: false,
+  plannedWorkDispositionOptions: [],
+  canRecordPlannedWorkDisposition: false,
+};
+const helperRead = parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: helperReadJob });
+assert(helperRead.job.plannedWorkProgress[0].remainingQuantity === 1, 'helper may read unreconciled planned quantity');
+assert(!helperRead.job.canRecordPlannedWorkDisposition && helperRead.job.plannedWorkDispositionOptions.length === 0, 'helper does not gain reconciliation authority by reading');
+assertThrows(() => parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: {
+  ...helperReadJob, plannedWorkDispositionOptions: pendingJob.plannedWorkDispositionOptions,
+} }), 'ineligible reader cannot receive write options even when the boolean is false');
+assertThrows(() => parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: {
+  ...helperReadJob, canRecordPlannedWorkDisposition: true,
+} }), 'ineligible reader cannot acquire a true write flag');
+for (const status of ['scheduled', 'en_route', 'completed', 'cancelled', 'no_access', 'ready_for_office_review']) {
+  const nonMutableJob = { ...pendingJob, fieldVisit: { ...visit, status }, plannedWorkDispositionOptions: [], canRecordPlannedWorkDisposition: false };
+  const read = parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: nonMutableJob });
+  assert(read.job.plannedWorkProgress[0].remainingQuantity === 1, `${status} remains readable with unresolved planned scope`);
+  assertThrows(() => parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: {
+    ...nonMutableJob, plannedWorkDispositionOptions: pendingJob.plannedWorkDispositionOptions,
+  } }), `${status} cannot expose ineligible write options`);
+}
+assertThrows(() => parseFieldPlannedWorkDispositionJobResponse({ success: true, version: 1, job: {
+  ...pendingJob, plannedWorkDispositionOptions: [],
+} }), 'eligible participant must still receive the exact canonical options');
+
 console.log('Field Planned Work Disposition contract acceptance passed.');

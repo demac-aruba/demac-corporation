@@ -191,7 +191,7 @@ test('completed assigned work remains visible in schedule/detail but is read-onl
   assert.deepEqual(detail.allowedActions, ['read']);
 });
 
-test('helper receives reporting actions but cannot receive billable or scope actions', async () => {
+test('assigned helper receives scoped capture/asset/service actions but no global completion or office privileges', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-helper', 'VAN-1'), '2026-08-24', '2026-08-24');
   assert.equal(jobs.length, 1);
@@ -199,10 +199,12 @@ test('helper receives reporting actions but cannot receive billable or scope act
   assert.equal(jobs[0].responsibility, 'helper');
   assert.ok(jobs[0].allowedActions.includes('report.edit'));
   assert.ok(jobs[0].allowedActions.includes('evidence.add'));
-  assert.ok(!jobs[0].allowedActions.includes('asset.add'));
-  assert.ok(!jobs[0].allowedActions.includes('intervention.add'));
+  assert.ok(jobs[0].allowedActions.includes('asset.add'));
+  assert.ok(jobs[0].allowedActions.includes('intervention.add'));
   assert.ok(!jobs[0].allowedActions.includes('sale.propose'));
   assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
+  assert.ok(!jobs[0].allowedActions.includes('execute'));
+  assert.ok(!jobs[0].allowedActions.includes('office.review'));
 });
 
 test('another team work order is denied even when its id is known', async () => {
@@ -350,4 +352,48 @@ test('canonical operations and legacy supervisor aliases share governed price ov
     assert.ok(jobs.every((job) => job.allowedActions.includes('office.review')));
     assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
   }
+});
+
+test('crew display follows the dated assignment and omits private staff attributes', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.dailyVanAssignments[0].helperStaffId = 'staff-substitute';
+  seed.staffProfiles = [
+    { id: 'staff-lead', name: 'DEMO Technician', active: true, salary: 999999, email: 'private@example.invalid' },
+    { id: 'staff-helper', name: 'Not assigned today', active: true },
+    { id: 'staff-substitute', name: 'DEMO Substitute', active: true, payroll: 'private' },
+    { id: 'staff-other', name: 'Other crew private', active: true },
+  ];
+  const db = createDb(seed);
+  const jobs = await loadAssignedSchedule(db, technician('staff-lead'), '2026-08-24', '2026-08-24');
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].crew, { vanId: 'VAN-1', vanName: 'Van 1', members: [
+    { staffId: 'staff-lead', name: 'DEMO Technician', responsibility: 'lead' },
+    { staffId: 'staff-substitute', name: 'DEMO Substitute', responsibility: 'helper' },
+  ] });
+  const job = await loadAssignedJob(db, technician('staff-substitute'), 'WO-1');
+  assert.deepEqual(job.crew, jobs[0].crew);
+  assert.equal(job.responsibility, 'helper');
+  assert.equal(job.allowedActions.includes('visit.complete'), false, 'display data never grants permission');
+  assert.equal(JSON.stringify(job.crew).includes('private'), false);
+  await assert.rejects(() => loadAssignedJob(db, technician('staff-other'), 'WO-1'), /not assigned/);
+});
+
+test('crew display supports a solo technician and never invents a missing employee name', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.staffProfiles = [{ id: 'staff-lead', name: 'DEMO Solo', active: true }];
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-lead'), '2026-08-24', '2026-08-24');
+  assert.equal(jobs[0].crew.members.length, 1);
+  assert.equal(jobs[0].crew.members[0].name, 'DEMO Solo');
+});
+
+test('inactive staff and direct assignment do not fabricate regular crew membership', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.staffProfiles = [{ id: 'staff-lead', name: 'DEMO Technician', active: true }, { id: 'staff-helper', name: 'Inactive', active: false }];
+  seed.workOrders[0].technicianIds.push('staff-direct');
+  const db = createDb(seed);
+  const regular = await loadAssignedJob(db, technician('staff-lead'), 'WO-1');
+  assert.equal(regular.crew.members.length, 1);
+  const direct = await loadAssignedJob(db, technician('staff-direct'), 'WO-1');
+  assert.equal(direct.assignmentSource, 'direct_staff');
+  assert.equal(direct.crew, undefined);
 });

@@ -1,0 +1,92 @@
+name: Technician approved preview infrastructure inventory
+
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-preview-inventory.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  read-existing-infrastructure:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/technician-app-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      # Reuse the existing authorized identity for metadata GETs only. No checkout,
+      # application imports, runtime deployment, API enablement or customer reads.
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Read accessible DEMAC project and service metadata only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request, urllib.error
+          from pathlib import Path
+          from datetime import datetime, timezone
+          token = subprocess.run(['gcloud','auth','print-access-token'], check=True, capture_output=True, text=True).stdout.strip()
+          if not token:
+              raise RuntimeError('Existing Google identity did not provide an access token.')
+          allowed = {'cloudresourcemanager.googleapis.com','run.googleapis.com','firestore.googleapis.com'}
+          errors = []
+          def read(host, path, label):
+              if host not in allowed or not path.startswith('/'):
+                  raise RuntimeError('Unapproved metadata endpoint.')
+              req = urllib.request.Request('https://' + host + path, headers={'Authorization':'Bearer ' + token}, method='GET')
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  errors.append({'query': label, 'httpStatus': error.code})
+                  return None
+          from urllib.parse import urlencode, quote
+          projects, page = [], ''
+          while True:
+              result = read('cloudresourcemanager.googleapis.com', '/v1/projects?' + urlencode({'pageSize':100, **({'pageToken':page} if page else {})}), 'accessible-projects')
+              if result is None:
+                  break
+              projects.extend(p for p in result.get('projects', []) if 'demac' in (p.get('projectId','') + ' ' + p.get('name','')).lower())
+              page = result.get('nextPageToken','')
+              if not page:
+                  break
+          records = []
+          for project in projects:
+              pid = project['projectId']
+              item = {'projectId':pid, 'name':project.get('name'), 'lifecycleState':project.get('lifecycleState'), 'services':[], 'databases':[]}
+              page = ''
+              while True:
+                  result = read('run.googleapis.com', '/v2/projects/' + quote(pid,safe='') + '/locations/-/services?' + urlencode({'pageSize':100, **({'pageToken':page} if page else {})}), pid + ':service-metadata')
+                  if result is None:
+                      break
+                  for service in result.get('services',[]):
+                      name = service.get('name','')
+                      # A name is a candidate, not proof of data isolation or approval.
+                      if any(word in name.rsplit('/',1)[-1].lower() for word in ['preview','staging','test','demo']):
+                          item['services'].append({'name':name,'uri':service.get('uri'), 'candidateOnly':True})
+                  page = result.get('nextPageToken','')
+                  if not page:
+                      break
+              result = read('firestore.googleapis.com','/v1/projects/' + quote(pid,safe='') + '/databases', pid + ':database-metadata')
+              if result is not None:
+                  item['databases'] = [{'name':d.get('name'),'type':d.get('type'),'locationId':d.get('locationId')} for d in result.get('databases',[])]
+              records.append(item)
+          report = {'checkedAt':datetime.now(timezone.utc).isoformat(), 'source':os.environ['GITHUB_SHA'], 'readOnly':True, 'projects':records, 'errors':errors, 'limits':['Only projects visible to the existing service account; absence is not proof that the owner has no other project.','No customer documents, users, secret values, environment values or IAM policies read.','No deployment, API enablement, access change, resource creation or production-data write.','Metadata is not authenticated preview acceptance.']}
+          output = Path(os.environ['RUNNER_TEMP']) / 'approved-preview-inventory'
+          output.mkdir()
+          (output / 'inventory.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          if errors:
+              raise SystemExit('Metadata inventory incomplete; see recorded HTTP status, not a successful isolation claim.')
+          PY
+      - name: Preserve sanitized infrastructure metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-approved-preview-inventory-${{ github.sha }}
+          path: ${{ runner.temp }}/approved-preview-inventory/
+          if-no-files-found: warn
+          retention-days: 3

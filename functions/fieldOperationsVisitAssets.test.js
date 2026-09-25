@@ -375,9 +375,9 @@ test('asset attachment is unavailable before arrival or after the activated work
   }
 });
 
-test('helper, read-only fallback and unassigned principals cannot add VisitAssets', async () => {
+test('read-only helper, read-only fallback and unassigned principals cannot add VisitAssets', async () => {
   for (const denied of [
-    assignment({ responsibility: 'helper' }),
+    assignment({ responsibility: 'helper', readOnly: true }),
     assignment({ readOnly: true, source: 'profile_van_fallback' }),
     assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
   ]) {
@@ -504,4 +504,10 @@ test('job read projection exposes VisitAssets and server-derived add eligibility
     allowedActions: ['read', 'asset.add'],
   });
   assert.equal(enRoute.canAddExistingAsset, false);
+});
+
+test('assigned helper attaches the existing contextual asset without editing its CRM identity', async () => {
+ const f=fixture({resolveAssignment:async()=>assignment({responsibility:'helper'})});
+ await f.attach({identity:identity(),visitId:'visit-WO-1',assetId:'AC-1',requestId:'helper-attach-approved-001'});
+ assert.equal(f.store.all('visitAssets').length,1);assert.equal(f.store.all('visitAssets')[0].assetId,'AC-1');
 });

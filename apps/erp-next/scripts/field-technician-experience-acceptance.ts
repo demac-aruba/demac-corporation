@@ -1,3 +1,6 @@
+import './field-preview-build-safety-acceptance';
+import './field-portal-presentation-acceptance';
+import './field-route-selection-acceptance';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { FieldScheduleJob, FieldVisitStatus } from '../lib/field-authority-contract';

@@ -130,19 +130,21 @@ function relationsValid(job: FieldPlannedWorkDispositionJobDetail) {
       || progress.linkedActualQuantity + progress.disposedQuantity + progress.remainingQuantity !== progress.plannedQuantity) return false;
   }
 
-  const expectedOptions = job.plannedWorkProgress
+  // Match the existing server projection: read-only participants and non-mutable
+  // visits have no disposition write options even when planned work remains.
+  const mayReceiveOptions = Boolean(job.fieldVisit
+    && MUTABLE_VISIT_STATUSES.has(job.fieldVisit.status)
+    && job.allowedActions.includes('intervention.complete'));
+  const expectedOptions = mayReceiveOptions ? job.plannedWorkProgress
     .filter((line) => line.remainingQuantity > 0)
-    .map((line) => ({ plannedWorkLineId: line.id, maxQuantity: line.remainingQuantity }));
+    .map((line) => ({ plannedWorkLineId: line.id, maxQuantity: line.remainingQuantity })) : [];
   if (job.plannedWorkDispositionOptions.length !== expectedOptions.length) return false;
   if (!expectedOptions.every((expected, index) => {
     const actual = job.plannedWorkDispositionOptions[index];
     return actual.plannedWorkLineId === expected.plannedWorkLineId && actual.maxQuantity === expected.maxQuantity;
   })) return false;
 
-  const serverEligible = Boolean(job.fieldVisit
-    && MUTABLE_VISIT_STATUSES.has(job.fieldVisit.status)
-    && job.allowedActions.includes('intervention.complete')
-    && expectedOptions.length > 0);
+  const serverEligible = expectedOptions.length > 0;
   return job.canRecordPlannedWorkDisposition === serverEligible;
 }
 

@@ -143,7 +143,15 @@ export type FieldVisitState = FieldPreparedVisit & {
   availableTransitions: FieldActiveVisitTransition[];
 };
 
+/** Optional display-only addition; existing clients and servers remain compatible. */
+export type FieldCrewPresentation = {
+  vanId: string;
+  vanName: string;
+  members: Array<{ staffId: string; name: string; responsibility: 'lead' | 'helper' }>;
+};
+
 export type FieldScheduleJob = {
+  crew?: FieldCrewPresentation;
   dwellingId?: string;
   locationSnapshot?: { locationLabel: string; accessInstructions: string; requester?: { name: string } | null; accessContact?: { name: string; phone: string } | null };
   id: string;
@@ -322,6 +330,22 @@ export function fieldVisitStateValid(value: unknown): value is FieldVisitState {
   return visitStateValid(value);
 }
 
+function crewPresentationValid(value: unknown) {
+  if (value === undefined) return true;
+  const crew = record(value);
+  if (!crew || typeof crew.vanId !== 'string' || !crew.vanId || typeof crew.vanName !== 'string'
+    || !Array.isArray(crew.members) || crew.members.length > 3) return false;
+  const ids = new Set<string>();
+  return crew.members.every((value: unknown) => {
+    const member = record(value);
+    if (!member || typeof member.staffId !== 'string' || !member.staffId || ids.has(member.staffId)
+      || typeof member.name !== 'string' || !member.name.trim()
+      || !['lead', 'helper'].includes(String(member.responsibility))) return false;
+    ids.add(member.staffId);
+    return true;
+  });
+}
+
 function scheduleJobValid(value: unknown): value is FieldScheduleJob {
   const job = record(value);
   if (!job) return false;
@@ -349,6 +373,8 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && Number.isFinite(job.estimatedQuantity)
     && job.estimatedQuantity >= 0
     && string(job.vanId)
+    && crewPresentationValid(job.crew)
+    && (job.crew === undefined || record(job.crew)?.vanId === job.vanId)
     && string(job.responsibility)
     && RESPONSIBILITIES.has(job.responsibility)
     && string(job.assignmentSource)
