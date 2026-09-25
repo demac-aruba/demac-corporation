@@ -3,6 +3,17 @@
 // No browser/UI acceptance and no hosted preview are claimed by this test.
 const {PROJECT,assertIsolated}=require('./dwellingsIsolation.cjs');assertIsolated();
 const assert=require('node:assert/strict'),http=require('node:http'),crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path'),zlib=require('node:zlib');
+const cp=require('node:child_process');
+const root=path.resolve(__dirname,'../..');
+const sourceFiles=['functions/test-support/fieldProcedureEmulator.cjs','functions/test-support/fieldProcedureFixture.cjs','functions/fieldOperationsAuthority.js','functions/fieldOperationsProcedureWorkflow.js','functions/fieldOperationsServiceProtocol.js','functions/fieldOperationsProcedureMedia.js','functions/fieldOperationsOfficeReview.js'];
+const sourceHead=cp.execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+const sourceManifest=sourceFiles.map(file=>{
+ const bytes=fs.readFileSync(path.join(root,file));
+ assert.deepEqual(bytes,cp.execFileSync('git',['show',`${sourceHead}:${file}`],{cwd:root}),`Executed source differs from checkout: ${file}`);
+ return {file,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),size:bytes.length};
+});
+console.log(JSON.stringify({test:'field-procedure-http-v1',sourceHead,sourceManifest}));
+const syntheticResults=Object.freeze({I02:'funciona',I03:'enfria',O02:'enfria',O03:'buen_estado',O06:'buen_estado',O07:'buen_estado',O08:'buen_estado'});
 const {initializeApp,deleteApp}=require('firebase-admin/app'),{getAuth}=require('firebase-admin/auth'),{getFirestore}=require('firebase-admin/firestore'),{getStorage}=require('firebase-admin/storage');
 const {createFieldOperationsApi}=require('../fieldOperationsAuthority');
 const {createFieldAuditAppender}=require('../fieldOperationsAudit');
@@ -75,8 +86,8 @@ async function main(){
   const denied=await fetch(download,{headers:{Authorization:`Bearer ${tokens.get(outsider.uid)}`}});assert.equal(denied.status,403);
   const permitted=await fetch(download,{headers:{Authorization:`Bearer ${tokens.get(who.uid)}`}});assert.equal(permitted.status,200);assert.deepEqual(Buffer.from(await permitted.arrayBuffer()),bytes);
  }
- async function completeStep(part,d){const who=owners[part];for(const view of d.views)await capture(part,d.id,view);const b=await read(who);
-  const r=await mutate({action:'save_step',part,stepId:d.id,expectedPartVersion:b.workflow.parts[part].version,expectedSafetyRevision:b.workflow.safety.revision,complete:true,...(d.options.length?{result:d.options[0]}:{}),...(d.competent?{competenceConfirmed:true}:{}),...(d.id==='O02'?{measurement:{value:110,unit:'psi'}}:{})},who);assert.equal(r.workflow.parts[part].steps[d.id].status,'documented');
+ async function completeStep(part,d){stage=`procedure:${part}:${d.id}`;const who=owners[part];if(d.options.length)assert.ok(d.options.includes(syntheticResults[d.id]),`Synthetic result must be an explicit authorized protocol value: ${d.id}`);for(const view of d.views)await capture(part,d.id,view);const b=await read(who);
+  const r=await mutate({action:'save_step',part,stepId:d.id,expectedPartVersion:b.workflow.parts[part].version,expectedSafetyRevision:b.workflow.safety.revision,complete:true,...(d.options.length?{result:syntheticResults[d.id]}:{}),...(d.competent?{competenceConfirmed:true}:{}),...(d.id==='O02'?{measurement:{value:110,unit:'psi'}}:{})},who);assert.equal(r.workflow.parts[part].steps[d.id].status,'documented');
  }
  const definition=(await read()).workflow.protocol;
  for(const part of ['indoor','outdoor'])for(const d of definition.parts[part].steps.filter(d=>d.stage==='initial'))await completeStep(part,d);
@@ -98,4 +109,4 @@ async function main(){
  for(const c of ['inventoryMovements','invoices','whatsappOutboundQueue'])assert.equal((await db.collection(c).get()).size,0);
  check('responsible submits, office returns/approves immutable revisions, no stock/invoice/message effect');
 }
-main().then(()=>{const dir=process.env.FIELD_PROCEDURE_TEST_RESULTS;if(dir){fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'emulator-report.json'),JSON.stringify({source:process.env.GITHUB_SHA,synthetic:true,backend:'loopback-emulators',groups,passed:true,notClaimed:['hosted-preview','browser-UI','physical-device-testing']},null,2));}}).catch(error=>{console.error(JSON.stringify({stage,code:error.code||'assertion',message:error.message}));process.exitCode=1;}).finally(async()=>{if(server)await new Promise(resolve=>server.close(resolve));await db.terminate();await deleteApp(app);});
+main().then(()=>{const dir=process.env.FIELD_PROCEDURE_TEST_RESULTS;if(dir){fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'emulator-report.json'),JSON.stringify({source:sourceHead,trigger:process.env.GITHUB_SHA,sourceManifest,synthetic:true,backend:'loopback-emulators',groups,passed:true,notClaimed:['hosted-preview','browser-UI','physical-device-testing']},null,2));}}).catch(error=>{console.error(JSON.stringify({stage,code:error.code||'assertion',message:error.message}));process.exitCode=1;}).finally(async()=>{if(server)await new Promise(resolve=>server.close(resolve));await db.terminate();await deleteApp(app);});
