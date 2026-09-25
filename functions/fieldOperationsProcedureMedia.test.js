@@ -31,3 +31,52 @@ test('actual API action dispatch retains canonical authenticated identity instea
  const noauth=await api.handle({method:'POST',headers:{},body:{action:'get_procedure_workspace',data:{visitId:'VISIT-1',interventionId:'WI-1'}}});assert.equal(noauth.status,401);
  const unconfigured=createFieldOperationsApi({db:f.store.db,verifyIdToken:async t=>({uid:t})});const blocked=await unconfigured.handle({method:'POST',headers:{authorization:'Bearer '+lead.uid},body:{action:'get_procedure_workspace',data:{visitId:'VISIT-1',interventionId:'WI-1'}}});assert.equal(blocked.status,503);
 });
+
+test('ordinary exact upload retry verifies the original without a second Storage write', async () => {
+ const b=bucket(),s=createProcedureMediaStore(b),r=reservation();
+ const first=await s.upload(r,photo),second=await s.upload(r,photo);
+ assert.equal(first.replayed,false);assert.equal(second.replayed,true);
+ assert.equal(second.generation,first.generation);assert.equal(second.sha256,first.sha256);
+ assert.equal(b.events.filter(e=>e[0]==='save').length,1);
+});
+test('preexisting conflicting content is rejected before any attempted Storage write', async () => {
+ const b=bucket(),s=createProcedureMediaStore(b),r=reservation();
+ b.objects.set(r.storagePath,{bytes:Buffer.from([255,216,255,4,255,217]),contentType:'image/jpeg',generation:'11'});
+ await assert.rejects(()=>s.upload(r,photo),e=>e.code==='procedure_object_conflict');
+ assert.equal(b.events.filter(e=>e[0]==='save').length,0);assert.equal(b.objects.get(r.storagePath).generation,'11');
+});
+for(const code of [403,429,503])test('metadata failure '+code+' never becomes permission to upload',async()=>{
+ const b=bucket(),original=b.file;b.file=(p,o)=>({...original(p,o),getMetadata:async()=>{throw Object.assign(Error('Injected metadata failure'),{code});}});
+ await assert.rejects(()=>createProcedureMediaStore(b).upload(reservation(),photo),e=>e.code===code);
+ assert.equal(b.events.filter(e=>e[0]==='save').length,0);
+});
+test('a missing original during pinned verification is not recreated by the retry',async()=>{
+ const b=bucket(),r=reservation();b.objects.set(r.storagePath,{bytes:photo,contentType:'image/jpeg',generation:'7'});
+ const original=b.file;b.file=(p,o)=>{const f=original(p,o);return {...f,getMetadata:async()=>{const result=await f.getMetadata();if(!o?.generation)b.objects.delete(p);return result;}};};
+ await assert.rejects(()=>createProcedureMediaStore(b).upload(r,photo),e=>e.code===404);
+ assert.equal(b.events.filter(e=>e[0]==='save').length,0);
+});
+test('concurrent first uploads retain the atomic create-only guard and resolve to one original',async()=>{
+ const b=bucket(),s=createProcedureMediaStore(b),r=reservation();
+ const results=await Promise.all([s.upload(r,photo),s.upload(r,photo)]);
+ assert.equal(b.objects.size,1);assert.equal(results.filter(r=>r.replayed).length,1);
+ assert.ok(results.every(r=>r.generation==='7'&&r.sha256===hash(photo)&&r.linked===false));
+ assert.equal(b.events.filter(e=>e[0]==='save').length,2);
+ assert.ok(b.events.filter(e=>e[0]==='save').every(e=>e[2].preconditionOpts.ifGenerationMatch===0));
+});
+test('a different writer winning after metadata 404 is rejected without overwriting the winner',async()=>{
+ const b=bucket(),r=reservation(),original=b.file;
+ b.file=(p,o)=>({...original(p,o),save:async(bytes,opts)=>{
+  assert.equal(opts.preconditionOpts.ifGenerationMatch,0);
+  b.objects.set(p,{bytes:Buffer.from([255,216,255,5,255,217]),contentType:'image/jpeg',generation:'17'});
+  throw Object.assign(Error('Another writer won'),{code:412});
+ }});
+ await assert.rejects(()=>createProcedureMediaStore(b).upload(r,photo),e=>e.code==='procedure_object_conflict');
+ assert.equal(b.objects.get(r.storagePath).generation,'17');
+});
+test('a committed upload with a lost response recovers by verified read rather than duplicate write',async()=>{
+ const b=bucket(),r=reservation(),original=b.file;let writes=0;
+ b.file=(p,o)=>{const f=original(p,o);return{...f,save:async(bytes,opts)=>{writes++;await f.save(bytes,opts);throw Object.assign(Error('Lost upload response'),{code:503});}};};
+ const s=createProcedureMediaStore(b);await assert.rejects(()=>s.upload(r,photo),e=>e.code===503);
+ const recovered=await s.upload(r,photo);assert.equal(recovered.replayed,true);assert.equal(recovered.linked,false);assert.equal(recovered.generation,'7');assert.equal(writes,1);
+});

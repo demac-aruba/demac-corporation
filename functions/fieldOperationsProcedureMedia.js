@@ -64,6 +64,31 @@ function createProcedureMediaStore(bucket) {
     if (!m || reservation.storagePath !== m.storagePath) invalid('La reserva no tiene una ruta coherente.');
     const actual = validateMediaBytes(bytes,m.kind,m.contentType);
     if (actual.sha256 !== m.sha256 || actual.sizeBytes !== m.sizeBytes) throw fieldError('procedure_upload_mismatch', 'El archivo no coincide con la reserva; no se reemplazó ningún original.', 409);
+    const matchesReservation = verified => {
+      if (verified.sha256 !== m.sha256 || verified.sizeBytes !== m.sizeBytes || verified.contentType !== m.contentType) {
+        throw fieldError('procedure_object_conflict', 'Ya existe otro contenido bajo esta reserva; no se sobrescribió.', 409);
+      }
+      return verified;
+    };
+    const response = (verified, replayed) => ({success:true,uploaded:true,linked:false,replayed,captureId:reservation.captureId,...verified});
+
+    // A normal retry is a read, not another upload. Inspect the original before
+    // attempting any write, and pin verification to that exact generation.
+    // Only a definite metadata 404 permits creation; access/transport/read
+    // failures never become permission to replace an uncertain original.
+    let existing;
+    try {
+      [existing] = await bucket.file(m.storagePath).getMetadata();
+    } catch (error) {
+      if (Number(error.code) !== 404) throw error;
+    }
+    if (existing) {
+      const { verified } = await readVerified(m.storagePath, m.kind, {
+        generation:String(existing.generation), sizeBytes:Number(existing.size), contentType:existing.contentType,
+      });
+      return response(matchesReservation(verified), true);
+    }
+
     let replayed = false;
     try {
       await bucket.file(m.storagePath).save(bytes, {
@@ -74,9 +99,10 @@ function createProcedureMediaStore(bucket) {
       if (Number(error.code) !== 412) throw error;
       replayed = true;
     }
-    const verified = await verify(m.storagePath,m.kind);
-    if (verified.sha256 !== m.sha256 || verified.sizeBytes !== m.sizeBytes || verified.contentType !== m.contentType) throw fieldError('procedure_object_conflict','Ya existe otro contenido bajo esta reserva; no se sobrescribió.',409);
-    return {success:true,uploaded:true,linked:false,replayed,captureId:reservation.captureId,...verified};
+    // The atomic create-only precondition remains mandatory: another process
+    // may win after our initial 404. A 412 is accepted only after byte verification.
+    const verified = matchesReservation(await verify(m.storagePath,m.kind));
+    return response(verified, replayed);
   }
   async function read(evidence) {return readVerified(evidence.storagePath,evidence.kind,evidence);}
   return {upload,verify,read};
