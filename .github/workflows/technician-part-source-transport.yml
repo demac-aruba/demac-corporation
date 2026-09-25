@@ -1,0 +1,68 @@
+name: Technician part source transport
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-part-source-transport.yml']
+permissions:
+  contents: read
+jobs:
+  exact-source-objects:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/technician-app-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 06e78a95d8be10231a647a52f42eba0dc0560fed
+          persist-credentials: false
+      - name: Create only hash-verified unreferenced source blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,json,os,subprocess,urllib.request
+          from pathlib import Path
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): return None
+          opener=urllib.request.build_opener(NoRedirect)
+          def api(suffix,data=None):
+              req=urllib.request.Request('https://api.github.com/repos/demac-aruba/demac-corporation/git/'+suffix,data=None if data is None else json.dumps(data).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with opener.open(req,timeout=30) as r: return json.load(r)
+          def blob(b): return hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+          expected={
+            'apps/erp-next/components/field/technician-field-home.tsx':['032745c5deab798b48366e3c99ccf7e846f3a074','5d44155b21a000d8a8ec404cccadb6012b4f71ff'],
+            'apps/erp-next/lib/field-authority.ts':['6aaf680fe6837664744bd9bbdde8d784e92c322b','ab87f3552fe4e6dfef1aaec0b9f107a66a69027a'],
+            '.github/workflows/technician-app-preview.yml':['0b28526155048f216e065bbcd9c3722d2527b6e2','969c9b93d0da14f8c5f7435f2483db39e2606f83'],
+          }
+          if subprocess.check_output(['git','rev-parse','HEAD']).decode().strip()!='06e78a95d8be10231a647a52f42eba0dc0560fed': raise SystemExit('Wrong source baseline')
+          for path,(before,after) in expected.items():
+              if blob(Path(path).read_bytes())!=before: raise SystemExit('Source baseline mismatch')
+          obj=api('blobs/4dc4d9a775f949f72c649a170741180cd036883b')
+          if obj.get('encoding')!='base64' or obj.get('sha')!='4dc4d9a775f949f72c649a170741180cd036883b': raise SystemExit('Wrong patch blob')
+          patch=base64.b64decode(obj['content'])
+          if blob(patch)!=obj['sha'] or hashlib.sha256(patch).hexdigest()!='24de1fe5507f362160fc0c400df1cbc2f16948a5200c592022c8f630fbec36e4': raise SystemExit('Patch hash mismatch')
+          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
+          subprocess.run(['git','apply','-'],input=patch,check=True)
+          changed=set(subprocess.check_output(['git','diff','--name-only']).decode().splitlines())
+          if changed!=set(expected): raise SystemExit('Unexpected changed paths')
+          records=[]
+          for path,(before,after) in expected.items():
+              content=Path(path).read_bytes()
+              if blob(content)!=after or b'PRIVATE KEY-----' in content: raise SystemExit('Output source mismatch')
+              result=api('blobs',{'content':content.decode('utf-8'),'encoding':'utf-8'})
+              if result.get('sha')!=after: raise SystemExit('Git object mismatch')
+              records.append({'path':path,'sha':after,'bytes':len(content)})
+          output=Path(os.environ['RUNNER_TEMP'])/'field-part-source';output.mkdir()
+          (output/'manifest.json').write_text(json.dumps({'base':'06e78a95d8be10231a647a52f42eba0dc0560fed','files':records,'branchUpdated':False,'applicationExecuted':False},indent=2))
+          print(json.dumps(records))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: technician-part-source-${{ github.sha }}
+          path: ${{ runner.temp }}/field-part-source/
+          retention-days: 3
+          if-no-files-found: error
