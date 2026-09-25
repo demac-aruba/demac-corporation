@@ -996,6 +996,11 @@ function DetailView({
           equipmentLabel={asset?.locationLabel || equipment?.locationLabel || 'Aire seleccionado'}
           equipmentDescription={[equipment?.brand, equipment?.model, selectedProcedure.interventionType].filter(Boolean).join(' · ')}
           onBack={() => { if (requestProcedureExit()) setProcedureInterventionId(null); }}
+          onOpenAddons={() => {
+            if (!requestProcedureExit()) return;
+            setProcedureInterventionId(null);
+            setActiveStage('service');
+          }}
         />
       </main>
     </div>;
