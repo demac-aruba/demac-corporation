@@ -9,8 +9,8 @@ import type { ProcedureSession } from './use-procedure-session';
 import { useProcedureDraft } from './use-procedure-draft';
 import styles from './field-procedure-workspace.module.css';
 
-export function ProcedureStepEditor({session,part,step,onBack}:{
-  session:ProcedureSession; part:FieldProcedurePart; step:ProcedureStep; onBack:()=>void;
+export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
+  session:ProcedureSession; part:FieldProcedurePart; step:ProcedureStep; onBack:()=>void; onOpenAddons?:()=>void;
 }) {
   const state=session.workspace!.procedureParts.find(p=>p.id===part)!;
   const safety=session.workspace!.safety!;
@@ -199,6 +199,13 @@ export function ProcedureStepEditor({session,part,step,onBack}:{
           }}>Solicitar revisión de excepción</button>
         </section>
       </details>:null}
+
+    {step.recommendation && onOpenAddons?<section className={styles.card}>
+      <h3>Recomendación relacionada</h3>
+      <p>Este procedimiento sugiere revisar un adicional de tipo <strong>{procedureLabel(step.recommendation)}</strong>. La selección de producto, precio, autorización y ejecución se realiza en “Trabajo y materiales” usando el catálogo vigente; esta observación no crea un cargo por sí sola.</p>
+      {blockedRisk?<div className={styles.error}>El riesgo alto debe resolverse antes de tratar una venta como autorización para continuar el trabajo.</div>:null}
+      <button type="button" disabled={blockedRisk} onClick={onOpenAddons}>Abrir Trabajo y materiales</button>
+    </section>:null}
 
     {feedback?<p className={styles.notice} role="status">{feedback}</p>:null}
     {owner?<div className={styles.sticky}>
