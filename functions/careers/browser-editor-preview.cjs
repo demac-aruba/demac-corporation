@@ -20,7 +20,9 @@ module.exports=async function verifyEditorPreview({office,title,spanishTitle,out
     assert(await dialog.evaluate(el=>el.open&&el.matches(':modal')),'native modal is open');
     assert(await dialog.evaluate(el=>!el.closest('form')),'preview form is outside the administrative form');
     await dialog.getByRole('heading',{name:spanishTitle,exact:true}).waitFor();
-    await office.screenshot({path:path.join(output,`${name}-editor-preview-es-role.png`),fullPage:true});
+    // Native dialogs occupy the viewport. Full-document capture misleadingly
+    // includes the long, inert editor behind the fixed top layer.
+    await office.screenshot({path:path.join(output,`${name}-editor-preview-es-role.png`),fullPage:false});
     await dialog.getByRole('button',{name:'Aplicar ahora',exact:true}).click();
     await dialog.locator('#givenName').fill('  Editorial QA  ');
     await dialog.locator('#givenName').press('Enter');
@@ -35,10 +37,10 @@ module.exports=async function verifyEditorPreview({office,title,spanishTitle,out
     await office.setViewportSize({width:390,height:844});
     assert(await office.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no mobile document overflow');
     assert(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'no mobile modal overflow');
-    await office.screenshot({path:path.join(output,`${name}-editor-preview-en-question-mobile.png`),fullPage:true});
+    await office.screenshot({path:path.join(output,`${name}-editor-preview-en-question-mobile.png`),fullPage:false});
     await dialog.getByRole('button',{name:'Español',exact:true}).click();
     assert.equal(await dialog.locator('#givenName').inputValue(),'  Editorial QA  ');
-    await office.screenshot({path:path.join(output,`${name}-editor-preview-es-question-mobile.png`),fullPage:true});
+    await office.screenshot({path:path.join(output,`${name}-editor-preview-es-question-mobile.png`),fullPage:false});
     await office.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
     assert.equal(await office.getByLabel('Job title',{exact:true}).inputValue(),title);
     assert.equal(await office.getByLabel('About the role',{exact:true}).inputValue(),englishText);
