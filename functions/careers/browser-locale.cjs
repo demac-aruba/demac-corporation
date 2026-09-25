@@ -79,9 +79,28 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.documents.length, 2);
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
-    const office = await admin.newPage(), reads = [];
+    const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [];
+    let lastNetworkActivity = Date.now(), phase = 'initial-read';
     office.setDefaultTimeout(15000);
     office.on('pageerror', error => errors.push(error.message));
+    office.on('request', request => { pendingRequests.add(request); lastNetworkActivity = Date.now(); });
+    const finished = request => { pendingRequests.delete(request); lastNetworkActivity = Date.now(); };
+    office.on('requestfinished', finished);
+    office.on('requestfailed', request => {
+      failedRequests.push({ phase, path: new URL(request.url()).pathname, error: request.failure()?.errorText });
+      finished(request);
+    });
+    // Readiness is still the authorized response plus exact DOM assertions below.
+    // Drain finite static-export prefetches ONLY before deliberately reloading or
+    // closing the context; cancelling active WebKit routes produces page errors.
+    // Keep routing/egress isolation and every page-error assertion enabled.
+    const drainBeforeNavigation = async () => {
+      const deadline = Date.now() + 15000;
+      while (pendingRequests.size || Date.now() - lastNetworkActivity < 500) {
+        assert(Date.now() < deadline, 'pending administrator requests must finish before deliberate navigation/teardown');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    };
     office.on('response', async response => {
       if (response.request().method() !== 'POST' || !response.url().endsWith('/careersAdmin')) return;
       const action = response.request().postDataJSON()?.action;
@@ -106,12 +125,18 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
       await office.getByRole('heading', { name: 'Role answers', exact: true }).waitFor();
       await office.screenshot({ path: path.join(output, `${name}-es-04-original-expedient.png`), fullPage: true });
+      await drainBeforeNavigation();
+      phase = 'reload';
       await openSavedProfile(() => office.reload({ waitUntil: 'domcontentloaded' }));
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
+      await drainBeforeNavigation();
+      assert.deepEqual(failedRequests, [], 'administrator requests must not fail before teardown');
+      phase = 'teardown';
     } catch (error) {
       await office.screenshot({ path: path.join(output, `${name}-es-admin-FAIL.png`), fullPage: true }).catch(() => {});
       fs.writeFileSync(path.join(output, `${name}-es-admin-diagnostic.json`), JSON.stringify({
-        path: new URL(office.url()).pathname, reads, errors, failure: error.message,
+        path: new URL(office.url()).pathname, phase, reads, errors, failedRequests, failure: error.message,
+        pendingPaths: [...pendingRequests].map(request => new URL(request.url()).pathname),
         headings: await office.locator('h1, h2').allTextContents().catch(() => []),
         snapshotNodes: await office.locator('[data-submitted-locale]').count().catch(() => -1),
       }, null, 2));
