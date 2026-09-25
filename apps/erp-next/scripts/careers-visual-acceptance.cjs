@@ -12,6 +12,8 @@ fs.mkdirSync(output, { recursive: true });
 const matrix = [
   { name: 'chromium-390', type: chromium, width: 390, height: 844, touch: true },
   { name: 'chromium-320', type: chromium, width: 320, height: 740, touch: true },
+  { name: 'chromium-430', type: chromium, width: 430, height: 932, touch: true },
+  { name: 'chromium-tablet-768', type: chromium, width: 768, height: 1024, touch: true },
   { name: 'chromium-desktop', type: chromium, width: 1366, height: 900 },
   { name: 'webkit-390', type: webkit, width: 390, height: 844, touch: true },
   { name: 'webkit-desktop', type: webkit, width: 1440, height: 900 },
@@ -69,6 +71,19 @@ const report = [];
         check(cards.length === 9 && cards.every(card => card.separated && card.aligned && card.target), 'compact phone cards pair each title with its touch-sized action without overlap');
       }
       await shot('01-jobs');
+      if (test.name === 'chromium-430') {
+        await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+        const enlarged = await page.evaluate(() => ({
+          width: innerWidth,
+          scroll: document.documentElement.scrollWidth,
+          bodyHeight: document.body.getBoundingClientRect().height,
+        }));
+        check(enlarged.scroll <= enlarged.width + 1 && enlarged.bodyHeight > innerHeight, '200% root-text enlargement stays readable without horizontal overflow');
+        const target = await page.getByRole('button', { name: 'View VRF Specialist', exact: true }).boundingBox();
+        check(!!target && target.height >= 44, '200% text enlargement keeps the primary card action usable');
+        await shot('01b-text-200');
+        await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
+      }
       await page.getByRole('button', { name: 'View VRF Specialist', exact: true }).click();
       await page.getByRole('heading', { name: 'VRF Specialist', exact: true }).waitFor();
       check(await page.locator('dt').filter({ hasText: /^Location$/ }).count() === 1, 'job facts and icons are rendered');

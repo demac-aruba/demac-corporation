@@ -17,9 +17,9 @@ Scope: PR #527 only. This is evidence for the preview iteration, not permission 
 - V06 PASS automated / PARTIAL owner visual — branded CTA/focus/selection/error states exercised; final owner sign-off remains open.
 - V07 PASS — photo plus configurable document categories, file names/sizes/states/actions and safe replacement.
 - V08 PASS — confirmation appears after a confirmed application write, uses server reference/email and does not claim email delivery. Success copy is Application submitted / ¡Solicitud enviada!.
-- V09 PASS automated at 390px and overflow assertions; 320/430 physical-device coverage is NOT RUN.
-- V10 PASS automated desktop/browser viewports used by current suites; physical tablet/desktop hardware is NOT RUN.
-- V11 PASS automated EN/ES and long/original-text cases; 200% manual zoom is NOT RUN.
+- V09 PASS automated at 320/390/430px with overflow assertions; physical iPhone/Galaxy coverage is NOT RUN.
+- V10 PASS automated at 768/1024 tablet-class and 1280–1920 desktop-class coverage across the current suites; physical tablet/desktop hardware is NOT RUN.
+- V11 PASS automated EN/ES, long/original-text cases and 200% root-text enlargement at 430px; physical browser zoom/screen-reader review is NOT RUN.
 - V12 PASS — existing public/Management integration and unrelated regression workflows remain green.
 
 ## B. Language and original responses
