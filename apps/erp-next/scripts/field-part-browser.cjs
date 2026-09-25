@@ -12,9 +12,12 @@ const {createFieldOperationsApi}=require(path.join(repo,'functions/fieldOperatio
 const out=path.resolve(process.env.FIELD_PART_EVIDENCE||path.join(app,'.field-part-browser'));
 fs.mkdirSync(out,{recursive:true});
 const define={ 'process.env.NEXT_PUBLIC_ISOLATED_PREVIEW':'"true"' };
-for(const [key,value] of Object.entries({PROJECT_ID:'demo-demac-dwellings',API_KEY:'synthetic',AUTH_DOMAIN:'demo-demac-dwellings.invalid',STORAGE_BUCKET:'demo-demac-dwellings.appspot.com',MESSAGING_SENDER_ID:'0',APP_ID:'synthetic'}))define['process.env.NEXT_PUBLIC_FIREBASE_'+key]=JSON.stringify(value);
+for(const [key,value] of Object.entries({PROJECT_ID:'demo-demac-dwellings',API_KEY:'synthetic',AUTH_DOMAIN:'demo-demac-dwellings.invalid',STORAGE_BUCKET:'demo-demac-dwellings.appspot.com',MESSAGING_SENDER_ID:'0',APP_ID:'synthetic',MEASUREMENT_ID:''}))define['process.env.NEXT_PUBLIC_FIREBASE_'+key]=JSON.stringify(value);
 const compiled=esbuild.buildSync({entryPoints:[path.join(__dirname,'field-part-browser.fixture.tsx')],bundle:true,write:false,outfile:path.join(out,'fixture.js'),jsx:'automatic',tsconfig:path.join(app,'tsconfig.json'),nodePaths:[path.join(tools,'node_modules')],external:['/images/*'],define});
 const js=compiled.outputFiles.find(f=>f.path.endsWith('.js')).contents,css=compiled.outputFiles.find(f=>f.path.endsWith('.css')).contents;
+// A browser has no Node process global. Fail before navigation if a new public
+// Firebase setting was not explicitly replaced in this synthetic-only bundle.
+assert.equal(/\bprocess\.env\.NEXT_PUBLIC_FIREBASE_/.test(Buffer.from(js).toString('utf8')),false,'Unresolved Firebase setting in browser fixture');
 // Exercise the defensive projection against real backend response shapes too.
 const cjs=esbuild.buildSync({entryPoints:[path.join(app,'lib/field-procedure-contract.ts')],bundle:true,write:false,platform:'node',format:'cjs',tsconfig:path.join(app,'tsconfig.json')}).outputFiles[0].text;
 const mod={exports:{}};new Function('module','exports','require',cjs)(mod,mod.exports,require);
