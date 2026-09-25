@@ -9,13 +9,15 @@ import { ProcedureStepEditor } from './procedure-step-editor';
 import { useProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 
-export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equipmentDescription,onBack,onOpenAddons}:{
+export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equipmentDescription,onBack,onOpenAddons,correctionRequested,reviewerNote}:{
   target:FieldProcedureTarget;
   initialPart:FieldProcedurePart;
   equipmentLabel:string;
   equipmentDescription:string;
   onBack:()=>void;
   onOpenAddons?:()=>void;
+  correctionRequested?:boolean;
+  reviewerNote?:string;
 }) {
   const session=useProcedureSession(target);
   const [part,setPart]=useState<FieldProcedurePart>(initialPart);
@@ -32,6 +34,7 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
   const [finalResult,setFinalResult]=useState('');
   const [finalNote,setFinalNote]=useState('');
   const [finalCompetent,setFinalCompetent]=useState(false);
+  const [correctionNote,setCorrectionNote]=useState('');
 
   const workspace=session.workspace;
   const state=workspace?.procedureParts.find(p=>p.id===part) ?? null;
@@ -90,6 +93,19 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
     {!session.fresh?<div className={styles.warning}>{session.loading?'Confirmando coordinación con el servidor…':'La coordinación no está confirmada. Los borradores locales no autorizan intervenir, energizar ni cerrar el servicio.'}</div>:null}
     {session.error?<div className={styles.error} role="alert">{session.error}</div>:null}
     {session.notice?<div className={styles.notice} role="status">{session.notice}</div>:null}
+    {correctionRequested && workspace.interventionStatus==='completed'?<section className={styles.card}>
+      <h3>Corrección devuelta por oficina</h3>
+      <p>{reviewerNote||'La oficina devolvió esta revisión para corrección.'}</p>
+      <p>Solo el técnico responsable puede reabrir la intervención. Reabrir no borra el historial: invalida la finalización anterior y reinicia la coordinación de seguridad antes de cualquier nueva intervención física.</p>
+      <label>Qué se va a corregir
+        <textarea rows={3} maxLength={1500} value={correctionNote} onChange={e=>setCorrectionNote(e.target.value)}/>
+      </label>
+      <button type="button" className={styles.primary} disabled={!session.canCommand||correctionNote.trim().length<3}
+        onClick={async()=>{
+          const next=await session.execute({action:'reopen_for_correction',expectedVersion:workspace.interventionVersion,note:correctionNote.trim()});
+          if(next)setCorrectionNote('');
+        }}>Reabrir intervención para corrección</button>
+    </section>:null}
     {session.operation?<div className={styles.warning}>
       <strong>Hay una solicitud sin acuse concluyente.</strong>
       <p>Reintentar usa exactamente la misma operación; “conservar sin reenviar” no afirma que el servidor la haya deshecho.</p>
