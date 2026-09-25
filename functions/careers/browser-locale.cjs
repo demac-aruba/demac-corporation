@@ -64,6 +64,7 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(submitted.presentationVersion, require('./submission-contract').PRESENTATION_VERSION);
     assert.equal(result.result.localeAtSubmit, 'es');
     await page.getByRole('heading', { name: '¡Solicitud enviada!', exact: true }).waitFor();
+    assert.equal(await page.getByText('El puesto o el aviso de privacidad cambió. Tus datos de contacto y documentos seleccionados se conservan. Revisa las preguntas y el consentimiento actuales antes de enviar.', { exact: true }).count(), 0, 'Spanish receipt must not retain a stale revision warning');
     await page.getByText('Tu solicitud está guardada. El envío de la solicitud no confirma la entrega del correo.', { exact: true }).waitFor();
     await shot('03-received');
     await ctx.close();
