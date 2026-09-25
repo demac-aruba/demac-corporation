@@ -71,3 +71,11 @@ test('global Careers Spanish is configured, reviewed and invalidated by changed 
  assert.equal(W.careersContentFor(saved.careers,'es').content.title,'Nueva página');
  assert.equal(W.careersContentFor(W.normalizeCareersContent({...original,spanish:{bad:'unreviewed'}}),'es').contentLocale,'en');
 });
+
+test('production live-review route remains isolated from real intake', () => {
+  const source = read('app/careers-preview/page.tsx');
+  assert(source.includes('<CareersPreview'));
+  assert(!source.includes('CareersPublic'));
+  assert(!source.includes('NEXT_PUBLIC_CAREERS_LIVE_ENABLED'));
+  assert(source.includes('robots: { index: false, follow: false }'));
+});
