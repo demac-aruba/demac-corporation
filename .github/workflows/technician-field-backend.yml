@@ -1,6 +1,13 @@
 name: Technician Field backend integration
 
 on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths:
+      - 'functions/fieldOperations*.js'
+      - 'functions/test-support/fieldProcedure*.cjs'
+      - 'functions/package.json'
+      - '.github/workflows/technician-field-backend.yml'
   pull_request:
     paths:
       - 'functions/fieldOperations*.js'
@@ -12,12 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: technician-field-backend-${{ github.event.pull_request.number }}
+  group: technician-field-backend-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   backend-integration:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/technician-app-20260923' && github.event.pull_request.number == 526
+    if: github.repository == 'demac-aruba/demac-corporation' && ((github.event_name == 'push' && github.ref == 'refs/heads/feature/technician-app-20260923') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/technician-app-20260923' && github.event.pull_request.number == 526))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -29,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
@@ -53,7 +60,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: technician-field-backend-${{ github.event.pull_request.head.sha }}
+          name: technician-field-backend-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/field-procedure-backend/
           retention-days: 7
           if-no-files-found: warn
