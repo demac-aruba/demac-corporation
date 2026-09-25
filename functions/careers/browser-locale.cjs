@@ -79,6 +79,7 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.documents.length, 2);
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
+    await require('./browser-head-probes.cjs').installLocalHeadProbes(admin, site);
     const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [], responseFacts = new WeakMap();
     let lastNetworkActivity = Date.now(), phase = 'initial-read';
     office.setDefaultTimeout(15000);
