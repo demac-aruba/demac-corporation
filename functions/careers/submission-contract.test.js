@@ -119,7 +119,12 @@ test('server persists one original snapshot atomically and ignores a spoofed cli
   assert.equal(saved.submissionSnapshot.questions.find(q => q.questionId === 'project').value, request.profile.answers.project);
   assert.equal(receipt.localeAtSubmit,'es');
   assert.equal((await service.sessionStatus(request)).receipt.localeAtSubmit,'es');
-  assert.equal([...store.rows.keys()].filter(k=>k.startsWith(`${N.mail}/`)).length,1,'mail expansion is a separate block');
+  assert.equal([...store.rows.keys()].filter(k=>k.startsWith(`${N.mail}/`)).length,1,'internal mailbox copy is deferred');
+  const mail=store.rows.get(`${N.mail}/${receipt.id}`);
+  assert.equal(mail.message.locale,'es');assert.equal(mail.message.kind,'candidate-confirmation');
+  assert.equal(mail.message.to,'qa@example.test');assert(mail.message.subject.endsWith('Técnico de prueba'));
+  assert(!mail.message.text.includes('SECRET INTERNAL NOTE'));
+  const beforeMail=JSON.stringify(mail);await service.submit(request);assert.equal(JSON.stringify(store.rows.get(`${N.mail}/${receipt.id}`)),beforeMail);
 });
 test('post-commit interruption replays the original snapshot even after the vacancy changes', async () => {
   const {store,service,request,j} = setup();

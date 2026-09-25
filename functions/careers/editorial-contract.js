@@ -1,4 +1,5 @@
 'use strict';
+const Documents = require('./document-contract');
 /** Shared editorial contract. No network, storage, AI, or candidate answers.
  * English stays on the canonical vacancy; Spanish only supplies display labels.
  */
@@ -54,7 +55,7 @@ function parseTranslations(value) {
 }
 function translationIssues(job, translation = job.translations?.es) {
   if (!translation) return ['Add the Spanish translation.'];
-  const issues = [];
+  const issues = [...Documents.documentTranslationIssues(job)];
   if (translation.status !== 'Approved') issues.push('Review and approve the Spanish translation.');
   if (translation.sourceVersion !== (job.editorialVersion || 1)) issues.push('The English content changed. Review Spanish against the current version.');
   for (const key of Object.keys(TEXT_FIELDS)) if (!translation[key]?.trim()) issues.push(`Translate ${key}.`);

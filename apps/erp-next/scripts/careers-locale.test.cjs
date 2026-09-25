@@ -130,3 +130,11 @@ test('submitted standard prompts and options share the exact EN/ES form copy', (
  const questions=require('../lib/careers-form-flow.ts').formScreens(exampleVacancies()[0],require('../lib/careers-preview.ts').emptyDraft());
  for (const screen of questions.filter(q=>q.kind==='profile')) assert.equal(screen.label,S.PROFILE_PROMPTS[screen.field]);
 });
+
+test('date-only review labels preserve calendar day and raw values',()=>{
+ const {formatCareersDate}=require('../lib/careers-locale.ts');
+ assert.equal(formatCareersDate('2026-10-01','en'),'1 October 2026');
+ assert.equal(formatCareersDate('2026-10-01','es'),'1 de octubre de 2026');
+ assert.equal(formatCareersDate('2026-02-30','es'),'2026-02-30');
+ assert.equal(formatCareersDate('not a date','es'),'not a date');
+});

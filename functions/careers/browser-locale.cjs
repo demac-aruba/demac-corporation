@@ -42,6 +42,7 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     await page.locator('#photo').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png });
     await page.getByText('Foto seleccionada para revisión', { exact: true }).waitFor();
     await page.locator('#cv').setInputFiles({ name: 'cv-prueba.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% QA only\n%%EOF') });
+    await page.locator('#files-certificate').setInputFiles({name:'certificado-prueba.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% Test training certificate\n%%EOF')});
     await page.getByRole('button', { name: 'Revisar solicitud', exact: true }).click();
     await page.getByRole('heading', { name: 'Revisa tu solicitud', exact: true }).waitFor();
     await page.getByText('Inglés, Español', { exact: true }).waitFor();
@@ -76,7 +77,12 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.submissionSnapshot.fields.find(row => row.id === 'profile:givenName').value, '  María  ');
     assert.equal(saved.submissionSnapshot.questions[0].label, job.translations.es.questions[0].label);
     assert.equal(saved.submissionSnapshot.questions[0].value, 'Yes');
-    assert.equal(saved.documents.length, 2);
+    assert.equal(saved.documents.length, 3);
+    assert.equal(saved.documents.filter(file=>file.category==='certificate').length,1);
+    assert.equal(saved.candidateMail.locale,'es');assert.equal(saved.candidateMail.status,'queued');
+    assert(saved.candidateMessage.subject.startsWith('Recibimos tu solicitud'));
+    assert.equal(saved.candidateMessage.to,email);
+    assert(!saved.candidateMessage.text.includes('QA PRIVATE NOTE'));
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
     const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [], completedTrees = [], responseFacts = new WeakMap();
@@ -132,6 +138,11 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
       await openSavedProfile(() => office.goto(`${site}/recruitment/?tab=applicants&candidate=${saved.id}`, { waitUntil: 'domcontentloaded' }));
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
       await office.getByRole('heading', { name: 'Role answers', exact: true }).waitFor();
+      await office.locator('[data-candidate-mail="queued"]').waitFor();
+      await office.getByText('View the prepared confirmation',{exact:true}).click();
+      await office.getByText(saved.candidateMessage.subject,{exact:true}).waitFor();
+      await office.screenshot({path:path.join(output,`${name}-es-05-candidate-mail.png`),fullPage:true});
+      await office.getByText('View the prepared confirmation',{exact:true}).click();
       await office.screenshot({ path: path.join(output, `${name}-es-04-original-expedient.png`), fullPage: true });
       await drainBeforeNavigation();
       phase = 'reload';

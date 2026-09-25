@@ -1,4 +1,5 @@
 'use client';
+import { candidateMessage } from '../../../../functions/careers/mail-contract';
 
 import { PRESENTATION_VERSION, createSubmissionSnapshot } from '../../../../functions/careers/submission-contract.js';
 import { validateDetails, validateExperience } from '../../../../functions/careers/form-contract.js';
@@ -94,6 +95,7 @@ export function CareersPreview() {
     const id = `PREVIEW-${String(live.current.applications.length + 1).padStart(4, '0')}`;
     const at = new Date().toISOString();
     const snapshot: PreviewApplication = { id, submissionSnapshot, vacancy: JSON.parse(JSON.stringify(selected)) as Vacancy, draft: copyForSubmission(draft, selected), stage: 'New', createdAt: at, notes: [], timeline: [{ text: 'Preview application completed · No production data sent', at }] };
+    snapshot.candidateMessage = candidateMessage({reference:id,profile:snapshot.draft,jobSnapshot:snapshot.vacancy,submissionSnapshot});
     changeApplications([...live.current.applications, snapshot]);
     submittedByRole.current.set(selected.id, id);
     // Retain a read-only draft for browser Back/Forward. Never resubmit on popstate.

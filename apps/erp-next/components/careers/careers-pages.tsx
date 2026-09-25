@@ -4,8 +4,9 @@ import { useCareersLanguage } from './careers-language';
 import { vacancyPresentation } from '../../lib/careers-locale';
 import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
-import { defaultCareersContent, type WebsiteCareersContent } from '../../lib/public-website-content';
+import { defaultCareersContent, careersContentFor, type WebsiteCareersContent } from '../../lib/public-website-content';
 import { BackControl, CareerIcon, VacancyFacts } from './careers-visuals';
+import { requirementsFor, requirementPresentation } from '../../../../functions/careers/document-contract';
 import s from './careers.module.css';
 import p from './careers-pages.module.css';
 
@@ -14,7 +15,9 @@ type DisplayVacancy = Vacancy & { desired?: string[] };
 export function CareersHero({ content = defaultCareersContent, vacancy, onBack, titleAsHeading = true, contentLocale = 'en' }: {
   content?: WebsiteCareersContent; vacancy?: DisplayVacancy; onBack?: () => void; titleAsHeading?: boolean; contentLocale?: 'en' | 'es';
 }) {
-  const { text } = useCareersLanguage();
+  const { locale,text } = useCareersLanguage();
+  const global=careersContentFor(content,locale);
+  if(!vacancy){content=global.content;contentLocale=global.contentLocale;}
   const Title = titleAsHeading ? 'h1' : 'h2';
   return <section className={`${p.hero} ${vacancy ? p.positionHero : ''}`} data-careers-hero>
     <img src={vacancy ? content.roleImageUrl : content.imageUrl} alt="" width="1440" height="640" fetchPriority="high" decoding="async"/>
@@ -71,7 +74,7 @@ export function VacancyProfile({ vacancy, onBack, onApply, applyLabel = 'Apply n
       <div className={p.description} data-career-content-locale={presented.contentLocale}>
         {locale !== presented.contentLocale && <p className={s.helper} role="status">{text('Position information is available in English.')}</p>}<section><h2>{text('About the role')}</h2><p lang={presented.contentLocale}>{display.summary}</p></section>
         {sections.filter(([, values]) => values.length).map(([title, values]) => <section key={title}><h2>{text(title)}</h2><ul>{values.filter(Boolean).map((text, index) => <li key={index} lang={presented.contentLocale}>{text}</li>)}</ul></section>)}
-        <section className={p.documents}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>{text('Documents to prepare')}</h2><p>{text('Please prepare the following for your application:')}</p><ul><li>{text('A recent profile photo. No professional photo needed.')}</li><li>{text('Updated CV / Resume')}{vacancy.cvRequired ? '' : text(' (optional)')}</li><li>{text('Relevant certificates or courses, when available (optional).')}</li></ul></div></section>
+        <section className={p.documents}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>{text('Documents to prepare')}</h2><p>{text('Please prepare the following for your application:')}</p><ul><li>{text('A recent profile photo. No professional photo needed.')}</li><li>{text('Updated CV / Resume')}{vacancy.cvRequired ? '' : text(' (optional)')}</li>{requirementsFor(vacancy).map(item=><li key={item.category}>{requirementPresentation(item,locale).label} · {text(item.required?'Required':'Optional')}</li>)}</ul></div></section>
       </div>
       <div className={p.apply}><button type="button" className={s.primary} onClick={onApply}>{text(applyLabel)}<CareerIcon name="arrow"/></button><span><CareerIcon name="lock"/>{text('No account or password needed')}</span></div>
     </section></>;

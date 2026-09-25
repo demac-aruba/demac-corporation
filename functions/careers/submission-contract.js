@@ -125,7 +125,7 @@ function createSubmissionSnapshot(job, raw, canonical, locale, version, privacy)
     vacancyVersion: job.version, editorialVersion: job.editorialVersion || 1,
     title: contentLocale === 'es' ? job.translations.es.title : job.title,
     fields, questions,
-    privacy: { version: privacy.version, text: privacy.text, contentLocale: null, acknowledged: true, futureTalent: canonical.futureTalent === true } };
+    privacy: { version: privacy.version, text: privacy.text, contentLocale: privacy.contentLocale || null, acknowledged: true, futureTalent: canonical.futureTalent === true } };
 }
 /** Render only frozen option labels; never treat a free-text response as a translation key. */
 function submittedAnswerText(row) {

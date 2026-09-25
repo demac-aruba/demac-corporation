@@ -6,8 +6,10 @@ import type { Vacancy } from '../../lib/careers-preview';
 import { sizeLabel } from './careers-ui';
 import s from './careers.module.css';
 
-export type IconName = 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
+export type IconName = 'diploma' | 'id' | 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
 const paths: Record<IconName, ReactNode> = {
+  diploma: <><path d="m2 8 10-5 10 5-10 5zM5 10v7c4 3 10 3 14 0v-7M22 8v9"/></>,
+  id: <><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="2"/><path d="M5 16c0-4 6-4 6 0M14 9h5M14 13h5M14 17h3"/></>,
   person: <><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></>,
   file: <><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h6"/></>,
   certificate: <><path d="m12 2 3 2 4 1 1 4 2 3-2 3-1 4-4 1-3 2-3-2-4-1-1-4-2-3 2-3 1-4 4-1z"/><path d="m8 12 3 3 5-6"/></>,
@@ -46,9 +48,11 @@ export function VacancyFacts({ vacancy, presentation = vacancy }: { vacancy: Vac
   ];
   return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{text(label)}</dt><dd>{value}</dd></div></div>)}</dl>;
 }
-export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
+export type SelectedFileState = 'selected'|'processing'|'stored'|'uncertain'|'error';
+export function ReadyFile({ file, onRemove, state='selected' }: { file: File; onRemove: () => void; state?:SelectedFileState }) {
   const { locale, text } = useCareersLanguage();
-  return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · {text('Selected for review')}</small></div><button type="button" className={s.iconButton} aria-label={careersTemplate(locale, 'Remove {name}', { name: file.name })} onClick={onRemove}><CareerIcon name="close"/></button></div>;
+  const stateText={selected:'Selected for review',processing:'Processing and security checking…',stored:'Stored securely · Not yet reviewed by a recruiter',uncertain:'Awaiting server confirmation · Retry checks the stored state',error:'File not stored · Retry or choose another file'}[state];
+  return <div className={s.selectedFile} data-file-state={state}><span className={state==='stored'||state==='selected'?s.greenCheck:s.iconTile}><CareerIcon name={state==='processing'||state==='uncertain'?'clock':state==='error'?'close':'check'}/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · {text(stateText)}</small></div><button type="button" className={s.iconButton} aria-label={careersTemplate(locale, 'Remove {name}', { name: file.name })} onClick={onRemove}><CareerIcon name="close"/></button></div>;
 }
 export function FunnelSteps({ step, completed, disabled, onSelect }: { step: number; completed: boolean[]; disabled: boolean; onSelect: (index: number) => void }) {
   const { locale, text } = useCareersLanguage();

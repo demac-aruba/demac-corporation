@@ -29,6 +29,18 @@ export function vacancyPresentation<T extends Vacancy>(job: T, locale: CareersLo
     summary: es.summary, responsibilities: es.responsibilities, requirements: es.requirements, desired: es.desired } };
 }
 const spanish: Record<string, string> = {
+ 'Processing and security checking…':'Procesando y revisando seguridad…',
+ 'Stored securely · Not yet reviewed by a recruiter':'Guardado de forma segura · Aún no revisado por un reclutador',
+ 'Awaiting server confirmation · Retry checks the stored state':'Esperando confirmación del servidor · Al reintentar se verifica el estado guardado',
+ 'File not stored · Retry or choose another file':'Archivo no guardado · Reintenta o selecciona otro',
+ 'Photo stored securely':'Foto guardada de forma segura',
+
+  'Required':'Obligatorio', 'Optional':'Opcional', 'Replace file':'Reemplazar archivo',
+  '{ready} / {total} ready':'{ready} / {total} preparados',
+  'Complete the required document categories.':'Completa las categorías documentales obligatorias.',
+  'Receiving an application does not confirm email delivery.':'Recibir una solicitud no confirma la entrega del correo.',
+  'No email is sent in this preview.':'En esta vista previa no se envían correos.',
+
   ...PROFILE_SPANISH,
   'The selected file cannot be read.': 'No se puede leer el archivo seleccionado.',
   "Photo & documents": "Foto y documentos",
@@ -253,6 +265,7 @@ export function careersIssue(error: unknown, fallback = 'Unable to submit. Pleas
   return { message: fallback };
 }
 const publicErrorMessages: Record<string, string> = {
+  'document-policy':'Revisa las categorías documentales solicitadas. La identificación requiere una política aprobada de DEMAC.',
   'presentation-version': 'La versión del formulario cambió. Conserva una copia de tus respuestas antes de recargar y revisar la versión nueva.',
   'connection-error': 'La conexión se interrumpió. Reinténtalo; una solicitud ya recibida no se duplicará.',
   'version-conflict': 'El puesto cambió. Revisa la versión actualizada antes de enviar; tus datos y archivos se conservan.',
@@ -282,4 +295,12 @@ export function careersIssueText(locale: CareersLocale, issue: CareersIssue): st
     ? publicErrorMessages[issue.code] || 'No se pudo completar esta operación. Revisa tus respuestas y archivos e inténtalo de nuevo. Tus datos permanecen en esta pestaña.'
     : 'No se pudo completar esta operación. Inténtalo de nuevo sin cerrar esta pestaña.';
   return issue.fileName ? `${issue.fileName}: ${message}` : message;
+}
+
+/** Format only valid date-only answers; never reinterpret their calendar day by timezone. */
+export function formatCareersDate(value:string,locale:CareersLocale):string {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return value;
+  const date=new Date(`${value}T00:00:00.000Z`);
+  if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value)return value;
+  return new Intl.DateTimeFormat(locale==='es'?'es':'en-GB',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}).format(date);
 }

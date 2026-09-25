@@ -60,3 +60,14 @@ test('only a configured experience value can add a fourth public fact', () => {
   assert(source.includes('...(experience ?'));
   assert(!source.includes("experience || 'See requirements'"));
 });
+
+test('global Careers Spanish is configured, reviewed and invalidated by changed original',()=>{
+ const original=W.normalizeCareersContent(W.defaultCareersContent);
+ const es=W.careersContentFor(original,'es');assert.equal(es.contentLocale,'es');assert.equal(es.content.title,'Trabaja con nosotros');
+ assert.equal(W.careersContentFor({...original,title:'New title'},'es').contentLocale,'en');
+ assert.equal(W.careersContentFor({...original,spanish:{...original.spanish,status:'Draft'}},'es').contentLocale,'en');
+ const raw={...original,spanish:{...original.spanish,title:'Nueva página',source:W.careersCopySignature(original)}};
+ const saved=W.normalizePublicWebsiteContent({...W.defaultPublicWebsiteContent,careers:raw},W.WEBSITE_PUBLISHED_ID);
+ assert.equal(W.careersContentFor(saved.careers,'es').content.title,'Nueva página');
+ assert.equal(W.careersContentFor(W.normalizeCareersContent({...original,spanish:{bad:'unreviewed'}}),'es').contentLocale,'en');
+});

@@ -8,6 +8,7 @@ import { uploadPublicWebsiteImage } from '@/lib/firebase/storage-rest';
 import {
   cloneWebsiteContent,
   defaultCareersContent,
+  CAREERS_COPY_KEYS, careersCopySignature,
   defaultPublicWebsiteContent,
   WEBSITE_DRAFT_ID,
   type PublicWebsiteContent,
@@ -300,6 +301,11 @@ export function WebsiteManagerWorkspace() {
               <input value={(draft.careers ?? defaultCareersContent)[key]} onChange={event => setDraft(current => ({ ...current, careers: { ...(current.careers ?? defaultCareersContent), [key]: event.target.value } }))}/>
             </label>)}
           </div>
+          <fieldset className="website-manager-fields two website-manager-global-fields"><legend>Español — Careers introduction</legend>
+            {CAREERS_COPY_KEYS.map(key=><label key={key}><span>{key} · Español</span><input value={(draft.careers??defaultCareersContent).spanish?.[key]||''} onChange={event=>setDraft(current=>{const content=current.careers??defaultCareersContent;return {...current,careers:{...content,spanish:{eyebrow:'',title:'',subtitle:'',description:'',source:'',status:'Draft',...content.spanish,[key]:event.target.value}}};})}/></label>)}
+            <label><input type="checkbox" checked={(draft.careers??defaultCareersContent).spanish?.status==='Approved'&&(draft.careers??defaultCareersContent).spanish?.source===careersCopySignature(draft.careers??defaultCareersContent)} onChange={event=>setDraft(current=>{const content=current.careers??defaultCareersContent;return {...current,careers:{...content,spanish:{eyebrow:'',title:'',subtitle:'',description:'',...content.spanish,status:event.target.checked?'Approved':'Draft',source:careersCopySignature(content)}}};})}/>I reviewed this Spanish introduction against the current English copy.</label>
+            <p>Changing the original invalidates the prior Spanish review. Unreviewed or incomplete copy stays in English, not an automatic translation.</p>
+          </fieldset>
           <p>Save Draft and Publish above use the existing Website Manager workflow. No vacancy is opened by publishing this content.</p>
         </section>
       ) : (

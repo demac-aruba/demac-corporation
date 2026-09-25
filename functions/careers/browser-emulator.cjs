@@ -116,6 +116,12 @@ async function context(browser,admin,viewport){
         ['Pregunta 2 · Español','Fecha de inicio más temprana'],['Pregunta 3 · Español','URL del portafolio'],
       ]) await office.getByLabel(label,{exact:true}).fill(value);
       const reviewed=office.getByLabel('I reviewed this Spanish translation against the current English version.',{exact:true});
+      await office.getByLabel('Request certificates',{exact:true}).check();
+      await office.getByLabel('Request government id',{exact:true}).check();
+      const idPurpose=office.getByLabel('Purpose / applicant help · Government ID · English',{exact:true});
+      await idPurpose.fill('  Proposed purpose only  ');
+      assert.equal(await idPurpose.inputValue(),'  Proposed purpose only  ','incomplete category edits keep exact entered text');
+      await office.getByLabel('Request government id',{exact:true}).uncheck();
       await reviewed.check();await shot(office,'01-vacancy-editor');
       await saveFromEditor('Save draft','Draft',title,spanishTitle,1);
       await office.reload({waitUntil:'domcontentloaded'});await office.getByRole('button',{name:'＋ New vacancy',exact:true}).waitFor();await office.getByText(title,{exact:true}).waitFor();

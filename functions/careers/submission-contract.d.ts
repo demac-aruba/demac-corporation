@@ -12,11 +12,11 @@ export interface SubmittedRow {
 export interface SubmissionSnapshot {
   schemaVersion: 1; presentationVersion: string; localeAtSubmit: 'en' | 'es'; contentLocale: 'en' | 'es';
   vacancyVersion: number; editorialVersion: number; title: string; fields: SubmittedRow[]; questions: SubmittedRow[];
-  privacy: { version: string; text: string; contentLocale: null; acknowledged: boolean; futureTalent: boolean };
+  privacy: { version: string; text: string; contentLocale: 'en' | 'es' | null; acknowledged: boolean; futureTalent: boolean };
 }
 export function profileCopy(locale: 'en' | 'es', text: string): string;
 export function presentedQuestion(job: EditorialVacancy, question: FormQuestion, locale: 'en' | 'es'): {
   contentLocale: 'en' | 'es'; label: string; help: string; options: { value: string; label: string }[];
 };
-export function createSubmissionSnapshot(job: EditorialVacancy & { version: number }, raw: object, canonical: object, locale: 'en' | 'es', version: string, privacy: { text: string; version: string }): SubmissionSnapshot;
+export function createSubmissionSnapshot(job: EditorialVacancy & { version: number }, raw: object, canonical: object, locale: 'en' | 'es', version: string, privacy: { text: string; version: string; contentLocale?: 'en' | 'es' | null }): SubmissionSnapshot;
 export function submittedAnswerText(row: SubmittedRow): string;

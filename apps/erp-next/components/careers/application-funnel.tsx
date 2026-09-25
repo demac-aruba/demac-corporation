@@ -1,20 +1,22 @@
 'use client';
+import { requirementsFor, requirementPresentation, categoryLabel, missingDocumentCategories, type SupportingCategory } from '../../../../functions/careers/document-contract.js';
+import { documentSelections } from '../../lib/careers-preview';
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { fileError, totalFileBytes, validateApplication, type ApplicationDraft, type Errors, type Vacancy } from '../../lib/careers-preview';
 import { formScreens, targetFor, screenErrors, previousFormTarget, questionProgress, type FormTarget, type FormScreen } from '../../lib/careers-form-flow';
 import { prepareProfilePhoto } from './profile-photo';
 import { Alert, countryName, focusError } from './careers-ui';
-import { BackControl, CareerIcon, FunnelSteps, ReadyFile } from './careers-visuals';
+import { BackControl, CareerIcon, FunnelSteps, ReadyFile, type SelectedFileState } from './careers-visuals';
 import { FunnelQuestion } from './funnel-question';
 import { useCareersLanguage } from './careers-language';
-import { careersTemplate, careersFormErrors, careersIssue, careersIssueText, questionPresentation, vacancyPresentation, type CareersIssue } from '../../lib/careers-locale';
+import { formatCareersDate, careersTemplate, careersFormErrors, careersIssue, careersIssueText, questionPresentation, vacancyPresentation, type CareersIssue } from '../../lib/careers-locale';
 import s from './careers.module.css';
 
 type Props = { vacancy: Vacancy; draft: ApplicationDraft; step: number; reviewing: boolean; question?: string; returnToReview?: boolean; completed?: boolean;
   onChange: (draft: ApplicationDraft) => void; onStep: (target: FormTarget) => void;
   onBack: (target?: FormTarget) => void; onBackToJob: () => void; onSubmit: () => string | CareersIssue | null | Promise<string | CareersIssue | null>;
-  live?: { privacyText: string; status: string }; };
+  live?: { privacyText: string; privacyContentLocale?: "en"|"es"|null; privacyTranslationPending?: boolean; fileStates?: {file:File;state:SelectedFileState}[]; photoState?:SelectedFileState; status: string }; };
 
 export function ApplicationFunnel({ vacancy, draft, step, reviewing, question, returnToReview = false, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit, live }: Props) {
   const { locale, text } = useCareersLanguage();
@@ -80,23 +82,31 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, question, r
     } catch (error) { if (generation === photoGeneration.current) setFileIssue(careersIssue(error, 'Unable to open this photo.')); }
     finally { if (generation === photoGeneration.current) setPhotoBusy(false); }
   }
-  function chooseFiles(event: ChangeEvent<HTMLInputElement>, kind: 'cv' | 'document') {
+  function chooseFiles(event: ChangeEvent<HTMLInputElement>, kind: 'cv' | 'document', category:SupportingCategory='document', replacing?:File) {
     const files = Array.from(event.target.files || []); event.target.value = '';
     if (!files.length || completed) return;
     setFileIssue(null);
     for (const file of files) { const issue = fileError(file, kind); if (issue) { setFileIssue({ message: issue, fileName: file.name }); return; } }
-    const updated = kind === 'cv' ? { ...draft, cv: files[0], noCv: false } : { ...draft, documents: [...draft.documents, ...files] };
+    const additions=replacing?files.slice(0,1):files;
+    const kept=draft.documents.filter(file=>file!==replacing);
+    const updated = kind === 'cv' ? { ...draft, cv: files[0], noCv: false } : { ...draft, documents: [...kept, ...additions],
+      documentAssignments:[...(draft.documentAssignments||[]).filter(entry=>kept.includes(entry.file)),...additions.map(file=>({file,category}))] };
     if (updated.documents.length > 5) { setFileIssue({ message: 'Select up to five supporting documents.' }); return; }
     if (totalFileBytes(updated) > 30 * 1024 * 1024) { setFileIssue({ message: 'The combined files must be smaller than 30 MB.' }); return; }
     onChange(updated);
-    setErrors(previous => { const copy = { ...previous }; delete copy.cv; return copy; });
+    setErrors(previous => { const copy = { ...previous }; delete copy.cv; delete copy.documents; return copy; });
   }
 
-  const requiredReady = Number(!!draft.photo) + Number(!!draft.cv || (!vacancy.cvRequired && draft.noCv));
+  const requirements = requirementsFor(vacancy), selections=documentSelections(draft);
+  const missing=missingDocumentCategories(vacancy,selections);
+  const requiredCount = 2 + requirements.filter(item=>item.required).length;
+  const requiredReady = Number(!!draft.photo) + Number(!!draft.cv || (!vacancy.cvRequired && draft.noCv)) + requirements.filter(item=>item.required&&!missing.includes(item.category)).length;
+  const removeSupporting=(file:File)=>onChange({...draft,documents:draft.documents.filter(item=>item!==file),documentAssignments:draft.documentAssignments?.filter(entry=>entry.file!==file)});
   const previous = previousFormTarget(screens, active, returnToReview);
   const backLabel = returnToReview ? 'Back to review' : reviewing ? 'Back to documents' : previous ? 'Back to previous question' : 'Back to position details';
   function answerFor(screen: FormScreen): string {
     const value = screen.question ? draft.answers[screen.question.id] : screen.field ? draft[screen.field] : '';
+    if(screen.question?.kind==='date'&&typeof value==='string')return formatCareersDate(value,locale);
     if (screen.field === 'phone') return `${draft.dialCode} ${draft.phone}`;
     if (['nationality', 'applyingFrom', 'residence'].includes(screen.field || '')) return countryName(String(value), locale);
     // Only configured selection labels are localized. Free text is never a dictionary key.
@@ -124,28 +134,34 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, question, r
           if (!completed) { onChange(updated); setErrors({}); }
         }}/>}
         {step === 2 && !reviewing && <div className={s.documentStack}>
-          <div className={s.sectionHeading}><h2>{text('Upload documents')}</h2><span className={requiredReady === 2 ? s.readyBadge : s.badge}>{careersTemplate(locale, '{ready} / 2 ready', { ready: requiredReady })}</span></div>
+          <div className={s.sectionHeading}><h2>{text('Upload documents')}</h2><span className={requiredReady === requiredCount ? s.readyBadge : s.badge}>{careersTemplate(locale, '{ready} / {total} ready', { ready: requiredReady,total:requiredCount })}</span></div>
           <section className={s.uploadCard} aria-labelledby="photo-title"><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="person"/></span><div><h2 id="photo-title">{text('Profile photo')} <span className={s.requiredMark}>*</span></h2><p>{text('A recent photo of you. No professional photo needed.')}</p></div>{draft.photo && !photoBusy && <span className={s.greenCheck} aria-label={text('Photo selected')}><CareerIcon name="check"/></span>}</div>
             <div className={s.photoRow}>{draft.photo ? <img className={s.photoPreview} src={draft.photo.dataUrl} alt={text('Your selected profile photo')}/> : <div className={s.photoPlaceholder}><CareerIcon name="person"/></div>}<div className={s.photoActions}>
               <label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{text(draft.photo ? 'Replace photo' : 'Select photo')}<input id="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={choosePhoto} disabled={busy} aria-label={text('Select profile photo')}/></label>
               <label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>{text('Take a photo')}<input type="file" accept="image/*" capture="user" onChange={choosePhoto} disabled={busy} aria-label={text('Take profile photo')}/></label>
               {draft.photo && <button type="button" className={s.textButton} onClick={() => patch('photo', null)} disabled={busy}>{text('Remove photo')}</button>}
             </div></div>
-            <div className={s.fileStatus} role="status">{photoBusy ? <><span className={s.spinner}/>{text('Preparing photo…')}</> : draft.photo ? <><span className={s.statusDot}/>{text('Photo selected for review')}</> : text('JPG, PNG or WebP · Up to 10 MB')}</div>
+            <div className={s.fileStatus} role="status">{photoBusy ? <><span className={s.spinner}/>{text('Preparing photo…')}</> : draft.photo ? <><span className={s.statusDot}/>{text(live?.photoState==='stored'?'Photo stored securely':live?.photoState==='processing'?'Processing and security checking…':live?.photoState==='uncertain'?'Awaiting server confirmation · Retry checks the stored state':'Photo selected for review')}</> : text('JPG, PNG or WebP · Up to 10 MB')}</div>
             <details className={s.fileHelp}><summary>{text('Photo formats & privacy')}</summary><p>{text('HEIC is supported only when this browser can open it. Otherwise select JPG/PNG or use the camera.')} {text(live ? 'Your photo will be processed and stored privately when you submit. It is not used for automated scoring.' : 'The photo stays in this preview tab, is not uploaded, and is not used for automated scoring.')}</p></details>
             {errors.photo && <small className={s.error} role="alert">{errors.photo}</small>}
           </section>
           <section className={s.uploadCard}><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>{text('CV / Resume')}{vacancy.cvRequired ? <span className={s.requiredMark}> *</span> : <span className={s.optional}>{text(' (optional)')}</span>}</h2><p>{text('PDF or DOCX · Up to 10 MB')}</p></div></div>
-            {draft.cv && <ReadyFile file={draft.cv} onRemove={() => patch('cv', null)}/>}
+            {draft.cv && <ReadyFile state={live?.fileStates?.find(entry=>entry.file===draft.cv)?.state} file={draft.cv} onRemove={() => patch('cv', null)}/>}
             <label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{text(draft.cv ? 'Replace CV' : 'Select CV')}<input id="cv" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={event => chooseFiles(event, 'cv')} aria-label={text('Select CV')}/></label>
             {!vacancy.cvRequired && <label className={s.checkbox}><input type="checkbox" checked={draft.noCv} onChange={event => onChange({ ...draft, noCv: event.target.checked, cv: event.target.checked ? null : draft.cv })}/>{text('I do not have a CV')}</label>}
             {errors.cv && <small className={s.error} role="alert">{errors.cv}</small>}
           </section>
-          <section className={s.uploadCard}><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="certificate"/></span><div><h2>{text('Certificates & courses')}</h2><p>{text('Optional · Studies, specializations or other documents')}</p></div></div>
-            {draft.documents.map((file, index) => <ReadyFile key={`${file.name}-${index}`} file={file} onRemove={() => patch('documents', draft.documents.filter((_, at) => at !== index))}/>)}
-            <div className={s.documentActions}><label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{text('Choose files')}{/* A general picker keeps PDF accessible on Android. */}<input id="supporting-files" type="file" multiple onChange={event => chooseFiles(event, 'document')} aria-label={text('Choose supporting files')}/></label><label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>{text('Take photo')}<input type="file" accept="image/*" capture="environment" onChange={event => chooseFiles(event, 'document')} aria-label={text('Photograph a document')}/></label></div>
-            <small>{text('PDF, JPG, PNG or WebP · Up to 5 files, 10 MB each')}</small>
-          </section>
+          {requirements.map(item=>{ const shown=requirementPresentation(item,locale),items=selections.filter(selected=>selected.category===item.category);
+            return <section className={s.uploadCard} key={item.category} data-document-category={item.category}>
+              <div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name={item.category==='document'?'file':item.category}/></span><div><h2>{shown.label}</h2><p>{text(item.required?'Required':'Optional')}</p><p lang={shown.contentLocale}>{shown.help}</p>{shown.translationPending&&<small>{locale==='es'?'La ayuda específica está disponible en inglés.':'Specific help is available in English.'}</small>}</div></div>
+              {items.map(({file},index)=><div key={`${file.name}-${index}`}><ReadyFile file={file} state={live?.fileStates?.find(entry=>entry.file===file)?.state} onRemove={()=>removeSupporting(file)}/><label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="upload"/>{text('Replace file')}<input type="file" aria-label={`${text('Replace file')}: ${file.name}`} onChange={event=>chooseFiles(event,'document',item.category,file)}/></label></div>)}
+              <div className={s.documentActions}><label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{text('Choose files')}<input id={item.category==='document'?'supporting-files':`files-${item.category}`} type="file" multiple onChange={event=>chooseFiles(event,'document',item.category)} aria-label={item.category==='document'?text('Choose supporting files'):`${text('Choose files')}: ${shown.label}`}/></label><label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>{text('Take photo')}<input type="file" accept="image/*" capture="environment" onChange={event=>chooseFiles(event,'document',item.category)} aria-label={`${text('Photograph a document')}: ${shown.label}`}/></label></div>
+              <small>{text('PDF, JPG, PNG or WebP · Up to 5 files, 10 MB each')}</small>
+              {errors.documents&&missing.includes(item.category)&&<p className={s.error} role="alert">{locale==='es'?'Agrega al menos un archivo de esta categoría.':'Add at least one file in this category.'}</p>}
+            </section>;
+          })}
+          {selections.filter(entry=>!requirements.some(item=>item.category===entry.category)).map(({file},index)=><section key={index} className={s.uploadCard}><p>{locale==='es'?'Esta categoría ya no se solicita. Retira el archivo antes de enviar.':'This category is no longer requested. Remove the file before submitting.'}</p><ReadyFile file={file} state={live?.fileStates?.find(entry=>entry.file===file)?.state} onRemove={()=>removeSupporting(file)}/></section>)}
+          {errors.documents&&<p id="documents" className={s.error} role="alert" tabIndex={-1}>{errors.documents}</p>}
           <p className={s.previewNotice}><CareerIcon name="lock"/>{text(live ? 'Selected files will be uploaded and security-checked when you submit.' : 'Preview: selected files stay in this tab. Nothing is uploaded or scanned.')}</p>
         </div>}
         {reviewing && <div className={s.formFields}>
@@ -156,8 +172,8 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, question, r
               <dt lang={contentLocaleFor(screen)}>{labelFor(screen)}</dt><dd lang={screen.question ? ['select', 'multiselect', 'yesno'].includes(screen.question.kind) ? contentLocaleFor(screen) : '' : ['languages', 'availability', 'nationality', 'applyingFrom', 'residence', 'whatsapp', 'sameResidence'].includes(screen.field || '') ? locale : ''}>{answerFor(screen)}</dd><button type="button" className={s.textButton} aria-label={careersTemplate(locale, 'Edit {label}', { label: labelFor(screen) })} onClick={() => move(screen, true)}>{text('Edit')}</button>
             </div>)}</dl>
           </section>)}
-          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="file"/>{text('Documents')}</h2><button type="button" className={s.textButton} onClick={() => move(screens.find(screen => screen.kind === 'documents')!, true)}>{text('Edit')}</button></div><p className={s.readyLine}><CareerIcon name="check"/>{text('Recent profile photo selected')}</p><p className={s.readyLine}><CareerIcon name="check"/>{draft.cv?.name || text('CV optional for this role')}</p>{draft.documents.map((file, index) => <p className={s.readyLine} key={`${file.name}-${index}`}><CareerIcon name="check"/>{file.name}</p>)}</section>
-          <details className={s.privacy}><summary>{text(live ? 'Recruitment privacy notice' : 'How this preview uses your information')}</summary>{live && locale === 'es' && <p lang="es">{text('The privacy notice is shown in its configured original language; a reviewed Spanish version is still pending.')}</p>}<p lang={live ? '' : locale} style={{ whiteSpace: 'pre-wrap' }}>{live ? live.privacyText : text('This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.')}</p></details>
+          <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="file"/>{text('Documents')}</h2><button type="button" className={s.textButton} onClick={() => move(screens.find(screen => screen.kind === 'documents')!, true)}>{text('Edit')}</button></div><p className={s.readyLine}><CareerIcon name="check"/>{text('Recent profile photo selected')}</p><p className={s.readyLine}><CareerIcon name="check"/>{draft.cv?.name || text('CV optional for this role')}</p>{selections.map(({file,category}, index) => <p className={s.readyLine} key={`${file.name}-${index}`}><CareerIcon name="check"/>{categoryLabel(category,locale)}: {file.name}</p>)}</section>
+          <p className={s.previewNotice}>{locale === "es" ? "Confirmación preparada en español para" : "Confirmation prepared in English for"} <strong>{draft.email}</strong>. {live ? text("Receiving an application does not confirm email delivery.") : text("No email is sent in this preview.")}</p><details className={s.privacy}><summary>{text(live ? 'Recruitment privacy notice' : 'How this preview uses your information')}</summary>{live && locale === 'es' && live.privacyTranslationPending !== false && <p lang="es">{text('The privacy notice is shown in its configured original language; a reviewed Spanish version is still pending.')}</p>}<p lang={live ? live.privacyContentLocale || '' : locale} style={{ whiteSpace: 'pre-wrap' }}>{live ? live.privacyText : text('This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.')}</p></details>
           <label className={s.checkbox}><input id="privacy" type="checkbox" checked={draft.privacy} onChange={event => patch('privacy', event.target.checked)} aria-invalid={!!errors.privacy}/>{text(live ? 'I have read the recruitment privacy notice.' : 'I have read the preview privacy information.')}</label>{errors.privacy && <small className={s.error} role="alert">{errors.privacy}</small>}
           <label className={s.checkbox}><input type="checkbox" checked={draft.futureTalent} onChange={event => patch('futureTalent', event.target.checked)}/>{text(live ? 'Keep my profile for future openings (optional).' : 'Keep my profile for future openings (optional; simulated in preview).')}</label>
         </div>}

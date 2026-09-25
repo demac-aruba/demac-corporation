@@ -90,6 +90,6 @@ function createFiles({bucket,sharp,scanner}) {
     return {bytes,mime:record.mime,name:record.name};
   }
   const remove = record => removePrivateObject(bucket,record);
-  return {decode,prepare,store,read,remove,publicFile:record=>({id:record.id,kind:record.kind,name:record.name,size:record.size,status:record.status})};
+  return {decode,prepare,store,read,remove,publicFile:record=>({id:record.id,kind:record.kind,...(record.category?{category:record.category}:{}),name:record.name,size:record.size,status:record.status})};
 }
 module.exports={decode,detectedType,privateScannerAddress,scan,createFiles};
