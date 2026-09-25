@@ -90,8 +90,21 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/field-tools" --no-audit --no-fund firebase-tools@15.30.0
       - name: Real loopback Auth, Firestore, Storage and HTTP integration
         run: |
+          set -euo pipefail
           export FIELD_PROCEDURE_TEST_RESULTS="$RUNNER_TEMP/field-procedure-backend"
-          "$RUNNER_TEMP/field-tools/node_modules/.bin/firebase" emulators:exec --project demo-demac-dwellings --config firebase.dwellings-preview.json --only auth,firestore,storage 'node functions/test-support/fieldProcedureEmulator.cjs'
+          # Pin the exact checked-out rules using absolute paths. Never substitute open rules.
+          node - <<'NODE'
+          const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+          const config=JSON.parse(fs.readFileSync('firebase.dwellings-preview.json','utf8'));
+          for(const key of ['firestore','storage']) {
+            const rule=key+'.rules';
+            const expected=cp.execFileSync('git',['show','HEAD:'+rule]);
+            if(!fs.readFileSync(rule).equals(expected))throw new Error('Rules changed during test preparation: '+key);
+            config[key]={rules:path.resolve(rule)};
+          }
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP,'field-backend.firebase.json'),JSON.stringify(config));
+          NODE
+          "$RUNNER_TEMP/field-tools/node_modules/.bin/firebase" emulators:exec --project demo-demac-dwellings --config "$RUNNER_TEMP/field-backend.firebase.json" --only auth,firestore,storage 'node functions/test-support/fieldProcedureEmulator.cjs'
       - name: Retain sanitized backend evidence
         if: always()
         uses: actions/upload-artifact@v4
