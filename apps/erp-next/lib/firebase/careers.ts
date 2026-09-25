@@ -49,6 +49,6 @@ export async function downloadApplicantDocument(applicationId: string, file: Doc
 function fileBase64(file: File) {
   return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('The selected file cannot be read.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file); });
 }
-export async function uploadApplicantDocument(session: ApplicantSession, file: File, kind: DocumentRecord['kind'], category?: SupportingCategory) {
-  return careersPublic<DocumentRecord>('file.upload', { ...session, name: file.name, kind, ...(kind === "document" ? { category: category || "document" } : {}), base64: await fileBase64(file) });
+export async function uploadApplicantDocument(session: ApplicantSession, file: File, kind: DocumentRecord['kind'], category?: SupportingCategory, replaceFileId?: string) {
+  return careersPublic<DocumentRecord>('file.upload', { ...session, name: file.name, kind, ...(replaceFileId ? { replaceFileId } : {}), ...(kind === "document" ? { category: category || "document" } : {}), base64: await fileBase64(file) });
 }

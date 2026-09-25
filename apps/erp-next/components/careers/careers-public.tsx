@@ -75,15 +75,30 @@ export function CareersPublic() {
       if (draft.cv) chosen.push({ file: draft.cv, kind: 'cv' });
       documentSelections(draft).forEach(item => chosen.push(item));
       for (const item of chosen) item.id = await keyFor(item.file, item.kind, item.category);
-      for (const old of existing.files) if (!chosen.some(f => f.id === old.id)) await careersPublic('file.remove', { ...session, fileId: old.id });
+      const obsolete=existing.files.filter(old=>!chosen.some(item=>item.id===old.id));
+      // Clear failed reservations only. Accepted files are preserved until a
+      // replacement has been acknowledged by the authority.
+      for (const old of obsolete.filter(file=>file.status!=='clean')) await careersPublic('file.remove',{...session,fileId:old.id});
+      const replacementPool=obsolete.filter(file=>file.status==='clean');
       const mark=(item:typeof chosen[number],state:SelectedFileState)=>{if(item.kind==='photo'){photoForState.current=draft.photo;setPhotoState(state);}else setFileStates(previous=>[...previous.filter(entry=>entry.file!==item.file),{file:item.file,state}]);};
       for (let i = 0; i < chosen.length; i++) {
         const item=chosen[i];
         if(existing.files.some(f=>f.id===item.id&&f.status==='clean')){mark(item,'stored');continue;}
         setStatus(careersTemplate(nav.locale,'Processing document {current} / {total}…',{current:i+1,total:chosen.length}));mark(item,'processing');
-        try {const saved=await uploadApplicantDocument(session,item.file,item.kind,item.category);mark(item,saved.status==='clean'?'stored':'uncertain');}
+        const sameKind=replacementPool.filter(file=>file.kind===item.kind);
+        const replaced=sameKind.find(file=>(file.category||'document')===(item.category||'document')) || sameKind[0];
+        try {
+          const saved=await uploadApplicantDocument(session,item.file,item.kind,item.category,replaced?.id);
+          mark(item,saved.status==='clean'?'stored':'uncertain');
+          if(replaced && saved.status==='clean') replacementPool.splice(replacementPool.indexOf(replaced),1);
+        }
         catch(error){mark(item,error instanceof CareersError&&['connection-error','upload-busy','upload-conflict'].includes(error.code)?'uncertain':'error');throw error;}
       }
+      // Confirm the actual server set before removing explicitly deselected
+      // leftovers. An uncertain upload exits above with the previous file intact.
+      const synchronized=await careersPublic<{files:DocumentRecord[];receipt?:Receipt}>('session.status',session);
+      if(synchronized.receipt){complete(synchronized.receipt);return null;}
+      for(const old of synchronized.files) if(!chosen.some(item=>item.id===old.id)) await careersPublic('file.remove',{...session,fileId:old.id});
       setStatus(text('Saving application…'));
       const { photo, cv, documents, documentAssignments, ...fields } = draft;
       const receipt = await careersPublic<Receipt>('application.submit', { ...session, localeAtSubmit: nav.locale, presentationVersion: PRESENTATION_VERSION, profile: { ...fields, privacyVersion: data.privacy.version } }); complete(receipt); return null;

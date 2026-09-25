@@ -42,6 +42,9 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     await page.locator('#photo').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png });
     await page.getByText('Foto seleccionada para revisión', { exact: true }).waitFor();
     await page.locator('#cv').setInputFiles({ name: 'cv-prueba.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% QA only\n%%EOF') });
+    await page.getByRole('button',{name:'Revisar solicitud',exact:true}).click();
+    await page.getByText('Agrega al menos un archivo de esta categoría.',{exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Foto y documentos',exact:true}).waitFor();
     await page.locator('#files-certificate').setInputFiles({name:'certificado-prueba.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% Test training certificate\n%%EOF')});
     await page.getByRole('button', { name: 'Revisar solicitud', exact: true }).click();
     await page.getByRole('heading', { name: 'Revisa tu solicitud', exact: true }).waitFor();
@@ -141,6 +144,8 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
       await office.locator('[data-candidate-mail="queued"]').waitFor();
       await office.getByText('View the prepared confirmation',{exact:true}).click();
       await office.getByText(saved.candidateMessage.subject,{exact:true}).waitFor();
+      assert.equal(await office.locator('iframe[title="Prepared candidate confirmation email"]').getAttribute('sandbox'),'');
+      await office.frameLocator('iframe[title="Prepared candidate confirmation email"]').getByText(saved.reference,{exact:true}).waitFor();
       await office.screenshot({path:path.join(output,`${name}-es-05-candidate-mail.png`),fullPage:true});
       await office.getByText('View the prepared confirmation',{exact:true}).click();
       await office.screenshot({ path: path.join(output, `${name}-es-04-original-expedient.png`), fullPage: true });

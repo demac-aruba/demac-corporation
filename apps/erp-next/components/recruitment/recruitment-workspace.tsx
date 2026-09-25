@@ -31,6 +31,7 @@ function Workspace() {
   const seq = useRef(0);
   const originalVacancy = useRef<RecruitmentVacancy | null>(null);
   const [publicationBlockers, setPublicationBlockers] = useState<string[]>([]);
+  const [idDocumentsAllowed, setIdDocumentsAllowed] = useState(false);
   const dirty = !!vacancy && JSON.stringify(vacancy) !== JSON.stringify(originalVacancy.current);
   useEffect(() => {
     if (!dirty) return;
@@ -59,7 +60,8 @@ function Workspace() {
         if (ticket !== seq.current) return;
         originalVacancy.current = data; setVacancy(data);
         try {
-          const setup = await careersAdmin<{ settings: CareersSettings | null; blockers: string[] }>('settings.get');
+          const setup = await careersAdmin<{ settings: CareersSettings | null; blockers: string[]; idDocumentsAllowed?: boolean }>('settings.get');
+          if (ticket === seq.current) setIdDocumentsAllowed(setup.idDocumentsAllowed === true);
           if (ticket === seq.current) setPublicationBlockers([...setup.blockers, ...(setup.settings?.intakeEnabled ? [] : ['Application intake is paused in Settings.'])]);
         } catch { if (ticket === seq.current) setPublicationBlockers(['Publication setup could not be checked. You can still save a draft.']); }
       } else {
@@ -92,7 +94,8 @@ function Workspace() {
   }
   const v = vacancy;
   const languageBlockers = v?.translations?.es?.status === 'Approved' ? translationIssues({ ...v, editorialVersion: nextEditorialVersion(v, v.version ? originalVacancy.current : null) }) : [];
-  const openingBlockers = [...publicationBlockers, ...languageBlockers];
+  const documentPolicyBlockers = v?.documentRequirements?.some(item => item.category === 'id') && !idDocumentsAllowed ? ['ID collection requires an approved purpose, access and retention policy. Remove this category or keep the vacancy as a draft.'] : [];
+  const openingBlockers = [...publicationBlockers, ...languageBlockers, ...documentPolicyBlockers];
   return <section className={s.root} aria-label="Recruitment administration">
     <header className={s.head}><div><div className={s.muted}>MANAGEMENT / PEOPLE</div><h1>Recruitment</h1><p>Manage opportunities, application forms and candidates.</p></div>{tab === 'vacancies' && !edit && <button className={s.primary} onClick={() => to('vacancies', { edit: 'new' })}>＋ New vacancy</button>}</header>
     <nav className={s.tabs} aria-label="Recruitment navigation">{[['vacancies', 'Vacancies'], ['applicants', 'Applicants'], ['settings', 'Settings']].map(([value, label]) => <button key={value} aria-pressed={tab === value} onClick={() => { setFilter(''); setSearch(''); to(value); }}>{label}</button>)}</nav>

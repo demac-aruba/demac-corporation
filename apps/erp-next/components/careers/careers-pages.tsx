@@ -2,6 +2,7 @@
 
 import { useCareersLanguage } from './careers-language';
 import { vacancyPresentation } from '../../lib/careers-locale';
+import { careersExcerpt } from '../../lib/careers-excerpt';
 import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
 import { defaultCareersContent, careersContentFor, type WebsiteCareersContent } from '../../lib/public-website-content';
@@ -27,7 +28,7 @@ export function CareersHero({ content = defaultCareersContent, vacancy, onBack, 
         <span className={p.eyebrow}>{vacancy ? vacancy.department : content.eyebrow}</span>
         <Title data-career-page-title={titleAsHeading ? true : undefined} tabIndex={titleAsHeading ? -1 : undefined}>{vacancy?.title || content.title}</Title>
         {!vacancy && <strong>{content.subtitle}</strong>}
-        <p>{vacancy?.summary || content.description}</p>
+        <p>{vacancy ? careersExcerpt(vacancy.summary) : content.description}</p>
       </div>
     </div>
   </section>;
@@ -54,7 +55,7 @@ export function VacancyCatalogue({ jobs, query, department, onQuery, onDepartmen
     <div className={p.list}>{filtered.map(job => <article data-career-content-locale={presentations.get(job.id)!.contentLocale} className={p.jobCard} key={job.id}>
       <h2 lang={presentations.get(job.id)!.contentLocale}>{presentations.get(job.id)!.job.title}</h2>
       <div className={p.meta} lang={presentations.get(job.id)!.contentLocale}><span><CareerIcon name="briefcase"/>{presentations.get(job.id)!.job.department}</span><span><CareerIcon name="location"/>{presentations.get(job.id)!.job.location}</span><span><CareerIcon name="clock"/>{presentations.get(job.id)!.job.contract}</span></div>
-      <p lang={presentations.get(job.id)!.contentLocale}>{presentations.get(job.id)!.job.summary}{locale === 'es' && presentations.get(job.id)!.contentLocale === 'en' && <small lang="es"> · Información en inglés</small>}</p>
+      <p lang={presentations.get(job.id)!.contentLocale}>{careersExcerpt(presentations.get(job.id)!.job.summary)}{locale === 'es' && presentations.get(job.id)!.contentLocale === 'en' && <small lang="es"> · Información en inglés</small>}</p>
       <button type="button" className={p.positionButton} data-career-focus={`job-${job.id}`} aria-label={`${text('View')} ${presentations.get(job.id)!.job.title}`} onClick={() => onSelect(job)}>{text('View position')} <CareerIcon name="arrow"/></button>
     </article>)}</div>
     {!filtered.length && <div className={s.empty}><h2>{!available ? text('Applications are temporarily unavailable') : jobs.length ? text('No matching positions') : text('No openings at the moment')}</h2><p>{text(jobs.length ? 'Try another keyword or department.' : 'Please check back for future opportunities.')}</p>{(query || department) && <button type="button" className={s.secondary} onClick={() => { onQuery(''); onDepartment(''); }}>{text('Reset search')}</button>}</div>}

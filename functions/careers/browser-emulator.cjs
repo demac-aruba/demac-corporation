@@ -45,7 +45,7 @@ async function context(browser,admin,viewport){
   if(admin){
     const response=await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=test-api-key`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'qa-admin@example.test',password:testPassword,returnSecureToken:true})});
     const token=await response.json();assert(token.idToken,'Auth emulator must sign in the test administrator');
-    await ctx.addInitScript(session=>sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)),{uid:'qa-admin',email:'qa-admin@example.test',idToken:token.idToken,refreshToken:token.refreshToken,expiresAt:Date.now()+3600000});
+    await ctx.addInitScript(session=>{ if (window !== window.top) return; sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)); },{uid:'qa-admin',email:'qa-admin@example.test',idToken:token.idToken,refreshToken:token.refreshToken,expiresAt:Date.now()+3600000});
   }
   return ctx;
 }
@@ -117,6 +117,7 @@ async function context(browser,admin,viewport){
       ]) await office.getByLabel(label,{exact:true}).fill(value);
       const reviewed=office.getByLabel('I reviewed this Spanish translation against the current English version.',{exact:true});
       await office.getByLabel('Request certificates',{exact:true}).check();
+      await office.getByLabel('Require certificates before submission',{exact:true}).check();
       await office.getByLabel('Request government id',{exact:true}).check();
       const idPurpose=office.getByLabel('Purpose / applicant help · Government ID · English',{exact:true});
       await idPurpose.fill('  Proposed purpose only  ');
@@ -188,6 +189,7 @@ async function context(browser,admin,viewport){
       const png=await require('sharp')({create:{width:96,height:96,channels:3,background:'#cbddee'}}).png().toBuffer();
       await person.locator('#photo').setInputFiles({name:'qa.png',mimeType:'image/png',buffer:png});await person.getByText('Photo selected for review',{exact:true}).waitFor();
       await person.locator('#cv').setInputFiles({name:'qa-cv.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% QA test file\n%%EOF')});
+      await person.locator('#files-certificate').setInputFiles({name:'qa-training.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% Synthetic certificate\n%%EOF')});
       await shot(person,'03-documents');await person.getByRole('button',{name:'Review application',exact:true}).click();await person.locator('#privacy').check();
       // A real admin edit invalidates the public form version; recovery is explicit,
       // keeps contact/files and never reinterprets an answer to a changed question.
@@ -213,7 +215,7 @@ async function context(browser,admin,viewport){
       await person.getByText('qa-cv.pdf',{exact:true}).waitFor();
       await person.getByRole('button',{name:'Review application',exact:true}).click();
       assert(!(await person.locator('#privacy').isChecked()),'revised privacy requires new acknowledgement');
-      await person.getByText(`candidate-${name}@example.test`,{exact:true}).waitFor();
+      assert.equal(await person.locator('[data-reviewed-question="profile:email"] dd').textContent(),`candidate-${name}@example.test`);
       await person.locator('#privacy').check();
       await shot(person,'03b-revised-review');
       interrupt=true;interrupted=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');

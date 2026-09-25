@@ -170,6 +170,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     const category=Documents.categoryFor(kind,p.category);
     const name=C.text(p.name,'file name',180); const key=C.digest(Documents.uploadIdentityMaterial(kind,C.digest(bytes),category)), lease=crypto.randomUUID();
     const attemptPath=`careers-private/${C.id(p.sessionId)}/${key}-${lease}`;
+    const replaceId=p.replaceFileId == null ? null : C.id(p.replaceFileId);
     const reserved=await db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sessionRef),p.token);
       C.requireValue(session.status==='draft','This application was already submitted.','already-submitted',409);
@@ -181,12 +182,22 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const existing=session.files[key];
       if(existing?.status==='clean') return existing;
       C.requireValue(!existing || existing.status!=='uploading' || existing.leaseUntil<now(),'This file is still being processed. Retry shortly.','upload-busy',409);
-      const active=Object.values(session.files).filter(f=>f.id!==key && ['clean','uploading'].includes(f.status));
+      // A replacement retains the last accepted object until the new object is
+      // scanned, stored and transactionally adopted. Never delete first.
+      const replaced=replaceId ? session.files[replaceId] : null;
+      if (replaceId) {
+        C.requireValue(replaceId!==key && replaced?.status==='clean' && replaced.kind===kind,
+          'The previous file changed. Refresh the upload state before retrying.','upload-conflict',409);
+        C.requireValue(!Object.values(session.files).some(f=>f.id!==key && f.status==='uploading' && f.replaces),
+          'Another replacement is still processing. Retry shortly.','upload-busy',409);
+      }
+      const active=Object.values(session.files).filter(f=>f.id!==key && f.id!==replaceId && ['clean','uploading'].includes(f.status));
       C.requireValue(Object.keys(session.files).length<16 || !!existing,'Too many upload attempts. Start another application session.','file-limit',409);
       C.requireValue(active.reduce((n,f)=>n+f.size,0)+bytes.length<=C.MAX_TOTAL,'Combined files exceed 30 MB.');
       C.requireValue(kind==='document'?active.filter(f=>f.kind==='document').length<5:!active.some(f=>f.kind===kind),'Remove the previous file before replacing it.','file-slot',409);
       if(existing?.path)tx.set(ref('deletions',C.digest(existing.path)),{path:existing.path,generation:existing.generation || null,notBefore:now()+300000,createdAt:at()});
-      const file={id:key,kind,...(category?{category}:{}),name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000,path:attemptPath,generation:null};
+      const file={id:key,kind,...(category?{category}:{}),name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000,path:attemptPath,generation:null,
+        ...(replaced ? {replaces:{id:replaced.id,path:replaced.path,generation:replaced.generation}} : {})};
       tx.update(sessionRef,{[`files.${key}`]:file}); return file;
     });
     if(reserved.status==='clean') return files.publicFile(reserved);
@@ -198,7 +209,14 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       await db.runTransaction(async tx=>{
         const session=sessionAccess(await tx.get(sessionRef),p.token);
         C.requireValue(session.status==='draft' && session.files[key]?.lease===lease,'Upload session changed.','upload-conflict',409);
-        tx.update(sessionRef,{[`files.${key}`]:record});
+        if (reserved.replaces) {
+          const previous=session.files[reserved.replaces.id];
+          C.requireValue(previous?.status==='clean' && previous.path===reserved.replaces.path && previous.generation===reserved.replaces.generation,
+            'The previous file changed during replacement. Retry with the current state.','upload-conflict',409);
+          const nextFiles={...session.files,[key]:record}; delete nextFiles[previous.id];
+          tx.update(sessionRef,{files:nextFiles});
+          tx.set(ref('deletions',C.digest(previous.path)),{path:previous.path,generation:previous.generation,notBefore:now()+300000,createdAt:at()});
+        } else tx.update(sessionRef,{[`files.${key}`]:record});
       });
       return files.publicFile(record);
     } catch(error) {
@@ -243,6 +261,8 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const file=session.files[key];
       if (!file) return null; // Exact removal retries are successful, not upload errors.
       C.requireValue(file.status!=='uploading' || file.leaseUntil<=now(),'File cannot be removed during upload.','upload-busy',409);
+      C.requireValue(!Object.values(session.files).some(f=>f.status==='uploading' && f.leaseUntil>now() && f.replaces?.id===key),
+        'The accepted file is protected while its replacement is processing.','upload-busy',409);
       const remaining={...session.files}; delete remaining[key]; tx.update(sref,{files:remaining}); if(file.path)tx.set(ref('deletions',C.digest(file.path)),{path:file.path,generation:file.generation,createdAt:at()}); return file;
     });
     if(record?.path) {try{await files.remove(record);await ref('deletions',C.digest(record.path)).delete();}catch{ }} return {removed:true};
