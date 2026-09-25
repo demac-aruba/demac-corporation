@@ -64,15 +64,16 @@ test('revising a position retains contact/files but does not reinterpret changed
   assert.equal(restored.privacy, false); assert.equal(restored.futureTalent, false);
 });
 
-// Careers must reuse the canonical website chrome exactly. The public-site
-// wrapper is scoped to the header/footer only; the application body keeps its
-// own component styles and does not inherit marketing illustration selectors.
+// Careers must reuse the canonical website chrome exactly without wrapping the
+// header/footer in .public-site, because that class reserves min-height:100vh.
 test('Careers reuses canonical public header and footer without replacement chrome', () => {
   const fs = require('node:fs'), path = require('node:path');
   const chrome = fs.readFileSync(path.join(__dirname, '../components/careers/careers-chrome.tsx'), 'utf8');
   const publicShell = fs.readFileSync(path.join(__dirname, '../components/public/public-site-shell.tsx'), 'utf8');
   assert(chrome.includes("import { PublicFooter, PublicHeader } from '../public/public-site-shell'"));
-  assert(chrome.includes('className="public-site public-home-approved"'));
+  assert(chrome.includes('public-subsite'));
+  assert(chrome.includes('s.brandChrome'));
+  assert(!chrome.includes('public-site public-home-approved'));
   assert(chrome.includes('<PublicHeader active="careers"'));
   assert(chrome.includes('<PublicFooter/>'));
   assert(publicShell.includes('export function PublicHeader'));

@@ -85,7 +85,9 @@ test('Careers reuses canonical public site chrome without replacement styling', 
   assert(source.includes("import { PublicFooter, PublicHeader } from '../public/public-site-shell'"));
   assert(source.includes('<PublicHeader active="careers"'));
   assert(source.includes('<PublicFooter/>'));
-  assert(source.includes('public-site public-home-approved'));
+  assert(source.includes('public-subsite'));
+  assert(source.includes('s.brandChrome'));
+  assert(!source.includes('public-site public-home-approved'));
   assert(!source.includes('careers-chrome.module.css'));
   assert(!source.includes('PublicBrand'));
   assert(!fs.existsSync(path.join(__dirname, '..', 'components/careers/careers-chrome.module.css')));
