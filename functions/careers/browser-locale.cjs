@@ -79,15 +79,16 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.documents.length, 2);
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
-    const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [];
+    const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [], responseFacts = new WeakMap();
     let lastNetworkActivity = Date.now(), phase = 'initial-read';
     office.setDefaultTimeout(15000);
     office.on('pageerror', error => errors.push(error.message));
     office.on('request', request => { pendingRequests.add(request); lastNetworkActivity = Date.now(); });
     const finished = request => { pendingRequests.delete(request); lastNetworkActivity = Date.now(); };
     office.on('requestfinished', finished);
+    office.on('response', response => responseFacts.set(response.request(), { status: response.status(), contentType: response.headers()['content-type'], length: response.headers()['content-length'] }));
     office.on('requestfailed', request => {
-      failedRequests.push({ phase, path: new URL(request.url()).pathname, error: request.failure()?.errorText });
+      failedRequests.push({ phase, path: new URL(request.url()).pathname, method: request.method(), type: request.resourceType(), response: responseFacts.get(request) || null, error: request.failure()?.errorText });
       finished(request);
     });
     // Readiness is still the authorized response plus exact DOM assertions below.
