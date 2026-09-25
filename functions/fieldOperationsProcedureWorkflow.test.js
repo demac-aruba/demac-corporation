@@ -7,6 +7,7 @@ const {fixture,lead,helper,office,outsider,service,seed}=require('./test-support
 const {createTransitionWorkInterventionCommand}=require('./fieldOperationsInterventionMutation');
 const {projectedChainState,reviewSnapshot,officeReviewDocumentId}=require('./fieldOperationsOfficeReview');
 const {projectCanonicalWorkVisit}=require('./fieldOperationsAuthorityWorkVisit');
+const {loadProcedureExceptionQueue}=require('./fieldOperationsProcedureExceptionQueue');
 const error=code=>e=>e.code===code;
 async function initials(f){
  await f.claim('indoor');await f.claim('outdoor');
@@ -118,6 +119,17 @@ test('lost companion capture has an office-audited recovery path, not a permanen
  assert.equal((await f.read()).workflow.parts.outdoor.ownerUserId,lead.uid);assert.ok((await f.read()).stepReadiness.outdoor.O01.includes('photo:before'));
  assert.equal(f.store.all('fieldEvidence').length,0);const event=f.store.all('fieldOperationEvents').find(e=>e.type==='procedure_abandon_capture');assert.equal(event.after.abandonedCapture.ownerUserId,helper.uid);
 });
+test('Office can discover a pending procedure exception before final Office Review and technician cannot list it',async()=>{
+ const f=fixture();await f.claim('indoor');let b=await f.read();
+ await f.mutate({action:'request_exception',part:'indoor',stepId:'I01',expectedPartVersion:b.workflow.parts.indoor.version,expectedSafetyRevision:b.workflow.safety.revision,reason:'Synthetic before-photo unavailable'});
+ await assert.rejects(()=>loadProcedureExceptionQueue(f.store.db,lead),error('permission_denied'));
+ const queued=await loadProcedureExceptionQueue(f.store.db,office);assert.equal(queued.length,1);assert.equal(queued[0].interventionId,'WI-1');assert.equal(queued[0].part,'indoor');assert.equal(queued[0].stepId,'I01');assert.equal(queued[0].reason,'Synthetic before-photo unavailable');
+ assert.equal(f.store.all('fieldOfficeReviews').length,0,'procedure exception is discoverable before visit-level Office Review');
+ b=await f.read(office);
+ await f.mutate({action:'review_exception',part:'indoor',stepId:'I01',expectedPartVersion:b.workflow.parts.indoor.version,decision:'approve',reason:'Office accepts documented limitation',disposition:'not_documented'},office);
+ assert.deepEqual(await loadProcedureExceptionQueue(f.store.db,office),[]);
+});
+
 test('same account relinked to another employee cannot upload an old employee capture',async()=>{
  const f=fixture();await f.claim('indoor');await f.mutate({action:'prepare_media',...await f.current('indoor'),captureId:'identity-capture',stepId:'I01',kind:'photo',view:'before',contentType:'image/jpeg',sizeBytes:20,sha256:'b'.repeat(64),source:'camera'});
  await assert.rejects(()=>f.commands.authorizeUpload({...f.input({...lead,staffId:'replacement-staff'}),captureId:'identity-capture'}),error('permission_denied'));assert.equal(f.storageCalls,0);
