@@ -22,6 +22,9 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
   const [riskOpen,setRiskOpen]=useState(false);
   const [riskReason,setRiskReason]=useState('');
   const [riskParts,setRiskParts]=useState<Record<FieldProcedurePart,boolean>>({indoor:initialPart==='indoor',outdoor:initialPart==='outdoor'});
+  const [riskResolution,setRiskResolution]=useState('');
+  const [riskCompetentPerson,setRiskCompetentPerson]=useState('');
+  const [riskCompetenceConfirmed,setRiskCompetenceConfirmed]=useState(false);
   const [isolationNote,setIsolationNote]=useState('');
   const [isolationCompetent,setIsolationCompetent]=useState(false);
   const [partSafe,setPartSafe]=useState(false);
@@ -36,6 +39,7 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
   const openRisk=workspace?.risks.find(r=>r.status==='open');
   const blocked=openRisk?.parts.includes(part) ?? false;
   const pendingLocal=useMemo(()=>session.captures.filter(c=>c.stage!=='confirmed'),[session.captures]);
+  const bothPartsReady=workspace?.procedureParts.every(p=>Boolean(p.completedAt)&&p.safeToTest) ?? false;
 
   function goBack(){if(requestProcedureExit())onBack();}
 
@@ -102,6 +106,23 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
       <strong>Riesgo alto abierto</strong>
       <p>{openRisk.reason}</p>
       <p>Partes afectadas: {openRisk.parts.map(x=>x==='indoor'?'Evaporadora':'Condensadora').join(' y ')}. La no aceptación del cliente no elimina el bloqueo.</p>
+      <details className={styles.coordination}>
+        <summary>Resolver riesgo — técnico responsable u oficina</summary>
+        <div className={styles.fields}>
+          <label className={styles.full}>Qué cambió y cómo se eliminó o controló el riesgo
+            <textarea rows={3} value={riskResolution} maxLength={1500} onChange={e=>setRiskResolution(e.target.value)}/>
+          </label>
+          <label>Persona competente que verificó
+            <input value={riskCompetentPerson} maxLength={180} onChange={e=>setRiskCompetentPerson(e.target.value)}/>
+          </label>
+          <label className={styles.check}><input type="checkbox" checked={riskCompetenceConfirmed} onChange={e=>setRiskCompetenceConfirmed(e.target.checked)}/>Confirmo que una persona competente verificó físicamente la resolución. Esto no se deduce del rol de la app.</label>
+          <button type="button" disabled={!session.canCommand||riskResolution.trim().length<3||riskCompetentPerson.trim().length<3||!riskCompetenceConfirmed}
+            onClick={async()=>{
+              const next=await session.execute({action:'resolve_risk',riskId:openRisk.id,expectedSafetyRevision:workspace.safety!.revision,reason:riskResolution.trim(),competentPerson:riskCompetentPerson.trim(),competenceConfirmed:riskCompetenceConfirmed});
+              if(next){setRiskResolution('');setRiskCompetentPerson('');setRiskCompetenceConfirmed(false);setPartSafe(false);}
+            }}>Confirmar resolución del riesgo</button>
+        </div>
+      </details>
     </div>:null}
 
     <div className={styles.tabs} role="tablist" aria-label="Parte del equipo">
@@ -175,19 +196,19 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
         }}>Finalizar mi parte</button>
     </section>:null}
 
-    {workspace.safety.phase==='final_test'?<details className={styles.coordination}>
-      <summary>Prueba final coordinada</summary>
+    {workspace.safety.phase==='isolated' && bothPartsReady?<details className={styles.coordination}>
+      <summary>Prueba final coordinada — técnico responsable</summary>
       <section className={styles.card}>
-        <p>Registrar solo después de coordinar a la cuadrilla y verificar que no quede un riesgo abierto.</p>
+        <p>Ambas partes están finalizadas y marcadas listas para prueba. Registra la prueba únicamente después de coordinar físicamente a la cuadrilla y verificar que no quede un riesgo abierto.</p>
         <label>Resultado
           <select value={finalResult} onChange={e=>setFinalResult(e.target.value)}>
             <option value="">Seleccionar</option><option value="enfria">Enfría</option><option value="no_enfria">No enfría</option><option value="inconcluso">Inconcluso</option><option value="no_se_pudo_verificar">No se pudo verificar</option>
           </select>
         </label>
-        <label>Nota de prueba<textarea rows={3} value={finalNote} maxLength={1500} onChange={e=>setFinalNote(e.target.value)}/></label>
+        <label>Nota de prueba<textarea rows={3} value={finalNote} maxLength={1500} onChange={e=>setFinalNote(e.target.value)} placeholder={finalResult==='enfria'?'Opcional si el resultado es Enfría.':'Explica el resultado o la limitación.'}/></label>
         <label className={styles.check}><input type="checkbox" checked={finalCompetent} onChange={e=>setFinalCompetent(e.target.checked)}/>La prueba fue coordinada y verificada por persona competente.</label>
         <button type="button" className={styles.primary}
-          disabled={!session.canCommand||!finalResult||!finalCompetent||finalNote.trim().length<3||Boolean(openRisk)}
+          disabled={!session.canCommand||!finalResult||!finalCompetent||(finalResult!=='enfria'&&finalNote.trim().length<3)||Boolean(openRisk)||pendingLocal.length>0}
           onClick={async()=>{
             const versions=Object.fromEntries(workspace.procedureParts.map(p=>[p.id,p.version])) as Record<FieldProcedurePart,number>;
             const next=await session.execute({action:'record_final_test',expectedSafetyRevision:workspace.safety!.revision,partVersions:versions,competenceConfirmed:finalCompetent,result:finalResult,note:finalNote.trim()});
@@ -195,6 +216,8 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
           }}>Registrar prueba final</button>
       </section>
     </details>:null}
+    {workspace.safety.phase==='isolated' && !bothPartsReady?<div className={styles.notice}>La prueba final se habilita cuando evaporadora y condensadora estén finalizadas y confirmadas como listas para la prueba.</div>:null}
+    {workspace.safety.phase==='final_test'?<div className={styles.notice}><strong>Prueba final confirmada por el servidor.</strong><p>Resultado: {workspace.safety.finalResult?procedureLabel(workspace.safety.finalResult):'sin resultado proyectado'}.</p><p>El técnico responsable todavía debe finalizar la intervención mediante el control de cierre del trabajo; esta pantalla no envía el reporte al cliente.</p></div>:null}
 
     <button type="button" className={styles.quiet} onClick={goBack}>Volver a seleccionar parte</button>
   </section>;
