@@ -64,6 +64,7 @@ import {
   type FieldOfficeReviewDecision,
 } from './field-office-review-contract';
 import { parseFieldHistoryJobResponse } from './field-history-contract';
+import { parseFieldProcedureExceptionQueueResponse } from './field-procedure-exception-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -196,6 +197,7 @@ export type {
   FieldSaleTransitionOption,
   FieldTransitionSaleLineResponse,
 } from './field-sale-contract';
+export type { FieldProcedureExceptionQueueItem, FieldProcedureExceptionQueueResponse } from './field-procedure-exception-contract';
 export type {
   FieldDecideOfficeReviewResponse,
   FieldBillingCandidate,
@@ -454,6 +456,10 @@ export async function getFieldJob(workOrderId: string) {
 
 export async function getFieldOfficeReviewQueue() {
   return parseFieldOfficeReviewQueueResponse(await callFieldAuthority('get_office_review_queue', {}));
+}
+
+export async function getFieldProcedureExceptionQueue() {
+  return parseFieldProcedureExceptionQueueResponse(await callFieldAuthority('get_procedure_exception_queue', {}));
 }
 
 export async function submitFieldVisitForOfficeReview(
