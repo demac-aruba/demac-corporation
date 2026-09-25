@@ -1,11 +1,13 @@
 'use client';
 import { useId, useState } from 'react';
-import { TEXT_FIELDS, LIST_FIELDS, emptyTranslation, alignTranslation, nextEditorialVersion, translationIssues, type EditorialVacancy, type EditorialTranslation } from '../../../../functions/careers/editorial-contract';
+import { TEXT_FIELDS, LIST_FIELDS, emptyTranslation, alignTranslation, nextEditorialVersion, translationIssues, type EditorialTranslation } from '../../../../functions/careers/editorial-contract';
 import s from './recruitment.module.css';
+import { VacancyEditorPreview } from './vacancy-editor-preview';
+import type { Vacancy } from '../../lib/careers-preview';
 
-type Props<T extends EditorialVacancy> = { vacancy: T; original?: T | null; onChange: (value: T) => void };
+type Props<T extends Vacancy & { desired?: string[] }> = { vacancy: T; original?: T | null; onChange: (value: T) => void };
 /** Shared by authenticated Recruitment and its explicitly isolated review fixture. */
-export function EditorialPanel<T extends EditorialVacancy>({ vacancy, original, onChange }: Props<T>) {
+export function EditorialPanel<T extends Vacancy & { desired?: string[] }>({ vacancy, original, onChange }: Props<T>) {
   const id = useId();
   const [language, setLanguage] = useState<'en' | 'es'>('en');
   const version = nextEditorialVersion(vacancy, original);
@@ -61,5 +63,6 @@ export function EditorialPanel<T extends EditorialVacancy>({ vacancy, original, 
         <p className={s.muted}>Review does not publish or open the vacancy. Saving a draft is always separate from publishing.</p>
       </>}
     </div>}
+    <VacancyEditorPreview vacancy={vacancy} editorialVersion={version}/>
   </section>;
 }

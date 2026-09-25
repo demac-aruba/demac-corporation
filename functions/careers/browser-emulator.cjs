@@ -135,6 +135,7 @@ async function context(browser,admin,viewport){
       await idPurpose.fill('  Proposed purpose only  ');
       assert.equal(await idPurpose.inputValue(),'  Proposed purpose only  ','incomplete category edits keep exact entered text');
       await office.getByLabel('Request government id',{exact:true}).uncheck();
+      await require('./browser-editor-preview.cjs')({office,title,spanishTitle,output,name});
       await reviewed.check();await shot(office,'01-vacancy-editor');
       await saveFromEditor('Save draft','Draft',title,spanishTitle,1);
       await office.reload({waitUntil:'domcontentloaded'});await office.getByRole('button',{name:'＋ New vacancy',exact:true}).waitFor();await office.getByText(title,{exact:true}).waitFor();
