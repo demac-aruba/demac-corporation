@@ -27,7 +27,7 @@ L01-L12 PASS in automated/browser/emulator coverage: explicit link language, sav
 
 ## C. Navigation and form
 N01-N07 and N09-N11 PASS in automated/browser coverage: native field types, explicit multiselect Continue, Back/Forward, review edit/return, language switching, conditional/version recovery, stable question routes, idempotent retry and honest in-tab draft warning.
-N08 PARTIAL — list search/filter state is preserved in current in-tab navigation checks; scroll-position restoration is not separately certified on a physical browser.
+N08 PASS automated — browser Back restores catalogue scroll position, search text, department filter and the matching result set; physical-browser spot-check remains part of final device review.
 
 ## D. Administration and security
 A01-A08 PASS in isolated authority tests and CI: drafts independent of launch config, preflight publication blockers, bilingual/question/document editing, server authorization, optimistic concurrency, internal-note exclusion, legacy-read compatibility and Website Manager ownership.
