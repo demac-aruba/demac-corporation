@@ -164,6 +164,27 @@ export function advanceProcedureCapture(target: FieldProcedureTarget, previous: 
     });
   });
 }
+export function authorizeProcedureCaptureRecovery(target: FieldProcedureTarget, captureId: string, reason: string): Promise<ProcedureCapture> {
+  const normalized=reason.trim();
+  if(normalized.length<3 || normalized.length>1500) return Promise.reject(new Error('Explica brevemente por qué este archivo debe recuperarse después del cambio de coordinación.'));
+  return transaction(target,'captures','readwrite',(store,done,fail)=>{
+    const request=store.get(captureId); onSuccess(request,fail,value=>{
+      const current=value ? restoreCapture(value) : undefined;
+      if(!current || !equalTarget(current.target,target) || !['reserved','uploaded'].includes(current.stage) || !current.prepare || !(current.blob instanceof Blob)) {
+        return fail(new ProcedureLocalConflict());
+      }
+      const next:ProcedureCapture={...current,
+        commit:{requestId:'procedure-link-recovery-'+current.id+'-'+crypto.randomUUID(),command:{action:'commit_media',captureId:current.id,acknowledgeCoordinationChange:true,reason:normalized}},
+        revision:current.revision+1,updatedAt:new Date().toISOString()};
+      if('byteEncoding' in value){
+        const {blob:_blob,...metadata}=next;
+        store.put({...metadata,byteEncoding:'array-buffer-v1',bytes:value.bytes});
+      } else store.put(next);
+      done(next);
+    });
+  });
+}
+
 export function discardUnsentProcedureCapture(target: FieldProcedureTarget, captureId: string): Promise<void> {
   return transaction(target,'captures','readwrite',(store,done,fail) => {
     const request = store.get(captureId); onSuccess(request,fail,value => {
