@@ -29,6 +29,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
 }) {
   const [error,setError]=useState('');
   const [capturing,setCapturing]=useState('');
+  const [recoveryReasons,setRecoveryReasons]=useState<Record<string,string>>({});
   const pickedAt=useRef<Record<string,{revision:number;at:string}>>({});
   const evidence=session.workspace?.evidence.filter(e=>e.part===part && e.procedureId===step.id) ?? [];
   const local=session.captures.filter(c=>c.part===part && c.stepId===step.id && c.stage!=='confirmed');
@@ -90,6 +91,19 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
             <strong>{stageLabel[c.stage]}</strong>
             <dl><dt>Tipo</dt><dd>{c.contentType}</dd><dt>Tamaño</dt><dd>{Math.round(c.sizeBytes/1024)} KB</dd><dt>Huella</dt><dd>{c.sha256.slice(0,14)}…</dd></dl>
             {c.stage==='local' && !c.prepare?<button type="button" className={styles.quiet} disabled={session.busy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
+            {['reserved','uploaded'].includes(c.stage)?<details className={styles.coordination}>
+              <summary>Recuperar vínculo si cambió la coordinación</summary>
+              <div>
+                <p>Úsalo solo cuando el archivo ya fue reservado/subido y el servidor indique que cambió la coordinación. Esto recupera documentación; no autoriza actividad física ni cambia el momento original de captura.</p>
+                <label>Motivo de recuperación
+                  <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
+                </label>
+                <button type="button" disabled={!session.fresh||session.busy||(recoveryReasons[c.id]||'').trim().length<3}
+                  onClick={async()=>{await session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim());setRecoveryReasons(v=>({...v,[c.id]:''}));}}>
+                  Confirmar recuperación documental y reintentar
+                </button>
+              </div>
+            </details>:null}
           </div>)}
           {remote.map(e=><div className={styles.receipt} key={e.id}>
             <strong>Vínculo confirmado</strong>
