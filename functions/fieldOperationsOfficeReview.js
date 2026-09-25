@@ -1,3 +1,5 @@
+const procedureProtocol = require('./fieldOperationsServiceProtocol');
+const { canonicalEvidence, validateProcedureContent } = require('./fieldOperationsProcedureWorkflow');
 'use strict';
 
 const crypto = require('node:crypto');
@@ -425,6 +427,26 @@ function projectedChainState({ visits, children, identity }) {
   }
 
   const interventionById = new Map(interventions.map((item) => [item.id, item]));
+  const procedureEvidence = [];
+  for (const record of children.fieldEvidence.filter((item) => item.targetType === 'service_procedure')) {
+    const intervention = interventionById.get(record.interventionId);
+    if (!intervention?.procedureWorkflow) throw fieldError('office_review_procedure_evidence_conflict', 'Procedure evidence does not resolve to its versioned intervention.', 409);
+    procedureEvidence.push(...canonicalEvidence([record], {
+      ...expectedFor(intervention.visitId), interventionId: intervention.id,
+      assetId: intervention.assetId, visitAssetId: intervention.visitAssetId,
+    }));
+  }
+  for (const intervention of interventions.filter((item) => item.procedureWorkflow)) {
+    const evidence = procedureEvidence.filter((item) => item.interventionId === intervention.id);
+    validateProcedureContent(intervention.procedureWorkflow, evidence);
+    if (Object.keys(intervention.procedureWorkflow.pendingCaptures).length) blockers.push(blocker('procedure_files_pending', 'Procedure files have not been linked or explicitly discarded.', intervention.id));
+    // Deferred or not-performed service retains its documented risk/exception; it is not
+    // relabeled completed just to submit the actual outcome for Office review.
+    if (intervention.status === 'completed') {
+      const progress = procedureProtocol.completion(intervention.procedureWorkflow, evidence);
+      if (!progress.complete) blockers.push(blocker('service_procedures_incomplete', 'Completed service has incomplete procedure documentation or safety coordination.', intervention.id));
+    }
+  }
   for (const line of saleLines) {
     if (!line.nonCatalog && !TERMINAL_SALE_LINE_STATUSES.has(line.status)) {
       blockers.push(blocker('field_sale_line_not_terminal', `Field Sale Line ${line.id} is still ${line.status}.`, line.id));
@@ -523,6 +545,7 @@ function projectedChainState({ visits, children, identity }) {
     interventions,
     plannedWorkProgress,
     professionalReportPreview,
+    procedureEvidence,
     reports,
     root,
     saleLines,
@@ -555,6 +578,7 @@ function reviewSnapshot(state) {
     })),
     plannedWorkProgress: state.plannedWorkProgress,
     professionalReportPreview: state.professionalReportPreview,
+    ...(state.procedureEvidence?.length ? {procedureEvidence: structuredClone(state.procedureEvidence)} : {}),
     visitAssets: state.visitAssets.map((item) => ({
       id: item.id,
       visitId: item.visitId,
@@ -579,6 +603,7 @@ function reviewSnapshot(state) {
       status: item.status,
       resultCode: item.resultCode,
       resultNotes: item.resultNotes,
+      ...(item.procedureWorkflow ? {procedureWorkflow: structuredClone(item.procedureWorkflow)} : {}),
       version: item.version,
     })),
     plannedWorkDispositions: state.dispositions.map((item) => ({

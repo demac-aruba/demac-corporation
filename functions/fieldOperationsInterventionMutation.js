@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const procedureProtocol = require('./fieldOperationsServiceProtocol');
 const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
@@ -268,7 +269,31 @@ function createTransitionWorkInterventionCommand({
         });
       }
 
-      if (target === 'completed') requireCompletedReport(stored, current);
+      if (['completed','pending_part','not_performed'].includes(target) && Object.keys(stored.procedureWorkflow?.pendingCaptures || {}).length) throw fieldError('procedure_upload_pending','Vincula o descarta con motivo los archivos pendientes antes de finalizar o diferir el servicio.',409);
+      if (target === 'completed') {
+        requireCompletedReport(stored, current);
+        if (stored.procedureWorkflow) {
+          const { canonicalEvidence, validateProcedureContent } = require('./fieldOperationsProcedureWorkflow');
+          const snap = await transaction.get(db.collection('fieldEvidence').where('interventionId', '==', current.id));
+          const evidence = canonicalEvidence(snap.docs.map(fieldSnapshotRecord), { ...expectedContext, interventionId: current.id, assetId: current.assetId, visitAssetId: current.visitAssetId });
+          validateProcedureContent(stored.procedureWorkflow, evidence);
+          const progress = procedureProtocol.completion(stored.procedureWorkflow, evidence);
+          if (!progress.complete) throw fieldError('service_procedures_incomplete', 'Faltan procedimientos, evidencias, coordinación o resolución de riesgos.', 409, { missing: progress.missing });
+          if (context.assignment.responsibility !== 'lead') throw fieldError('permission_denied', 'Solo el técnico responsable finaliza el servicio conjunto.', 403);
+        }
+      }
+      let protocolToFreeze;
+      if (target === 'in_progress' && !stored.procedureWorkflow) {
+        const serviceSnapshot = await transaction.get(db.collection('services').doc(current.serviceCatalogItemId));
+        if (!serviceSnapshot.exists) throw fieldError('service_not_available', 'The Work Intervention Service is no longer available in the canonical catalog.', 409);
+        protocolToFreeze = procedureProtocol.protocolForService(fieldSnapshotRecord(serviceSnapshot));
+      }
+      if (target === 'in_progress') {
+        const shared = await transaction.get(db.collection(WORK_INTERVENTION_COLLECTION).where('visitId','==',current.visitId));
+        const another = shared.docs.map(fieldSnapshotRecord).filter(row=>row.id!==current.id&&row.assetId===current.assetId);
+        if (another.some(row=>row.procedureWorkflow && (row.status==='in_progress'||procedureProtocol.blockers(row.procedureWorkflow).length))) throw fieldError('field_asset_protocol_active','Este aire ya tiene una intervención con coordinación o riesgo pendiente. Resuélvela antes de iniciar otra.',409);
+        if ((stored.procedureWorkflow || protocolToFreeze) && another.some(row=>row.status==='in_progress')) throw fieldError('field_asset_intervention_active','Termina o documenta la intervención activa del mismo aire antes de iniciar el mantenimiento coordinado.',409);
+      }
       const reportTemplateSnapshot = target === 'in_progress'
         ? await loadReportTemplateSnapshot({ db, transaction, intervention: current })
         : undefined;
@@ -283,6 +308,7 @@ function createTransitionWorkInterventionCommand({
         occurredAt,
         reportTemplateSnapshot,
       });
+      if (protocolToFreeze) patch.procedureWorkflow = procedureProtocol.initialWorkflow(protocolToFreeze);
       const nextStored = { ...stored, ...patch };
       const next = projectWorkIntervention(nextStored, expectedContext);
       const event = transitionAuditEvent({

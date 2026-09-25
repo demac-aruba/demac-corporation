@@ -191,7 +191,7 @@ test('completed assigned work remains visible in schedule/detail but is read-onl
   assert.deepEqual(detail.allowedActions, ['read']);
 });
 
-test('helper receives reporting actions but cannot receive billable or scope actions', async () => {
+test('assigned helper receives scoped capture/asset/service actions but no global completion or office privileges', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-helper', 'VAN-1'), '2026-08-24', '2026-08-24');
   assert.equal(jobs.length, 1);
@@ -199,10 +199,12 @@ test('helper receives reporting actions but cannot receive billable or scope act
   assert.equal(jobs[0].responsibility, 'helper');
   assert.ok(jobs[0].allowedActions.includes('report.edit'));
   assert.ok(jobs[0].allowedActions.includes('evidence.add'));
-  assert.ok(!jobs[0].allowedActions.includes('asset.add'));
-  assert.ok(!jobs[0].allowedActions.includes('intervention.add'));
+  assert.ok(jobs[0].allowedActions.includes('asset.add'));
+  assert.ok(jobs[0].allowedActions.includes('intervention.add'));
   assert.ok(!jobs[0].allowedActions.includes('sale.propose'));
   assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
+  assert.ok(!jobs[0].allowedActions.includes('execute'));
+  assert.ok(!jobs[0].allowedActions.includes('office.review'));
 });
 
 test('another team work order is denied even when its id is known', async () => {

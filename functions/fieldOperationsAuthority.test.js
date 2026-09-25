@@ -60,11 +60,13 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'decide_office_review',
     'get_job',
     'get_office_review_queue',
+    'get_procedure_workspace',
     'get_schedule',
     'prepare_visit',
     'record_additional_intervention_decision',
     'record_customer_report_acknowledgement',
     'record_planned_work_disposition',
+    'record_procedure_action',
     'register_visit_asset',
     'set_report_checklist_item',
     'set_report_free_text',
@@ -82,6 +84,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'transition_intervention', 'add_report_photo_evidence', 'add_report_voice_evidence', 'add_report_measurement', 'add_report_finding',
     'set_report_checklist_item', 'set_report_free_text', 'record_customer_report_acknowledgement',
     'submit_visit_for_office_review', 'decide_office_review',
+    'get_procedure_workspace', 'record_procedure_action',
   ]) {
     await assert.rejects(
       () => api.execute({ action, data: {}, identity: { operations: false } }),

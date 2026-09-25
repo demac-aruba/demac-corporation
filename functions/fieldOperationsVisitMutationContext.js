@@ -30,6 +30,7 @@ async function loadCurrentVisitMutationContext({
   action,
   deniedMessage,
   requireCurrent = true,
+  allowCompletedRead = false,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (!transaction || typeof transaction.get !== 'function') throw new Error('A Firestore transaction is required.');
@@ -50,7 +51,7 @@ async function loadCurrentVisitMutationContext({
   const workOrderSnapshot = await transaction.get(workOrderRef);
   if (!workOrderSnapshot.exists) throw fieldError('work_order_not_found', 'The Work Order for this visit is not available.', 404);
   const order = { id: workOrderSnapshot.id, ...workOrderSnapshot.data() };
-  if (!activeWorkOrder(order)) {
+  if (!activeWorkOrder(order) && !(allowCompletedRead && action === 'read' && order.status === 'Completada')) {
     throw fieldError('work_order_not_available', 'This Work Order is no longer released for active Field execution.', 409);
   }
 

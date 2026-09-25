@@ -223,7 +223,7 @@ test('registration is idempotent for exact replay and same request id with chang
   );
 });
 
-test('pre-arrival, helper, read-only fallback and unassigned principals are denied before storage is trusted', async () => {
+test('pre-arrival, read-only read-only helper, read-only fallback and unassigned principals are denied before storage is trusted', async () => {
   const preArrival = fixture({ visit: visit({ status: 'on_the_way' }) });
   await assert.rejects(
     () => preArrival.register(input()),
@@ -232,7 +232,7 @@ test('pre-arrival, helper, read-only fallback and unassigned principals are deni
   assert.equal(preArrival.verifiedPaths.length, 0);
 
   for (const denied of [
-    assignment({ responsibility: 'helper' }),
+    assignment({ responsibility: 'helper', readOnly: true }),
     assignment({ source: 'profile_van_fallback', readOnly: true }),
     assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
   ]) {
@@ -312,4 +312,12 @@ test('persisted registered equipment projection fails closed on identity/schema/
   ]) {
     assert.throws(() => projectRegisteredEquipment({ ...valid, ...patch }, expected));
   }
+});
+
+test('assigned helper registers only an equipment system within the authorized visit with original evidence checks', async () => {
+ const f=fixture({resolveAssignment:async()=>assignment({responsibility:'helper'})});
+ const result=await f.register(input());
+ assert.ok(result.equipment.id);assert.equal(f.store.all('equipmentSystems').length,1);
+ assert.equal(f.store.all('fieldEvidence').length,3);
+ assert.equal(f.store.all('equipmentSystems')[0].propertyId,'PROPERTY-1');
 });

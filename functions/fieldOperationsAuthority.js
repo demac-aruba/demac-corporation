@@ -1,3 +1,5 @@
+const { createProcedureWorkflowCommands } = require('./fieldOperationsProcedureWorkflow');
+const { createProcedureMediaStore, handleProcedureMedia } = require('./fieldOperationsProcedureMedia');
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
@@ -66,6 +68,8 @@ const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMuta
 const { arubaDateParts } = require('./bookingSchedulingPrimitives');
 
 const FIELD_ACTIONS = new Set([
+  'get_procedure_workspace',
+  'record_procedure_action',
   'get_schedule',
   'get_job',
   'get_office_review_queue',
@@ -182,6 +186,8 @@ function createFieldOperationsApi({
   recordCustomerAcknowledgement,
   submitOfficeReview,
   decideOfficeReview,
+  procedureCommands,
+  procedureMediaStore,
   listOfficeReviews = loadOfficeReviewQueue,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
@@ -233,6 +239,12 @@ function createFieldOperationsApi({
   }
 
   async function execute({ action, data = {}, identity }) {
+    if (action === 'get_procedure_workspace' || action === 'record_procedure_action') {
+      const handler = action === 'get_procedure_workspace' ? procedureCommands?.read : procedureCommands?.mutate;
+      if (typeof handler !== 'function') throw fieldError('mutation_not_configured', 'Field procedures are not configured in this runtime.', 503);
+      return handler({ identity, visitId: data.visitId, interventionId: data.interventionId,
+        ...(action === 'record_procedure_action' ? { command: data.command, requestId: data.requestId } : {}) });
+    }
     if (action === 'get_schedule') {
       const { startDate, endDate } = resolveFieldScheduleDateRange(identity, data, now());
       const jobs = await loadSchedule(db, identity, startDate, endDate);
@@ -643,6 +655,12 @@ function createFieldOperationsApi({
 
   async function handle(request) {
     if (request.method === 'OPTIONS') return { status: 204, body: null };
+    if (request.query?.procedureMedia !== undefined) {
+      try {
+        const identity = await authenticate(request);
+        return await handleProcedureMedia({request,identity,commands:procedureCommands,store:procedureMediaStore});
+      } catch (error) { return apiError(error); }
+    }
     if (request.method !== 'POST') return { status: 405, body: { success: false, version: FIELD_OPERATIONS_API_VERSION, error: { code: 'method_not_allowed', message: 'POST is required.', details: {} } } };
     const action = cleanText(request.body?.action, 120);
     try {
@@ -687,6 +705,8 @@ function getDefaultApi() {
     const db = getFirestore();
     const resolveAssignment = createMutationAssignmentResolver({ db });
     const appendAuditInTransaction = createFieldAuditAppender({ db });
+    const procedureMediaStore = createProcedureMediaStore(getStorage().bucket());
+    const procedureCommands = createProcedureWorkflowCommands({db,resolveAssignment,appendAuditInTransaction,verifyStoredMedia:procedureMediaStore.verify});
     const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createReturnWorkVisit = createReturnWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
@@ -727,6 +747,8 @@ function getDefaultApi() {
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
+      procedureCommands,
+      procedureMediaStore,
       prepareWorkVisit,
       createReturnWorkVisit,
       transitionWorkVisit,
@@ -768,13 +790,15 @@ exports.fieldOperationsAuthority = onRequest(
     response.set('Access-Control-Allow-Origin', origin);
     response.set('Vary', 'Origin');
     response.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    response.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     const result = await getDefaultApi().handle(request);
     if (result.status === 204) {
       response.status(204).send('');
       return;
     }
-    response.status(result.status).json(result.body);
+    for (const [name,value] of Object.entries(result.headers || {})) response.set(name,value);
+    if (Buffer.isBuffer(result.body)) response.status(result.status).send(result.body);
+    else response.status(result.status).json(result.body);
   },
 );
 

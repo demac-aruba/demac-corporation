@@ -31,7 +31,7 @@ const RESPONSIBILITY_ACTIONS = Object.freeze({
     'read', 'execute', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add',
     'asset.add', 'intervention.add', 'sale.propose', 'intervention.complete',
   ]),
-  helper: Object.freeze(['read', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add']),
+  helper: Object.freeze(['read', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add', 'asset.add', 'intervention.add']),
   office: Object.freeze(['read', 'office.review']),
 });
 

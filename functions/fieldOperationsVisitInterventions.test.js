@@ -349,9 +349,9 @@ test('unknown, inactive, product or non-canonical services are denied instead of
   }
 });
 
-test('helper, read-only fallback and unassigned principals cannot create WorkInterventions', async () => {
+test('read-only helper, read-only fallback and unassigned principals cannot create WorkInterventions', async () => {
   for (const denied of [
-    assignment({ responsibility: 'helper' }),
+    assignment({ responsibility: 'helper', readOnly: true }),
     assignment({ readOnly: true, source: 'profile_van_fallback' }),
     assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
   ]) {
@@ -533,4 +533,10 @@ test('return-visit mutation fails closed when its immutable scheduled scope drif
     () => create(createInput({ visitId: 'visit-return', visitAssetId: 'VA-RETURN', requestId: 'scope-drift-001' })),
     (error) => error?.code === 'visit_scope_conflict' && error?.status === 409,
   );
+});
+
+test('assigned helper confirms a planned intervention without declaring it performed', async () => {
+ const f=fixture({resolveAssignment:async()=>assignment({responsibility:'helper'})});
+ await f.create(createInput());const intervention=f.store.all('workInterventions')[0];
+ assert.equal(intervention.status,'confirmed');assert.deepEqual(intervention.performedByStaffIds,[]);
 });

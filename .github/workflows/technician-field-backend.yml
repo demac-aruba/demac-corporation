@@ -1,0 +1,59 @@
+name: Technician Field backend integration
+
+on:
+  pull_request:
+    paths:
+      - 'functions/fieldOperations*.js'
+      - 'functions/test-support/fieldProcedure*.cjs'
+      - 'functions/package.json'
+      - '.github/workflows/technician-field-backend.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technician-field-backend-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend-integration:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/technician-app-20260923' && github.event.pull_request.number == 526
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GCLOUD_PROJECT: demo-demac-dwellings
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8297
+      FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9297
+      FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:9397
+      FIELD_PROCEDURE_TEST_RESULTS: ${{ runner.temp }}/field-procedure-backend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Existing dependencies and required tests
+        run: |
+          test -z "${GOOGLE_APPLICATION_CREDENTIALS:-}"
+          npm install --prefix functions --ignore-scripts --no-audit --no-fund
+          npm run validate:firebase --prefix functions
+          npm run test:field-authority --prefix functions
+          npm install --prefix "$RUNNER_TEMP/field-tools" --no-audit --no-fund firebase-tools@15.30.0
+      - name: Real loopback Auth, Firestore, Storage and HTTP integration
+        run: |
+          "$RUNNER_TEMP/field-tools/node_modules/.bin/firebase" emulators:exec --project demo-demac-dwellings --config firebase.dwellings-preview.json --only auth,firestore,storage 'node functions/test-support/fieldProcedureEmulator.cjs'
+      - name: Retain sanitized backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-field-backend-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/field-procedure-backend/
+          retention-days: 7
+          if-no-files-found: warn
