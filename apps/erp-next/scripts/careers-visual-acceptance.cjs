@@ -77,8 +77,9 @@ const report = [];
           width: innerWidth,
           scroll: document.documentElement.scrollWidth,
           bodyHeight: document.body.getBoundingClientRect().height,
+          viewportHeight: innerHeight,
         }));
-        check(enlarged.scroll <= enlarged.width + 1 && enlarged.bodyHeight > innerHeight, '200% root-text enlargement stays readable without horizontal overflow');
+        check(enlarged.scroll <= enlarged.width + 1 && enlarged.bodyHeight > enlarged.viewportHeight, '200% root-text enlargement stays readable without horizontal overflow');
         const target = await page.getByRole('button', { name: 'View VRF Specialist', exact: true }).boundingBox();
         check(!!target && target.height >= 44, '200% text enlargement keeps the primary card action usable');
         await shot('01b-text-200');
