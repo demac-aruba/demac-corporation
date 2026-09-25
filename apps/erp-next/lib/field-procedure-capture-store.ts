@@ -75,9 +75,21 @@ function onSuccess<T>(request: IDBRequest<T>, fail: (error: Error) => void, run:
     catch (error) { fail(error instanceof ProcedureLocalConflict ? error : new ProcedureStorageError()); }
   };
 }
-export async function hashProcedureBlob(blob: Blob): Promise<string> {
-  const bytes = await blob.arrayBuffer(), digest = await crypto.subtle.digest('SHA-256',bytes);
+async function hashProcedureBytes(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256',bytes);
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2,'0')).join('');
+}
+export async function hashProcedureBlob(blob: Blob): Promise<string> {
+  return hashProcedureBytes(await blob.arrayBuffer());
+}
+
+type StoredProcedureCapture = Omit<ProcedureCapture,'blob'> & { context?: string; byteEncoding: 'array-buffer-v1'; bytes: ArrayBuffer | null };
+function restoreCapture(value: ProcedureCapture | StoredProcedureCapture): ProcedureCapture {
+  if (!('byteEncoding' in value)) return value; // Existing native-Blob receipts remain readable.
+  const {bytes,byteEncoding,...metadata} = value;
+  if (byteEncoding !== 'array-buffer-v1' || (bytes === null ? value.stage !== 'confirmed'
+      : !(bytes instanceof ArrayBuffer) || bytes.byteLength !== value.sizeBytes || value.stage === 'confirmed')) throw new ProcedureStorageError();
+  return {...metadata,blob:bytes === null ? null : new Blob([bytes],{type:value.contentType})};
 }
 export async function storeProcedureCapture(target: FieldProcedureTarget, input: {
   part: FieldProcedurePart; stepId: string; view: string; kind: ProcedureMediaKind; source: ProcedureMediaSource;
@@ -89,20 +101,23 @@ export async function storeProcedureCapture(target: FieldProcedureTarget, input:
       || input.blob.size > input.limitBytes || input.blob.size > 20*1024*1024 || !Number.isSafeInteger(input.safetyRevision) || input.safetyRevision < 0
       || !['camera','gallery','recorder','attachment'].includes(input.source) || !/^[a-z_]{1,40}$/.test(input.view)
       || input.declaredCapturedAt != null && !Number.isFinite(Date.parse(input.declaredCapturedAt))) throw new Error('Tipo, tamaño o contexto del archivo no admitido.');
-  const sha256 = await hashProcedureBlob(input.blob); assertProcedureOwner(target);
+  // Persist exact binary bytes, not a browser-specific native Blob reference. Some
+  // WebKit private contexts cannot serialize native Blobs into IndexedDB. No base64.
+  const bytes = await input.blob.arrayBuffer(), sha256 = await hashProcedureBytes(bytes); assertProcedureOwner(target);
   const id = crypto.randomUUID(), now = new Date().toISOString();
   const capture: ProcedureCapture = {id,target:{...target},part:input.part,stepId:input.stepId,view:input.view,kind:input.kind,source:input.source,
     contentType,sizeBytes:input.blob.size,sha256,declaredCapturedAt:input.declaredCapturedAt || null,capturedSafetyRevision:input.safetyRevision,
     blob:input.blob,stage:'local',revision:0,createdAt:now,updatedAt:now,prepare:null,
     commit:{requestId:`procedure-link-${id}`,command:{action:'commit_media',captureId:id}},evidenceId:null};
   // Resolve only after the Blob and all retry identifiers have committed atomically.
-  return transaction(target,'captures','readwrite',(store,done) => { store.add({...capture,context:procedureContextKey(target)}); done(capture); });
+  return transaction(target,'captures','readwrite',(store,done) => { const {blob:_blob,...metadata} = capture;
+    store.add({...metadata,context:procedureContextKey(target),byteEncoding:'array-buffer-v1',bytes}); done(capture); });
 }
 export function listProcedureCaptures(target: FieldProcedureTarget): Promise<ProcedureCapture[]> {
   return transaction(target,'captures','readonly',(store,done,fail) => {
     const request = store.index('context').getAll(procedureContextKey(target));
     request.onsuccess = () => {
-      try { const rows = request.result as ProcedureCapture[]; if (rows.some(r => !equalTarget(r.target,target))) throw new ProcedureLocalConflict();
+      try { const rows = (request.result as Array<ProcedureCapture | StoredProcedureCapture>).map(restoreCapture); if (rows.some(r => !equalTarget(r.target,target))) throw new ProcedureLocalConflict();
         done(rows.sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))); } catch (e) { fail(e as Error); }
     };
   });
@@ -110,7 +125,7 @@ export function listProcedureCaptures(target: FieldProcedureTarget): Promise<Pro
 export function readProcedureCapture(target: FieldProcedureTarget, captureId: string): Promise<ProcedureCapture | null> {
   return transaction(target,'captures','readonly',(store,done,fail) => {
     const request = store.get(captureId); onSuccess(request,fail,value => {
-      const row = value as ProcedureCapture | undefined;
+      const row = value ? restoreCapture(value) : undefined;
       if (row && !equalTarget(row.target,target)) fail(new ProcedureLocalConflict()); else done(row || null);
     });
   });
@@ -120,13 +135,18 @@ export function advanceProcedureCapture(target: FieldProcedureTarget, previous: 
   patch: Partial<Pick<ProcedureCapture,'stage'|'prepare'|'evidenceId'|'blob'>>): Promise<ProcedureCapture> {
   return transaction(target,'captures','readwrite',(store,done,fail) => {
     const request = store.get(previous.id); onSuccess(request,fail,value => {
-      const current = value as ProcedureCapture | undefined;
+      const current = value ? restoreCapture(value) : undefined;
       if (!current || !equalTarget(current.target,target) || current.revision !== previous.revision) return fail(new ProcedureLocalConflict());
+      if (patch.blob !== undefined && patch.blob !== null) return fail(new ProcedureLocalConflict());
       const next = {...current,...patch,revision:current.revision+1,updatedAt:new Date().toISOString()};
       const stages = ['local','reserved','uploaded','confirmed'];
       if (stages.indexOf(next.stage) < stages.indexOf(current.stage) || current.prepare && JSON.stringify(current.prepare) !== JSON.stringify(next.prepare)
           || next.stage === 'confirmed' && (!next.evidenceId || next.blob !== null) || next.stage !== 'confirmed' && !(next.blob instanceof Blob)) return fail(new ProcedureLocalConflict());
-      store.put(next); done(next);
+      if ('byteEncoding' in value) {
+        const {blob:_blob,...metadata} = next;
+        store.put({...metadata,byteEncoding:'array-buffer-v1',bytes:next.blob === null ? null : value.bytes});
+      } else store.put(next);
+      done(next);
     });
   });
 }
