@@ -17,6 +17,8 @@ export function ProcedureStepEditor({session,part,step,onBack}:{
   const draft=useProcedureDraft(session.target,part,step,state.version,safety.revision);
   const [exception,setException]=useState('');
   const [feedback,setFeedback]=useState('');
+  const [reviewNote,setReviewNote]=useState('');
+  const [reviewDisposition,setReviewDisposition]=useState<'not_documented'|'not_applicable'|'not_performed'>('not_documented');
   const owner=state.ownerUserId===session.target.ownerUserId;
   const blockedRisk=session.workspace!.risks.some(r=>r.status==='open' && r.parts.includes(part));
   const writable=owner
@@ -153,6 +155,37 @@ export function ProcedureStepEditor({session,part,step,onBack}:{
     </section>
 
     <ProcedureMediaPanel session={session} part={part} step={step} canCapture={writable && session.localReady && !session.busy && !session.operation}/>
+
+    {step.exception?<section className={styles.card} aria-label="Excepción del procedimiento">
+      <h3>Excepción documentada</h3>
+      <p>{step.exception.reason}</p>
+      <span className={styles.pill}>{step.exception.reviewStatus==='pending'?'Pendiente de oficina':step.exception.reviewStatus==='approved'?'Aprobada por oficina':'Devuelta por oficina'}</span>
+      {step.exception.disposition?<small>Disposición: {procedureLabel(step.exception.disposition)}. No representa trabajo que no se realizó.</small>:null}
+      {session.workspace!.allowedActions.includes('office.review') && step.exception.reviewStatus==='pending'?<>
+        <label>Motivo de la revisión
+          <textarea value={reviewNote} onChange={e=>setReviewNote(e.target.value)} rows={3} maxLength={1500}/>
+        </label>
+        <label>Disposición al aprobar
+          <select value={reviewDisposition} onChange={e=>setReviewDisposition(e.target.value as typeof reviewDisposition)}>
+            <option value="not_documented">Trabajo sin documentación suficiente</option>
+            <option value="not_applicable">No aplica a este procedimiento</option>
+            <option value="not_performed">Trabajo no realizado — continúa pendiente</option>
+          </select>
+        </label>
+        <div className={styles.actions}>
+          <button type="button" disabled={!session.canCommand||reviewNote.trim().length<3}
+            onClick={async()=>{
+              const next=await session.execute({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'approve',reason:reviewNote.trim(),disposition:reviewDisposition});
+              if(next)setReviewNote('');
+            }}>Aprobar excepción con disposición</button>
+          <button type="button" disabled={!session.canCommand||reviewNote.trim().length<3}
+            onClick={async()=>{
+              const next=await session.execute({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'reject',reason:reviewNote.trim()});
+              if(next)setReviewNote('');
+            }}>Devolver excepción</button>
+        </div>
+      </>:null}
+    </section>:null}
 
     {owner && session.workspace!.allowedActions.includes('report.edit') && session.workspace!.interventionStatus==='in_progress' && !state.completedAt?
       <details className={styles.coordination}><summary>No pude completar o documentar este procedimiento</summary>
