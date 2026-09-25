@@ -17,15 +17,15 @@ function UnitIllustration({ part }: { part: FieldProcedurePart }) {
   if (part === 'indoor') return <PortalIcon name="unit" />;
   return <svg viewBox="0 0 60 52" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="4" y="5" width="52" height="40" rx="4" /><circle cx="25" cy="25" r="15" /><circle cx="25" cy="25" r="4" /><path d="M25 10v11m0 8v11M10 25h11m8 0h11M15 15l7 7m6 6 7 7M15 35l7-7m6-6 7-7M46 14h5m-5 5h5M10 45v4m37-4v4" /></svg>;
 }
-export function FieldPartSelector({ target, equipmentLabel, equipmentDescription, onBack, onOpenAddons }: {
-  target: FieldProcedureTarget; equipmentLabel: string; equipmentDescription: string; onBack: () => void; onOpenAddons?: () => void;
+export function FieldPartSelector({ target, equipmentLabel, equipmentDescription, onBack, onOpenAddons, correctionRequested, reviewerNote }: {
+  target: FieldProcedureTarget; equipmentLabel: string; equipmentDescription: string; onBack: () => void; onOpenAddons?: () => void; correctionRequested?: boolean; reviewerNote?: string;
 }) {
   const identityKey = JSON.stringify([target.ownerUserId,target.visitId,target.interventionId,target.assetId]);
   // The keyed child synchronously discards old-user/context data, before effects run.
-  return <PartSelectorSession key={identityKey} target={target} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={onBack} onOpenAddons={onOpenAddons} />;
+  return <PartSelectorSession key={identityKey} target={target} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={onBack} onOpenAddons={onOpenAddons} correctionRequested={correctionRequested} reviewerNote={reviewerNote} />;
 }
-function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onBack, onOpenAddons }: {
-  target: FieldProcedureTarget; equipmentLabel: string; equipmentDescription: string; onBack: () => void; onOpenAddons?: () => void;
+function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onBack, onOpenAddons, correctionRequested, reviewerNote }: {
+  target: FieldProcedureTarget; equipmentLabel: string; equipmentDescription: string; onBack: () => void; onOpenAddons?: () => void; correctionRequested?: boolean; reviewerNote?: string;
 }) {
   const [snapshot,setSnapshot] = useState<FieldProcedureSummary | null>(null);
   const [selected,setSelected] = useState<FieldProcedurePart | null>(null);
@@ -80,7 +80,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
   const writable = fresh && !busy && !retry && snapshot?.allowedActions.includes('report.edit')
     && ['confirmed','in_progress'].includes(snapshot.interventionStatus);
   const mine = part?.ownerUserId === target.ownerUserId;
-  if (openPart) return <FieldProcedureWorkspace target={target} initialPart={openPart} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={()=>setOpenPart(null)} onOpenAddons={onOpenAddons} />;
+  if (openPart) return <FieldProcedureWorkspace target={target} initialPart={openPart} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={()=>setOpenPart(null)} onOpenAddons={onOpenAddons} correctionRequested={correctionRequested} reviewerNote={reviewerNote} />;
   return <section className={styles.panel} aria-label="Selección compartida de parte">
     <div className={styles.air}><PortalIcon name="unit" /><div><strong>{equipmentLabel}</strong><small>{equipmentDescription}</small>{snapshot?.protocolName ? <span className={styles.status}>{snapshot.protocolName}</span> : null}</div></div>
     <div className={styles.refresh}><h2>¿Qué vas a trabajar?</h2><button type="button" onClick={()=>void load()} disabled={loading||busy}>Actualizar</button></div>
