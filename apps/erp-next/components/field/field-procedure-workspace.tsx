@@ -35,6 +35,7 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
   const [finalNote,setFinalNote]=useState('');
   const [finalCompetent,setFinalCompetent]=useState(false);
   const [correctionNote,setCorrectionNote]=useState('');
+  const [abandonReasons,setAbandonReasons]=useState<Record<string,string>>({});
 
   const workspace=session.workspace;
   const state=workspace?.procedureParts.find(p=>p.id===part) ?? null;
@@ -119,6 +120,24 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
       <p>Los originales siguen en este dispositivo. No cuentan como evidencia del servidor hasta completar la sincronización.</p>
       <button type="button" disabled={!session.fresh||session.busy||Boolean(session.operation)} onClick={()=>void session.sync()}>Reintentar archivos pendientes</button>
     </div>:null}
+    {workspace.allowedActions.includes('office.review') && workspace.pendingCaptures.length?<section className={styles.card}>
+      <h3>Reservas multimedia pendientes — revisión de oficina</h3>
+      <p>Abandonar una reserva no inventa evidencia ni borra el original del dispositivo del autor. La vista requerida seguirá faltando hasta que exista evidencia válida o una excepción revisada.</p>
+      {workspace.pendingCaptures.map(capture=><details className={styles.coordination} key={capture.captureId}>
+        <summary>{capture.part==='indoor'?'Evaporadora':'Condensadora'} · {capture.stepId} · reserva pendiente</summary>
+        <div>
+          <small>Autor: {capture.ownerUserId} · revisión de coordinación al reservar: {capture.safetyRevision}</small>
+          <label>Motivo de abandono de la reserva
+            <textarea rows={2} maxLength={1500} value={abandonReasons[capture.captureId]||''} onChange={e=>setAbandonReasons(v=>({...v,[capture.captureId]:e.target.value}))}/>
+          </label>
+          <button type="button" disabled={!session.canCommand||(abandonReasons[capture.captureId]||'').trim().length<3}
+            onClick={async()=>{
+              const next=await session.execute({action:'abandon_capture',captureId:capture.captureId,expectedSafetyRevision:workspace.safety!.revision,reason:(abandonReasons[capture.captureId]||'').trim()});
+              if(next)setAbandonReasons(v=>({...v,[capture.captureId]:''}));
+            }}>Abandonar solo la reserva con trazabilidad</button>
+        </div>
+      </details>)}
+    </section>:null}
     {openRisk?<div className={styles.error}>
       <strong>Riesgo alto abierto</strong>
       <p>{openRisk.reason}</p>
