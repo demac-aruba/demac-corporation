@@ -1,4 +1,5 @@
 'use client';
+import { useId } from 'react';
 import { CATEGORIES, categoryLabel, type DocumentRequirement, type SupportingCategory } from '../../../../functions/careers/document-contract.js';
 
 /** Same configuration editor in real Recruitment and isolated preview. IDs never change. */
@@ -6,6 +7,7 @@ export function DocumentRequirementsEditor({ value, onChange, panelClass, fieldC
   value?: DocumentRequirement[]; onChange:(next:DocumentRequirement[])=>void;
   panelClass:string; fieldClass:string; checkClass:string;
 }) {
+  const fieldId = useId();
   // Editing may be incomplete. Never run the server's strict parser during typing.
   const entries=value ?? [{category:'document' as const,required:false,helpEn:'',helpEs:'',reviewedSource:''}];
   const patch=(category:SupportingCategory,part:Partial<DocumentRequirement>)=>onChange(entries.map(entry=>entry.category===category?{...entry,...part}:entry));
@@ -19,8 +21,8 @@ export function DocumentRequirementsEditor({ value, onChange, panelClass, fieldC
         <label className={checkClass}><input type="checkbox" checked={!!item} onChange={e=>onChange(e.target.checked?[...entries,{category,required:false,helpEn:'',helpEs:'',reviewedSource:''}]:entries.filter(entry=>entry.category!==category))}/>Request {name.toLowerCase()}</label>
         {item && <>
           <label className={checkClass}><input type="checkbox" checked={item.required} onChange={e=>patch(category,{required:e.target.checked})}/>Require {name.toLowerCase()} before submission</label>
-          <label className={fieldClass}>Purpose / applicant help · {name} · English<textarea maxLength={600} rows={2} value={item.helpEn} onChange={e=>patch(category,{helpEn:e.target.value})}/></label>
-          <label className={fieldClass}>Ayuda para el candidato · {name} · Español<textarea maxLength={600} rows={2} value={item.helpEs} onChange={e=>patch(category,{helpEs:e.target.value})}/></label>
+          <div className={fieldClass}><label htmlFor={`${fieldId}-${category}-en`}>Purpose / applicant help · {name} · English</label><textarea id={`${fieldId}-${category}-en`} maxLength={600} rows={2} value={item.helpEn} onChange={e=>patch(category,{helpEn:e.target.value})}/></div>
+          <div className={fieldClass}><label htmlFor={`${fieldId}-${category}-es`}>Ayuda para el candidato · {name} · Español</label><textarea id={`${fieldId}-${category}-es`} maxLength={600} rows={2} value={item.helpEs} onChange={e=>patch(category,{helpEs:e.target.value})}/></div>
           {item.helpEn && <label className={checkClass}><input type="checkbox" disabled={!item.helpEs.trim()} checked={!!item.helpEs.trim()&&item.reviewedSource===item.helpEn.trim()} onChange={e=>patch(category,{reviewedSource:e.target.checked?item.helpEn.trim():''})}/>I reviewed this document help in Spanish.</label>}
           {!item.helpEn && <p>Blank help uses the built-in bilingual category explanation.</p>}
           {category==='id'&&<p role="status">ID uploads remain blocked until DEMAC explicitly approves their purpose, access and retention policy in the server release configuration. A draft can describe that proposed requirement; it does not authorize collecting identification.</p>}
