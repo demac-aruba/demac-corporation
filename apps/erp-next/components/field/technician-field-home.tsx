@@ -1001,6 +1001,8 @@ function DetailView({
             setProcedureInterventionId(null);
             setActiveStage('service');
           }}
+          correctionRequested={job.officeReviewSubmission?.correctionRequired === true}
+          reviewerNote={job.officeReviewSubmission?.reviewerNote}
         />
       </main>
     </div>;
