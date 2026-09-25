@@ -32,12 +32,46 @@ jobs:
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8297
       FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9297
       FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:9397
-      FIELD_PROCEDURE_TEST_RESULTS: ${{ runner.temp }}/field-procedure-backend
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Retain exact upstream changes for compatibility review
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin 38542864b07ef18b32542ff08118fe9eea1526aa d82350f9cfad76a12d089fa6a00f938a75f5cf77
+          python3 - <<'PYCODE'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          base='38542864b07ef18b32542ff08118fe9eea1526aa'
+          main='d82350f9cfad76a12d089fa6a00f938a75f5cf77'
+          def git(*args): return subprocess.check_output(['git',*args])
+          paths=git('diff','--name-only','-z',base,main).decode().strip('\0').split('\0')
+          output=Path(os.environ['RUNNER_TEMP'])/'field-upstream-source';output.mkdir()
+          records=[]
+          for path in paths:
+              entry=git('ls-tree',main,'--',path).decode().strip()
+              mode,kind,sha_and_path=entry.split(' ',2)
+              sha,name=sha_and_path.split('\t',1)
+              if mode!='100644' or kind!='blob' or name!=path or '..' in path.split('/') or Path(path).name.startswith('.env'):
+                  raise SystemExit('Unexpected upstream source path or mode')
+              content=git('show',main+':'+path)
+              if b'PRIVATE KEY-----' in content: raise SystemExit('Private key material rejected')
+              records.append({'path':path,'sha':sha,'size':len(content),'sha256':hashlib.sha256(content).hexdigest()})
+          archive=git('archive','--format=tar.gz',main,'--',*paths)
+          (output/'upstream.tar.gz').write_bytes(archive)
+          (output/'manifest.json').write_text(json.dumps({'base':base,'main':main,'head':git('rev-parse','HEAD').decode().strip(),'files':records,'archiveSha256':hashlib.sha256(archive).hexdigest()},indent=2))
+          print('Captured exact upstream source only; no merge, branch update or application execution.')
+          PYCODE
+      - name: Retain upstream source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-field-upstream-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/field-upstream-source/
+          retention-days: 3
+          if-no-files-found: error
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -48,6 +82,7 @@ jobs:
           java-version: '21'
       - name: Existing dependencies and required tests
         run: |
+          set -euo pipefail
           test -z "${GOOGLE_APPLICATION_CREDENTIALS:-}"
           npm install --prefix functions --ignore-scripts --no-audit --no-fund
           npm run validate:firebase --prefix functions
@@ -55,6 +90,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/field-tools" --no-audit --no-fund firebase-tools@15.30.0
       - name: Real loopback Auth, Firestore, Storage and HTTP integration
         run: |
+          export FIELD_PROCEDURE_TEST_RESULTS="$RUNNER_TEMP/field-procedure-backend"
           "$RUNNER_TEMP/field-tools/node_modules/.bin/firebase" emulators:exec --project demo-demac-dwellings --config firebase.dwellings-preview.json --only auth,firestore,storage 'node functions/test-support/fieldProcedureEmulator.cjs'
       - name: Retain sanitized backend evidence
         if: always()
