@@ -9,9 +9,10 @@ import { ProcedureStepEditor } from './procedure-step-editor';
 import { useProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 
-export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equipmentDescription,onBack,onOpenAddons,correctionRequested,reviewerNote}:{
+export function FieldProcedureWorkspace({target,initialPart,initialStepId,equipmentLabel,equipmentDescription,onBack,onOpenAddons,correctionRequested,reviewerNote}:{
   target:FieldProcedureTarget;
   initialPart:FieldProcedurePart;
+  initialStepId?:string;
   equipmentLabel:string;
   equipmentDescription:string;
   onBack:()=>void;
@@ -21,7 +22,7 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
 }) {
   const session=useProcedureSession(target);
   const [part,setPart]=useState<FieldProcedurePart>(initialPart);
-  const [stepId,setStepId]=useState<string|null>(null);
+  const [stepId,setStepId]=useState<string|null>(initialStepId||null);
   const [riskOpen,setRiskOpen]=useState(false);
   const [riskReason,setRiskReason]=useState('');
   const [riskParts,setRiskParts]=useState<Record<FieldProcedurePart,boolean>>({indoor:initialPart==='indoor',outdoor:initialPart==='outdoor'});
