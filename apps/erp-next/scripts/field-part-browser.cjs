@@ -97,7 +97,22 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      await choose(loser);assert.equal(await loser.getByRole('button',{name:/^Asignada a /}).isDisabled(),true);
      await choose(loser,'outdoor');await loser.getByRole('button',{name:'Tomar condensadora',exact:true}).click();await loser.getByText('Tu parte está identificada.',{exact:true}).waitFor();
      let w=state.store.get('workInterventions','WI-1').procedureWorkflow;assert.notEqual(w.parts.indoor.ownerUserId,w.parts.outdoor.ownerUserId);
-     await choose(winner);await winner.getByText('Liberar mi parte',{exact:true}).click();await winner.getByLabel('Motivo de la transferencia').fill('Transferencia sintética registrada');await winner.getByRole('button',{name:'Liberar sin borrar el historial',exact:true}).click();await winner.getByText('Parte liberada. La contribución anterior permanece en el historial.',{exact:true}).waitFor();
+     // Open the actual procedure workspace through the existing selector. Verify the 14-step
+     // list, single anomaly entry point, per-step evidence controls, and that opening is read-only.
+     const writesBeforeWorkspace=writes().length;
+     await choose(winner);await winner.getByRole('button',{name:'Abrir procedimientos',exact:true}).click();
+     await winner.getByRole('heading',{name:'Procedimientos del servicio',exact:true}).waitFor();
+     assert.equal(await winner.getByRole('button',{name:/Vista amplia inicial/}).count(),1);
+     assert.equal(await winner.getByRole('button',{name:'Reportar anomalía',exact:true}).count(),1,'single anomaly entry on procedure list');
+     assert.equal(writes().length,writesBeforeWorkspace,'opening workspace cannot mutate procedure state');
+     await winner.getByRole('button',{name:/Vista amplia inicial/}).click();
+     await winner.getByRole('heading',{name:'Evidencia por procedimiento',exact:true}).waitFor();
+     assert.equal(await winner.getByRole('button',{name:'Reportar anomalía',exact:true}).count(),0,'anomaly entry is not repeated in step detail');
+     assert.equal(await winner.getByLabel('Tomar Foto: ANTES').count(),1,'required photo control is tied to the procedure view');
+     await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
+     await winner.getByRole('button',{name:'Volver a seleccionar parte',exact:true}).click();
+     await winner.getByText('Tu parte está identificada.',{exact:true}).waitFor();
+     await winner.getByText('Liberar mi parte',{exact:true}).click();await winner.getByLabel('Motivo de la transferencia').fill('Transferencia sintética registrada');await winner.getByRole('button',{name:'Liberar sin borrar el historial',exact:true}).click();await winner.getByText('Parte liberada. La contribución anterior permanece en el historial.',{exact:true}).waitFor();
      assert.equal(state.store.get('workInterventions','WI-1').procedureWorkflow.parts.indoor.ownerUserId,null);
      // Lose the response after the server commit; explicit retry MUST retain request and body.
      fault={uid:owner,action:'record_procedure_action',status:503,afterCommit:true};
@@ -132,7 +147,7 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      assert.equal(state.store.all('workVisits').length,1);assert.equal(state.store.all('workInterventions').length,1);assert.equal(state.store.get('workInterventions','WI-1').status,'in_progress');
      for(const collection of ['fieldEvidence','invoices','stockMovements','whatsappOutboundQueue','fieldOfficeReviews'])assert.equal(state.store.all(collection).length,0);
      assert.deepEqual(errors,[]);assert.deepEqual(outside,[]);
-     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['two separate visible browser devices','no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors']});
+     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['two separate visible browser devices','no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors','actual procedure workspace 14/9 entry','single anomaly entry','per-step photo controls']});
      console.log(`PASS shared parts ${browserName} ${label}`);await Promise.all([context.close(),otherContext.close()]);
     }
    }finally{await Promise.all([browser.close(),companion?.close()]);}
