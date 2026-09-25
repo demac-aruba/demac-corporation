@@ -1003,6 +1003,7 @@ function DetailView({
           }}
           correctionRequested={job.officeReviewSubmission?.correctionRequired === true}
           reviewerNote={job.officeReviewSubmission?.reviewerNote}
+          canRecoverPart={job.responsibility === 'lead'}
         />
       </main>
     </div>;
