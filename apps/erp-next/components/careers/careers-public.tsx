@@ -128,7 +128,7 @@ export function CareersPublic() {
     } catch (e) { setError(careersIssue(e, 'Unable to refresh the position. Your answers are still here.')); }
     finally { loading.current = false; }
   }
-  function complete(receipt: Receipt) { if (!job) return; const saved = { ...current.current.receipts, [job.id]: receipt }; current.current = { ...current.current, receipts: saved }; setReceipts(saved); nav.navigate({ view: 'success', receipt: receipt.id }); }
+  function complete(receipt: Receipt) { if (!job) return; const saved = { ...current.current.receipts, [job.id]: receipt }; current.current = { ...current.current, receipts: saved }; setReceipts(saved); setNeedsRevision(false); setRevisionNotice(''); nav.navigate({ view: 'success', receipt: receipt.id }); }
   const receivedRole = Object.keys(receipts).find(id => receipts[id].id === route.receipt);
   const receivedJob = data?.jobs.find(value => value.id === receivedRole);
   const receivedDraft = receivedRole ? drafts[receivedRole] : undefined;
