@@ -20,7 +20,7 @@ const server=http.createServer(async(req,res)=>{
   const handler=handlers[req.url];if(!handler){res.writeHead(404);res.end();return;}
   let raw=Buffer.alloc(0);for await(const chunk of req){raw=Buffer.concat([raw,chunk]);if(raw.length>15*1024*1024){res.writeHead(413);res.end();return;}}
   try{
-    const request={method:req.method,body:raw.length?JSON.parse(raw):{},rawBody:raw,ip:'127.0.0.1',get:k=>req.headers[k.toLowerCase()],is:type=>String(req.headers['content-type']||'').startsWith(type)};
+    const request={method:req.method,body:raw.length?JSON.parse(raw):{},rawBody:raw,ip:clients.address(req.headers[clients.header]),get:k=>req.headers[k.toLowerCase()],is:type=>String(req.headers['content-type']||'').startsWith(type)};
     const response={set(k,v){res.setHeader(k,v);return this;},status(n){res.statusCode=n;return this;},json(body){
       // Return a deterministic gateway error after the real transaction commits.
       // Closing a socket instead allows Chromium to retry invisibly at HTTP level.
@@ -31,10 +31,13 @@ const server=http.createServer(async(req,res)=>{
   }catch(error){res.statusCode=500;res.end(JSON.stringify({ok:false,message:'Test server failure'}));console.error(error);}
 });
 const results=[];
+const clients=require('./test-support/browser-clients.cjs').createBrowserClients();
 async function context(browser,admin,viewport){
   const ctx=await browser.newContext({viewport,reducedMotion:'reduce'});
+  const client=clients.register();
   await ctx.route('**/*',async route=>{
     const u=new URL(route.request().url());
+    if(u.origin===api)return route.continue({headers:{...route.request().headers(),[clients.header]:client}});
     if([site,api].includes(u.origin)||u.protocol==='data:'||u.protocol==='blob:'&&[site,api].includes(new URL(u.pathname).origin))return route.continue();
     if(u.hostname==='firestore.googleapis.com'&&u.pathname.startsWith(`/v1/projects/${project}/`)){
       const response=await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}${u.pathname}${u.search}`,{method:route.request().method(),headers:route.request().headers(),...(route.request().postData()?{body:route.request().postData()}:{})});
@@ -61,7 +64,16 @@ async function context(browser,admin,viewport){
     const office=await admin.newPage(),person=await candidate.newPage(),errors=[];
     let dismissDialog=false;
     for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>dismissDialog?d.dismiss():d.accept());}
-    async function shot(page,label){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');}
+    async function shot(page,label){
+      await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));
+      const notice=page.locator('[data-candidate-email-notice]');
+      if(await notice.count()&&await notice.isVisible()){
+        const outer=await notice.boundingBox(),copy=await notice.locator(':scope > span').boundingBox();
+        assert(copy&&outer&&copy.width>=outer.width-12,'candidate email notice must flow as one readable paragraph, not narrow flex columns');
+      }
+      await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');
+    }
     async function settled(){await office.getByText('Loading from DEMAC…',{exact:true}).waitFor({state:'hidden'});}
     // A title also appears as the English source inside the Spanish editor. It is
     // not a save acknowledgement. Wait for the real write, list route and row
@@ -218,7 +230,13 @@ async function context(browser,admin,viewport){
       assert.equal(await person.locator('[data-reviewed-question="profile:email"] dd').textContent(),`candidate-${name}@example.test`);
       await person.locator('#privacy').check();
       await shot(person,'03b-revised-review');
-      interrupt=true;interrupted=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');
+      interrupt=true;interrupted=false;
+      const interruptedResponse=person.waitForResponse(r=>r.url()===`${api}/careersPublic`&&r.request().method()==='POST'&&r.request().postDataJSON()?.action==='application.submit');
+      await person.getByRole('button',{name:'Submit application',exact:true}).click();
+      const interruptedResult=await interruptedResponse;
+      assert.equal(interruptedResult.status(),503,'the injected gateway interruption, not a rate-limit error, must be exercised');
+      assert.equal((await interruptedResult.json()).code,'connection-error');
+      await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');
       interrupt=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('heading',{name:'Application received',exact:true}).waitFor();await shot(person,'04-receipt');
       await candidate.close();
       await office.getByRole('button',{name:'Applicants',exact:true}).click();await settled();await office.getByLabel('Search',{exact:true}).fill(`Candidate ${name}`);

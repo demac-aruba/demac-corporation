@@ -28,7 +28,7 @@ jobs:
         run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
       - name: Root-cause fault injection and shared browser/server form contract
         run: |
-          node --test functions/careers/architecture.test.js functions/careers/editorial-contract.test.js functions/careers/submission-contract.test.js functions/careers/privacy-contract.test.js functions/careers/browser-network-audit.test.cjs functions/careers/mail-contract.test.js functions/careers/document-contract.test.js functions/careers/upload-replacement.test.js
+          node --test functions/careers/architecture.test.js functions/careers/editorial-contract.test.js functions/careers/submission-contract.test.js functions/careers/privacy-contract.test.js functions/careers/browser-network-audit.test.cjs functions/careers/mail-contract.test.js functions/careers/document-contract.test.js functions/careers/upload-replacement.test.js functions/careers/browser-clients.test.cjs
           node --experimental-strip-types --test apps/erp-next/scripts/careers-form-contract.test.cjs
       - name: Existing booking, field and communications regression suites
         run: |
@@ -40,7 +40,7 @@ jobs:
       - name: Persistent records, private files and ambiguous-write recovery in demo emulators only
         env:
           GCLOUD_PROJECT: demo-demac-careers
-        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js && node --test functions/careers/orphan-emulator.test.js'
+        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js && node --test functions/careers/orphan-emulator.test.js && node --test functions/careers/browser-client-emulator.test.js'
   recruitment-browser-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
