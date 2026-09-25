@@ -1,0 +1,104 @@
+name: Careers V4 scoped review
+
+# Review only. This workflow has no production credentials, writes or deploy job.
+on:
+  push:
+    branches: [feature/careers-v4-20260923]
+    paths:
+      - 'apps/erp-next/components/careers/**'
+      - 'apps/erp-next/components/recruitment/**'
+      - 'apps/erp-next/components/website-manager-workspace.tsx'
+      - 'apps/erp-next/lib/public-website-content.ts'
+      - 'apps/erp-next/lib/careers-*'
+      - 'apps/erp-next/lib/firebase/careers.ts'
+      - 'apps/erp-next/app/careers/**'
+      - 'apps/erp-next/scripts/careers-*'
+      - 'functions/careers/**'
+      - 'docs/ai/tasks/careers-v4-*'
+      - 'docs/ai/reviews/careers-v4-*'
+      - '.github/workflows/careers-v4-review.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careers-v4-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Preserve the exact tracked review source, without credentials or runtime data
+        run: |
+          mkdir -p "$RUNNER_TEMP/careers-v4-source"
+          git rev-parse HEAD > "$RUNNER_TEMP/careers-v4-source/commit.txt"
+          git status --porcelain > "$RUNNER_TEMP/careers-v4-source/status.txt"
+          git archive --format=tar.gz --prefix=demac-corporation/ -o "$RUNNER_TEMP/careers-v4-source/source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: careers-v4-source-${{ github.sha }}
+          path: ${{ runner.temp }}/careers-v4-source/
+          retention-days: 3
+          if-no-files-found: error
+
+  existing-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CAREERS_PREVIEW_BUILD: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_CAREERS_LIVE_ENABLED: 'false'
+      NEXT_PUBLIC_CAREERS_ADMIN_ENABLED: 'false'
+      NEXT_PUBLIC_FIREBASE_API_KEY: test-api-key
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-careers.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-careers
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-careers.appspot.com
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123456'
+      NEXT_PUBLIC_FIREBASE_APP_ID: demo-careers-app
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install the existing Next application
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Preserve the shared browser and server form contract checks
+        run: node --experimental-strip-types --test apps/erp-next/scripts/careers-form-contract.test.cjs apps/erp-next/scripts/careers-question-flow.test.cjs apps/erp-next/scripts/careers-visual-contract.test.cjs functions/careers/editorial-contract.test.js functions/careers/submission-contract.test.js functions/careers/mail-contract.test.js functions/careers/document-contract.test.js functions/careers/upload-replacement.test.js functions/careers/browser-clients.test.cjs functions/careers/privacy-contract.test.js apps/erp-next/scripts/careers-locale.test.cjs apps/erp-next/scripts/careers-excerpt.test.cjs apps/erp-next/scripts/careers-editor-preview.test.cjs
+      - name: Types and build, including all existing prebuild gates
+        run: npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build
+      - name: Preserve the compiled isolated preview for visual inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-v4-export-${{ github.sha }}
+          path: apps/erp-next/out/
+          retention-days: 3
+          if-no-files-found: error
+      - name: Install isolated browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/careers-v4-browser" playwright@1.58.2 --no-audit --no-fund
+          "$RUNNER_TEMP/careers-v4-browser/node_modules/.bin/playwright" install --with-deps chromium webkit firefox
+      - name: Preserve existing rendered Careers and navigation checks
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out > "$RUNNER_TEMP/careers-v4-http.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" || true' EXIT
+          for i in $(seq 1 20); do curl --fail --silent http://127.0.0.1:4173/careers/ >/dev/null && break; sleep 1; done
+          NODE_PATH="$RUNNER_TEMP/careers-v4-browser/node_modules" node apps/erp-next/scripts/careers-visual-acceptance.cjs
+          NODE_PATH="$RUNNER_TEMP/careers-v4-browser/node_modules" node apps/erp-next/scripts/careers-navigation-acceptance.cjs
+          NODE_PATH="$RUNNER_TEMP/careers-v4-browser/node_modules" node apps/erp-next/scripts/careers-locale-acceptance.cjs
+      - name: Preserve actual synthetic-data screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-v4-baseline-${{ github.sha }}
+          path: careers-ui-results/
+          retention-days: 7
+          if-no-files-found: warn

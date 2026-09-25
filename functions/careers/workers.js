@@ -1,6 +1,7 @@
 'use strict';
 const crypto=require('node:crypto');
 const {COLLECTIONS}=require('./service');
+const {candidateMessage}=require('./mail-contract');
 function createWorkers({db,files,infrastructure,now=Date.now}){
   async function sendOne(document){
     const owner=crypto.randomUUID();
@@ -12,17 +13,20 @@ function createWorkers({db,files,infrastructure,now=Date.now}){
       const application=a.data(),settings=s.data();
       if(!application || application.expiresAt<=now() || application.deleting){tx.update(document,{status:'cancelled'});return null;}
       if(infrastructure.blockers(settings).length || settings?.verification?.signature!==infrastructure.signature(settings))return null;
-      tx.update(document,{status:'sending',owner,leaseUntil:now()+90000,attempts:m.attempts+1});
-      return {application,settings,attempts:m.attempts+1};
+      const message=m.message || candidateMessage(application);
+      tx.update(document,{status:'sending',kind:'candidate-confirmation',message,owner,leaseUntil:now()+90000,attempts:m.attempts+1});
+      return {application,settings,message,attempts:m.attempts+1};
     });
     if(!task)return;
     let status='delivery_unknown';
     try{
-      const response=await infrastructure.send(task.application,task.settings);
-      status=response.accepted?.some(v=>String(v).toLowerCase()===task.application.profile.email.toLowerCase())?'smtp_accepted':'rejected';
+      const response=await infrastructure.send(task.application,task.settings,task.message);
+      const recipient=task.message.to.toLowerCase();
+      status=response.accepted?.some(v=>String(v).toLowerCase()===recipient)?'smtp_accepted':response.rejected?.some(v=>String(v).toLowerCase()===recipient)?'rejected':'delivery_unknown';
     }catch(error){
       const beforeSend=error.code==='EDNS' || error.code==='ECONNECTION' || error.code==='ESOCKET' && error.command==='CONN';
-      status=beforeSend && task.attempts<4?'queued':beforeSend?'failed':'delivery_unknown';
+      const rejected=error.code==='EENVELOPE' || Number(error.responseCode)>=500 && ['MAIL FROM','RCPT TO','DATA'].includes(error.command);
+      status=rejected?'rejected':error.code==='EAUTH' || error.code==='mail-content-invalid'?'failed':beforeSend && task.attempts<4?'queued':beforeSend?'failed':'delivery_unknown';
     }
     await db.runTransaction(async tx=>{
       const m=(await tx.get(document)).data(); if(m?.owner!==owner || m.status!=='sending')return;

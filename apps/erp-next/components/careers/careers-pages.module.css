@@ -1,0 +1,78 @@
+/* Public candidate pages. No global resets, fonts or administrative selectors. */
+.hero{position:relative;isolation:isolate;overflow:hidden;background:#edf7ff;border-bottom:1px solid var(--career-border)}
+.hero>img{position:absolute;inset:0 0 0 auto;width:66%;height:100%;object-fit:cover;object-position:65% center;z-index:-2}
+.hero::after{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,#e9f5ff 0%,#e9f5fff2 32%,#e9f5ff80 59%,transparent 85%)}
+.heroInner{width:min(1160px,100%);margin:auto;box-sizing:border-box;padding:40px 28px}
+.heroCopy{max-width:660px}
+.eyebrow{display:block;color:var(--career-text);font-size:.72rem;letter-spacing:.12em;font-weight:750;margin-bottom:8px}
+.heroCopy h1,.heroCopy h2{font-size:clamp(2.25rem,4vw,3.5rem);font-weight:800;letter-spacing:-.045em;line-height:1.05;margin:0 0 10px;color:var(--career-text)}
+.heroCopy>strong{display:block;font-size:1.45rem;letter-spacing:-.025em;line-height:1.3;margin-bottom:8px}
+.heroCopy p{font-size:1rem;line-height:1.55;color:var(--career-text);max-width:540px;margin:0}
+.positionHero .heroInner{padding-top:18px;padding-bottom:30px}
+.backRow{display:flex;align-items:center;gap:10px;margin-bottom:20px;color:var(--career-text);font-size:.875rem}
+.positionHero .heroCopy{max-width:720px}
+.catalogue{max-width:1160px;padding:22px 28px 24px;margin:auto;box-sizing:border-box}
+.filters{display:grid;gap:12px;margin-bottom:20px}
+.search{display:flex;align-items:center;border:1px solid #cbd9eb;border-radius:28px;padding:0 16px;gap:10px;min-height:48px;color:var(--career-muted)}
+.search:focus-within{outline:2px solid var(--career-primary);outline-offset:3px}
+.search input{width:100%;min-width:0;border:0;outline:none!important;min-height:46px;background:transparent;color:var(--career-text);font-size:1rem}
+.search svg{flex:0 0 20px}
+.search input::placeholder{color:var(--career-muted)}
+.filterRow{display:flex;gap:12px;align-items:center}
+.filterRow select{min-height:44px;max-width:100%;border:1px solid #cbd9eb;border-radius:24px;background:var(--career-surface);color:var(--career-text);padding:9px 34px 9px 16px;font-size:.875rem}
+.clear{border:0;background:none;color:var(--career-primary);min-height:44px;padding:8px;font-size:.875rem}
+.results{display:flex;justify-content:space-between;gap:16px;margin:0 0 12px;font-size:.8125rem;color:var(--career-text)}
+.results>span:last-child{color:var(--career-muted)}
+.list{display:grid;gap:10px}
+.jobCard{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 24px;align-items:center;border:1px solid var(--career-border);border-radius:10px;padding:16px 18px;background:var(--career-surface);min-width:0;transition:border-color .15s,box-shadow .15s}
+.jobCard h2{grid-column:1;font-size:1.18rem;line-height:1.3;letter-spacing:-.025em;margin:0;color:var(--career-text)}
+.meta{grid-column:1;display:flex;flex-wrap:wrap;gap:7px 15px;font-size:.8rem;line-height:1.5;color:var(--career-muted)}
+.meta>span{display:inline-flex;align-items:center;gap:6px}
+.meta svg{width:16px;height:16px;flex-shrink:0}
+.jobCard p{grid-column:1;margin:0;color:var(--career-muted);font-size:.875rem;line-height:1.55;overflow-wrap:anywhere}
+.positionButton{grid-column:2;grid-row:1/4;min-height:46px;display:flex;align-items:center;justify-content:center;gap:12px;border:1px solid var(--career-action);border-radius:9px;padding:10px 16px;background:var(--career-action);color:#fff;font-weight:650;font-size:.875rem;line-height:1.4;white-space:nowrap}
+.positionButton svg{width:18px;height:18px}
+.previewNote{font-size:.75rem;color:var(--career-muted);margin:18px 0 0}
+.rolePage{padding-top:18px;padding-bottom:34px}
+.description{max-width:950px;margin:auto}
+.description>section{padding:24px 0;border-bottom:1px solid var(--career-border)}
+.description>section:first-child{padding-top:0}
+.description h2{margin:0 0 10px;line-height:1.25;font-size:1.5rem;letter-spacing:-.025em}
+.description p,.description li{font-size:1rem;line-height:1.65;color:var(--career-muted)}
+.description p{white-space:pre-wrap}
+.description ul{list-style:none;padding:0;margin:10px 0 0}
+.description li{position:relative;padding-left:22px;margin:6px 0}
+.description li::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--career-primary);position:absolute;left:1px;top:.62em}
+.documents{display:flex;align-items:flex-start;gap:14px}
+.documents>div{min-width:0}
+.apply{max-width:950px;margin:28px auto 0;display:flex;align-items:center;gap:24px}
+.apply button{min-width:280px;min-height:54px;font-size:1.05rem}
+.apply>span{display:flex;gap:8px;align-items:center;color:var(--career-muted);font-size:.8125rem}
+.apply>span svg{width:16px;height:16px}
+.receipt{max-width:720px;margin:0 auto;padding:32px 28px 36px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:20px;text-align:center}
+.receipt h1{font-size:2.5rem;line-height:1.12;letter-spacing:-.035em;margin:0;color:var(--career-text)}
+.receipt>.primary{width:100%}
+.receipt>button{width:100%}
+.receipt>small{font-size:.75rem;color:var(--career-muted);line-height:1.5}
+.receipt>p{font-size:1.05rem;line-height:1.65;margin:0;color:var(--career-muted)}
+.receipt>p strong{display:inline-block;color:var(--career-text);font-size:1.2rem;margin-top:4px}
+.successMark{width:88px;height:88px;display:grid;place-items:center;border-radius:50%;background:#e3f5ed;color:#26a771;margin:4px 0 8px}
+.successMark svg{width:32px;height:32px;stroke-width:3}
+.receiptDetails{align-self:stretch;border-radius:12px;background:var(--career-soft);padding:18px 22px;margin:0;text-align:left}
+.receiptDetails>div{display:grid;grid-template-columns:24px minmax(110px,1fr) minmax(0,1.25fr);align-items:center;gap:12px;margin:10px 0}
+.receiptDetails dt{color:var(--career-muted);font-size:.875rem}
+.receiptDetails dd{margin:0;font-weight:750;color:var(--career-text);font-size:1rem;overflow-wrap:anywhere}
+.mailNotice{color:var(--career-muted);font-size:.8125rem;line-height:1.6;max-width:100%}
+.next{width:100%;text-align:left;border-top:1px solid var(--career-border);padding-top:20px}
+.next h2{font-size:1.35rem;margin-bottom:18px}
+.next ol{counter-reset:step;list-style:none;margin:0;padding:0}
+.next li{counter-increment:step;position:relative;display:flex;align-items:center;gap:16px;min-height:54px;color:var(--career-muted);font-size:.9375rem}
+.next li::before{content:counter(step);display:grid;place-items:center;flex:0 0 32px;height:32px;border-radius:50%;background:#deedff;color:var(--career-text);font-weight:750;z-index:1}
+.next li:not(:last-child)::after{content:'';position:absolute;width:2px;background:#deedff;left:15px;top:30px;bottom:-10px}
+.srOnly{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(hover:hover){.jobCard:hover{border-color:#a9c3e5;box-shadow:0 3px 12px #0b24580a}.positionButton:hover{filter:brightness(1.15)}}
+@media(max-width:760px){.heroInner{padding:28px 20px}.hero>img{width:82%;object-position:68% center}.heroCopy{max-width:83%}.heroCopy h1,.heroCopy h2{font-size:2.35rem}.heroCopy>strong{font-size:1.16rem}.heroCopy p{font-size:.9375rem;max-width:330px}.hero::after{background:linear-gradient(90deg,#e9f5fff5 0%,#e9f5ffd9 40%,#e9f5ff50 75%,#e9f5ff10)}.positionHero .heroCopy{max-width:90%}.positionHero .heroInner{padding-bottom:28px}.positionHero .heroCopy h1{font-size:2.1rem}.catalogue{padding:18px 20px 24px}.jobCard{padding:14px;gap:8px 12px}.jobCard h2{grid-column:1/-1;font-size:1.125rem}.meta{grid-column:1/-1;font-size:.75rem;gap:5px 12px}.jobCard p{grid-column:1/-1;font-size:.875rem}.positionButton{grid-column:1/-1;grid-row:auto;justify-self:end;min-height:44px;font-size:.8125rem;padding:9px 12px}.results>span:last-child{display:none}.description h2{margin:0 0 10px;line-height:1.25;font-size:1.3rem}.description>section{padding:20px 0}.apply{flex-direction:column;align-items:stretch;gap:12px}.apply button{min-width:0;width:100%;justify-content:center}.apply>span{justify-content:center}.receiptDetails>div{grid-template-columns:22px minmax(0,1fr);gap:3px 12px;margin:12px 0}.receiptDetails svg{grid-row:1/3}.receiptDetails dd{grid-column:2}.receipt{gap:16px;padding-inline:20px}.receipt h1{font-size:2rem}.successMark{width:76px;height:76px}.backRow{margin-bottom:14px}}
+/* Keep the action next to its title at normal phone widths, as in REF-01.
+   Smaller screens retain the readable stacked layout rather than tiny text. */
+@media(min-width:380px) and (max-width:760px){.jobCard{grid-template-columns:minmax(0,1fr) auto}.jobCard h2{grid-column:1;grid-row:1}.jobCard .meta{grid-column:1/-1;grid-row:2}.jobCard p{grid-column:1/-1;grid-row:3}.positionButton{grid-column:2;grid-row:1;align-self:center}}
+@media(max-width:380px){.catalogue,.heroInner{padding-inline:16px}.heroCopy{max-width:100%}.heroCopy h1,.heroCopy h2{font-size:2.05rem}.filterRow{flex-wrap:wrap}.receipt h1{font-size:1.8rem}}

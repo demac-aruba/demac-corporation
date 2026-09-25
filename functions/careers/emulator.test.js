@@ -83,3 +83,127 @@ test('cleanup distinguishes expired drafts from submitted application documents'
   time+=86400001;await assert.rejects(service.getApplication('qa-admin',r.id),{status:404});await workers.cleanup();
   assert.equal((await db.collection(N.applications).doc(r.id).get()).exists,false);const [exists]=await bucket.file(cv.path).exists();assert.equal(exists,false);
 });
+
+test('editorial translations persist with transactional revisions and remain private until approved', async () => {
+  const E = require('./editorial-contract'), key = requestId();
+  const original = job();
+  const es = { ...E.emptyTranslation(original), title: 'Técnico QA', department: 'Técnica', location: 'Aruba', contract: 'Contrato de prueba',
+    summary: 'Solo para pruebas.', responsibilities: ['Responsabilidad de prueba'], requirements: ['Requisito de prueba'],
+    questions: [ { id: 'has-vrf', label: '¿Experiencia en VRF?', help: '', optionLabels: { Yes: 'Sí', No: 'No' } },
+      { id: 'detail', label: 'Describe tu experiencia', help: '', optionLabels: {} } ] };
+  const absentSetup = createService({ ...args, infrastructure: { ...infra, blockers: () => ['Test setup missing.'] } });
+  await absentSetup.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 0, vacancy: { ...original, translations: { es } } });
+  const saved = await other.getVacancy('qa-admin', key);
+  assert.equal(saved.translations.es.title, es.title); assert.equal(saved.editorialVersion, 1);
+  assert.deepEqual(C.publicVacancy(saved).translations, {});
+  const revised = { ...saved, title: 'Updated English role', translations: { es: { ...es, status: 'Approved' } }, status: 'Open' };
+  await assert.rejects(service.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 1, vacancy: revised }), { code: 'translation-review-required' });
+  assert.deepEqual(await other.getVacancy('qa-admin', key), saved, 'rejected publication makes no partial write');
+  const request = { id: key, requestId: requestId(), expectedVersion: 1, vacancy: { ...revised, status: 'Draft' } };
+  const results = await Promise.allSettled([service.saveVacancy('qa-admin', request), other.saveVacancy('qa-admin', { ...request, requestId: requestId() })]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1, 'two translators cannot silently overwrite one another');
+  const final = await other.getVacancy('qa-admin', key);
+  assert.equal(final.version, 2); assert.equal(final.editorialVersion, 2); assert.equal(final.translations.es.sourceVersion, 1);
+  const legacy = { ...final }; delete legacy.translations;
+  await service.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 2, vacancy: legacy });
+  assert.equal((await other.getVacancy('qa-admin', key)).translations.es.title, es.title, 'older editors cannot erase translations by omission');
+});
+
+test('submitted original presentation survives changed vacancy, separate instances and stage/note edits', async () => {
+  const S = require('./submission-contract'), E = require('./editorial-contract'), j = job(), id = requestId();
+  const es = { ...E.emptyTranslation(j), status:'Approved', title:'Técnico original', department:'Técnica',
+    location:'Aruba',contract:'Solo prueba',summary:'Prueba aislada.',responsibilities:['Responsabilidad'],requirements:['Requisito'],
+    questions:[{id:'has-vrf',label:'¿Experiencia en VRF?',help:'',optionLabels:{Yes:'Sí',No:'No'}},
+      {id:'detail',label:'Describe tu experiencia',help:'',optionLabels:{}}] };
+  await service.saveVacancy('qa-admin',{id,requestId:requestId(),expectedVersion:0,vacancy:{...j,status:'Open',translations:{es}}});
+  const session = await prepare(id), raw = {...profile(),givenName:'  María  ',answers:{'has-vrf':'Yes',detail:'  Trabajé aquí.\nI maintained VRF.  <b>literal</b>  ',unknown:'NEVER STORE'}};
+  const request = {...session,profile:raw,localeAtSubmit:'es',presentationVersion:S.PRESENTATION_VERSION};
+  const [first, second] = await Promise.all([service.submit(request), other.submit(request)]);
+  assert.equal(first.id,second.id,'concurrent repeat creates one record');
+  const before = (await other.getApplication('qa-admin',first.id)).submissionSnapshot;
+  assert.equal(before.localeAtSubmit,'es'); assert.equal(before.title,es.title);
+  assert.equal(before.questions[1].value,raw.answers.detail);
+  assert.equal(before.questions[0].options.find(o=>o.value==='Yes').label,'Sí');
+  assert.equal(before.fields[0].value,raw.givenName); assert(!JSON.stringify(before).includes('NEVER STORE'));
+  await service.saveVacancy('qa-admin',{id,requestId:requestId(),expectedVersion:1,vacancy:{...j,title:'Changed English',status:'Closed'}});
+  await service.updateApplication('qa-admin',{id:first.id,requestId:requestId(),expectedVersion:1,stage:'Interview',submissionSnapshot:{title:'spoof'}});
+  await service.updateApplication('qa-admin',{id:first.id,requestId:requestId(),expectedVersion:2,note:'Test note never copied to original snapshot.'});
+  const after = await other.getApplication('qa-admin',first.id);
+  assert.deepEqual(after.submissionSnapshot,before);
+  assert.equal((await service.sessionStatus(session)).receipt.localeAtSubmit,'es');
+  assert.equal((await other.submit(request)).jobTitle,es.title);
+  await assert.rejects(service.submit({...request,localeAtSubmit:'en'}),{code:'already-submitted'});
+  assert.equal((await db.collection(N.applications).where('id','==',first.id).get()).size,1);
+  assert.equal(after.documents.length,2);
+});
+
+test('actual private storage retains a CV after scan failure, then atomically adopts its replacement', async () => {
+  const session = await prepare(await openJob());
+  const old = (await service.sessionStatus(session)).files.find(file => file.kind === 'cv');
+  const original = (await db.collection(N.sessions).doc(session.sessionId).get()).data().files[old.id];
+  const request = { ...session, kind: 'cv', name: 'replacement.pdf', replaceFileId: old.id,
+    base64: Buffer.from('%PDF-1.4\n% Replacement fixture\n%%EOF').toString('base64') };
+  infected = true;
+  try { await assert.rejects(service.upload(request), { code: 'unsafe-file' }); }
+  finally { infected = false; }
+  assert((await service.sessionStatus(session)).files.some(file => file.id === old.id && file.status === 'clean'));
+  assert.equal((await bucket.file(original.path).exists())[0], true);
+  const next = await service.upload(request);
+  const current = await service.sessionStatus(session);
+  assert.equal(current.files.filter(file => file.kind === 'cv' && file.status === 'clean').length, 1);
+  assert(current.files.some(file => file.id === next.id && file.status === 'clean'));
+  assert(!current.files.some(file => file.id === old.id));
+  assert.equal((await db.collection(N.deletions).doc(C.digest(original.path)).get()).data().generation, original.generation);
+  const receipt = await service.submit({ ...session, profile: profile() });
+  const saved = await other.getApplication('qa-admin', receipt.id);
+  assert(saved.documents.some(file => file.id === next.id));
+  assert(!saved.documents.some(file => file.id === old.id));
+  assert.equal((await service.document('qa-admin', receipt.id, next.id)).mime, 'application/pdf');
+  await assert.rejects(service.removeUpload({ ...session, fileId: next.id }), { code: 'already-submitted' });
+});
+
+test('candidate Spanish message is frozen in Firestore and accepted only once by a controlled mail transport', async () => {
+  const session = await prepare(await openJob());
+  const receipt = await service.submit({ ...session, profile: profile(), localeAtSubmit: 'es', presentationVersion: require('./submission-contract').PRESENTATION_VERSION });
+  const reference = db.collection(N.mail).doc(receipt.id);
+  const before = (await reference.get()).data().message;
+  assert.equal(before.locale, 'es'); assert(before.subject.startsWith('Recibimos tu solicitud — '));
+  let attempts = 0;
+  const transport = { ...infra, send: async (application, settings, message) => {
+    attempts++; assert.deepEqual(message, before);
+    return { accepted: [message.to] };
+  } };
+  const testedWorker = createWorkers({ ...args, infrastructure: transport });
+  await Promise.all([testedWorker.sendOne(reference), testedWorker.sendOne(reference)]);
+  await testedWorker.sendOne(reference);
+  const stored = (await reference.get()).data();
+  assert.equal(attempts, 1); assert.equal(stored.status, 'smtp_accepted');
+  assert.deepEqual(stored.message, before);
+  assert.equal((await other.getApplication('qa-admin', receipt.id)).candidateMail.status, 'smtp_accepted');
+  assert.equal((await db.collection(N.mail).where('applicationId', '==', receipt.id).get()).size, 1, 'internal mailbox job remains deferred');
+});
+
+test('reviewed privacy translation and required certificates are enforced by the persistent authority', async () => {
+  const id = requestId(), requirement = { category: 'certificate', required: true, helpEn: '', helpEs: '', reviewedSource: '' };
+  await service.saveVacancy('qa-admin', { id, requestId: requestId(), expectedVersion: 0, vacancy: { ...job(), status: 'Open', documentRequirements: [requirement] } });
+  const session = await prepare(id);
+  await assert.rejects(service.submit({ ...session, profile: profile() }), { code: 'document-policy' });
+  assert.equal((await db.collection(N.applications).doc(session.sessionId).get()).exists, false);
+  await service.upload({ ...session, kind: 'document', category: 'certificate', name: 'certificate.pdf', base64: Buffer.from('%PDF-1.4\n% Certificate test\n%%EOF').toString('base64') });
+  const previous = (await service.getSettings('qa-admin')).settings;
+  const nextVersion = 'qa-privacy-es', privacyText = 'Synthetic privacy for language integration, not a real notice.';
+  const spanishText = 'Aviso sintético para integración de idioma; no es una política real.';
+  await service.saveSettings('qa-admin', { requestId: requestId(), expectedVersion: previous.version, settings: { ...previous, intakeEnabled: false,
+    privacyText, privacyVersion: nextVersion, privacyLocale: 'en', privacyTranslation: { text: spanishText, status: 'Approved', sourceVersion: nextVersion } } });
+  await service.verifySetup('qa-admin');
+  const configured = (await service.getSettings('qa-admin')).settings;
+  await service.saveSettings('qa-admin', { requestId: requestId(), expectedVersion: configured.version, settings: { ...configured, intakeEnabled: true } });
+  const currentProfile = { ...profile(), privacyVersion: nextVersion };
+  await assert.rejects(service.submit({ ...session, profile: profile() }), { code: 'privacy-version' });
+  const saved = await service.submit({ ...session, profile: currentProfile, localeAtSubmit: 'es', presentationVersion: require('./submission-contract').PRESENTATION_VERSION });
+  const record = await other.getApplication('qa-admin', saved.id);
+  assert.equal(record.submissionSnapshot.privacy.text, spanishText);
+  assert.equal(record.submissionSnapshot.privacy.contentLocale, 'es');
+  assert.equal(record.documents.filter(file => file.category === 'certificate').length, 1);
+  assert.equal(record.candidateMessage.locale, 'es');
+});

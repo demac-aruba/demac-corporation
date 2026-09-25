@@ -36,25 +36,28 @@ export function PublicBrand() {
   );
 }
 
-export function PublicHeader({ active }: { active?: PublicSiteShellProps['active'] }) {
+export function PublicHeader({ active, locale='en' }: { active?: PublicSiteShellProps['active']; locale?:'en'|'es' }) {
+  const labels:Record<string,string>={Home:'Inicio','About Us':'Nosotros',Services:'Servicios',Projects:'Proyectos','Industries We Serve':'Sectores',Careers:'Empleo',Contact:'Contacto'};
+  const labelFor=(label:string)=>locale==='es'?labels[label]||label:label;
+  const hrefFor=(id:string,href:string)=>id==='careers'&&locale==='es'?`${href}?lang=es`:href;
   return (
     <header className="public-header">
       <div className="public-header-inner">
         <PublicBrand />
-        <nav className="public-nav" aria-label="Main navigation">
+        <nav className="public-nav" aria-label={locale==='es'?'Navegación principal':'Main navigation'}>
           {primaryLinks.map(([id, href, label]) => (
-            <Link className={active === id ? 'is-active' : ''} href={href} key={id} aria-current={active === id ? 'page' : undefined}>{label}</Link>
+            <Link className={active === id ? 'is-active' : ''} href={hrefFor(id,href)} key={id} aria-current={active === id ? 'page' : undefined}>{labelFor(label)}</Link>
           ))}
         </nav>
         <div className="public-header-actions">
-          <Link className="public-button public-button-whatsapp" href="/contact?channel=whatsapp"><span aria-hidden="true">◉</span> WhatsApp Us</Link>
-          <Link className="public-button public-button-primary" href="/contact?request=estimate">▣ Request Estimate</Link>
+          <Link className="public-button public-button-whatsapp" href="/contact?channel=whatsapp"><span aria-hidden="true">◉</span> {locale==='es'?'Escríbenos':'WhatsApp Us'}</Link>
+          <Link className="public-button public-button-primary" href="/contact?request=estimate">{locale==='es'?'Solicitar cotización':'▣ Request Estimate'}</Link>
         </div>
         <details className="public-mobile-menu">
-          <summary aria-label="Open navigation"><span /><span /><span /></summary>
+          <summary aria-label={locale==='es'?'Abrir navegación':'Open navigation'}><span /><span /><span /></summary>
           <div>
-            {primaryLinks.map(([id, href, label]) => <Link href={href} key={id} aria-current={active === id ? 'page' : undefined}>{label}</Link>)}
-            <Link href="/login">Staff Login</Link>
+            {primaryLinks.map(([id, href, label]) => <Link href={hrefFor(id,href)} key={id} aria-current={active === id ? 'page' : undefined}>{labelFor(label)}</Link>)}
+            <Link href="/login">{locale==='es'?'Acceso del personal':'Staff Login'}</Link>
           </div>
         </details>
       </div>
