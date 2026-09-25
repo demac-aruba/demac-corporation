@@ -1,3 +1,4 @@
+import type { SubmissionSnapshot } from '../../../functions/careers/submission-contract';
 import type { EditorialTranslation } from '../../../functions/careers/editorial-contract';
 import { COUNTRY_CODES, validateDetails, validateExperience, visibleQuestions as visibleFormQuestions, type FormQuestion } from '../../../functions/careers/form-contract.js';
 /** UI draft types and shared validation. Preview fixtures are never persisted. */
@@ -26,6 +27,7 @@ export interface ApplicationDraft {
 export const stages = ['New', 'In review', 'Shortlisted', 'Interview', 'Technical test', 'Offer', 'Hired', 'Not selected', 'Withdrawn'] as const;
 export type Stage = typeof stages[number];
 export interface PreviewApplication {
+  submissionSnapshot?: SubmissionSnapshot;
   id: string; vacancy: Vacancy; draft: ApplicationDraft; stage: Stage; createdAt: string;
   notes: { text: string; at: string }[]; timeline: { text: string; at: string }[];
 }

@@ -98,8 +98,14 @@ const results=[];
    const receipt=new URL(page.url()).searchParams.get('receipt');
    await switchTo('English','en');await page.getByRole('heading',{name:'Application completed',exact:true}).waitFor();
    await switchTo('Español','es');assert.equal(new URL(page.url()).searchParams.get('receipt'),receipt);
+   await page.getByText('Review tools', {exact:false}).first().click();
+   await page.getByRole('button',{name:'Review this candidate',exact:true}).click();
+   await page.locator('[data-submitted-locale="es"]').waitFor();
+   assert.equal(await page.locator('[data-submitted-question="role:project"] dd').textContent(),'  Trabajé 4 años.\nI also repaired VRF.  ');
+   assert.equal(await page.locator('[data-submitted-question="role:drawings"] dt').textContent(),'¿Puedes leer planos técnicos?');
+   await shot('07-original-expedient');
    assert.deepEqual(errors,[]);
-   results.push({browser:name,status:'PASS',scenarios:['campaign ES','canonical department survives toggle','approved Spanish profile','explicit language does not add history','selected options retained','mixed original paragraph retained in session','file retained','Back/Forward retains manual ES','localized standard and role questions','localized invalid number and file feedback','selected file is not misreported as stored','original paragraph is unchanged in review and edit','explicit consent and no preselected future opt-in','localized preview receipt without mail claim']});
+   results.push({browser:name,status:'PASS',scenarios:['campaign ES','canonical department survives toggle','approved Spanish profile','explicit language does not add history','selected options retained','mixed original paragraph retained in session','file retained','Back/Forward retains manual ES','localized standard and role questions','localized invalid number and file feedback','selected file is not misreported as stored','original paragraph is unchanged in review and edit','explicit consent and no preselected future opt-in','localized preview receipt without mail claim','frozen Spanish original evidence in the English admin preview']});
   }catch(e){await page.screenshot({path:path.join(output,`${name}-locale-FAIL.png`),fullPage:true});results.push({browser:name,status:'FAIL',error:e.message});throw e;}
   finally{await context.close();await browser.close();fs.writeFileSync(path.join(output,'locale-report.json'),JSON.stringify(results,null,2));}
  }
@@ -125,5 +131,5 @@ const results=[];
    results.push({scenario:scenario.id,status:'PASS'});await ctx.close();
   }
  }finally{await browser.close();fs.writeFileSync(path.join(output,'locale-report.json'),JSON.stringify(results,null,2));}
- console.log('PASS: locale routing, selection, canonical filters and retained in-tab data. Localized form, review and synthetic receipt are covered; production privacy, snapshots and email remain separate.');
+ console.log('PASS: locale routing, selection, canonical filters and retained in-tab data. Localized form, review and synthetic receipt are covered; snapshot admin rendering is covered; production privacy and email remain separate.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -28,7 +28,7 @@ jobs:
         run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
       - name: Root-cause fault injection and shared browser/server form contract
         run: |
-          node --test functions/careers/architecture.test.js functions/careers/editorial-contract.test.js
+          node --test functions/careers/architecture.test.js functions/careers/editorial-contract.test.js functions/careers/submission-contract.test.js
           node --experimental-strip-types --test apps/erp-next/scripts/careers-form-contract.test.cjs
       - name: Existing booking, field and communications regression suites
         run: |

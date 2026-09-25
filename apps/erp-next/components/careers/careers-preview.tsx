@@ -1,5 +1,7 @@
 'use client';
 
+import { PRESENTATION_VERSION, createSubmissionSnapshot } from '../../../../functions/careers/submission-contract.js';
+import { validateDetails, validateExperience } from '../../../../functions/careers/form-contract.js';
 import { CareersLanguage } from './careers-language';
 import { withSpanishPreview } from '../../lib/careers-preview-locales';
 import { careersText, vacancyPresentation } from '../../lib/careers-locale';
@@ -82,10 +84,16 @@ export function CareersPreview() {
     if (live.current.vacancies.find(job => job.id === selected.id)?.status !== 'Open') return 'This preview vacancy is no longer open. Your answers are still available in this session.';
     const errors = { ...validateStep(draft, selected, 0), ...validateStep(draft, selected, 1), ...validateStep(draft, selected, 2, true) };
     if (Object.keys(errors).length || totalFileBytes(draft) > 30 * 1024 * 1024) return 'Please review all required answers and file limits before submitting.';
+    let submissionSnapshot;
+    try {
+      const canonical = { ...validateDetails(draft).value, ...validateExperience(draft, selected.questions).value, futureTalent: draft.futureTalent };
+      submissionSnapshot = createSubmissionSnapshot(selected, draft, canonical, navigation.locale, PRESENTATION_VERSION,
+        { version: 'preview-only', text: careersText(navigation.locale, 'This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.') });
+    } catch { return 'Please review all required answers and file limits before submitting.'; }
     submitLock.current = true;
     const id = `PREVIEW-${String(live.current.applications.length + 1).padStart(4, '0')}`;
     const at = new Date().toISOString();
-    const snapshot: PreviewApplication = { id, vacancy: JSON.parse(JSON.stringify(selected)) as Vacancy, draft: copyForSubmission(draft, selected), stage: 'New', createdAt: at, notes: [], timeline: [{ text: 'Preview application completed · No production data sent', at }] };
+    const snapshot: PreviewApplication = { id, submissionSnapshot, vacancy: JSON.parse(JSON.stringify(selected)) as Vacancy, draft: copyForSubmission(draft, selected), stage: 'New', createdAt: at, notes: [], timeline: [{ text: 'Preview application completed · No production data sent', at }] };
     changeApplications([...live.current.applications, snapshot]);
     submittedByRole.current.set(selected.id, id);
     // Retain a read-only draft for browser Back/Forward. Never resubmit on popstate.

@@ -1,5 +1,6 @@
 'use client';
 
+import { PROFILE_CHOICES } from '../../../../functions/careers/submission-contract.js';
 import { useState, type ChangeEvent } from 'react';
 import { dialingCodes, type ApplicationDraft, type Errors, type Question, type Vacancy } from '../../lib/careers-preview';
 import { useCareersLanguage } from './careers-language';
@@ -72,9 +73,9 @@ export function FunnelQuestion({ vacancy, screen, draft, errors, onChange }: Pro
     </Field>
     <Field id="phone" label={text('Phone number')} error={errors.phone}><input {...input('phone', 'tel', 'tel-national')} aria-labelledby={undefined} maxLength={24}/></Field>
   </div>;
-  else if (field === 'whatsapp' || field === 'sameResidence') control = choices(field, standardChoices(['Yes', 'No']), draft[field] ? 'Yes' : 'No', false, value => patch(field, value === 'Yes'));
-  else if (field === 'languages') control = <><p className={s.helper}>{text('Select all that apply, then continue.')}</p>{choices('languages', standardChoices(['English', 'Spanish', 'Papiamento', 'Dutch', 'Other']), draft.languages, true, value => patch('languages', Array.isArray(value) ? value : [value]))}</>;
-  else if (field === 'availability') control = choices('availability', standardChoices(['Immediately', 'Within 2 weeks', 'Within 1 month', 'More than 1 month', 'To be discussed']), draft.availability, false, value => patch('availability', String(value)));
+  else if (field === 'whatsapp' || field === 'sameResidence') control = choices(field, standardChoices(PROFILE_CHOICES.yesno), draft[field] ? 'Yes' : 'No', false, value => patch(field, value === 'Yes'));
+  else if (field === 'languages') control = <><p className={s.helper}>{text('Select all that apply, then continue.')}</p>{choices('languages', standardChoices(PROFILE_CHOICES.languages), draft.languages, true, value => patch('languages', Array.isArray(value) ? value : [value]))}</>;
+  else if (field === 'availability') control = choices('availability', standardChoices(PROFILE_CHOICES.availability), draft.availability, false, value => patch('availability', String(value)));
   else if (field === 'nationality' || field === 'applyingFrom' || field === 'residence') control = <Field id={field} label={text(field === 'nationality' ? 'Nationality' : 'Country')} error={errors[field]}>
     <CountrySelect locale={locale} id={field} value={draft[field]} onChange={value => patch(field, value)} error={errors[field]}/>
   </Field>;

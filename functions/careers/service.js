@@ -2,11 +2,14 @@
 const crypto = require('node:crypto');
 const C = require('./core');
 const Editorial = require('./editorial-contract');
+const Submission = require('./submission-contract');
 const COLLECTIONS = Object.freeze({ jobs:'careersVacancies', applications:'careersApplications', sessions:'careersSessions', settings:'careersSettings', operations:'careersOperations', audit:'careersAudit', mail:'careersEmailJobs', rate:'careersRateLimits', deletions:'careersFileDeletions' });
 function createService({ db, files, infrastructure, now = Date.now }) {
   const ref = (kind,key) => db.collection(COLLECTIONS[kind]).doc(C.id(key));
   const configRef = ref('settings','default');
   const at = () => new Date(now()).toISOString();
+  const receiptFor = (session, status) => ({ id: session.applicationId, reference: session.reference, emailStatus: status,
+    ...(session.receiptPresentation || {}) });
   const assertAdmin = async (uid, reader = db) => {
     C.id(uid);
     const snapshot = await reader.get(db.collection('users').doc(uid));
@@ -111,7 +114,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const matches=kind==='jobs'
         ? (!p.status || d.status===p.status) && (!search || `${d.title} ${d.department}`.toLowerCase().includes(search))
         : (!p.jobId || d.jobId===p.jobId) && (!p.stage || d.stage===p.stage) && (!p.country || d.profile.residence===p.country) && (minimum===null || Number(d.profile.relevantExperience)>=minimum) && (!search || `${d.profile.givenName} ${d.profile.familyName} ${d.jobSnapshot.title} ${Object.values(d.profile.answers).flat().join(' ')}`.toLowerCase().includes(search));
-      if(matches) items.push(kind==='jobs'?d:{id:d.id,jobId:d.jobId,title:d.jobSnapshot.title,name:`${d.profile.givenName} ${d.profile.familyName}`,stage:d.stage,version:d.version,experience:d.profile.relevantExperience,country:d.profile.residence,createdAt:d.createdAt});
+      if(matches) items.push(kind==='jobs'?d:{id:d.id,jobId:d.jobId,title:d.jobSnapshot.title,name:`${d.profile.givenName} ${d.profile.familyName}`,stage:d.stage,version:d.version,experience:d.profile.relevantExperience,country:d.profile.residence,createdAt:d.createdAt,...(d.submissionSnapshot?{localeAtSubmit:d.submissionSnapshot.localeAtSubmit}:{})});
       if(items.length===count) break;
     }
     return {items,nextCursor:processed<scan.size || scan.size===200?cursor:null};
@@ -152,7 +155,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
   async function sessionStatus(p) {
     const session=sessionAccess(await ref('sessions',p.sessionId).get(),p.token);
     const mail=session.status==='submitted'?(await ref('mail',session.applicationId).get()).data():null;
-    return {files:Object.values(session.files).map(files.publicFile),...(session.status==='submitted'?{receipt:{id:session.applicationId,reference:session.reference,emailStatus:mail?.status || 'unavailable'}}:{})};
+    return {files:Object.values(session.files).map(files.publicFile),...(session.status==='submitted'?{receipt:receiptFor(session,mail?.status || 'unavailable')}:{})};
   }
   async function upload(p) {
     const sessionRef=ref('sessions',p.sessionId);
@@ -233,10 +236,14 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     if(record?.path) {try{await files.remove(record);await ref('deletions',C.digest(record.path)).delete();}catch{ }} return {removed:true};
   }
   async function submit(p) {
-    const sref=ref('sessions',p.sessionId); const fingerprint=C.digest(C.stable(p.profile));
+    const sref=ref('sessions',p.sessionId);
+    const hasPresentation=Object.hasOwn(p,'localeAtSubmit') || Object.hasOwn(p,'presentationVersion');
+    // Old sessions keep their existing profile-only fingerprint. New requests freeze
+    // explicit locale/version too; retry must never mutate a committed presentation.
+    const fingerprint=C.digest(C.stable(hasPresentation ? {profile:p.profile,localeAtSubmit:p.localeAtSubmit ?? null,presentationVersion:p.presentationVersion ?? null} : p.profile));
     return db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sref),p.token);
-      if(session.status==='submitted') { C.requireValue(session.fingerprint===fingerprint,'This session has already been submitted.','already-submitted',409);const mail=(await tx.get(ref('mail',session.applicationId))).data();return {id:session.applicationId,reference:session.reference,emailStatus:mail?.status || 'unavailable'}; }
+      if(session.status==='submitted') { C.requireValue(session.fingerprint===fingerprint,'This session has already been submitted.','already-submitted',409);const mail=(await tx.get(ref('mail',session.applicationId))).data();return receiptFor(session,mail?.status || 'unavailable'); }
       const [jobSnap,configSnap]=await Promise.all([tx.get(ref('jobs',session.jobId)),tx.get(configRef)]);
       const job=jobSnap.data(),config=configSnap.data();
       C.requireValue(config?.intakeEnabled && configReady(config).length===0,'Applications are temporarily paused.','intake-paused',409);
@@ -247,13 +254,16 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const clean=docs.filter(d=>d.status==='clean');
       C.requireValue(clean.filter(d=>d.kind==='photo').length===1,'A recent profile photo is required.');
       C.requireValue(clean.some(d=>d.kind==='cv') || (!job.cvRequired && profile.noCv),'Your CV is required.');
+      const submissionSnapshot=hasPresentation ? Submission.createSubmissionSnapshot(job,p.profile,profile,p.localeAtSubmit,p.presentationVersion,
+        {text:config.privacyText,version:config.privacyVersion}) : null;
+      const receiptPresentation=submissionSnapshot ? {localeAtSubmit:submissionSnapshot.localeAtSubmit,presentationVersion:submissionSnapshot.presentationVersion,jobTitle:submissionSnapshot.title} : null;
       const id=session.id, reference=`DEMAC-${new Date(now()).getUTCFullYear()}-${id.slice(0,8).toUpperCase()}`;
       const expiresAt=now()+(profile.futureTalent?config.talentRetentionDays:config.retentionDays)*86400000;
-      tx.create(ref('applications',id),{id,reference,jobId:job.id,jobSnapshot:C.publicVacancy(job),profile,documents:clean,stage:'New',version:1,createdAt:at(),updatedAt:at(),expiresAt});
+      tx.create(ref('applications',id),{id,reference,jobId:job.id,jobSnapshot:C.publicVacancy(job),profile,...(submissionSnapshot?{submissionSnapshot}:{}),documents:clean,stage:'New',version:1,createdAt:at(),updatedAt:at(),expiresAt});
       tx.create(ref('mail',id),{id,applicationId:id,status:'queued',attempts:0,notBefore:now(),createdAt:at(),expiresAt});
       tx.create(ref('applications',id).collection('events').doc('submitted'),{action:'Application received',at:at(),actorUid:null});
-      tx.update(sref,{status:'submitted',applicationId:id,reference,fingerprint});
-      return {id,reference,emailStatus:'queued'};
+      tx.update(sref,{status:'submitted',applicationId:id,reference,fingerprint,...(receiptPresentation?{receiptPresentation}:{})});
+      return {id,reference,emailStatus:'queued',...(receiptPresentation || {})};
     });
   }
   async function document(uid,applicationId,fileId) {

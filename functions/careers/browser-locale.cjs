@@ -19,7 +19,7 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     await page.getByRole('button', { name: `Ver ${job.translations.es.title}`, exact: true }).click();
     await page.getByRole('button', { name: 'Aplicar ahora', exact: true }).click();
     await page.getByRole('heading', { name: '¿Cuál es tu nombre?', exact: true }).waitFor();
-    await flow.details(page, { first: 'María', last: `Spanish ${name}`, email, nationality: 'CO' });
+    await flow.details(page, { first: '  María  ', last: `Spanish ${name}`, email, nationality: 'CO' });
     await page.locator('#totalExperience').fill('6'); await flow.next(page);
     await page.locator('#relevantExperience').fill('3'); await flow.next(page);
     await page.getByRole('heading', { name: '¿Has trabajado con sistemas VRF?', exact: true }).waitFor();
@@ -54,6 +54,10 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     await page.getByRole('button', { name: 'Enviar solicitud', exact: true }).click();
     const response = await saveResponse, result = await response.json();
     assert.equal(response.status(), 200); assert.equal(result.ok, true);
+    const submitted = response.request().postDataJSON().payload;
+    assert.equal(submitted.localeAtSubmit, 'es');
+    assert.equal(submitted.presentationVersion, require('./submission-contract').PRESENTATION_VERSION);
+    assert.equal(result.result.localeAtSubmit, 'es');
     await page.getByRole('heading', { name: '¡Solicitud recibida!', exact: true }).waitFor();
     await page.getByText('Tu solicitud está guardada. El envío de la solicitud no confirma la entrega del correo.', { exact: true }).waitFor();
     await shot('03-received');
@@ -67,7 +71,25 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     for (const q of job.questions) {
       assert.equal(saved.profile.answers[q.id], q.kind === 'yesno' ? 'Yes' : q.kind === 'date' ? '2026-10-01' : 'https://example.test/spanish-portfolio');
     }
+    assert.equal(saved.submissionSnapshot.localeAtSubmit, 'es');
+    assert.equal(saved.submissionSnapshot.fields.find(row => row.id === 'profile:givenName').value, '  María  ');
+    assert.equal(saved.submissionSnapshot.questions[0].label, job.translations.es.questions[0].label);
+    assert.equal(saved.submissionSnapshot.questions[0].value, 'Yes');
     assert.equal(saved.documents.length, 2);
+    // Fresh authorized admin context proves snapshot rendering after the candidate closes.
+    const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
+    try {
+      const office = await admin.newPage(); office.setDefaultTimeout(15000);
+      office.on('pageerror', error => errors.push(error.message));
+      await office.goto(`${site}/recruitment/?tab=applicants&candidate=${saved.id}`, { waitUntil: 'domcontentloaded' });
+      await office.locator('[data-submitted-locale="es"]').waitFor();
+      assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
+      await office.getByRole('heading', { name: 'Role answers', exact: true }).waitFor();
+      await office.screenshot({ path: path.join(output, `${name}-es-04-original-expedient.png`), fullPage: true });
+      await office.reload({ waitUntil: 'domcontentloaded' });
+      await office.locator('[data-submitted-locale="es"]').waitFor();
+      assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
+    } finally { await admin.close(); }
     assert.deepEqual(errors, []);
     return ['Spanish public form from an admin-authored vacancy', 'Spanish date/URL validation and selected-option labels', 'original configured privacy notice, not invented translation', 'Spanish receipt follows actual committed emulator submission', 'canonical option values and private documents persist after closing the browser'];
   } catch (error) {

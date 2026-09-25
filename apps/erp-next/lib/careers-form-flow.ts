@@ -1,3 +1,4 @@
+import { PROFILE_PROMPTS } from '../../../functions/careers/submission-contract.js';
 import { visibleQuestions } from '../../../functions/careers/form-contract.js';
 import type { ApplicationDraft, Errors, Question, Vacancy } from './careers-preview';
 
@@ -28,27 +29,27 @@ function profile(field: ProfileField, label: string, stage: 0 | 1, errorKeys: st
 }
 export function formScreens(vacancy: Vacancy, draft: ApplicationDraft): FormScreen[] {
   const details = [
-    profile('givenName', 'What is your first name?', 0),
-    profile('familyName', 'What is your last name?', 0),
-    profile('email', 'What is your email address?', 0),
-    profile('phone', 'What is your phone number?', 0, ['dialCode', 'phone']),
-    profile('whatsapp', 'Is this number also on WhatsApp?', 0),
-    profile('nationality', 'What is your nationality?', 0),
-    profile('applyingFrom', 'Which country are you applying from?', 0,
+    profile('givenName', PROFILE_PROMPTS.givenName, 0),
+    profile('familyName', PROFILE_PROMPTS.familyName, 0),
+    profile('email', PROFILE_PROMPTS.email, 0),
+    profile('phone', PROFILE_PROMPTS.phone, 0, ['dialCode', 'phone']),
+    profile('whatsapp', PROFILE_PROMPTS.whatsapp, 0),
+    profile('nationality', PROFILE_PROMPTS.nationality, 0),
+    profile('applyingFrom', PROFILE_PROMPTS.applyingFrom, 0,
       draft.sameResidence ? ['applyingFrom', 'residence'] : ['applyingFrom']),
-    profile('sameResidence', 'Do you also live in that country?', 0),
-    ...(!draft.sameResidence ? [profile('residence', 'Which country do you live in?', 0)] : []),
-    profile('city', 'Which city do you live in?', 0),
+    profile('sameResidence', PROFILE_PROMPTS.sameResidence, 0),
+    ...(!draft.sameResidence ? [profile('residence', PROFILE_PROMPTS.residence, 0)] : []),
+    profile('city', PROFILE_PROMPTS.city, 0),
   ];
   const experience = [
-    profile('totalExperience', 'How many years of total work experience do you have?', 1),
-    profile('relevantExperience', 'How many years of experience are relevant to this role?', 1),
+    profile('totalExperience', PROFILE_PROMPTS.totalExperience, 1),
+    profile('relevantExperience', PROFILE_PROMPTS.relevantExperience, 1),
     ...visibleQuestions(vacancy.questions, draft.answers).map((question: Question): FormScreen => ({
       id: `role:${question.id}`, stage: 1, kind: 'role', label: question.label,
       question, errorKeys: [`q-${question.id}`, 'answers'],
     })),
-    profile('languages', 'Which languages do you speak?', 1),
-    profile('availability', 'When could you start?', 1),
+    profile('languages', PROFILE_PROMPTS.languages, 1),
+    profile('availability', PROFILE_PROMPTS.availability, 1),
   ];
   return [...details, ...experience,
     { id: 'documents', stage: 2, kind: 'documents', label: 'Photo & documents', errorKeys: ['photo', 'cv', 'documents'] },

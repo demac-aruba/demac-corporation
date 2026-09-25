@@ -1,4 +1,5 @@
 'use client';
+import { PRESENTATION_VERSION } from '../../../../functions/careers/submission-contract.js';
 import { CareersLanguage } from './careers-language';
 import { careersText, careersTemplate, careersIssue, careersIssueText, vacancyPresentation, type CareersIssue } from '../../lib/careers-locale';
 import { useEffect, useRef, useState } from 'react';
@@ -72,7 +73,7 @@ export function CareersPublic() {
       for (let i = 0; i < chosen.length; i++) { const item = chosen[i]; if (existing.files.some(f => f.id === item.id && f.status === 'clean')) continue; setStatus(careersTemplate(nav.locale, 'Processing document {current} / {total}…', { current: i + 1, total: chosen.length })); await uploadApplicantDocument(session, item.file, item.kind); }
       setStatus(text('Saving application…'));
       const { photo, cv, documents, ...fields } = draft;
-      const receipt = await careersPublic<Receipt>('application.submit', { ...session, profile: { ...fields, privacyVersion: data.privacy.version } }); complete(receipt); return null;
+      const receipt = await careersPublic<Receipt>('application.submit', { ...session, localeAtSubmit: nav.locale, presentationVersion: PRESENTATION_VERSION, profile: { ...fields, privacyVersion: data.privacy.version } }); complete(receipt); return null;
     } catch (e) {
       if (e instanceof CareersError && ['version-conflict', 'privacy-version', 'vacancy-closed'].includes(e.code)) setNeedsRevision(true);
       return careersIssue(e);

@@ -121,3 +121,12 @@ test('Spanish UI cannot change the stored answer schema, required state or field
  assert.deepEqual(after,screens);assert.equal(JSON.stringify({job,draft}),before);
  assert.equal(draft.answers.project,'  Trabajé 4 años.\nI repaired VRF.  ');
 });
+
+test('submitted standard prompts and options share the exact EN/ES form copy', () => {
+ const S=require('../../../functions/careers/submission-contract.js');
+ for (const key of [...Object.values(S.PROFILE_PROMPTS), ...Object.values(S.PROFILE_CHOICES).flat()]) {
+  for (const locale of ['en','es']) assert.equal(careersText(locale,key),S.profileCopy(locale,key));
+ }
+ const questions=require('../lib/careers-form-flow.ts').formScreens(exampleVacancies()[0],require('../lib/careers-preview.ts').emptyDraft());
+ for (const screen of questions.filter(q=>q.kind==='profile')) assert.equal(screen.label,S.PROFILE_PROMPTS[screen.field]);
+});

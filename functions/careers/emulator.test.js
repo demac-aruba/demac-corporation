@@ -108,3 +108,31 @@ test('editorial translations persist with transactional revisions and remain pri
   await service.saveVacancy('qa-admin', { id: key, requestId: requestId(), expectedVersion: 2, vacancy: legacy });
   assert.equal((await other.getVacancy('qa-admin', key)).translations.es.title, es.title, 'older editors cannot erase translations by omission');
 });
+
+test('submitted original presentation survives changed vacancy, separate instances and stage/note edits', async () => {
+  const S = require('./submission-contract'), E = require('./editorial-contract'), j = job(), id = requestId();
+  const es = { ...E.emptyTranslation(j), status:'Approved', title:'Técnico original', department:'Técnica',
+    location:'Aruba',contract:'Solo prueba',summary:'Prueba aislada.',responsibilities:['Responsabilidad'],requirements:['Requisito'],
+    questions:[{id:'has-vrf',label:'¿Experiencia en VRF?',help:'',optionLabels:{Yes:'Sí',No:'No'}},
+      {id:'detail',label:'Describe tu experiencia',help:'',optionLabels:{}}] };
+  await service.saveVacancy('qa-admin',{id,requestId:requestId(),expectedVersion:0,vacancy:{...j,status:'Open',translations:{es}}});
+  const session = await prepare(id), raw = {...profile(),givenName:'  María  ',answers:{'has-vrf':'Yes',detail:'  Trabajé aquí.\nI maintained VRF.  <b>literal</b>  ',unknown:'NEVER STORE'}};
+  const request = {...session,profile:raw,localeAtSubmit:'es',presentationVersion:S.PRESENTATION_VERSION};
+  const [first, second] = await Promise.all([service.submit(request), other.submit(request)]);
+  assert.equal(first.id,second.id,'concurrent repeat creates one record');
+  const before = (await other.getApplication('qa-admin',first.id)).submissionSnapshot;
+  assert.equal(before.localeAtSubmit,'es'); assert.equal(before.title,es.title);
+  assert.equal(before.questions[1].value,raw.answers.detail);
+  assert.equal(before.questions[0].options.find(o=>o.value==='Yes').label,'Sí');
+  assert.equal(before.fields[0].value,raw.givenName); assert(!JSON.stringify(before).includes('NEVER STORE'));
+  await service.saveVacancy('qa-admin',{id,requestId:requestId(),expectedVersion:1,vacancy:{...j,title:'Changed English',status:'Closed'}});
+  await service.updateApplication('qa-admin',{id:first.id,requestId:requestId(),expectedVersion:1,stage:'Interview',submissionSnapshot:{title:'spoof'}});
+  await service.updateApplication('qa-admin',{id:first.id,requestId:requestId(),expectedVersion:2,note:'Test note never copied to original snapshot.'});
+  const after = await other.getApplication('qa-admin',first.id);
+  assert.deepEqual(after.submissionSnapshot,before);
+  assert.equal((await service.sessionStatus(session)).receipt.localeAtSubmit,'es');
+  assert.equal((await other.submit(request)).jobTitle,es.title);
+  await assert.rejects(service.submit({...request,localeAtSubmit:'en'}),{code:'already-submitted'});
+  assert.equal((await db.collection(N.applications).where('id','==',first.id).get()).size,1);
+  assert.equal(after.documents.length,2);
+});

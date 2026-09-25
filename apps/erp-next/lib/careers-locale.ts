@@ -1,3 +1,4 @@
+import { PROFILE_SPANISH, presentedQuestion } from '../../../functions/careers/submission-contract.js';
 import { availableLocales } from '../../../functions/careers/editorial-contract.js';
 import type { Vacancy, Question, Errors } from './careers-preview';
 
@@ -28,21 +29,8 @@ export function vacancyPresentation<T extends Vacancy>(job: T, locale: CareersLo
     summary: es.summary, responsibilities: es.responsibilities, requirements: es.requirements, desired: es.desired } };
 }
 const spanish: Record<string, string> = {
+  ...PROFILE_SPANISH,
   'The selected file cannot be read.': 'No se puede leer el archivo seleccionado.',
-  "What is your first name?": "¿Cuál es tu nombre?",
-  "What is your last name?": "¿Cuáles son tus apellidos?",
-  "What is your email address?": "¿Cuál es tu correo electrónico?",
-  "What is your phone number?": "¿Cuál es tu número de teléfono?",
-  "Is this number also on WhatsApp?": "¿Este número también tiene WhatsApp?",
-  "What is your nationality?": "¿Cuál es tu nacionalidad?",
-  "Which country are you applying from?": "¿Desde qué país estás aplicando?",
-  "Do you also live in that country?": "¿También resides en ese país?",
-  "Which country do you live in?": "¿En qué país resides?",
-  "Which city do you live in?": "¿En qué ciudad resides?",
-  "How many years of total work experience do you have?": "¿Cuántos años de experiencia laboral tienes en total?",
-  "How many years of experience are relevant to this role?": "¿Cuántos años de experiencia tienes en trabajos relacionados con este puesto?",
-  "Which languages do you speak?": "¿Qué idiomas hablas?",
-  "When could you start?": "¿Cuándo podrías comenzar?",
   "Photo & documents": "Foto y documentos",
   "Review your application": "Revisa tu solicitud",
   "Select an answer": "Selecciona una respuesta",
@@ -55,18 +43,6 @@ const spanish: Record<string, string> = {
   "Nationality": "Nacionalidad",
   "Country": "País",
   "Select country": "Selecciona un país",
-  "Yes": "Sí",
-  "No": "No",
-  "English": "Inglés",
-  "Spanish": "Español",
-  "Papiamento": "Papiamento",
-  "Dutch": "Neerlandés",
-  "Other": "Otro",
-  "Immediately": "Inmediatamente",
-  "Within 2 weeks": "Dentro de 2 semanas",
-  "Within 1 month": "Dentro de 1 mes",
-  "More than 1 month": "En más de 1 mes",
-  "To be discussed": "Por acordar",
   "Curaçao / Caribbean Netherlands": "Curazao / Caribe Neerlandés",
   "US / Canada / Caribbean": "EE. UU. / Canadá / Caribe",
   "Netherlands": "Países Bajos",
@@ -257,11 +233,7 @@ export function careersTemplate(locale: CareersLocale, key: string, values: Reco
   return careersText(locale, key).replace(/\{([A-Za-z]+)\}/g, (match, name: string) => Object.hasOwn(values, name) ? String(values[name]) : match);
 }
 export function questionPresentation(job: Vacancy, question: Question, locale: CareersLocale) {
-  const contentLocale = vacancyPresentation(job, locale).contentLocale;
-  const translated = contentLocale === 'es' ? job.translations?.es?.questions.find(item => item.id === question.id) : undefined;
-  const values = question.kind === 'yesno' ? ['Yes', 'No'] : question.options || [];
-  return { contentLocale, label: translated?.label || question.label, help: translated?.help || question.help || '',
-    options: values.map(value => ({ value, label: translated?.optionLabels[value] || value })) };
+  return presentedQuestion(job, question, locale);
 }
 /** Display errors without changing the shared validator, field keys or canonical options. */
 export function careersFormErrors(locale: CareersLocale, errors: Errors, vacancy: Vacancy, live = false): Errors {
@@ -281,6 +253,7 @@ export function careersIssue(error: unknown, fallback = 'Unable to submit. Pleas
   return { message: fallback };
 }
 const publicErrorMessages: Record<string, string> = {
+  'presentation-version': 'La versión del formulario cambió. Conserva una copia de tus respuestas antes de recargar y revisar la versión nueva.',
   'connection-error': 'La conexión se interrumpió. Reinténtalo; una solicitud ya recibida no se duplicará.',
   'version-conflict': 'El puesto cambió. Revisa la versión actualizada antes de enviar; tus datos y archivos se conservan.',
   'privacy-version': 'El aviso de privacidad cambió. Revisa la versión actualizada antes de enviar.',

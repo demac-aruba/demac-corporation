@@ -1,3 +1,4 @@
+import type { SubmissionSnapshot } from '../../../../functions/careers/submission-contract';
 import { firebaseClientConfig } from './client-config';
 import { requireFirebaseWebSession } from './session';
 import type { Vacancy, ApplicationDraft, Question, Stage } from '../careers-preview';
@@ -8,10 +9,10 @@ export type RecruitmentVacancy = Omit<Vacancy, 'status'> & {
 export type PublicVacancy = Omit<RecruitmentVacancy, 'internalNotes'>;
 export type CareersSettings = { intakeEnabled: boolean; privacyText: string; privacyVersion: string; retentionDays: number; talentRetentionDays: number; from: string; replyTo: string; senderName: string; version: number; verification?: { at: number; signature: string } | null };
 export type DocumentRecord = { id: string; kind: 'photo' | 'cv' | 'document'; name: string; size: number; mime: string; status: string };
-export type ApplicantSummary = { id: string; title: string; name: string; stage: Stage; version: number; experience: string; country: string; createdAt: string };
-export type ApplicantRecord = { id: string; reference: string; jobSnapshot: PublicVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
+export type ApplicantSummary = { localeAtSubmit?: 'en' | 'es'; id: string; title: string; name: string; stage: Stage; version: number; experience: string; country: string; createdAt: string };
+export type ApplicantRecord = { submissionSnapshot?: SubmissionSnapshot; id: string; reference: string; jobSnapshot: PublicVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
 export type ApplicantSession = { sessionId: string; token: string; expiresAt: number };
-export type Receipt = { id: string; reference: string; emailStatus: string };
+export type Receipt = { localeAtSubmit?: 'en' | 'es'; presentationVersion?: string; jobTitle?: string; id: string; reference: string; emailStatus: string };
 export type PublicJobs = { available: boolean; jobs: PublicVacancy[]; privacy?: { text: string; version: string } };
 export type Page<T> = { items: T[]; nextCursor: string | null };
 export class CareersError extends Error { constructor(message: string, public readonly code: string, public readonly status: number) { super(message); } }
