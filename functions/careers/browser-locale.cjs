@@ -63,7 +63,7 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(submitted.localeAtSubmit, 'es');
     assert.equal(submitted.presentationVersion, require('./submission-contract').PRESENTATION_VERSION);
     assert.equal(result.result.localeAtSubmit, 'es');
-    await page.getByRole('heading', { name: '¡Solicitud recibida!', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '¡Solicitud enviada!', exact: true }).waitFor();
     await page.getByText('Tu solicitud está guardada. El envío de la solicitud no confirma la entrega del correo.', { exact: true }).waitFor();
     await shot('03-received');
     await ctx.close();
