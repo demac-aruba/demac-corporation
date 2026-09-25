@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getFieldProcedureWorkspace, isFieldProcedureTemporaryFailure, recordFieldProcedureAction } from '../../lib/field-authority';
 import type { FieldProcedureTarget } from '../../lib/field-procedure-contract';
 import {
-  acknowledgeProcedureOperation, beginProcedureOperation, discardUnsentProcedureCapture, listProcedureCaptures,
+  acknowledgeProcedureOperation, authorizeProcedureCaptureRecovery, beginProcedureOperation, discardUnsentProcedureCapture, listProcedureCaptures,
   procedureStoragePersisted, readProcedureOperation, shelveProcedureOperation, storeProcedureCapture,
   type ProcedureCaptureSummary, type ProcedureOperation,
 } from '../../lib/field-procedure-capture-store';
@@ -100,6 +100,14 @@ export function useProcedureSession(input: FieldProcedureTarget) {
     if (alive.current && !lock.current && state.current.fresh && !state.current.operation) void sync([saved.id]);
     return saved;
   }
+  async function recoverCapture(id:string, reason:string) {
+    if(lock.current || !alive.current || !state.current.fresh || state.current.operation)return;
+    try{
+      await authorizeProcedureCaptureRecovery(target,id,reason);
+      await refreshLocal();
+      await sync([id]);
+    }catch(e){if(alive.current)setError(message(e));}
+  }
   async function discardLocal(id: string) {
     try{await discardUnsentProcedureCapture(target,id);await refreshLocal();}catch(e){if(alive.current)setError(message(e));}
   }
@@ -109,7 +117,7 @@ export function useProcedureSession(input: FieldProcedureTarget) {
   }
   function denyAccess(){epoch.current+=1;localEpoch.current+=1;setWorkspace(null);setCaptures([]);setOperation(null);setFresh(false);setLocalReady(false);setError('Acceso sin confirmar. Los originales permanecen en el dispositivo de su autor.');}
   return {target,workspace,captures,operation,fresh,loading,busy,localReady,persisted,error,notice,refresh,
-    execute,sync,capture,denyAccess,discardLocal,stopRetrying,refreshLocal,
+    execute,sync,capture,denyAccess,discardLocal,recoverCapture,stopRetrying,refreshLocal,
     canCommand:fresh && localReady && !busy && !operation,
   };
 }
