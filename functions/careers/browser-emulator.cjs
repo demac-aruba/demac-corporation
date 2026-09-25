@@ -238,7 +238,7 @@ async function context(browser,admin,viewport){
       assert.equal(interruptedResult.status(),503,'the injected gateway interruption, not a rate-limit error, must be exercised');
       assert.equal((await interruptedResult.json()).code,'connection-error');
       await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');
-      interrupt=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('heading',{name:'Application received',exact:true}).waitFor();await shot(person,'04-receipt');
+      interrupt=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('heading',{name:'Application submitted',exact:true}).waitFor();await shot(person,'04-receipt');
       await candidate.close();
       await office.getByRole('button',{name:'Applicants',exact:true}).click();await settled();await office.getByLabel('Search',{exact:true}).fill(`Candidate ${name}`);
       await Promise.all([office.waitForResponse(r=>r.url()===`${api}/careersAdmin`&&r.request().postDataJSON()?.action==='applications.list'&&r.request().postDataJSON()?.payload?.search===`Candidate ${name}`),office.getByRole('button',{name:'Apply filters',exact:true}).click()]);
