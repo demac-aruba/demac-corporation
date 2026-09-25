@@ -112,6 +112,7 @@ import { FieldHistoryPanel } from './field-history-panel';
 import { FieldQrLookup } from './field-qr-lookup';
 import { FieldAdminSimulationDetail, FieldAdminSimulationSelector } from './field-admin-simulator';
 import { ProfessionalReportPreview } from './professional-report-preview';
+import { requestProcedureExit } from '../../lib/field-procedure-navigation';
 import simulationStyles from './field-admin-simulator.module.css';
 import styles from './technician-field-home.module.css';
 
@@ -986,7 +987,7 @@ function DetailView({
     const asset = job.visitAssets.find((item) => item.assetId === selectedProcedure.assetId);
     const equipment = job.knownEquipment.find((item) => item.id === selectedProcedure.assetId);
     return <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`}>
-      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => setProcedureInterventionId(null)} />
+      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => { if (requestProcedureExit()) setProcedureInterventionId(null); }} />
       <main className={styles.mobileContent}>
         <FieldJobContext job={job} />
         <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
@@ -994,7 +995,7 @@ function DetailView({
           target={{ ownerUserId:currentPrincipal.userId, visitId:job.fieldVisit.id, interventionId:selectedProcedure.id, assetId:selectedProcedure.assetId }}
           equipmentLabel={asset?.locationLabel || equipment?.locationLabel || 'Aire seleccionado'}
           equipmentDescription={[equipment?.brand, equipment?.model, selectedProcedure.interventionType].filter(Boolean).join(' · ')}
-          onBack={() => setProcedureInterventionId(null)}
+          onBack={() => { if (requestProcedureExit()) setProcedureInterventionId(null); }}
         />
       </main>
     </div>;
