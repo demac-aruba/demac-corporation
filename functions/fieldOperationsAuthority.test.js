@@ -60,6 +60,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'decide_office_review',
     'get_job',
     'get_office_review_queue',
+    'get_procedure_exception_queue',
     'get_procedure_workspace',
     'get_schedule',
     'prepare_visit',
@@ -92,6 +93,15 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     );
   }
   await assert.rejects(() => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }), /Unsupported Field Operations action/);
+
+  const queueApi=createFieldOperationsApi({
+    db:{collection(){return {};}},
+    verifyIdToken:async()=>({uid:'unused'}),
+    listProcedureExceptions:async(_db,identity)=>identity.operations?[{key:'WI-1:indoor:I01'}]:[],
+  });
+  assert.deepEqual(await queueApi.execute({action:'get_procedure_exception_queue',data:{},identity:{operations:true}}),{
+    success:true,version:1,exceptions:[{key:'WI-1:indoor:I01'}],
+  });
 });
 
 test('public Field DTO does not expose Legacy mixed-namespace technicianIds', () => {
