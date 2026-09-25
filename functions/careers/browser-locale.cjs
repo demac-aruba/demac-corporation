@@ -79,17 +79,23 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.documents.length, 2);
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
-    await require('./browser-head-probes.cjs').installLocalHeadProbes(admin, site);
-    const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [], responseFacts = new WeakMap();
+    const office = await admin.newPage(), reads = [], pendingRequests = new Set(), failedRequests = [], completedTrees = [], responseFacts = new WeakMap();
     let lastNetworkActivity = Date.now(), phase = 'initial-read';
     office.setDefaultTimeout(15000);
     office.on('pageerror', error => errors.push(error.message));
     office.on('request', request => { pendingRequests.add(request); lastNetworkActivity = Date.now(); });
     const finished = request => { pendingRequests.delete(request); lastNetworkActivity = Date.now(); };
-    office.on('requestfinished', finished);
+    office.on('requestfinished', request => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname.endsWith('/__next._tree.txt')) {
+        completedTrees.push({ phase, origin: url.origin, path: url.pathname, method: request.method(),
+          type: request.resourceType(), response: responseFacts.get(request) || null });
+      }
+      finished(request);
+    });
     office.on('response', response => responseFacts.set(response.request(), { status: response.status(), contentType: response.headers()['content-type'], length: response.headers()['content-length'] }));
     office.on('requestfailed', request => {
-      failedRequests.push({ phase, path: new URL(request.url()).pathname, method: request.method(), type: request.resourceType(), response: responseFacts.get(request) || null, error: request.failure()?.errorText });
+      failedRequests.push({ phase, origin: new URL(request.url()).origin, path: new URL(request.url()).pathname, method: request.method(), type: request.resourceType(), response: responseFacts.get(request) || null, error: request.failure()?.errorText });
       finished(request);
     });
     // Readiness is still the authorized response plus exact DOM assertions below.
@@ -132,12 +138,20 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
       await openSavedProfile(() => office.reload({ waitUntil: 'domcontentloaded' }));
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
       await drainBeforeNavigation();
-      assert.deepEqual(failedRequests, [], 'administrator requests must not fail before teardown');
+      // A failed event is not dismissed by method alone: the installed static
+      // router must actually consume its HEAD metadata and complete that route's
+      // tree GET in this same phase. The adapter experiment did not fix these
+      // Chromium events and has been removed; all traffic is unmodified again.
+      const network = require('./browser-network-audit.cjs').auditNetworkEvents(failedRequests, completedTrees, site);
+      fs.writeFileSync(path.join(output, `${name}-es-network-evidence.json`), JSON.stringify({
+        failedEvents: failedRequests, completedTrees, ...network,
+      }, null, 2));
+      assert.deepEqual(network.failures, [], 'administrator requests must complete their intended operation before teardown');
       phase = 'teardown';
     } catch (error) {
       await office.screenshot({ path: path.join(output, `${name}-es-admin-FAIL.png`), fullPage: true }).catch(() => {});
       fs.writeFileSync(path.join(output, `${name}-es-admin-diagnostic.json`), JSON.stringify({
-        path: new URL(office.url()).pathname, phase, reads, errors, failedRequests, failure: error.message,
+        path: new URL(office.url()).pathname, phase, reads, errors, failedRequests, completedTrees, failure: error.message,
         pendingPaths: [...pendingRequests].map(request => new URL(request.url()).pathname),
         headings: await office.locator('h1, h2').allTextContents().catch(() => []),
         snapshotNodes: await office.locator('[data-submitted-locale]').count().catch(() => -1),
