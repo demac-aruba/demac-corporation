@@ -59,18 +59,30 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
  try {
   for(const browserName of (process.env.FIELD_PART_BROWSERS||'chromium').split(',')){
    const type=browserName==='webkit'?webkit:chromium;
-   const browser=await type.launch({headless:true,...(browserName==='chromium'&&process.env.FIELD_PORTAL_BROWSER_EXECUTABLE?{executablePath:process.env.FIELD_PORTAL_BROWSER_EXECUTABLE}:{}),args:browserName==='chromium'?['--no-sandbox']:[]});
+   const launchOptions={headless:true,...(browserName==='chromium'&&process.env.FIELD_PORTAL_BROWSER_EXECUTABLE?{executablePath:process.env.FIELD_PORTAL_BROWSER_EXECUTABLE}:{}),args:browserName==='chromium'?['--no-sandbox']:[]};
+   const browser=await type.launch(launchOptions);let companion;
    try {
+    // Two devices, not two tabs competing for foreground visibility. Keep the
+    // real hidden-tab/session protections; never force-click a disabled claim.
+    companion=await type.launch(launchOptions);
     for(const [label,width,height] of [['mobile-360',360,800],['mobile-390',390,844],['desktop',1365,1000]]){
      reset();const errors=[],outside=[],context=await browser.newContext({viewport:{width,height}});
-     await context.route('**/*',route=>{if(!route.request().url().startsWith(origin+'/')){outside.push(route.request().url());return route.abort();}return route.continue();});
+     const otherContext=await companion.newContext({viewport:{width,height}});
+     for(const device of [context,otherContext])await device.route('**/*',route=>{if(!route.request().url().startsWith(origin+'/')){outside.push(route.request().url());return route.abort();}return route.continue();});
      const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(origin);await loaded(page);
      assert.equal(writes().length,0);assert.equal(await page.locator('[aria-pressed=true]').count(),0);
      await choose(page);assert.equal(writes().length,0,'select is not claim');
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
      assert.equal(await page.getByRole('button',{name:/Evaporadora · Indoor/}).evaluate(el=>el.getBoundingClientRect().height>=44),true);
      await page.screenshot({path:path.join(out,`04-partes-${browserName}-${label}.png`),fullPage:true});
-     const other=await context.newPage();other.on('pageerror',e=>errors.push(e.message));await other.goto(origin+'/?actor=test-helper');await loaded(other);await choose(other);
+     const other=await otherContext.newPage();other.on('pageerror',e=>errors.push(e.message));await other.goto(origin+'/?actor=test-helper');await loaded(other);await choose(other);
+     for(const [actor,devicePage] of [[lead.uid,page],[helper.uid,other]]){
+      const state=await devicePage.evaluate(()=>({visibility:document.visibilityState,online:navigator.onLine,status:[...document.querySelectorAll('[role=status],[role=alert]')].map(e=>e.textContent)}));
+      const enabled=await devicePage.getByRole('button',{name:'Tomar evaporadora',exact:true}).isEnabled();
+      assert.equal(state.visibility,'visible',`${actor} must have its own visible device: ${JSON.stringify(state)}`);
+      assert.equal(state.online,true,`${actor} fixture must be online`);
+      assert.equal(enabled,true,`${actor} has not received current claim authority: ${JSON.stringify(state)}`);
+     }
      const claims=[page,other].map(p=>p.waitForResponse(r=>r.request().method()==='POST'&&r.request().postDataJSON()?.action==='record_procedure_action'));
      await Promise.all([page.getByRole('button',{name:'Tomar evaporadora',exact:true}).click(),other.getByRole('button',{name:'Tomar evaporadora',exact:true}).click()]);
      await Promise.all(claims);
@@ -117,10 +129,10 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      assert.equal(state.store.all('workVisits').length,1);assert.equal(state.store.all('workInterventions').length,1);assert.equal(state.store.get('workInterventions','WI-1').status,'in_progress');
      for(const collection of ['fieldEvidence','invoices','stockMovements','whatsappOutboundQueue','fieldOfficeReviews'])assert.equal(state.store.all(collection).length,0);
      assert.deepEqual(errors,[]);assert.deepEqual(outside,[]);
-     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors']});
-     console.log(`PASS shared parts ${browserName} ${label}`);await context.close();
+     reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['two separate visible browser devices','no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors']});
+     console.log(`PASS shared parts ${browserName} ${label}`);await Promise.all([context.close(),otherContext.close()]);
     }
-   }finally{await browser.close();}
+   }finally{await Promise.all([browser.close(),companion?.close()]);}
   }
   fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({sourceHead:require('node:child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),synthetic:true,backend:'loopback HTTP with deterministic database/auth fixtures',notClaimed:['hosted-preview','real-Firebase-auth','Firestore-emulator','physical-devices','procedure-media-capture-UI'],reports},null,2));
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
