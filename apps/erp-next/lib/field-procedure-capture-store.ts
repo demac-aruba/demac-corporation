@@ -1,6 +1,6 @@
 import { assertFieldProcedureTarget, type FieldProcedurePart, type FieldProcedureTarget } from './field-procedure-contract';
 import { loadFirebaseWebSession } from './firebase/session';
-import { PROCEDURE_MEDIA_TYPES, type PrepareProcedureMedia, type ProcedureMediaKind, type ProcedureMediaSource } from './field-procedure-workspace';
+import { PROCEDURE_MEDIA_TYPES, type PrepareProcedureMedia, type ProcedureMediaKind, type ProcedureMediaSource, type FieldProcedureCommand } from './field-procedure-workspace';
 
 // Browser-only recovery storage, never another business database or authorization source.
 // Keep the existing text outbox schema unchanged. Tokens and public URLs never enter this database.
@@ -39,9 +39,10 @@ function assertStep(part: FieldProcedurePart, stepId: string) {
 function open(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') return Promise.reject(new ProcedureStorageError());
   return new Promise((resolve,reject) => {
-    const request = indexedDB.open(DB,1); let failed = false;
+    const request = indexedDB.open(DB,2); let failed = false;
     request.onupgradeneeded = () => {
-      for (const name of ['captures','drafts']) {
+      for (const name of ['captures','drafts','commands','forms']) {
+        if (request.result.objectStoreNames.contains(name)) continue;
         const store = request.result.createObjectStore(name,{keyPath:'id'});
         store.createIndex('context','context');
       }
@@ -113,12 +114,25 @@ export async function storeProcedureCapture(target: FieldProcedureTarget, input:
   return transaction(target,'captures','readwrite',(store,done) => { const {blob:_blob,...metadata} = capture;
     store.add({...metadata,context:procedureContextKey(target),byteEncoding:'array-buffer-v1',bytes}); done(capture); });
 }
-export function listProcedureCaptures(target: FieldProcedureTarget): Promise<ProcedureCapture[]> {
+/** Metadata-only enumeration: do not retain every original's binary bytes in a mobile view. */
+export type ProcedureCaptureSummary = Omit<ProcedureCapture,'blob'>;
+export function listProcedureCaptures(target: FieldProcedureTarget): Promise<ProcedureCaptureSummary[]> {
   return transaction(target,'captures','readonly',(store,done,fail) => {
-    const request = store.index('context').getAll(procedureContextKey(target));
-    request.onsuccess = () => {
-      try { const rows = (request.result as Array<ProcedureCapture | StoredProcedureCapture>).map(restoreCapture); if (rows.some(r => !equalTarget(r.target,target))) throw new ProcedureLocalConflict();
-        done(rows.sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))); } catch (e) { fail(e as Error); }
+    const rows: ProcedureCaptureSummary[]=[];
+    const request=store.index('context').openCursor(IDBKeyRange.only(procedureContextKey(target)));
+    request.onsuccess=()=>{
+      try {
+        const cursor=request.result;
+        if(!cursor){done(rows.sort((a,b)=>a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));return;}
+        const value=cursor.value as ProcedureCapture | StoredProcedureCapture;
+        if(!equalTarget(value.target,target))return fail(new ProcedureLocalConflict());
+        if('byteEncoding' in value){
+          const {bytes,byteEncoding,...metadata}=value;
+          if(byteEncoding!=='array-buffer-v1' || (bytes===null ? value.stage!=='confirmed' : !(bytes instanceof ArrayBuffer) || bytes.byteLength!==value.sizeBytes))return fail(new ProcedureStorageError());
+          rows.push(metadata);
+        }else{const {blob:_blob,...metadata}=value;rows.push(metadata);}
+        cursor.continue();
+      }catch(e){fail(e instanceof Error?e:new ProcedureStorageError());}
     };
   });
 }
@@ -177,4 +191,70 @@ export function saveProcedureDraft(target: FieldProcedureTarget, input: Omit<Pro
 }
 export async function procedureStoragePersisted(): Promise<boolean> {
   try { return await navigator.storage?.persisted?.() || false; } catch { return false; }
+}
+
+
+/** One unresolved UI command per account/workspace. This is recovery intent, not an offline approval. */
+export type ProcedureOperation = {
+  id: string; target: FieldProcedureTarget; requestId: string; command: FieldProcedureCommand;
+  createdAt: string; shelvedAt?: string;
+};
+export function readProcedureOperation(target: FieldProcedureTarget): Promise<ProcedureOperation | null> {
+  return transaction(target,'commands','readonly',(store,done,fail) => {
+    onSuccess(store.get(procedureContextKey(target)),fail,value => {
+      if (value && !equalTarget(value.target,target)) return fail(new ProcedureLocalConflict());
+      done(value || null);
+    });
+  });
+}
+export function beginProcedureOperation(target: FieldProcedureTarget, command: FieldProcedureCommand): Promise<ProcedureOperation> {
+  const id = procedureContextKey(target);
+  const operation: ProcedureOperation = {id,target:{...target},requestId:`procedure-ui-${crypto.randomUUID()}`,command:structuredClone(command),createdAt:new Date().toISOString()};
+  return transaction(target,'commands','readwrite',(store,done,fail) => {
+    onSuccess(store.get(id),fail,value => {
+      if (value) return fail(new ProcedureLocalConflict());
+      store.add({...operation,context:id}); done(operation);
+    });
+  });
+}
+export function acknowledgeProcedureOperation(target: FieldProcedureTarget, requestId: string): Promise<void> {
+  return transaction(target,'commands','readwrite',(store,done,fail) => {
+    const id = procedureContextKey(target);
+    onSuccess(store.get(id),fail,value => {
+      if (value && (!equalTarget(value.target,target) || value.requestId !== requestId)) return fail(new ProcedureLocalConflict());
+      if (value) store.delete(id); done(undefined);
+    });
+  });
+}
+/** Explicitly stop retrying, retaining the original intent. This never claims the server rolled back. */
+export function shelveProcedureOperation(target: FieldProcedureTarget, requestId: string): Promise<void> {
+  return transaction(target,'commands','readwrite',(store,done,fail) => {
+    const id = procedureContextKey(target);
+    onSuccess(store.get(id),fail,value => {
+      if (!value || !equalTarget(value.target,target) || value.requestId !== requestId) return fail(new ProcedureLocalConflict());
+      store.add({...value,id:JSON.stringify([id,requestId]),shelvedAt:new Date().toISOString()});
+      store.delete(id); done(undefined);
+    });
+  });
+}
+
+export type ProcedureFormDraft = { id: string; target: FieldProcedureTarget; scope: string; value: string; revision: number; updatedAt: string };
+function formKey(target: FieldProcedureTarget, scope: string) {
+  if(!/^[-A-Za-z0-9_.:]{1,180}$/.test(scope) || scope.includes('..')) throw new Error('Contexto de formulario inválido.');
+  return JSON.stringify([procedureContextKey(target),scope]);
+}
+export function readProcedureForm(target: FieldProcedureTarget, scope: string): Promise<ProcedureFormDraft | null> {
+  const key=formKey(target,scope);
+  return transaction(target,'forms','readonly',(store,done,fail)=>{onSuccess(store.get(key),fail,row=>{
+    if(row && (!equalTarget(row.target,target) || row.scope!==scope))return fail(new ProcedureLocalConflict());
+    done(row || null);
+  });});
+}
+export function saveProcedureForm(target: FieldProcedureTarget, scope: string, value: string, expectedRevision: number | null): Promise<ProcedureFormDraft> {
+  const key=formKey(target,scope);if(typeof value!=='string' || value.length>16000)return Promise.reject(new ProcedureStorageError());
+  return transaction(target,'forms','readwrite',(store,done,fail)=>{onSuccess(store.get(key),fail,old=>{
+    if((old?.revision ?? null)!==expectedRevision)return fail(new ProcedureLocalConflict());
+    const next={id:key,target:{...target},scope,value,revision:(old?.revision ?? -1)+1,updatedAt:new Date().toISOString()};
+    store.put({...next,context:procedureContextKey(target)});done(next);
+  });});
 }
