@@ -6,9 +6,10 @@ async function question(page, id) {
   assert.equal(await page.locator('[data-career-question]').count(), 1, 'exactly one conceptual question is mounted');
   assert.equal(new URL(page.url()).searchParams.get('question'), id, 'stable question ID is reflected by the shared router');
 }
+async function label(page, english, spanish) { return await page.locator('html').getAttribute('lang') === 'es' ? spanish : english; }
 async function next(page) {
   const before = page.url();
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByRole('button', { name: await label(page, 'Continue', 'Continuar'), exact: true }).click();
   await page.waitForFunction(previous => window.location.href !== previous, before);
 }
 async function walkTo(page, id) {
@@ -25,13 +26,13 @@ async function details(page, values = {}) {
   await question(page, 'profile:email'); await page.locator('#email').fill(fields.email); await next(page);
   await question(page, 'profile:phone');
   await page.locator('#dialCode').selectOption(values.customCode ? 'other' : '+1');
-  if (values.customCode) await page.getByLabel('Other country calling code', { exact: true }).fill('+1');
+  if (values.customCode) await page.getByLabel(await label(page, 'Other country calling code', 'Otro código telefónico internacional'), { exact: true }).fill('+1');
   await page.locator('#phone').fill('2025550101'); await next(page);
-  await question(page, 'profile:whatsapp'); await page.locator('#whatsapp').getByLabel('Yes', { exact: true }).check(); await next(page);
+  await question(page, 'profile:whatsapp'); await page.locator('#whatsapp').getByLabel(await label(page, 'Yes', 'Sí'), { exact: true }).check(); await next(page);
   await question(page, 'profile:nationality'); await page.locator('#nationality').selectOption(fields.nationality); await next(page);
   await question(page, 'profile:applyingFrom'); await page.locator('#applyingFrom').selectOption('AW'); await next(page);
-  await question(page, 'profile:sameResidence'); await page.locator('#sameResidence').getByLabel('Yes', { exact: true }).check(); await next(page);
+  await question(page, 'profile:sameResidence'); await page.locator('#sameResidence').getByLabel(await label(page, 'Yes', 'Sí'), { exact: true }).check(); await next(page);
   await question(page, 'profile:city'); await page.locator('#city').fill('Test city'); await next(page);
   await question(page, 'profile:totalExperience');
 }
-module.exports = { question, next, walkTo, details };
+module.exports = { question, next, walkTo, details, label };

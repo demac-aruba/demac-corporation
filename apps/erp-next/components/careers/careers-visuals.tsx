@@ -1,5 +1,6 @@
 'use client';
 import { useCareersLanguage } from './careers-language';
+import { careersTemplate } from '../../lib/careers-locale';
 import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
 import { sizeLabel } from './careers-ui';
@@ -46,16 +47,18 @@ export function VacancyFacts({ vacancy, presentation = vacancy }: { vacancy: Vac
   return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{text(label)}</dt><dd>{value}</dd></div></div>)}</dl>;
 }
 export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
-  return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · Selected for review</small></div><button type="button" className={s.iconButton} aria-label={`Remove ${file.name}`} onClick={onRemove}><CareerIcon name="close"/></button></div>;
+  const { locale, text } = useCareersLanguage();
+  return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · {text('Selected for review')}</small></div><button type="button" className={s.iconButton} aria-label={careersTemplate(locale, 'Remove {name}', { name: file.name })} onClick={onRemove}><CareerIcon name="close"/></button></div>;
 }
 export function FunnelSteps({ step, completed, disabled, onSelect }: { step: number; completed: boolean[]; disabled: boolean; onSelect: (index: number) => void }) {
-  return <nav className={s.steps} aria-label="Application progress">{['Your details', 'Experience', 'Documents & review'].map((label, index) => {
+  const { locale, text } = useCareersLanguage();
+  return <nav className={s.steps} aria-label={text('Application progress')}>{['Your details', 'Experience', 'Documents & review'].map((label, index) => {
     const complete = index !== step && completed[index];
     const accessible = index <= step || completed.slice(0, index).every(Boolean);
     return <button key={label} type="button" data-step-state={index === step ? 'active' : complete ? 'complete' : 'upcoming'} disabled={!accessible || disabled}
       onClick={() => onSelect(index)} aria-current={index === step ? 'step' : undefined}
-      aria-label={`Step ${index + 1}: ${label}${complete ? ', completed' : ''}`} className={index === step || complete ? s.stepActive : s.step}>
-      <span className={s.stepCircle}>{complete ? <CareerIcon name="check"/> : index + 1}</span><small>{label}</small>
+      aria-label={careersTemplate(locale, 'Step {step}: {label}', { step: index + 1, label: text(label) }) + (complete ? text(', completed') : '')} className={index === step || complete ? s.stepActive : s.step}>
+      <span className={s.stepCircle}>{complete ? <CareerIcon name="check"/> : index + 1}</span><small>{text(label)}</small>
     </button>;
   })}</nav>;
 }

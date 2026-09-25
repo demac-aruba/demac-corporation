@@ -81,14 +81,15 @@ export function ApplicationReceipt({ reference, email, jobTitle, preview = false
   reference: string; email: string; jobTitle: string; preview?: boolean; emailNotice?: ReactNode;
   onExplore: () => void; content?: WebsiteCareersContent;
 }) {
-  return <><CareersHero content={content} titleAsHeading={false}/><section className={p.receipt} lang="en">
+  const { text } = useCareersLanguage();
+  return <><CareersHero content={content} titleAsHeading={false}/><section className={p.receipt}>
     <div className={p.successMark}><CareerIcon name="check"/></div>
-    <h1 data-career-page-title tabIndex={-1}>{preview ? 'Application completed' : 'Application received'}</h1>
-    <p>Thank you for applying to join the DEMAC team.<br/>{preview ? 'You completed the preview application for' : 'We have received your application for'}<br/><strong>{jobTitle}</strong></p>
-    <dl className={p.receiptDetails}><div><CareerIcon name="file"/><dt>Reference number</dt><dd>{reference}</dd></div><div><CareerIcon name="mail"/><dt>Your email</dt><dd>{email}</dd></div></dl>
-    <div className={p.mailNotice} role="status">{preview ? 'Preview only. No email has been sent and no live application has been saved.' : emailNotice}</div>
-    <section className={p.next}><h2>{preview ? 'Selection process · Live applications' : 'What happens next?'}</h2><ol><li>Our team reviews your application.</li><li>We contact qualified candidates.</li><li>If selected, we invite you to the next stage.</li></ol></section>
-    <button type="button" className={s.primary} onClick={onExplore}>Explore positions <CareerIcon name="arrow"/></button>
-    {preview && <small>Test information only. Refreshing or closing the tab clears this session.</small>}
+    <h1 data-career-page-title tabIndex={-1}>{text(preview ? 'Application completed' : 'Application received')}</h1>
+    <p>{text('Thank you for applying to join the DEMAC team.')}<br/>{text(preview ? 'You completed the preview application for' : 'We have received your application for')}<br/><strong>{jobTitle}</strong></p>
+    <dl className={p.receiptDetails}><div><CareerIcon name="file"/><dt>{text('Reference number')}</dt><dd>{reference}</dd></div><div><CareerIcon name="mail"/><dt>{text('Your email')}</dt><dd>{email}</dd></div></dl>
+    <div className={p.mailNotice} role="status">{preview ? text('Preview only. No email has been sent and no live application has been saved.') : emailNotice}</div>
+    <section className={p.next}><h2>{text(preview ? 'Selection process · Live applications' : 'What happens next?')}</h2><ol><li>{text('Our team reviews your application.')}</li><li>{text('We contact qualified candidates.')}</li><li>{text('If selected, we invite you to the next stage.')}</li></ol></section>
+    <button type="button" className={s.primary} onClick={onExplore}>{text('Explore positions')} <CareerIcon name="arrow"/></button>
+    {preview && <small>{text('Test information only. Refreshing or closing the tab clears this session.')}</small>}
   </section></>;
 }

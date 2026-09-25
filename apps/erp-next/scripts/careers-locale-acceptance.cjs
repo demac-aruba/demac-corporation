@@ -1,5 +1,5 @@
 'use strict';
-// Scoped LANG-01 browser checks. Synthetic jobs/files only; no live Firebase or mail.
+// LANG-01 and LANG-02 candidate browser checks. Synthetic jobs/files only; no live Firebase or mail.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const { chromium,webkit,firefox }=require('playwright');
 const flow=require('./careers-question-driver.cjs');
@@ -31,33 +31,75 @@ const results=[];
    await page.getByRole('button',{name:'Ver Técnico HVAC',exact:true}).click();
    await page.getByRole('heading',{name:'Técnico HVAC',exact:true}).waitFor();await shot('02-es-role');
    await page.getByRole('button',{name:'Aplicar ahora',exact:true}).click();
+   await page.getByRole('button',{name:'Continuar',exact:true}).click();
+   await page.getByText('Escribe tu nombre.',{exact:true}).waitFor();
+   await shot('02a-name-error');
    await flow.details(page,{first:'María',last:'Test',email:'candidate@example.test'});
+   assert.equal(await page.locator('#totalExperience').getAttribute('type'),'number');
+   await page.locator('#totalExperience').fill('-1');
+   await page.getByRole('button',{name:'Continuar',exact:true}).click();
+   await page.getByText('Escribe los años de experiencia, entre 0 y 70.',{exact:true}).waitFor();
    await page.locator('#totalExperience').fill('4');await flow.next(page);
    await page.locator('#relevantExperience').fill('3');await flow.next(page);
    await flow.question(page,'role:systems');
-   await page.getByLabel('Split units',{exact:true}).check();await page.getByLabel('VRF / VRV',{exact:true}).check();
+   await page.getByLabel('Unidades split',{exact:true}).check();await page.getByLabel('VRF / VRV',{exact:true}).check();
+   await page.getByRole('heading',{name:'¿Con qué sistemas has trabajado?',exact:true}).waitFor();
+   await shot('02b-multiple-choice');
    const question=new URL(page.url()).searchParams.get('question'),count=await page.evaluate(()=>history.length);
    await switchTo('English','en');assert.equal(new URL(page.url()).searchParams.get('question'),question);
    assert.equal(await page.evaluate(()=>history.length),count);assert.ok(await page.getByLabel('VRF / VRV',{exact:true}).isChecked());
    await switchTo('Español','es');await flow.next(page);
-   await page.getByLabel('Yes',{exact:true}).check();await flow.next(page);
-   await page.locator('#q-project').fill('Trabajé 4 años.\nI also repaired VRF.');await flow.next(page);
-   await page.getByLabel('English',{exact:true}).check();await page.getByLabel('Spanish',{exact:true}).check();await flow.next(page);
-   await page.getByLabel('Immediately',{exact:true}).check();await flow.next(page);
+   await page.getByLabel('Sí',{exact:true}).check();await flow.next(page);
+   await page.locator('#q-project').fill('  Trabajé 4 años.\nI also repaired VRF.  ');await flow.next(page);
+   await page.locator('#languages').getByLabel('Inglés',{exact:true}).check();await page.locator('#languages').getByLabel('Español',{exact:true}).check();await flow.next(page);
+   await page.getByLabel('Inmediatamente',{exact:true}).check();await flow.next(page);
    await page.locator('#cv').setInputFiles({name:'cv-synthetic.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n%%EOF')});
-   await switchTo('English','en');await switchTo('Español','es');
+   await page.locator('#cv').setInputFiles({name:'Continue.exe',mimeType:'application/octet-stream',buffer:Buffer.from('synthetic rejected file')});
+   await page.getByRole('alert').filter({hasText:'Continue.exe: Usa PDF o DOCX.'}).waitFor();
+   await switchTo('English','en');
+   await page.getByRole('alert').filter({hasText:'Continue.exe: Use PDF or DOCX.'}).waitFor();
+   await switchTo('Español','es');
+   await page.getByRole('alert').filter({hasText:'Continue.exe: Usa PDF o DOCX.'}).waitFor();
    assert.equal(await page.getByText('cv-synthetic.pdf',{exact:true}).count(),1);
    await page.goBack({waitUntil:'domcontentloaded'});await flow.question(page,'profile:availability');await locale('es');
-   assert.ok(await page.getByLabel('Immediately',{exact:true}).isChecked());
+   assert.ok(await page.getByLabel('Inmediatamente',{exact:true}).isChecked());
    await page.goForward({waitUntil:'domcontentloaded'});await page.locator('#cv').waitFor();await locale('es');
    assert.equal(await page.getByText('cv-synthetic.pdf',{exact:true}).count(),1);
    await shot('03-preserved-file');
    // Re-read the original paragraph after both toggles and history traversal.
    for (const id of ['profile:availability', 'profile:languages', 'role:project']) { await page.goBack({waitUntil:'domcontentloaded'}); await flow.question(page,id); }
-   assert.equal(await page.locator('#q-project').inputValue(),'Trabajé 4 años.\nI also repaired VRF.');
+   assert.equal(await page.locator('#q-project').inputValue(),'  Trabajé 4 años.\nI also repaired VRF.  ');
    await locale('es');
+   // Resume the existing forward history, then finish the actual localized form.
+   for (const id of ['profile:languages', 'profile:availability']) { await page.goForward({waitUntil:'domcontentloaded'}); await flow.question(page,id); }
+   await page.goForward({waitUntil:'domcontentloaded'}); await page.locator('#photo').waitFor();
+   const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAALUlEQVR4nGM8ffcdAy0BE01NH7Vg1IJRC0YtGLVg1IJRC0YtGLVg1IJRC6gIAOdxAtaKe4s8AAAAAElFTkSuQmCC','base64');
+   await page.locator('#photo').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:image});
+   await page.getByText('Foto seleccionada para revisión',{exact:true}).waitFor();
+   await shot('04-documents-complete');
+   await page.getByRole('button',{name:'Revisar solicitud',exact:true}).click();
+   await page.getByRole('heading',{name:'Revisa tu solicitud',exact:true}).waitFor();
+   const original=page.locator('dd').filter({hasText:'I also repaired VRF.'});
+   assert.equal(await original.textContent(),'  Trabajé 4 años.\nI also repaired VRF.  ');
+   assert.equal(await page.locator('#privacy').isChecked(),false);
+   assert.equal(await page.getByLabel('Conservar mi perfil para futuras vacantes (opcional; simulado en esta vista previa).',{exact:true}).isChecked(),false);
+   await page.getByRole('button',{name:'Enviar solicitud de prueba',exact:true}).click();
+   await page.getByText('Lee y acepta la información de privacidad de esta vista previa.',{exact:true}).waitFor();
+   await page.getByRole('button',{name:'Editar Cuéntanos brevemente sobre un proyecto relacionado.',exact:true}).click();
+   await flow.question(page,'role:project');
+   assert.equal(await page.locator('#q-project').inputValue(),'  Trabajé 4 años.\nI also repaired VRF.  ');
+   await page.locator('button[type="submit"]').filter({hasText:'Volver a la revisión'}).click();
+   await page.getByRole('heading',{name:'Revisa tu solicitud',exact:true}).waitFor();
+   await page.locator('#privacy').check();await shot('05-review');
+   await page.getByRole('button',{name:'Enviar solicitud de prueba',exact:true}).click();
+   await page.getByRole('heading',{name:'Solicitud de prueba completada',exact:true}).waitFor();
+   await page.getByText('Solo vista previa. No se ha enviado ningún correo ni se ha guardado una candidatura real.',{exact:true}).waitFor();
+   await shot('06-confirmation');
+   const receipt=new URL(page.url()).searchParams.get('receipt');
+   await switchTo('English','en');await page.getByRole('heading',{name:'Application completed',exact:true}).waitFor();
+   await switchTo('Español','es');assert.equal(new URL(page.url()).searchParams.get('receipt'),receipt);
    assert.deepEqual(errors,[]);
-   results.push({browser:name,status:'PASS',scenarios:['campaign ES','canonical department survives toggle','approved Spanish profile','explicit language does not add history','selected options retained','mixed original paragraph retained in session','file retained','Back/Forward retains manual ES']});
+   results.push({browser:name,status:'PASS',scenarios:['campaign ES','canonical department survives toggle','approved Spanish profile','explicit language does not add history','selected options retained','mixed original paragraph retained in session','file retained','Back/Forward retains manual ES','localized standard and role questions','localized invalid number and file feedback','selected file is not misreported as stored','original paragraph is unchanged in review and edit','explicit consent and no preselected future opt-in','localized preview receipt without mail claim']});
   }catch(e){await page.screenshot({path:path.join(output,`${name}-locale-FAIL.png`),fullPage:true});results.push({browser:name,status:'FAIL',error:e.message});throw e;}
   finally{await context.close();await browser.close();fs.writeFileSync(path.join(output,'locale-report.json'),JSON.stringify(results,null,2));}
  }
@@ -83,5 +125,5 @@ const results=[];
    results.push({scenario:scenario.id,status:'PASS'});await ctx.close();
   }
  }finally{await browser.close();fs.writeFileSync(path.join(output,'locale-report.json'),JSON.stringify(results,null,2));}
- console.log('PASS: locale routing, selection, canonical filters and retained in-tab data. Form/receipt localization is not certified by this block.');
+ console.log('PASS: locale routing, selection, canonical filters and retained in-tab data. Localized form, review and synthetic receipt are covered; production privacy, snapshots and email remain separate.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -2,20 +2,21 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { countryCodes } from '../../lib/careers-preview';
+import { careersText, type CareersLocale } from '../../lib/careers-locale';
 import s from './careers.module.css';
 
 export function Field({ id, label, error, hint, children, optional = false }: { id: string; label: string; error?: string; hint?: string; children: ReactNode; optional?: boolean }) {
   return <div className={s.field}><label htmlFor={id}>{label}{optional && <span className={s.optional}> (optional)</span>}</label>{children}{hint && <small id={`${id}-hint`}>{hint}</small>}{error && <small className={s.error} id={`${id}-error`} role="alert">{error}</small>}</div>;
 }
-export function CountrySelect({ id, value, onChange, error }: { id: string; value: string; onChange: (value: string) => void; error?: string }) {
+export function CountrySelect({ id, value, onChange, error, locale = 'en' }: { id: string; value: string; onChange: (value: string) => void; error?: string; locale?: CareersLocale }) {
   const options = useMemo(() => {
-    const names = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], { type: 'region' }) : null;
-    return countryCodes.map(code => ({ code, name: names?.of(code) || code })).sort((a, b) => a.name.localeCompare(b.name, 'en'));
-  }, []);
-  return <select id={id} value={value} onChange={event => onChange(event.target.value)} aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined}><option value="">Select country</option>{options.map(option => <option key={option.code} value={option.code}>{option.name}</option>)}</select>;
+    const names = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames([locale], { type: 'region' }) : null;
+    return countryCodes.map(code => ({ code, name: names?.of(code) || code })).sort((a, b) => a.name.localeCompare(b.name, locale));
+  }, [locale]);
+  return <select id={id} value={value} onChange={event => onChange(event.target.value)} aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined}><option value="">{careersText(locale, 'Select country')}</option>{options.map(option => <option key={option.code} value={option.code}>{option.name}</option>)}</select>;
 }
-export function countryName(code: string): string {
-  try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) || code; } catch { return code; }
+export function countryName(code: string, locale: CareersLocale = 'en'): string {
+  try { return new Intl.DisplayNames([locale], { type: 'region' }).of(code) || code; } catch { return code; }
 }
 export function FileLink({ file }: { file: File }) {
   const [url, setUrl] = useState('');

@@ -2,7 +2,7 @@
 
 import { CareersLanguage } from './careers-language';
 import { withSpanishPreview } from '../../lib/careers-preview-locales';
-import { careersText } from '../../lib/careers-locale';
+import { careersText, vacancyPresentation } from '../../lib/careers-locale';
 import { useEffect, useRef, useState } from 'react';
 import { CareersHeader, CareersFooter } from './careers-chrome';
 import { copyForSubmission, emptyDraft, exampleVacancies, totalFileBytes, validateStep, validateApplication, type ApplicationDraft, type PreviewApplication, type Vacancy } from '../../lib/careers-preview';
@@ -40,6 +40,7 @@ export function CareersPreview() {
   }
   const navigation = useCareersNavigation(normalizeRoute);
   const route = navigation.route;
+  const text = (key: string) => careersText(navigation.locale, key);
   const view = route.view;
   const selected = route.role ? snapshots.current.get(route.role) || vacancies.find(job => job.id === route.role) : undefined;
   const draft = selected ? drafts[selected.id] || emptyDraft() : emptyDraft();
@@ -94,18 +95,17 @@ export function CareersPreview() {
   function reviewView(next: CareerRoute) { if (tools.current) tools.current.open = false; navigation.navigate(next); }
   return <CareersLanguage locale={navigation.locale} onChange={navigation.setLocale} disabled={!navigation.ready}><main lang={view === 'admin' ? 'en' : navigation.locale} className={`${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v3" data-careers-increment="questions-v4" data-career-view={view} onClickCapture={event => {
     const anchor = event.target instanceof Element ? event.target.closest('a') : null;
-    if (anchor && !anchor.hasAttribute('download') && !anchor.href.startsWith('blob:') && (hasDraft || applications.length) && !window.confirm('Leave this preview? The application details in this session will be cleared.')) { event.preventDefault(); event.stopPropagation(); }
+    if (anchor && !anchor.hasAttribute('download') && !anchor.href.startsWith('blob:') && (hasDraft || applications.length) && !window.confirm(text('Leave this preview? The application details in this session will be cleared.'))) { event.preventDefault(); event.stopPropagation(); }
   }}>
-    <div className={s.previewRibbon}><span><i aria-hidden="true"/>Preview V4 · Test data only</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView({ view: 'jobs' })}>Candidate view</button><button type="button" className={s.primary} onClick={() => reviewView({ view: 'admin', tab: 'applications' })}>Recruitment preview</button>{submitted && <button type="button" className={s.secondary} onClick={() => reviewView({ view: 'admin', tab: 'applications', candidate: submitted.id })}>Review this candidate</button>}</div></details></div>
+    <div className={s.previewRibbon}><span><i aria-hidden="true"/>{text('Preview V4 · Test data only')}</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView({ view: 'jobs' })}>Candidate view</button><button type="button" className={s.primary} onClick={() => reviewView({ view: 'admin', tab: 'applications' })}>Recruitment preview</button>{submitted && <button type="button" className={s.secondary} onClick={() => reviewView({ view: 'admin', tab: 'applications', candidate: submitted.id })}>Review this candidate</button>}</div></details></div>
     <CareersHeader compactLabel={view === 'jobs' || view === 'detail' ? undefined : view === 'admin' ? 'Recruitment' : 'Careers'}/>
     {!navigation.ready && <div className={s.container} role="status">{careersText(navigation.locale, 'Opening Careers…')}</div>}
     {navigation.ready && view === 'jobs' && <VacancyCatalogue jobs={vacancies.filter(job => job.status === 'Open')} query={search} department={department} onQuery={setSearch} onDepartment={setDepartment} onSelect={detail} preview/>}
     {navigation.ready && view === 'detail' && selected && <VacancyProfile vacancy={selected} onBack={() => navigation.backTo({ view: 'jobs' })} onApply={start} applyLabel={submittedByRole.current.has(selected.id) ? 'View confirmation' : drafts[selected.id] ? 'Continue application' : 'Apply now'}/>}
-    {navigation.locale === 'es' && view === 'form' && <p className={s.previewNotice} lang="es">{careersText('es', 'Application form currently available in English. Language selection will not clear your answers or files.')}</p>}
-    {navigation.ready && view === 'form' && selected && <div lang="en"><ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={submittedByRole.current.has(selected.id)} onChange={next => changeDraft(selected.id, next)} onStep={target => navigation.navigate({ view: 'form', role: selected.id, ...target })} onBack={target => navigation.backTo(target ? { view: 'form', role: selected.id, ...target } : { view: 'detail', role: selected.id })} onBackToJob={() => navigation.backTo({ view: 'detail', role: selected.id })} onSubmit={submit}/></div>}
-    {navigation.ready && view === 'success' && submitted && <ApplicationReceipt reference={submitted.id} email={submitted.draft.email} jobTitle={submitted.vacancy.title} onExplore={() => navigation.navigate({ view: 'jobs' })} preview/>}
+    {navigation.ready && view === 'form' && selected && <div><ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={route.step || 0} reviewing={!!route.reviewing} question={route.question} returnToReview={route.returnToReview} completed={submittedByRole.current.has(selected.id)} onChange={next => changeDraft(selected.id, next)} onStep={target => navigation.navigate({ view: 'form', role: selected.id, ...target })} onBack={target => navigation.backTo(target ? { view: 'form', role: selected.id, ...target } : { view: 'detail', role: selected.id })} onBackToJob={() => navigation.backTo({ view: 'detail', role: selected.id })} onSubmit={submit}/></div>}
+    {navigation.ready && view === 'success' && submitted && <ApplicationReceipt reference={submitted.id} email={submitted.draft.email} jobTitle={vacancyPresentation(submitted.vacancy, navigation.locale).job.title} onExplore={() => navigation.navigate({ view: 'jobs' })} preview/>}
     {navigation.ready && view === 'admin' && <RecruitmentPreview vacancies={vacancies} applications={applications} onVacancies={changeVacancies} onApplications={changeApplications} initialApplication={route.candidate} onTryApplication={() => navigation.navigate({ view: 'jobs' })}/>}
     {(view === 'jobs' || view === 'detail' || view === 'success') && <CareersFooter/>}
-    {view === 'form' && <footer className={s.funnelFooter}><span>DEMAC · Professional Cooling Solutions</span><span>Careers · Aruba</span></footer>}
+    {view === 'form' && <footer className={s.funnelFooter}><span>DEMAC · Professional Cooling Solutions</span><span>{text('Careers')} · Aruba</span></footer>}
   </main></CareersLanguage>;
 }
