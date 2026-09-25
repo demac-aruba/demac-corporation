@@ -2,6 +2,7 @@
 // Additional real-browser journey using only the caller's demo authorities.
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const flow = require('../../apps/erp-next/scripts/careers-question-driver.cjs');
 module.exports = async function verifySpanishCandidate({ browser, makeContext, job, site, output, name, service, db, collections }) {
   const ctx = await makeContext(browser, false, { width: 390, height: 844 });
@@ -78,17 +79,43 @@ module.exports = async function verifySpanishCandidate({ browser, makeContext, j
     assert.equal(saved.documents.length, 2);
     // Fresh authorized admin context proves snapshot rendering after the candidate closes.
     const admin = await makeContext(browser, true, { width: 1440, height: 1000 });
-    try {
-      const office = await admin.newPage(); office.setDefaultTimeout(15000);
-      office.on('pageerror', error => errors.push(error.message));
-      await office.goto(`${site}/recruitment/?tab=applicants&candidate=${saved.id}`, { waitUntil: 'domcontentloaded' });
+    const office = await admin.newPage(), reads = [];
+    office.setDefaultTimeout(15000);
+    office.on('pageerror', error => errors.push(error.message));
+    office.on('response', async response => {
+      if (response.request().method() !== 'POST' || !response.url().endsWith('/careersAdmin')) return;
+      const action = response.request().postDataJSON()?.action;
+      if (action !== 'applications.get') return;
+      const body = await response.json().catch(() => ({}));
+      // Diagnostics contain only test status/schema flags, never tokens or answer values.
+      reads.push({ status: response.status(), ok: body.ok, code: body.code,
+        snapshotVersion: body.result?.submissionSnapshot?.schemaVersion });
+    });
+    const openSavedProfile = async navigate => {
+      const read = office.waitForResponse(response => response.request().method() === 'POST'
+        && response.url().endsWith('/careersAdmin') && response.request().postDataJSON()?.action === 'applications.get');
+      const [response] = await Promise.all([read, navigate()]);
+      assert.equal(response.status(), 200, 'fresh admin must receive an authorized application response');
+      const body = await response.json();
+      assert.equal(body.ok, true); assert.equal(body.result.id, saved.id);
+      assert.equal(body.result.submissionSnapshot?.localeAtSubmit, 'es');
       await office.locator('[data-submitted-locale="es"]').waitFor();
+    };
+    try {
+      await openSavedProfile(() => office.goto(`${site}/recruitment/?tab=applicants&candidate=${saved.id}`, { waitUntil: 'domcontentloaded' }));
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
       await office.getByRole('heading', { name: 'Role answers', exact: true }).waitFor();
       await office.screenshot({ path: path.join(output, `${name}-es-04-original-expedient.png`), fullPage: true });
-      await office.reload({ waitUntil: 'domcontentloaded' });
-      await office.locator('[data-submitted-locale="es"]').waitFor();
+      await openSavedProfile(() => office.reload({ waitUntil: 'domcontentloaded' }));
       assert.equal(await office.locator('[data-submitted-question="profile:givenName"] dd').textContent(), '  María  ');
+    } catch (error) {
+      await office.screenshot({ path: path.join(output, `${name}-es-admin-FAIL.png`), fullPage: true }).catch(() => {});
+      fs.writeFileSync(path.join(output, `${name}-es-admin-diagnostic.json`), JSON.stringify({
+        path: new URL(office.url()).pathname, reads, errors, failure: error.message,
+        headings: await office.locator('h1, h2').allTextContents().catch(() => []),
+        snapshotNodes: await office.locator('[data-submitted-locale]').count().catch(() => -1),
+      }, null, 2));
+      throw error;
     } finally { await admin.close(); }
     assert.deepEqual(errors, []);
     return ['Spanish public form from an admin-authored vacancy', 'Spanish date/URL validation and selected-option labels', 'original configured privacy notice, not invented translation', 'Spanish receipt follows actual committed emulator submission', 'canonical option values and private documents persist after closing the browser'];
