@@ -64,15 +64,20 @@ test('revising a position retains contact/files but does not reinterpret changed
   assert.equal(restored.privacy, false); assert.equal(restored.futureTalent, false);
 });
 
-// Design tokens must remain identical to the existing website, while layout and
-// illustration selectors must never become ancestors of Careers application UI.
-test('branded chrome uses existing public tokens without the full-page marketing wrapper', () => {
+// Careers must reuse the canonical website chrome exactly. The public-site
+// wrapper is scoped to the header/footer only; the application body keeps its
+// own component styles and does not inherit marketing illustration selectors.
+test('Careers reuses canonical public header and footer without replacement chrome', () => {
   const fs = require('node:fs'), path = require('node:path');
-  const moduleCss = fs.readFileSync(path.join(__dirname, '../components/careers/careers.module.css'), 'utf8');
-  const websiteCss = fs.readFileSync(path.join(__dirname, '../app/landing.css'), 'utf8');
-  const extract = text => Object.fromEntries([...text.matchAll(/(--public-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map(match => [match[1], match[2].trim()]));
-  assert.deepEqual(extract(moduleCss.split('.brandChrome{')[1].split('}')[0]), extract(websiteCss.split('}')[0]));
   const chrome = fs.readFileSync(path.join(__dirname, '../components/careers/careers-chrome.tsx'), 'utf8');
-  assert(!/className=.*public-site/.test(chrome));
+  const publicShell = fs.readFileSync(path.join(__dirname, '../components/public/public-site-shell.tsx'), 'utf8');
+  assert(chrome.includes("import { PublicFooter, PublicHeader } from '../public/public-site-shell'"));
+  assert(chrome.includes('className="public-site public-home-approved"'));
+  assert(chrome.includes('<PublicHeader active="careers"'));
+  assert(chrome.includes('<PublicFooter/>'));
+  assert(publicShell.includes('export function PublicHeader'));
+  assert(publicShell.includes('export function PublicFooter'));
+  assert(!chrome.includes('careers-chrome.module.css'));
+  assert(!fs.existsSync(path.join(__dirname, '../components/careers/careers-chrome.module.css')));
   assert(!fs.existsSync(path.join(__dirname, '../components/careers/careers-control-compat.css')));
 });
