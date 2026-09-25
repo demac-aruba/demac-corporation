@@ -59,6 +59,8 @@ const report = [];
       check(response.status() === 200, 'compiled careers route returns HTTP 200');
       await page.locator('[data-careers-version="premium-v3"]').waitFor();
       check(await page.locator('[data-careers-chrome="site-header"] .public-header').count() === 1, 'Careers renders the canonical public website header');
+      const chromeBox = await page.locator('[data-careers-chrome="site-header"]').boundingBox();
+      check(!!chromeBox && chromeBox.height < 160, 'Careers header wrapper does not reserve a full viewport');
       check(await page.locator('[data-careers-chrome="site-footer"] .premium-public-footer').count() === 1, 'Careers renders the canonical premium public website footer');
       if (test.width > 1040) {
         check(await page.locator('[data-careers-chrome="site-header"] .public-header-actions').isVisible(), 'desktop Careers keeps the homepage WhatsApp and estimate actions');
