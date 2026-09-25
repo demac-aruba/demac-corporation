@@ -2,7 +2,8 @@ name: Technician App isolated review
 
 # Owner direction (2026-09-24): use DEMAC GitHub/Vercel only for publication.
 # This workflow now runs isolated loopback checks only; it publishes no endpoint.
-# Public preview acceptance remains BLOCKED, not waived or represented as passing.
+# Owner update (2026-09-25): public preview is no longer a release prerequisite.
+# Internal isolated checks remain mandatory. This workflow never publishes production.
 
 on:
   pull_request:
@@ -84,7 +85,7 @@ jobs:
           npm run test:field-authority --prefix functions
           FIELD_PORTAL_EVIDENCE="$PREVIEW_EVIDENCE_DIR/components" node apps/erp-next/scripts/field-portal-browser.cjs
           FIELD_SERVICE_EVIDENCE="$PREVIEW_EVIDENCE_DIR/service-components" node apps/erp-next/scripts/field-service-browser.cjs
-          FIELD_PART_BROWSERS=chromium,webkit FIELD_PART_EVIDENCE="$PREVIEW_EVIDENCE_DIR/part-components" node apps/erp-next/scripts/field-part-browser.cjs
+          FIELD_PART_BROWSERS=chromium,webkit FIELD_PART_EVIDENCE="$PREVIEW_EVIDENCE_DIR/part-components" node apps/erp-next/scripts/field-part-browser.cjs 2>&1 | tee "$PREVIEW_EVIDENCE_DIR/shared-parts.log"
           npm run build --prefix apps/erp-next
       - name: Start only loopback demo emulators and generate private synthetic identities
         shell: bash
@@ -115,12 +116,12 @@ jobs:
           node functions/test-support/technicianPortalGatewayCheck.cjs
           node functions/test-support/technicianPortalBrowser.cjs
           node functions/test-support/technicianServiceBrowser.cjs
-      - name: Public preview acceptance blocked pending approved Vercel environment
+      - name: Record internal validation scope and owner preview decision
         shell: bash
         run: |
-          echo "::error::Public preview withdrawn by owner direction. No approved DEMAC Vercel preview has been verified."
-          echo "Loopback checks are not public-preview acceptance. Do not merge or publish to production."
-          exit 1
+          echo "Owner direction: public preview set aside; report release readiness before live publication."
+          echo "Completed internal checks are not production deployment, visual approval, or hosted preview availability."
+          echo "No merge/deploy is performed by this workflow. All functional checks above remain required."
       - name: Retain actual synthetic browser and API evidence
         if: always()
         uses: actions/upload-artifact@v4
