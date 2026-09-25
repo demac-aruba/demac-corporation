@@ -5,6 +5,7 @@ import { getFieldProcedureSummary, isFieldProcedureTemporaryFailure, updateField
 import type { FieldPartCommand, FieldProcedurePart, FieldProcedureSummary, FieldProcedureTarget } from '../../lib/field-procedure-contract';
 import { PortalIcon, fieldPortalStyles } from './field-portal-chrome';
 import styles from './field-part-selector.module.css';
+import { FieldProcedureWorkspace } from './field-procedure-workspace';
 
 type Pending = { command: FieldPartCommand; requestId: string };
 const descriptions = {
@@ -28,6 +29,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
 }) {
   const [snapshot,setSnapshot] = useState<FieldProcedureSummary | null>(null);
   const [selected,setSelected] = useState<FieldProcedurePart | null>(null);
+  const [openPart,setOpenPart] = useState<FieldProcedurePart | null>(null);
   const [fresh,setFresh] = useState(false),[loading,setLoading] = useState(true),[busy,setBusy] = useState(false);
   const [error,setError] = useState(''),[notice,setNotice] = useState(''),[reason,setReason] = useState('');
   const [retry,setRetry] = useState<Pending | null>(null);
@@ -78,6 +80,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
   const writable = fresh && !busy && !retry && snapshot?.allowedActions.includes('report.edit')
     && ['confirmed','in_progress'].includes(snapshot.interventionStatus);
   const mine = part?.ownerUserId === target.ownerUserId;
+  if (openPart) return <FieldProcedureWorkspace target={target} initialPart={openPart} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={()=>setOpenPart(null)} />;
   return <section className={styles.panel} aria-label="Selección compartida de parte">
     <div className={styles.air}><PortalIcon name="unit" /><div><strong>{equipmentLabel}</strong><small>{equipmentDescription}</small>{snapshot?.protocolName ? <span className={styles.status}>{snapshot.protocolName}</span> : null}</div></div>
     <div className={styles.refresh}><h2>¿Qué vas a trabajar?</h2><button type="button" onClick={()=>void load()} disabled={loading||busy}>Actualizar</button></div>
@@ -92,7 +95,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
     </div>
     {retry ? <button type="button" className={fieldPortalStyles.primary} disabled={busy||loading} onClick={()=>void mutate(retry.command,retry)}>Reintentar la misma solicitud</button> : null}
     {part && !mine && !retry ? <button type="button" className={fieldPortalStyles.primary} disabled={!writable||Boolean(part.ownerUserId)||Boolean(part.completedAt)} onClick={()=>void mutate({action:'claim_part',part:part.id,expectedPartVersion:part.version})}>{busy ? 'Confirmando…' : part.ownerUserId ? `Asignada a ${part.ownerName || 'otro miembro'}` : `Tomar ${part.id==='indoor'?'evaporadora':'condensadora'}`}</button> : null}
-    {mine ? <div className={styles.info}><p><strong>Tu parte está identificada.</strong> El registro multimedia de procedimientos se está conectando en este incremento. No hay evidencia nueva ni finalización automática al seleccionar una parte.</p><p>El inicio del servicio compartido y su cierre siguen a cargo del técnico responsable, mediante los controles del trabajo.</p></div> : null}
+    {mine ? <div className={styles.info}><p><strong>Tu parte está identificada.</strong> Abre los procedimientos para documentar cada paso con su evidencia y autoría. El cierre global del servicio continúa separado.</p><button type="button" className={fieldPortalStyles.primary} disabled={!snapshot?.revision||Boolean(retry)} onClick={()=>part&&setOpenPart(part.id)}>Abrir procedimientos</button></div> : null}
     {mine && !part?.completedAt ? <details className={styles.release}><summary>Liberar mi parte</summary><label>Motivo de la transferencia<textarea rows={2} value={reason} maxLength={1500} onChange={e=>setReason(e.target.value)} disabled={busy||Boolean(retry)} /></label><button type="button" className={fieldPortalStyles.secondary} disabled={!writable||reason.trim().length<3} onClick={()=>part&&void mutate({action:'release_part',part:part.id,expectedPartVersion:part.version,note:reason.trim()})}>Liberar sin borrar el historial</button></details> : null}
     <div className={styles.info}><p>Ambos miembros pueden abrir el mismo aire desde sus cuentas y escoger una parte. Una persona sola puede trabajar ambas. Son partes del mismo servicio, no dos cargos.</p><p>Las confirmaciones de la aplicación no sustituyen el aislamiento, la comunicación ni el control físico del equipo.</p></div>
     <button type="button" className={fieldPortalStyles.secondary} onClick={onBack}>Volver al trabajo</button>
