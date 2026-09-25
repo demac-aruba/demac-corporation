@@ -9,12 +9,13 @@ import { ProcedureStepEditor } from './procedure-step-editor';
 import { useProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 
-export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equipmentDescription,onBack}:{
+export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equipmentDescription,onBack,onOpenAddons}:{
   target:FieldProcedureTarget;
   initialPart:FieldProcedurePart;
   equipmentLabel:string;
   equipmentDescription:string;
   onBack:()=>void;
+  onOpenAddons?:()=>void;
 }) {
   const session=useProcedureSession(target);
   const [part,setPart]=useState<FieldProcedurePart>(initialPart);
@@ -75,7 +76,7 @@ export function FieldProcedureWorkspace({target,initialPart,equipmentLabel,equip
           <button type="button" disabled={!session.fresh||session.busy} onClick={()=>void session.stopRetrying()}>Conservar sin reenviar</button>
         </div>
       </div>:null}
-      <ProcedureStepEditor session={session} part={part} step={step} onBack={()=>setStepId(null)}/>
+      <ProcedureStepEditor session={session} part={part} step={step} onBack={()=>setStepId(null)} onOpenAddons={onOpenAddons}/>
     </section>;
   }
 
