@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
+import { FieldPartSelector } from './field-part-selector';
 import { FieldDayOverview } from './field-day-overview';
 import { FieldPortalHeader, FieldPortalIdentity, FieldPortalNavigation, FieldJobContext, fieldPortalStyles, type FieldPortalTab } from './field-portal-chrome';
 import { arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
@@ -955,10 +956,12 @@ function DetailView({
   const { principal: currentPrincipal } = useAuth();
   const canonicalStage = fieldExperienceStageForStatus(job?.fieldVisit?.status);
   const [activeStage, setActiveStage] = useState<FieldExperienceStage>(canonicalStage);
+  const [procedureInterventionId, setProcedureInterventionId] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveStage(canonicalStage);
-  }, [canonicalStage, job?.workOrderId]);
+    setProcedureInterventionId(null);
+  }, [canonicalStage, job?.workOrderId, currentPrincipal.userId]);
 
   if (loading || error || !job) {
     return (
@@ -976,6 +979,25 @@ function DetailView({
         </main>
       </div>
     );
+  }
+
+  const selectedProcedure = job.workInterventions.find((item) => item.id === procedureInterventionId);
+  if (selectedProcedure && job.fieldVisit && draftOwnerUserId === currentPrincipal.userId && offlineCapturedAt === null) {
+    const asset = job.visitAssets.find((item) => item.assetId === selectedProcedure.assetId);
+    const equipment = job.knownEquipment.find((item) => item.id === selectedProcedure.assetId);
+    return <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`}>
+      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => setProcedureInterventionId(null)} />
+      <main className={styles.mobileContent}>
+        <FieldJobContext job={job} />
+        <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
+        <FieldPartSelector
+          target={{ ownerUserId:currentPrincipal.userId, visitId:job.fieldVisit.id, interventionId:selectedProcedure.id, assetId:selectedProcedure.assetId }}
+          equipmentLabel={asset?.locationLabel || equipment?.locationLabel || 'Aire seleccionado'}
+          equipmentDescription={[equipment?.brand, equipment?.model, selectedProcedure.interventionType].filter(Boolean).join(' · ')}
+          onBack={() => setProcedureInterventionId(null)}
+        />
+      </main>
+    </div>;
   }
 
   const links = contactLinks(job);
@@ -1138,6 +1160,9 @@ function DetailView({
             <summary><b>3</b><span>Evidencia y reporte<small>Checklist, fotos, mediciones, notas y voz</small></span></summary>
             <div className={styles.disclosureBody}>
               <InterventionExecutionControls job={job} mutationBusy={mutationBusy} transitioningInterventionId={transitioningInterventionId} error={executionError} onTransition={onTransitionIntervention} />
+              {job.workInterventions.map((intervention) => <button key={intervention.id} type="button" className={fieldPortalStyles.secondary} disabled={mutationBusy} onClick={() => setProcedureInterventionId(intervention.id)}>
+                Elegir parte / ver coordinación · {job.visitAssets.find((asset) => asset.assetId === intervention.assetId)?.locationLabel || intervention.interventionType}
+              </button>)}
               <InterventionReportControls job={job} mutationBusy={mutationBusy} uploadingPhotoKey={uploadingReportPhotoKey} savingMeasurementKey={savingReportMeasurementKey} savingFindingKey={savingReportFindingKey} savingChecklistKey={savingChecklistKey} error={reportError} onAddPhoto={onAddReportPhoto} onAddMeasurement={onAddReportMeasurement} onAddFinding={onAddReportFinding} onSetChecklistItem={onSetChecklistItem} />
               <FreeTextReportControls job={job} draftOwnerUserId={draftOwnerUserId} allowDraftWhileOffline={offlineCapturedAt !== null} mutationBusy={mutationBusy} savingKey={savingFreeTextKey} error={freeTextError} onSave={onSaveFreeText} />
               <VoiceNoteReportControls job={job} mutationBusy={mutationBusy} savingKey={savingVoiceNoteKey} error={voiceNoteError} onSave={onSaveVoiceNote} />

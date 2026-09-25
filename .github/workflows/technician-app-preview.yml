@@ -84,6 +84,7 @@ jobs:
           npm run test:field-authority --prefix functions
           FIELD_PORTAL_EVIDENCE="$PREVIEW_EVIDENCE_DIR/components" node apps/erp-next/scripts/field-portal-browser.cjs
           FIELD_SERVICE_EVIDENCE="$PREVIEW_EVIDENCE_DIR/service-components" node apps/erp-next/scripts/field-service-browser.cjs
+          FIELD_PART_BROWSERS=chromium,webkit FIELD_PART_EVIDENCE="$PREVIEW_EVIDENCE_DIR/part-components" node apps/erp-next/scripts/field-part-browser.cjs
           npm run build --prefix apps/erp-next
       - name: Start only loopback demo emulators and generate private synthetic identities
         shell: bash
