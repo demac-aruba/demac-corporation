@@ -86,6 +86,7 @@ jobs:
           FIELD_PORTAL_EVIDENCE="$PREVIEW_EVIDENCE_DIR/components" node apps/erp-next/scripts/field-portal-browser.cjs
           FIELD_SERVICE_EVIDENCE="$PREVIEW_EVIDENCE_DIR/service-components" node apps/erp-next/scripts/field-service-browser.cjs
           FIELD_PART_BROWSERS=chromium,webkit FIELD_PART_EVIDENCE="$PREVIEW_EVIDENCE_DIR/part-components" node apps/erp-next/scripts/field-part-browser.cjs 2>&1 | tee "$PREVIEW_EVIDENCE_DIR/shared-parts.log"
+          FIELD_CAPTURE_EVIDENCE="$PREVIEW_EVIDENCE_DIR/procedure-capture" node apps/erp-next/scripts/field-procedure-capture-browser.cjs 2>&1 | tee "$PREVIEW_EVIDENCE_DIR/procedure-capture.log"
           npm run build --prefix apps/erp-next
       - name: Start only loopback demo emulators and generate private synthetic identities
         shell: bash
