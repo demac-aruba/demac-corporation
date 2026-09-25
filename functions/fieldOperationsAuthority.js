@@ -48,6 +48,7 @@ const {
   createSubmitOfficeReviewCommand,
   loadOfficeReviewQueue,
 } = require('./fieldOperationsOfficeReview');
+const { loadProcedureExceptionQueue } = require('./fieldOperationsProcedureExceptionQueue');
 const {
   attachScopeChangesToJob,
   createAdditionalWorkInterventionCommand,
@@ -73,6 +74,7 @@ const FIELD_ACTIONS = new Set([
   'get_schedule',
   'get_job',
   'get_office_review_queue',
+  'get_procedure_exception_queue',
   'prepare_visit',
   'create_return_visit',
   'transition_visit',
@@ -189,6 +191,7 @@ function createFieldOperationsApi({
   procedureCommands,
   procedureMediaStore,
   listOfficeReviews = loadOfficeReviewQueue,
+  listProcedureExceptions = loadProcedureExceptionQueue,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -219,6 +222,7 @@ function createFieldOperationsApi({
   if (submitOfficeReview !== undefined && typeof submitOfficeReview !== 'function') throw new Error('submitOfficeReview must be a function when provided.');
   if (decideOfficeReview !== undefined && typeof decideOfficeReview !== 'function') throw new Error('decideOfficeReview must be a function when provided.');
   if (typeof listOfficeReviews !== 'function') throw new Error('listOfficeReviews must be a function when provided.');
+  if (typeof listProcedureExceptions !== 'function') throw new Error('listProcedureExceptions must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -281,6 +285,10 @@ function createFieldOperationsApi({
     if (action === 'get_office_review_queue') {
       const reviews = await listOfficeReviews(db, identity);
       return { success: true, version: FIELD_OPERATIONS_API_VERSION, reviews };
+    }
+    if (action === 'get_procedure_exception_queue') {
+      const exceptions = await listProcedureExceptions(db, identity);
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, exceptions };
     }
     if (action === 'prepare_visit') {
       if (typeof prepareWorkVisit !== 'function') {
