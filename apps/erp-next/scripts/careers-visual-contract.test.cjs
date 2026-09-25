@@ -79,3 +79,14 @@ test('production live-review route remains isolated from real intake', () => {
   assert(!source.includes('NEXT_PUBLIC_CAREERS_LIVE_ENABLED'));
   assert(source.includes('robots: { index: false, follow: false }'));
 });
+
+test('Careers reuses canonical public site chrome without replacement styling', () => {
+  const source = read('components/careers/careers-chrome.tsx');
+  assert(source.includes("import { PublicFooter, PublicHeader } from '../public/public-site-shell'"));
+  assert(source.includes('<PublicHeader active="careers"'));
+  assert(source.includes('<PublicFooter/>'));
+  assert(source.includes('public-site public-home-approved'));
+  assert(!source.includes('careers-chrome.module.css'));
+  assert(!source.includes('PublicBrand'));
+  assert(!fs.existsSync(path.join(__dirname, '..', 'components/careers/careers-chrome.module.css')));
+});
