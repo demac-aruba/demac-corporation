@@ -1,10 +1,10 @@
 name: Project historical bookings
 on:
   pull_request:
-    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/bookingProjectHistoricalCapacity*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'functions/package.json', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/bookingProjectHistoricalCapacity*.js', 'functions/bookingRegularHistoricalCapacity.*', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'functions/package.json', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
   push:
     branches: [feature/project-historical-bookings, release/project-historical-bookings, main]
-    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/bookingProjectHistoricalCapacity*.js', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'functions/package.json', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
+    paths: ['functions/project*.js', 'functions/project*.cjs', 'functions/bookingAuthority*.js', 'functions/bookingProjectHistoricalCapacity*.js', 'functions/bookingRegularHistoricalCapacity.*', 'functions/officeBookingAuthority.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bootstrap.js', 'functions/package.json', 'apps/erp-next/**', 'firebase.project-history-test.json', 'scripts/project-history-approved-deploy*.cjs', '.github/workflows/project-history.yml']
 permissions:
   contents: read
 jobs:
@@ -50,7 +50,7 @@ jobs:
         run: >-
           npx --yes firebase-tools@15.30.0 emulators:exec --only firestore
           --project demo-demac-project-history --config firebase.project-history-test.json
-          "node --test functions/projectHistoricalBooking.emulator.test.cjs && node apps/erp-next/scripts/project-history-browser.cjs"
+          "node --test functions/projectHistoricalBooking.emulator.test.cjs && node --test functions/bookingRegularHistoricalCapacity.emulator.test.cjs && node apps/erp-next/scripts/project-history-browser.cjs"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

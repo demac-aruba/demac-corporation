@@ -568,6 +568,37 @@ export function getOfficeAppointment(appointmentId: string) {
   }>('get_appointment', { appointmentId }, 8_000);
 }
 
+export type OfficeRegularHistoricalCapacityAdjustment = {
+  appointmentId: string;
+  requestId: string;
+  expectedSlots: number;
+  slots: number;
+  reason: string;
+  noBillingAcknowledged: true;
+};
+
+export type OfficeRegularHistoricalCapacityResult = {
+  success: true;
+  replayed: boolean;
+  appointmentId: string;
+  workOrderId: string;
+  previousSlots: number | null;
+  currentSlots: number | null;
+  observedCurrentSlots: number | null;
+  currentMatchesAudit: boolean;
+  audit: Record<string, unknown>;
+};
+
+export async function adjustOfficeRegularHistoricalCapacity(input: OfficeRegularHistoricalCapacityAdjustment) {
+  const result = await callOfficeBookingAuthority<OfficeRegularHistoricalCapacityResult>(
+    'adjust_historical_regular_capacity', input, 20_000,
+  );
+  if (!result.success || result.appointmentId !== input.appointmentId || !result.workOrderId) {
+    throw new Error('Booking Authority did not verify the historical slot correction. Refresh before trying again.');
+  }
+  return result;
+}
+
 export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
   const ids = [...new Set(appointmentIds.map((item) => item.trim()).filter(Boolean))];
   const attribution: OfficeAppointmentAttribution[] = [];
