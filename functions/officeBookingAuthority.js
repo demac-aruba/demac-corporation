@@ -39,6 +39,8 @@ const BACKDATED_BOOKING_MODE = "backdated";
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
+  "operator",
+  "office_operator",
   "supervisor",
   "owner",
   "super_admin",
@@ -74,7 +76,7 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
 });
 
 function requireOfficeRole(role) {
-  const normalized = cleanText(role, 80).toLowerCase();
+  const normalized = cleanText(role, 80).toLowerCase().replace(/[\s-]+/g, "_");
   if (!OFFICE_BOOKING_ROLES.includes(normalized)) {
     const error = new Error("This user is not allowed to schedule appointments.");
     error.code = "permission_denied";
