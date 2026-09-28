@@ -165,6 +165,21 @@ export type BrowserProject = {
   assignments: ProjectAssignment[];
 };
 
+/** Read-only Project fields needed to plan a canonical Scheduling booking. */
+export type ProjectSchedulingSnapshot = Pick<BrowserProject,
+  'serverVersion' | 'id' | 'projectNumber' | 'name' | 'customerId' | 'customerName' |
+  'siteId' | 'location' | 'type' | 'technicianInstructions' | 'status' |
+  'slotsPerWorkDay' | 'slotDurationMinutes' | 'estimatedLaborHours' |
+  'scheduledFutureHours' | 'actualLaborHours'
+> & {
+  phases: Array<Pick<ProjectPhase,
+    'id' | 'name' | 'status' | 'workflowStatus' | 'estimatedLaborHours' | 'actualLaborHours'
+  >>;
+  assignments: Array<Pick<ProjectAssignment,
+    'projectId' | 'phaseId' | 'scheduledHours' | 'postedAt' | 'appointmentId' | 'workOrderId'
+  >>;
+};
+
 export type BrowserProjectsPreviewState = {
   version: 1;
   selectedProjectId: string;
@@ -591,11 +606,11 @@ function normalizedProjectSearchText(value: unknown) {
     : '';
 }
 
-export function projectIsSchedulable(project: BrowserProject): boolean {
+export function projectIsSchedulable(project: ProjectSchedulingSnapshot): boolean {
   return schedulableProjectStatuses.has(project.status);
 }
 
-export function searchProjectsForScheduling(projects: BrowserProject[], query: string): BrowserProject[] {
+export function searchProjectsForScheduling<T extends ProjectSchedulingSnapshot>(projects: T[], query: string): T[] {
   const tokens = normalizedProjectSearchText(query).split(' ').filter(Boolean);
   return projects.filter((project) => {
     if (!projectIsSchedulable(project)) return false;
@@ -611,7 +626,7 @@ export function searchProjectsForScheduling(projects: BrowserProject[], query: s
   });
 }
 
-function scheduledHoursForSlots(project: BrowserProject, scheduledSlots: number) {
+function scheduledHoursForSlots(project: ProjectSchedulingSnapshot, scheduledSlots: number) {
   const slotsPerWorkDay = Number.isInteger(project.slotsPerWorkDay) && project.slotsPerWorkDay > 0
     ? project.slotsPerWorkDay
     : defaultSchedulingSettings.serviceStartTimes.length;
@@ -624,7 +639,7 @@ function scheduledHoursForSlots(project: BrowserProject, scheduledSlots: number)
   return scheduledSlots * slotDurationMinutes / 60;
 }
 
-export function planProjectScheduling(project: BrowserProject, scheduledSlots: number, phaseId?: string): ProjectSchedulingPlan {
+export function planProjectScheduling(project: ProjectSchedulingSnapshot, scheduledSlots: number, phaseId?: string): ProjectSchedulingPlan {
   const scheduledHours = scheduledHoursForSlots(project, scheduledSlots);
   if (!projectIsSchedulable(project)) {
     throw new Error(`Project ${project.projectNumber} is not available for Scheduling while ${project.status}.`);
@@ -660,7 +675,7 @@ function normalizedIdentifier(value: string, label: string) {
   return normalized;
 }
 
-function normalizedProjectPhaseId(project: BrowserProject, value: string) {
+function normalizedProjectPhaseId(project: ProjectSchedulingSnapshot, value: string) {
   const normalized = value.trim();
   if (!project.phases.length) {
     if (!normalized || normalized === GENERAL_PROJECT_WORK_PHASE_ID) return GENERAL_PROJECT_WORK_PHASE_ID;

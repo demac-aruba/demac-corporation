@@ -21,7 +21,7 @@ export type Capability =
   | 'finance.view' | 'finance.manage' | 'finance.approve'
   | 'banking.view' | 'banking.reconcile'
   | 'employees.view' | 'employees.manage' | 'payroll_sensitive.view'
-  | 'projects.view' | 'projects.manage'
+  | 'projects.view' | 'projects.manage' | 'projects.schedule'
   | 'reports.view'
   | 'executive_ai.use'
   | 'website.manage'
@@ -52,17 +52,17 @@ export const roleCapabilities: Record<UserRole, ReadonlySet<Capability>> = {
     'work_orders.view','work_orders.manage','field.read_assigned','field.execute','field.scope.manage','field.sale.propose','field.complete','field.review','field.price.override',
     'communications.view','communications.reply','communications.manage','inventory.view','inventory.manage','inventory.approve','purchasing.view','purchasing.manage','purchasing.approve',
     'finance.view','finance.manage','finance.approve','banking.view','banking.reconcile','employees.view','employees.manage',
-    'payroll_sensitive.view','projects.view','projects.manage','reports.view','executive_ai.use','website.manage','settings.view','settings.manage',
+    'payroll_sensitive.view','projects.view','projects.manage','projects.schedule','reports.view','executive_ai.use','website.manage','settings.view','settings.manage',
     'automations.view','automations.manage','integrations.view','integrations.manage','audit.view','security.manage',
   ),
   operations: capabilities(
     'dashboard.view','kpi.view','crm.view','crm.manage','sales.view','scheduling.view','scheduling.manage','tasks.view','tasks.manage','tasks.execute','work_orders.view',
     'work_orders.manage','field.read_assigned','field.review','field.price.override','communications.view','communications.reply','communications.manage','inventory.view','purchasing.view',
-    'employees.view','employees.manage','projects.view','projects.manage','reports.view',
+    'employees.view','employees.manage','projects.view','projects.manage','projects.schedule','reports.view',
   ),
   office_operator: capabilities(
     'dashboard.view','kpi.view','crm.view','crm.manage','sales.view','sales.manage','scheduling.view','scheduling.manage','tasks.view','tasks.execute',
-    'work_orders.view','work_orders.manage','field.read_assigned','field.review','communications.view','communications.reply','finance.view','reports.view',
+    'work_orders.view','work_orders.manage','field.read_assigned','field.review','communications.view','communications.reply','finance.view','projects.schedule','reports.view',
   ),
   finance: capabilities(
     'dashboard.view','kpi.view','crm.view','purchasing.view','purchasing.approve','finance.view','finance.manage','finance.approve',
@@ -74,7 +74,7 @@ export const roleCapabilities: Record<UserRole, ReadonlySet<Capability>> = {
   sales: capabilities('dashboard.view','crm.view','crm.manage','sales.view','sales.manage','communications.view','communications.reply','reports.view'),
   project_manager: capabilities(
     'dashboard.view','kpi.view','crm.view','sales.view','scheduling.view','scheduling.manage','tasks.view','tasks.manage','tasks.execute','work_orders.view','work_orders.manage',
-    'inventory.view','purchasing.view','projects.view','projects.manage','reports.view',
+    'inventory.view','purchasing.view','projects.view','projects.manage','projects.schedule','reports.view',
   ),
   technician: capabilities('work_orders.view','field.read_assigned','field.execute','field.scope.manage','field.sale.propose','field.complete'),
   auditor: capabilities('dashboard.view','kpi.view','finance.view','reports.view','audit.view'),
