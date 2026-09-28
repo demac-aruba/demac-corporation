@@ -51,7 +51,6 @@ export type FieldProcedureCommand = FieldPartCommand
   | (StepVersion & { action: 'save_step'; result?: string | null; note: string; measurement?: ProcedureMeasurement | null;
       complete: boolean; competenceConfirmed?: boolean; customerDecision?: 'accepted' | 'declined' | 'pending' | null; decisionPerson?: string })
   | (StepVersion & { action: 'request_exception'; reason: string })
-  | (PartVersion & { action: 'recover_part'; note: string })
   | (PartVersion & { action: 'review_exception'; stepId: string; decision: 'approve' | 'reject'; reason: string;
       disposition?: 'not_documented' | 'not_applicable' | 'not_performed' })
   | { action: 'confirm_isolation'; expectedSafetyRevision: number; competenceConfirmed: boolean; note: string }

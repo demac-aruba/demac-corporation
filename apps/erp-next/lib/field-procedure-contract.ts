@@ -5,7 +5,8 @@ export type FieldProcedureTarget = { ownerUserId: string; visitId: string; inter
 export type FieldPartCommand =
   | { action: 'initialize' }
   | { action: 'claim_part'; part: FieldProcedurePart; expectedPartVersion: number }
-  | { action: 'release_part'; part: FieldProcedurePart; expectedPartVersion: number; note: string };
+  | { action: 'release_part'; part: FieldProcedurePart; expectedPartVersion: number; note: string }
+  | { action: 'recover_part'; part: FieldProcedurePart; expectedPartVersion: number; note: string };
 export type FieldPartSummary = {
   id: FieldProcedurePart; label: string; version: number; ownerUserId: string | null;
   ownerStaffId: string | null; ownerName: string | null; completedAt: string | null;
