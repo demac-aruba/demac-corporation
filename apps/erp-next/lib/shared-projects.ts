@@ -1,4 +1,4 @@
-import type { BrowserProject, BrowserProjectsPreviewState } from './browser-projects';
+import type { BrowserProject, BrowserProjectsPreviewState, ProjectSchedulingSnapshot } from './browser-projects';
 import { loadProjectsWithoutSamples, commitProjectsWithoutSamples } from './project-record-sanitizer';
 import { firebaseClientConfig } from './firebase/client-config';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
@@ -18,6 +18,23 @@ export async function projectApi<T>(action: string, data: Record<string, unknown
   return payload as T;
 }
 const pendingLists = new Map<string, Promise<BrowserProject[]>>();
+const pendingSchedulingLists = new Map<string, Promise<ProjectSchedulingSnapshot[]>>();
+
+/** Existing published Projects only. No browser-local draft or full planning record is exposed. */
+export async function loadSchedulingProjects(uid: string): Promise<ProjectSchedulingSnapshot[]> {
+  let pending = pendingSchedulingLists.get(uid);
+  if (!pending) {
+    pending = projectApi<{ projects: ProjectSchedulingSnapshot[] }>('schedule_list', {}, uid).then(result => {
+      if (!Array.isArray(result.projects) || result.projects.some(project => !Number.isInteger(project.serverVersion) || !project.serverVersion)) {
+        throw new Error('Shared Project scheduling records could not be verified.');
+      }
+      return result.projects;
+    });
+    pendingSchedulingLists.set(uid, pending);
+    void pending.finally(() => { if (pendingSchedulingLists.get(uid) === pending) pendingSchedulingLists.delete(uid); }).catch(() => {});
+  }
+  return pending;
+}
 export async function loadSharedProjects(uid: string, includeBrowserRecords = true): Promise<BrowserProjectsPreviewState> {
   let pending = pendingLists.get(uid);
   if (!pending) {

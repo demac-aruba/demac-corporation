@@ -46,10 +46,12 @@ assert.deepEqual(
   ['super_admin', 'operations', 'project_manager', 'finance'],
   'Projects navigation must remain visible only to the roles with projects.view capability.',
 );
-assert.equal(roleCapabilities.office_operator.has('projects.view'), false, 'Office operators must not read Projects or Project technician instructions from Scheduling.');
-assert.equal(roleCapabilities.office_operator.has('projects.manage'), false, 'Office operators must not link Scheduling writes to Projects.');
+assert.equal(roleCapabilities.office_operator.has('projects.view'), false, 'Office operators must not receive full Project planning access.');
+assert.equal(roleCapabilities.office_operator.has('projects.manage'), false, 'Office operators must not create or edit Project planning.');
+assert.equal(roleCapabilities.office_operator.has('projects.schedule'), true, 'Office operators may schedule an existing shared Project.');
 assert.equal(roleCapabilities.finance.has('projects.view'), true, 'Finance keeps read-only Project visibility.');
 assert.equal(roleCapabilities.finance.has('projects.manage'), false, 'Read-only Project visibility must not imply permission to link or write Project scheduling records.');
+assert.equal(roleCapabilities.finance.has('projects.schedule'), false, 'Finance must not gain Project booking access.');
 
 const state = createProjectsPreviewState();
 const project = state.projects.find((row) => row.id === state.selectedProjectId);

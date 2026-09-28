@@ -21,6 +21,12 @@ engineering index; it does not replace that registry.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
   canonical conflict validation, audit markers and silent automatic communications.
+- `OPS-PROJ-SCHED-001`: an active, provisioned Office Operator may schedule or place a
+  Temporary Hold for an existing published Project, using its canonical Customer and
+  Property and Booking Authority's atomic Appointment/Work Order/capacity/Project link.
+  The operator may read only the scheduling projection needed for this work; creating,
+  editing or completing Project planning and correcting historical Project capacity
+  remain manager-only. Browser-local unpublished Projects cannot be booked by operators.
 - `OPS-TASK-*`: internal operational tasks are independent of Scheduling, use canonical staff
   identity, governed lifecycle/version checks, private evidence and the existing WhatsApp authority.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware

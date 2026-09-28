@@ -4,7 +4,7 @@ import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-b
 import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-confirmation';
 import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
 import { projectSlotLabel } from '@/lib/project-slot-label';
-import { commitSharedProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '@/lib/shared-projects';
+import { commitSharedProjects, loadSchedulingProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '@/lib/shared-projects';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PropertyLocations } from '../crm/property-locations';
@@ -20,8 +20,8 @@ import {
   planProjectScheduling,
   projectIsSchedulable,
   searchProjectsForScheduling,
-  type BrowserProject,
   type BrowserProjectsPreviewState,
+  type ProjectSchedulingSnapshot,
   type ProjectSchedulingPlan,
 } from '../../lib/browser-projects';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
@@ -335,10 +335,10 @@ function sameStringArray(left: string[], right: string[]) {
 
 export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict }: Props) {
   const { principal } = useAuth();
-  const canViewProjects = principal.active && principal.capabilities.has('projects.view');
-  const canManageProjects = canViewProjects && principal.capabilities.has('projects.manage');
-  const projectAccessRef = useRef({ uid: principal.userId, canView: canViewProjects, canManage: canManageProjects });
-  projectAccessRef.current = { uid: principal.userId, canView: canViewProjects, canManage: canManageProjects };
+  const canScheduleProjects = principal.active && principal.capabilities.has('projects.schedule');
+  const canManageProjects = principal.active && principal.capabilities.has('projects.view') && principal.capabilities.has('projects.manage');
+  const projectAccessRef = useRef({ uid: principal.userId, canSchedule: canScheduleProjects, canManage: canManageProjects });
+  projectAccessRef.current = { uid: principal.userId, canSchedule: canScheduleProjects, canManage: canManageProjects };
   const isAfterHours = mode === 'after_hours';
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
@@ -348,6 +348,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [crewLabel, setCrewLabel] = useState('Crew loading…');
   const [appointmentSource, setAppointmentSource] = useState<AppointmentSource>('service');
   const [projectsState, setProjectsState] = useState<BrowserProjectsPreviewState>(EMPTY_PROJECTS_PREVIEW_STATE);
+  const [schedulingProjects, setSchedulingProjects] = useState<ProjectSchedulingSnapshot[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -539,20 +540,27 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   }, []);
 
   useEffect(() => {
-    if (isAfterHours || !canViewProjects) {
+    if (isAfterHours || !canScheduleProjects) {
       setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+      setSchedulingProjects([]);
       setProjectsReady(false);
       return undefined;
     }
     let active = true;
     let sequence = 0;
     setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+    setSchedulingProjects([]);
     setProjectsReady(false);
     const loadProjects = async () => {
       const attempt = ++sequence;
       try {
-        const loaded = await loadSharedProjects(principal.userId);
-        if (active && attempt === sequence) { setProjectsState(loaded); setProjectsReady(true); }
+        if (canManageProjects) {
+          const loaded = await loadSharedProjects(principal.userId);
+          if (active && attempt === sequence) { setProjectsState(loaded); setProjectsReady(true); }
+        } else {
+          const loaded = await loadSchedulingProjects(principal.userId);
+          if (active && attempt === sequence) { setSchedulingProjects(loaded); setProjectsReady(true); }
+        }
       } catch (error) {
         if (active && attempt === sequence) { setProjectsReady(false); setAuthorityError(error instanceof Error ? error.message : 'Shared Projects could not be loaded.'); }
       }
@@ -565,15 +573,16 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const handleShared = () => { void loadProjects(); };
     window.addEventListener(PROJECTS_CHANGED_EVENT, handleShared);
     return () => { active = false; window.removeEventListener('storage', handleStorage); window.removeEventListener(PROJECTS_CHANGED_EVENT, handleShared); };
-  }, [canViewProjects, canManageProjects, isAfterHours, principal.userId]);
+  }, [canScheduleProjects, canManageProjects, isAfterHours, principal.userId]);
 
   useEffect(() => {
-    if (canViewProjects || appointmentSource !== 'project') return;
+    if (canScheduleProjects || appointmentSource !== 'project') return;
     validationAbortRef.current?.abort();
     validationAbortRef.current = null;
     validationEpochRef.current += 1;
     setAppointmentSource('service');
     setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+    setSchedulingProjects([]);
     setProjectsReady(false);
     setProjectQuery('');
     setProjectId('');
@@ -598,7 +607,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setSelectedSupportSlotIds([]);
     setMasterError('');
     setAuthorityError('Projects access is no longer available. Continue with a Regular Booking.');
-  }, [appointmentSource, canViewProjects]);
+  }, [appointmentSource, canScheduleProjects]);
 
   useEffect(() => () => {
     if (automaticValidationTimerRef.current !== null) {
@@ -624,12 +633,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   }, [target.dateKey, target.vanId]);
 
   const projectSourceSelected = !isAfterHours && appointmentSource === 'project';
-  const projectMode = projectSourceSelected && canViewProjects;
-  const projectWriteBlocked = projectSourceSelected && !canManageProjects;
-  const projectAccessRevoked = projectSourceSelected && !canViewProjects;
+  const projectMode = projectSourceSelected && canScheduleProjects;
+  const projectAccessRevoked = projectSourceSelected && !canScheduleProjects;
   const authorizedDescription = projectAccessRevoked ? '' : description;
   const authorizedTechnicianInstructions = projectAccessRevoked ? '' : technicianInstructions;
-  const selectedProject = projectMode ? projectsState.projects.find((project) => project.id === projectId) : undefined;
+  const availableProjects: ProjectSchedulingSnapshot[] = canManageProjects ? projectsState.projects : schedulingProjects;
+  const selectedProject = projectMode ? availableProjects.find((project) => project.id === projectId) : undefined;
+  const projectWriteBlocked = projectSourceSelected && (!canScheduleProjects || Boolean(selectedProject && !selectedProject.serverVersion && !canManageProjects));
   const selectedProjectRecordId = selectedProject?.id ?? '';
   const selectedProjectCustomerId = selectedProject?.customerId ?? '';
   const selectedProjectSiteId = selectedProject?.siteId ?? '';
@@ -640,8 +650,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   );
   const selectedProjectPhase = schedulableProjectPhases.find((phase) => phase.id === projectPhaseId);
   const matchingProjects = useMemo(
-    () => canViewProjects ? searchProjectsForScheduling(projectsState.projects, projectQuery).slice(0, 10) : [],
-    [canViewProjects, projectQuery, projectsState.projects],
+    () => canScheduleProjects ? searchProjectsForScheduling(availableProjects, projectQuery).slice(0, 10) : [],
+    [canScheduleProjects, projectQuery, availableProjects],
   );
   const selectedCustomer = references.clients.find((customer) => customer.id === customerId);
   const customerProperties = useMemo(
@@ -877,8 +887,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       : [...current, slotId]);
   };
 
-  const projectLinkIssue = (project: BrowserProject) => {
-    if (!projectAccessRef.current.canView) return 'Projects viewing permission is required.';
+  const projectLinkIssue = (project: ProjectSchedulingSnapshot) => {
+    if (!projectAccessRef.current.canSchedule) return 'Project scheduling permission is required.';
     if (!projectIsSchedulable(project)) return 'This Project is not open for scheduling.';
     const projectCustomer = references.clients.find((customer) => customer.id === project.customerId && customer.active !== false);
     if (!projectCustomer) return 'Needs a canonical CRM Customer link.';
@@ -890,8 +900,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const chooseAppointmentSource = (source: AppointmentSource) => {
-    if (source === 'project' && !projectAccessRef.current.canView) {
-      setAuthorityError('Your account does not have permission to view Projects.');
+    if (source === 'project' && !projectAccessRef.current.canSchedule) {
+      setAuthorityError('Your account does not have permission to schedule Projects.');
       return;
     }
     if (source === 'project' && backdatedTarget) return;
@@ -916,9 +926,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     resetCapacityValidation();
   };
 
-  const selectProject = (project: BrowserProject) => {
-    if (!projectAccessRef.current.canView) {
-      setAuthorityError('Your account does not have permission to view Projects.');
+  const selectProject = (project: ProjectSchedulingSnapshot) => {
+    if (!projectAccessRef.current.canSchedule) {
+      setAuthorityError('Your account does not have permission to schedule Projects.');
       return;
     }
     const linkIssue = projectLinkIssue(project);
@@ -1235,16 +1245,25 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     status: 'confirmed' | 'temporary_hold';
   }) => {
     if (!projectMode) return true;
-    if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId || !selectedProject || !projectPlan) return false;
+    if (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId || !selectedProject || !projectPlan) return false;
     try {
       if (selectedProject.serverVersion) {
-        const shared = await loadSharedProjects(principal.userId);
-        if (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId) return false;
-        const saved = shared.projects.find(project => project.id === selectedProject.id);
+        const managerLoad = projectAccessRef.current.canManage;
+        const shared = managerLoad
+          ? await loadSharedProjects(principal.userId)
+          : await loadSchedulingProjects(principal.userId);
+        if (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
+          || managerLoad !== projectAccessRef.current.canManage) return false;
+        const saved = (managerLoad ? (shared as BrowserProjectsPreviewState).projects : shared as ProjectSchedulingSnapshot[])
+          .find(project => project.id === selectedProject.id);
         const linked = input.workOrderIds.length > 0 && input.workOrderIds.every(id => saved?.assignments.some(link => link.workOrderId === id && link.appointmentId === input.appointmentId));
-        if (linked) setProjectsState(shared);
+        if (linked) {
+          if (managerLoad) setProjectsState(shared as BrowserProjectsPreviewState);
+          else setSchedulingProjects(shared as ProjectSchedulingSnapshot[]);
+        }
         return linked;
       }
+      if (!projectAccessRef.current.canManage) return false;
       const nextState = await commitSharedProjects(projectsState, (latestProjectsState) => {
         const latestProject = latestProjectsState.projects.find((project) => project.id === selectedProject.id);
         if (!latestProject
@@ -1303,8 +1322,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const confirmBooking = async (acknowledgedBudget?: string) => {
     const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
-    if (projectBookingRequested && (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId)) {
-      setAuthorityError('Projects management permission is required to confirm an appointment linked to a Project.');
+    if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
+      || (selectedProject && !selectedProject.serverVersion && !projectAccessRef.current.canManage))) {
+      setAuthorityError('Project scheduling permission or a published Project is required to confirm this appointment.');
       return;
     }
     if (!locationReady || !selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || bookingInFlight.current) return;
@@ -1383,7 +1403,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
       setBookingRecovery(null);
-      const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
+      const projectLinked = projectBookingRequested && projectAccessRef.current.canSchedule
         ? await saveProjectBookingLink({
           appointmentId: result.appointmentId,
           workOrderIds: result.workOrderIds ?? [],
@@ -1391,7 +1411,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           status: 'confirmed',
         })
         : !projectBookingRequested;
-      const canExposeCreatedProject = projectAccessRef.current.canView;
+      const canExposeCreatedProject = projectAccessRef.current.canSchedule;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -1420,8 +1440,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const holdBooking = async (acknowledgedBudget?: string) => {
     const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
-    if (projectBookingRequested && (!projectAccessRef.current.canManage || projectAccessRef.current.uid !== principal.userId)) {
-      setAuthorityError('Projects management permission is required to place a Temporary Hold linked to a Project.');
+    if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
+      || (selectedProject && !selectedProject.serverVersion && !projectAccessRef.current.canManage))) {
+      setAuthorityError('Project scheduling permission or a published Project is required to hold this appointment.');
       return;
     }
     if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding || bookingInFlight.current) return;
@@ -1444,7 +1465,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         optionId: option.id,
       });
       setBookingRecovery(null);
-      const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
+      const projectLinked = projectBookingRequested && projectAccessRef.current.canSchedule
         ? await saveProjectBookingLink({
           appointmentId: result.appointmentId,
           workOrderIds: result.workOrderIds ?? [],
@@ -1452,7 +1473,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           status: 'temporary_hold',
         })
         : !projectBookingRequested;
-      const canExposeCreatedProject = projectAccessRef.current.canView;
+      const canExposeCreatedProject = projectAccessRef.current.canSchedule;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -1481,7 +1502,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
-      {budgetConfirmation && budgetConfirmation.signature === budgetSignature && bookingBudgetPlan && canManageProjects && !busy && !checking && <ProjectBudgetConfirmation
+      {budgetConfirmation && budgetConfirmation.signature === budgetSignature && bookingBudgetPlan && canScheduleProjects && !busy && !checking && <ProjectBudgetConfirmation
         key={budgetConfirmation.signature}
         slotDurationMinutes={selectedProject?.slotDurationMinutes ?? 60}
         budgets={[{ scope: 'Proyecto', budget: bookingBudgetPlan.laborBudget }, ...(bookingBudgetPlan.phaseLaborBudget ? [{ scope: 'Fase', budget: bookingBudgetPlan.phaseLaborBudget }] : [])]}
@@ -1495,7 +1516,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <h2>{isAfterHours ? 'New after-hours appointment' : 'New appointment'}</h2>
             <p>{isAfterHours
               ? 'Use the same canonical customer, property, contacts and work-selection flow as every appointment. The selected Van receives one extra open-ended job from 5:00 PM onward.'
-              : canViewProjects
+              : canScheduleProjects
                 ? 'Create a Regular Booking or select an existing Project. Customer, property, work and Van time are validated together before anything is committed.'
                 : 'Create a Regular Booking. Customer, property, work and Van time are validated together before anything is committed.'}</p>
           </div>
@@ -1519,13 +1540,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
           {!isAfterHours ? (
             <section className={styles.section}>
-              <header><div><span>1</span><strong>Appointment source</strong><small>{canViewProjects ? 'Create a Regular Booking or reserve real Scheduling capacity for an existing Project.' : 'Create a Regular Booking from canonical customer, property, and Services & Products records.'}</small></div></header>
+              <header><div><span>1</span><strong>Appointment source</strong><small>{canScheduleProjects ? 'Create a Regular Booking or reserve real Scheduling capacity for an existing Project.' : 'Create a Regular Booking from canonical customer, property, and Services & Products records.'}</small></div></header>
               <div className={styles.sectionBody}>
                 <div className={styles.sourceToggle}>
                   <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
                     <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
                   </button>
-                  {canViewProjects ? <button type="button" disabled={backdatedTarget} className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
+                  {canScheduleProjects ? <button type="button" disabled={backdatedTarget} className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
                     <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
                   </button> : null}
                 </div>
@@ -1555,7 +1576,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         <button type="button" onClick={() => { setProjectId(''); setProjectPhaseId(''); setProjectSlots(''); setCustomerId(''); setPropertyId(''); setRecipientSelections([]); technicianInstructionsTouchedRef.current = false; lastSyncedProjectSiteRef.current = ''; pendingProjectSiteRefreshRef.current = ''; setTechnicianInstructions(''); resetCapacityValidation(); }}>Change</button>
                       </div>
                     ) : null}
-                    <div className={styles.previewBoundary} role="note"><strong>{canManageProjects ? 'Preview bridge:' : 'Read-only Project access:'}</strong> {canManageProjects ? 'the Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.' : 'you may inspect and plan against this Project, but confirming or holding a linked appointment requires Projects management permission.'}</div>
+                    <div className={styles.previewBoundary} role="note"><strong>{selectedProject?.serverVersion ? 'Shared Project booking:' : 'Preview bridge:'}</strong> The Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.</div>
                   </div>
                 ) : null}
               </div>
@@ -1863,10 +1884,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : projectMode ? 'PROJECT PREVIEW + CANONICAL SCHEDULING' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : projectMode ? 'Project → Booking Authority → Appointment + Work Order + Capacity Locks' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
-            {!isAfterHours && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Projects management permission required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
+            {!isAfterHours && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
             <button type="button" className={styles.confirmButton} disabled={isAfterHours
               ? busy || !selectedCustomer || !selectedProperty || !workValid || !validAfterHoursStart(requestTarget.start)
-              : !selectedValidatedOption || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Projects management permission required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
+              : !selectedValidatedOption || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
           </div>
           </>}
         </footer>
