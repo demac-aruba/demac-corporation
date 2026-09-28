@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { projectLiveSchedulingAppointments } from '../lib/live-scheduling';
 import { assignmentReservedSlots, hasServiceWorkEstimate, schedulingWorkSummary } from '../lib/scheduling-card-presentation';
-import { schedulingProjectLabel } from '../lib/scheduling-project-labels';
+import { schedulingProjectLabel, schedulingProjectLabelFromSnapshots } from '../lib/scheduling-project-labels';
 
 const base = { id: 'SYNTHETIC-WO-1', appointmentId: 'SYNTHETIC-APT', date: '2026-09-18',
   time: '08:30', vanId: 'VAN-1', status: 'confirmed', appointmentPresetId: 'other',
@@ -81,4 +81,20 @@ for (const invalid of [null, {}, { version: 1, projects: [null, {}, { ...project
   assert.equal(schedulingProjectLabel(linkedAppointment, invalid), undefined);
 }
 assert.deepEqual(schedulingProjectLabel(linkedAppointment, state([{ ...project, phases: [null, 42, {}] }]))?.phaseNames, []);
+const operatorProject = {
+  ...project,
+  serverVersion: 2,
+  type: 'VRF Project', status: 'Planned' as const,
+  customerName: 'Synthetic Customer', location: 'Synthetic Property', technicianInstructions: 'Use west gate',
+  slotsPerWorkDay: 6, slotDurationMinutes: 60, estimatedLaborHours: 12, scheduledFutureHours: 6, actualLaborHours: 0,
+  phases: [{ ...project.phases[0], status: 'Completed' as const, estimatedLaborHours: 12, actualLaborHours: 0 }],
+  assignments: project.assignments.map(link => ({ ...link, scheduledHours: 6 })),
+};
+assert.deepEqual(schedulingProjectLabelFromSnapshots(linkedAppointment, [operatorProject]), label,
+  'Scheduling-only Project data must show the exact verified Project name to an operator.');
+assert.equal(schedulingProjectLabelFromSnapshots(linkedAppointment, [operatorProject, operatorProject]), undefined,
+  'Duplicate Project identities must not produce an arbitrary operator label.');
+assert.equal(schedulingProjectLabelFromSnapshots({ ...linkedAppointment, siteId: 'wrong-property' }, [operatorProject]), undefined);
+assert.equal(schedulingProjectLabelFromSnapshots(linkedAppointment, [{ ...operatorProject,
+  assignments: operatorProject.assignments.map(link => ({ ...link, workOrderId: 'wrong-wo' })) }]), undefined);
 console.log('PASS Project labels: exact appointment/work-order/customer/property links, ambiguous/stale/malformed rejection, phase/name refresh and unchanged per-Van capacity');

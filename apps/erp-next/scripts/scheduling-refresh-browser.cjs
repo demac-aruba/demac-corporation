@@ -14,7 +14,7 @@ fs.mkdirSync(output, { recursive: true });
 const stubs = {
   'session': `export async function requireFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}`,
   'auth-provider': `import {useSyncExternalStore} from 'react';
-    const listeners=new Set();let principal={userId:'synthetic-operator',displayName:'Viewer',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.view'])};
+    const listeners=new Set();let principal={userId:'synthetic-operator',displayName:'Viewer',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.schedule'])};
     window.switchPrincipal=(value)=>{principal={...principal,...value};for(const fn of listeners)fn();};
     window.getSyntheticUid=()=>principal.userId;
     const refreshPrincipal=async()=>window.switchPrincipal({active:false});
@@ -62,20 +62,25 @@ window.records=projectLiveSchedulingAppointments(['VAN-1','VAN-2'].map((vanId,i)
 })),[{id:'SYNTHETIC-CUSTOMER',name:'Synthetic test customer'}],[{id:'SYNTHETIC-PROPERTY',name:'Synthetic test site'}]);
 window.records.push(...projectLiveSchedulingAppointments([{id:'SYNTHETIC-SINGLE-WO',appointmentId:'SYNTHETIC-SINGLE-APT',date,time:'08:30',vanId:'VAN-3',status:'confirmed',appointmentPresetId:'standard_service',appointmentWorkLabel:'Standard service',appointmentDurationMode:'per_unit',appointmentDurationMinutes:60,scheduledSlots:1,quantity:1}],[],[]));
 window.originalRecords=structuredClone(window.records);
-window.projectKey='demac.erp-next.projects.preview.v1';
-window.projectState={version:1,selectedProjectId:'SYNTHETIC-PROJECT',projects:[{
- id:'SYNTHETIC-PROJECT',projectNumber:'SYNTHETIC-001',name:'Synthetic VRF project',
- customerId:'SYNTHETIC-CUSTOMER',siteId:'SYNTHETIC-PROPERTY',
- phases:[{id:'phase-1',name:'Installation',status:'Completed'}],
- assignments:['SYNTHETIC-WO-0','SYNTHETIC-WO-1'].map(workOrderId=>({projectId:'SYNTHETIC-PROJECT',appointmentId:'SYNTHETIC-APT',workOrderId,phaseId:'phase-1'}))
-}]};
-localStorage.setItem(window.projectKey,JSON.stringify(window.projectState));
 window.overtimeRecords=projectLiveSchedulingAppointments([{id:'SYNTHETIC-OT-WO',appointmentId:'SYNTHETIC-OT-APT',date,time:'14:30',vanId:'VAN-2',status:'confirmed',appointmentPresetId:'standard_service',appointmentWorkLabel:'Standard service',appointmentDurationMode:'per_unit',appointmentDurationMinutes:180,appointmentEndTime:'17:30',appointmentCapacityEndTime:'17:30',scheduledSlots:3,quantity:3,operationalMoveOvertime:{accepted:true,capacityEnd:'17:30'}}],[],[]);
 const root=createRoot(document.getElementById('app'));window.unmount=()=>root.unmount();root.render(<React.StrictMode><div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div></React.StrictMode>);`;
 
 async function runCase(browser, origin, label, viewport) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
+  const project = {
+    serverVersion: 1, id: 'SYNTHETIC-PROJECT', projectNumber: 'SYNTHETIC-001', name: 'Synthetic VRF project',
+    customerId: 'SYNTHETIC-CUSTOMER', customerName: 'Synthetic test customer',
+    siteId: 'SYNTHETIC-PROPERTY', location: 'Synthetic test site', type: 'VRF Project', status: 'Active',
+    technicianInstructions: '', slotsPerWorkDay: 6, slotDurationMinutes: 60, estimatedSlots: 12,
+    estimatedLaborHours: 12, scheduledFutureHours: 12, actualLaborHours: 0,
+    phases: [{ id: 'phase-1', name: 'Installation', status: 'Completed', estimatedLaborHours: 12, actualLaborHours: 0 }],
+    assignments: ['SYNTHETIC-WO-0', 'SYNTHETIC-WO-1'].map(workOrderId => ({
+      projectId: 'SYNTHETIC-PROJECT', phaseId: 'phase-1', appointmentId: 'SYNTHETIC-APT',
+      workOrderId, scheduledHours: 6, postedAt: '',
+    })),
+  };
+  let projectSnapshots = [project];
   // The fixture uses "today" for its jobs. Keep it on an open weekday so the
   // real Scheduling view can render them even when CI runs on a Sunday.
   await page.clock.install({ time: new Date('2026-09-23T12:00:00.000Z') });
@@ -85,8 +90,8 @@ async function runCase(browser, origin, label, viewport) {
   await context.route('**/*',route=>{
     if(route.request().url().startsWith(origin+'/'))return route.continue();
     if(route.request().url()==='https://us-central1-demo-demac-scheduling.cloudfunctions.net/projectAuthority') {
-      assert.equal(route.request().postDataJSON().action,'list');
-      return route.fulfill({json:{success:true,projects:[]}});
+      assert.deepEqual(route.request().postDataJSON(),{action:'schedule_list',data:{}});
+      return route.fulfill({json:{success:true,projects:projectSnapshots}});
     }
     external.push(route.request().url());return route.abort();
   });
@@ -117,18 +122,21 @@ async function runCase(browser, origin, label, viewport) {
   assert.match(await cards.nth(1).innerText(),/Project · Synthetic VRF project · Installation/);
   assert.match(await cards.nth(2).innerText(),/Standard service · 1 unit/);
   await page.screenshot({path:path.join(output,`${label}.png`),fullPage:true});
-  // Existing Project edits/removal update the read-only label without an operational write.
-  await page.evaluate(()=>{window.projectState.projects[0].name='Renamed synthetic project';localStorage.setItem(window.projectKey,JSON.stringify(window.projectState));window.dispatchEvent(new StorageEvent('storage',{key:window.projectKey}));});
+  // Shared Project edits/removal update the read-only label without an operational write.
+  project.name='Renamed synthetic project';
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(()=>document.querySelector('[data-schedule-job]')?.textContent.includes('Renamed synthetic project'));
-  await page.evaluate(()=>{localStorage.removeItem(window.projectKey);window.dispatchEvent(new StorageEvent('storage',{key:window.projectKey}));});
+  projectSnapshots=[];
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(()=>!document.querySelector('[data-schedule-job]')?.textContent.includes('Project ·'));
   assert.match(await cards.first().innerText(),/Other/);
-  await page.evaluate(()=>{localStorage.setItem(window.projectKey,JSON.stringify(window.projectState));window.dispatchEvent(new Event('focus'));});
+  projectSnapshots=[project];
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(()=>document.querySelector('[data-schedule-job]')?.textContent.includes('Renamed synthetic project'));
   await page.evaluate(()=>window.switchPrincipal({capabilities:new Set(['scheduling.view','scheduling.manage'])}));
-  await cards.first().waitFor();
+  await page.waitForFunction(()=>!document.querySelector('[data-schedule-job]')?.textContent.includes('Project ·'));
   assert.doesNotMatch(await page.locator('body').innerText(),/Renamed synthetic project|Installation/);
-  await page.evaluate(()=>window.switchPrincipal({capabilities:new Set(['scheduling.view','scheduling.manage','projects.view'])}));
+  await page.evaluate(()=>window.switchPrincipal({capabilities:new Set(['scheduling.view','scheduling.manage','projects.schedule'])}));
   await page.waitForFunction(()=>document.querySelector('[data-schedule-job]')?.textContent.includes('Renamed synthetic project'));
   // Integration with main must preserve its accepted overtime while retaining new card semantics.
   await page.evaluate(()=>{window.records=structuredClone(window.overtimeRecords);window.dispatchEvent(new Event('focus'));});

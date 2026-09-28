@@ -1,4 +1,5 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
+import type { ProjectSchedulingSnapshot } from './browser-projects';
 import { sanitizeProjectsState } from './project-record-sanitizer';
 
 /** Display context from the existing browser Project link, never booking authority. */
@@ -34,5 +35,32 @@ export function schedulingProjectLabel(
     matches.push({ projectId: project.id, name: project.name.trim(), phaseNames: [...new Set(phaseNames)] });
   }
   // Never choose an arbitrary Project when local records disagree.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Resolve an operator card from the authenticated, scheduling-only server projection. */
+export function schedulingProjectLabelFromSnapshots(
+  appointment: BrowserAppointmentRecord,
+  projects: readonly ProjectSchedulingSnapshot[],
+): SchedulingProjectLabel | undefined {
+  if (!nonempty(appointment.id) || !nonempty(appointment.customerId) || !nonempty(appointment.siteId)
+    || !Array.isArray(projects)) return;
+  const workOrderIds = new Set([appointment.workOrderId, ...(appointment.workOrderIds ?? [])].filter(nonempty));
+  const matches: SchedulingProjectLabel[] = [];
+  for (const project of projects as readonly ProjectSchedulingSnapshot[]) {
+    if (!project || !nonempty(project.id) || !nonempty(project.name)
+      || project.customerId !== appointment.customerId || project.siteId !== appointment.siteId
+      || !Array.isArray(project.assignments) || !Array.isArray(project.phases)) continue;
+    if (projects.filter((candidate) => candidate?.id === project.id).length !== 1) return;
+    const links = project.assignments.filter((link) => link && link.projectId === project.id
+      && link.appointmentId === appointment.id && nonempty(link.workOrderId) && workOrderIds.has(link.workOrderId));
+    if (!links.length) continue;
+    const phaseIds = new Set(links.map((link) => link.phaseId).filter(nonempty));
+    const phaseNames = [...phaseIds].flatMap((id) => {
+      const phases = project.phases.filter((phase) => phase && phase.id === id && nonempty(phase.name));
+      return phases.length === 1 ? [phases[0].name.trim()] : [];
+    });
+    matches.push({ projectId: project.id, name: project.name.trim(), phaseNames: [...new Set(phaseNames)] });
+  }
   return matches.length === 1 ? matches[0] : undefined;
 }

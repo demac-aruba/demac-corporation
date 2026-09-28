@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
-import { BROWSER_PROJECTS_PREVIEW_KEY } from '../../lib/browser-projects';
-import { loadSharedProjects, PROJECTS_CHANGED_EVENT } from '../../lib/shared-projects';
-import { schedulingProjectLabel, type SchedulingProjectLabel } from '../../lib/scheduling-project-labels';
+import { BROWSER_PROJECTS_PREVIEW_KEY, type BrowserProjectsPreviewState, type ProjectSchedulingSnapshot } from '../../lib/browser-projects';
+import { loadSchedulingProjects, loadSharedProjects, PROJECTS_CHANGED_EVENT } from '../../lib/shared-projects';
+import { schedulingProjectLabel, schedulingProjectLabelFromSnapshots, type SchedulingProjectLabel } from '../../lib/scheduling-project-labels';
 import {
   liveCompanyClosureReason,
   liveOperationalStartTimes,
@@ -190,7 +190,11 @@ function LiveSchedulingSession() {
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
-  const [projectState, setProjectState] = useState<unknown>(null);
+  const [projectState, setProjectState] = useState<
+    | { kind: 'planning'; state: BrowserProjectsPreviewState }
+    | { kind: 'scheduling'; projects: ProjectSchedulingSnapshot[] }
+    | null
+  >(null);
   const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(null);
   const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
@@ -220,20 +224,24 @@ function LiveSchedulingSession() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const canView = principal.active && principal.capabilities.has('scheduling.view');
-  const canViewProjects = principal.active && principal.capabilities.has('projects.view');
-  const projectPrincipal = `${principal.userId}:${canViewProjects}`;
+  const canScheduleProjects = principal.active && principal.capabilities.has('projects.schedule');
+  const canManageProjects = principal.active && principal.capabilities.has('projects.view') && principal.capabilities.has('projects.manage');
+  const projectPrincipal = `${principal.userId}:${canScheduleProjects}:${canManageProjects}`;
   const projectPrincipalRef = useRef(projectPrincipal);
   projectPrincipalRef.current = projectPrincipal;
   const projectLoadSequence = useRef(0);
   const refreshProjectLabels = useCallback(() => {
     const sequence = ++projectLoadSequence.current;
-    if (!canViewProjects) { setProjectState(null); return; }
-    void loadSharedProjects(principal.userId).then(state => {
+    if (!canScheduleProjects) { setProjectState(null); return; }
+    const load = canManageProjects
+      ? loadSharedProjects(principal.userId).then(state => ({ kind: 'planning' as const, state }))
+      : loadSchedulingProjects(principal.userId).then(projects => ({ kind: 'scheduling' as const, projects }));
+    void load.then(state => {
       if (projectPrincipalRef.current === projectPrincipal && sequence === projectLoadSequence.current) setProjectState(state);
     }).catch(() => {
       if (projectPrincipalRef.current === projectPrincipal && sequence === projectLoadSequence.current) setProjectState(null);
     });
-  }, [canViewProjects, principal.userId, principal.capabilities, projectPrincipal]);
+  }, [canScheduleProjects, canManageProjects, principal.userId, projectPrincipal]);
   useEffect(() => {
     setProjectState(null);
     refreshProjectLabels();
@@ -412,8 +420,11 @@ function LiveSchedulingSession() {
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
   const projectLabels = useMemo(() => new Map(appointments.map((appointment) => [
-    appointment.id, canViewProjects ? schedulingProjectLabel(appointment, projectState) : undefined,
-  ])), [appointments, canViewProjects, projectState]);
+    appointment.id, !canScheduleProjects || !projectState ? undefined
+      : projectState.kind === 'planning'
+        ? schedulingProjectLabel(appointment, projectState.state)
+        : schedulingProjectLabelFromSnapshots(appointment, projectState.projects),
+  ])), [appointments, canScheduleProjects, projectState]);
   const jobLinks = useMemo(() => {
     const result = new Map<string, JobLink>();
     for (const appointment of appointments) {
