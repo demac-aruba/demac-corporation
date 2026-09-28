@@ -25,6 +25,7 @@ import {
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
 import { arubaBookingClock, isBackdatedAppointmentTarget } from '../lib/scheduling-backdating';
+import { canOfferRegularHistoricalCapacityCorrection, regularHistoricalCapacitySource } from '../lib/regular-historical-capacity';
 import { getRuntimeSchedulingSettings } from '../lib/scheduling';
 
 function requireCondition(condition: unknown, message: string) {
@@ -87,6 +88,24 @@ requireCondition(canonical.assignments[0].end === '10:30', 'Canonical elapsed du
 requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain capacity/history metadata.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
+requireCondition(canOfferRegularHistoricalCapacityCorrection(canonical, false, arubaNoon), 'A past confirmed single-Van Regular Booking must offer slot correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection(canonical, true, arubaNoon), 'Project bookings must stay in the Project correction flow.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, durationMinutesPerUnit: 120 }, false, arubaNoon), 'Known two-hour-per-unit service must not advertise the hourly correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, dateKey: '2026-09-01' }, false, arubaNoon), 'A same-day booking must not offer historical correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, status: 'temporary_hold' }, false, arubaNoon), 'A hold must not offer historical correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, assignments: [canonical.assignments[0], canonical.assignments[0]] }, false, arubaNoon), 'A multi-Van booking must not offer historical correction.');
+const regularHistoryRecord = {
+  bookingAuthorityVersion: 1, status: 'confirmed', date: '2026-08-18', startTime: '08:30',
+  customerId: 'CUSTOMER-1', propertyId: 'PROPERTY-1', primaryVanId: 'VAN-1',
+  assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2, quantity: 2, durationMinutes: 120 }], workOrderIds: ['WO-1'],
+};
+requireCondition(regularHistoricalCapacitySource(regularHistoryRecord, arubaNoon)?.currentSlots === 2, 'Correction must read current slots from the fresh canonical Appointment.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, projectId: 'PRJ-1' }, arubaNoon) === null, 'A canonical Project identity must block Regular correction even if the board label is missing.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2.5 }] }, arubaNoon) === null, 'Fractional historical slots must not be offered.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2, quantity: 1, durationMinutes: 120 }] }, arubaNoon) === null, 'A two-hour service must not be presented as an hourly slot correction.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, regularCapacityCorrectionRequestId: 'prior-safe-correction', assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 3, quantity: 2, durationMinutes: 180 }] }, arubaNoon)?.currentSlots === 3, 'A previously corrected hourly booking must allow another reviewed adjustment.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, workOrderIds: ['WO-1', 'WO-2'] }, arubaNoon) === null, 'Multi-Work-Order booking must not be offered.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, date: '2026-09-01' }, arubaNoon) === null, 'Canonical same-day bookings must not use the historical correction flow.');
 
 const sixService = projectLiveSchedulingAppointments([{
   ...canonicalWorkOrders[0],

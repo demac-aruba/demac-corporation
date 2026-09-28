@@ -52,6 +52,8 @@ export type ProjectPhase = {
   unitsPlanned: number;
   unitsCompleted: number;
   progress: number;
+  workflowStatus?: string;
+  fieldReports?: unknown[];
   startsOn: string;
   endsOn: string;
 };
@@ -205,6 +207,8 @@ export type ProjectSchedulingLinkInput = {
 export type BrowserProjectEditInput = {
   projectId: string;
   name: string;
+  description?: string;
+  managerName?: string;
   type: string;
   siteId: string;
   location: string;
@@ -317,7 +321,10 @@ export function projectHasOperationalActivity(project: BrowserProject) {
     || project.phases.some((phase) => phase.status !== 'Planned'
       || phase.actualLaborHours > 0
       || phase.actualMaterialCost > 0
-      || phase.unitsCompleted > 0);
+      || phase.unitsCompleted > 0
+      || phase.progress > 0
+      || (phase.fieldReports?.length ?? 0) > 0
+      || Boolean(phase.workflowStatus && !['Draft', 'Ready to Schedule'].includes(phase.workflowStatus)));
 }
 
 function isLegacyInheritedProject(project: BrowserProject) {
@@ -469,16 +476,23 @@ export function editBrowserProject(
   if (projectIndex < 0) throw new Error(`Project ${projectId || '(missing id)'} is not available in this preview.`);
   const project = state.projects[projectIndex];
   const name = normalizedProjectEditText(input.name, 'Project name', 180);
+  const managerName = normalizedProjectEditText((input.managerName ?? project.managerName)?.trim() || 'Not assigned', 'Project manager', 180);
   const type = normalizedProjectEditText(input.type, 'Project type', 80);
   if (!editableProjectTypes.has(type)) throw new Error(`Project type ${type} is not supported.`);
   const siteId = typeof input.siteId === 'string' ? input.siteId.trim() : '';
   if (siteId.length > 180) throw new Error('Project Property ID must be 180 characters or fewer.');
+  if (project.serverVersion && project.siteId && siteId !== project.siteId) {
+    throw new Error('The Service Property of a shared Project is locked after publication.');
+  }
   const location = normalizedProjectEditText(input.location, 'Project location', 240);
   if (!editableProjectStatuses.has(input.status)) throw new Error(`Project status ${String(input.status)} is not supported.`);
   if ((project.status === 'Completed') !== (input.status === 'Completed')) {
     throw new Error('Completed Project status can only change through the dedicated completion workflow.');
   }
   const structureLocked = projectHasOperationalActivity(project);
+  if (project.status === 'Completed' && (type !== project.type || siteId !== project.siteId || location !== project.location)) {
+    throw new Error('Completed Project type and Service Property cannot be changed through planning.');
+  }
   if (structureLocked && (type !== project.type || siteId !== project.siteId || location !== project.location)) {
     throw new Error('Project type and Service Property cannot change after Scheduling work or actual cost exists.');
   }
@@ -495,6 +509,9 @@ export function editBrowserProject(
     throw new Error('Estimated completion date cannot be earlier than the Project start date.');
   }
   const capacity = projectCapacityPlan(input.estimatedWorkDays);
+  if (project.serverVersion && capacity.estimatedSlots < project.estimatedSlots) {
+    throw new Error('Reducing a shared Project slot budget requires canonical Scheduling verification. This editor can increase the plan, but cannot reduce it yet.');
+  }
   const committedLaborHours = project.actualLaborHours + project.scheduledFutureHours;
   // An unchanged estimate must not block an unrelated edit after an allowed overrun.
   if (capacity.estimatedLaborHours < project.estimatedLaborHours && capacity.estimatedLaborHours < committedLaborHours) {
@@ -502,15 +519,25 @@ export function editBrowserProject(
   }
   const materialBudget = projectTypeUsesMaterialBudget(type)
     ? normalizeOptionalMaterialBudget(input.materialBudget)
-    : null;
+    : type === project.type ? project.materialBudget : null;
   const technicianInstructions = normalizedTechnicianInstructions(input.technicianInstructions);
   const previousAutomaticDescription = `${project.name} · ${project.type}.`;
-  const description = project.description === previousAutomaticDescription
-    ? `${name} · ${type}.`
-    : project.description;
+  if (input.description !== undefined && typeof input.description !== 'string') {
+    throw new Error('Project description must be text.');
+  }
+  const editedDescription = input.description?.trim();
+  if (editedDescription && editedDescription.length > 5000) {
+    throw new Error('Project description must be 5000 characters or fewer.');
+  }
+  const description = input.description !== undefined
+    ? editedDescription || `${name} · ${type}.`
+    : project.description === previousAutomaticDescription
+      ? `${name} · ${type}.`
+      : project.description;
   const nextProject: BrowserProject = {
     ...project,
     name,
+    managerName,
     type,
     description,
     siteId,
@@ -526,6 +553,7 @@ export function editBrowserProject(
   };
   if (
     project.name === nextProject.name
+    && project.managerName === nextProject.managerName
     && project.type === nextProject.type
     && project.description === nextProject.description
     && project.siteId === nextProject.siteId

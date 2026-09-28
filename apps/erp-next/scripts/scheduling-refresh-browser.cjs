@@ -76,6 +76,9 @@ const root=createRoot(document.getElementById('app'));window.unmount=()=>root.un
 async function runCase(browser, origin, label, viewport) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
+  // The fixture uses "today" for its jobs. Keep it on an open weekday so the
+  // real Scheduling view can render them even when CI runs on a Sunday.
+  await page.clock.install({ time: new Date('2026-09-23T12:00:00.000Z') });
   page.setDefaultTimeout(15000);
   const errors=[];const external=[];
   page.on('pageerror',e=>errors.push(e.message));

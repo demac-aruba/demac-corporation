@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const script = fs.readFileSync(path.join(__dirname, 'project-history-approved-deploy.cjs'), 'utf8');
 const mainSha = '38542864b07ef18b32542ff08118fe9eea1526aa';
+const lastApprovedReleaseSha = 'd029ee4b9c5d9ffdc395f51ae9edb48f783d4ea2';
 const releaseSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const advancedMain = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const officeName = 'projects/demac-corporation/locations/us-central1/functions/officeBookingAuthority';
@@ -13,7 +14,7 @@ const projectName = officeName.replace(/officeBookingAuthority$/, 'projectAuthor
 
 async function simulate({ officeSource = 'prior', projectSource = 'prior', inventory = [{ name: officeName }, { name: projectName }],
   listError = false, mainAdvanced = false, releaseAdvanced = false, sourceTreeDrift = false,
-  officeRevisionDrift = false } = {}) {
+  officeRevisionDrift = false, officeDriftFile = '' } = {}) {
   const deployments = []; let evidence; let mainLookups = 0; let officeDescribes = 0;
   const process = { env: { GITHUB_REPOSITORY: 'demac-aruba/demac-corporation',
     GITHUB_REF: 'refs/heads/release/project-historical-bookings', GITHUB_SHA: releaseSha, RUNNER_TEMP: '/test' } };
@@ -26,7 +27,8 @@ async function simulate({ officeSource = 'prior', projectSource = 'prior', inven
         officeRevisionDrift && name === 'officeBookingAuthority' && officeDescribes > 1 ? 'other-revision' : 'approved-revision' } });
   };
   const source = (kind, file) => {
-    if (kind === 'prior' && ['bookingProjectHistoricalCapacity.js', 'projectCommercialGuard.js'].includes(file)) throw Error('Not in prior source');
+    if (kind === 'prior' && ['bookingProjectHistoricalCapacity.js', 'bookingRegularHistoricalCapacity.js', 'projectCommercialGuard.js'].includes(file)) throw Error('Not in prior source');
+    if (kind === 'last-release' && file === 'bookingRegularHistoricalCapacity.js') throw Error('Not in last release source');
     return `${kind}-${file}`;
   };
   const execFileSync = (command, args) => {
@@ -39,7 +41,11 @@ async function simulate({ officeSource = 'prior', projectSource = 'prior', inven
       if (args[0] === 'functions' && args[1] === 'deploy') { deployments.push(args[2]); return 'ACTIVE'; }
       if (args[0] === 'storage') return '';
     }
-    if (command === 'unzip') return source(args[1].includes('officeBookingAuthority') ? officeSource : projectSource, args[2]);
+    if (command === 'unzip') {
+      const isOffice = args[1].includes('officeBookingAuthority');
+      if (isOffice && args[2] === officeDriftFile) return `foreign-${args[2]}`;
+      return source(isOffice ? officeSource : projectSource, args[2]);
+    }
     if (command === 'git') {
       if (args[0] === 'ls-remote') {
         const ref = args[2];
@@ -54,7 +60,10 @@ async function simulate({ officeSource = 'prior', projectSource = 'prior', inven
         return sourceTreeDrift && sha === releaseSha && item === 'functions' ? `drift-${item}` : `same-${item}`;
       }
       if (args[0] === 'merge-base') return '';
-      if (args[0] === 'show') return source('prior', args[1].split('/').at(-1));
+      if (args[0] === 'show') {
+        const [revision, file] = args[1].split(':');
+        return source(revision === lastApprovedReleaseSha ? 'last-release' : 'prior', path.basename(file));
+      }
       if (args[0] === 'archive') return '';
     }
     if (command === 'tar') return '';
@@ -76,6 +85,22 @@ test('exact main source and approved deployed sources allow bounded Office and P
   assert.equal(result.evidence.expectedMainSha, mainSha);
   assert.equal(result.evidence.functions.length, 2);
   assert.equal(result.exitCode, undefined);
+});
+test('the exact last successful Office and Project release is an approved deployed source', async () => {
+  const result = await simulate({ officeSource: 'last-release', projectSource: 'last-release' });
+  assert.deepEqual(result.deployments, ['officeBookingAuthority', 'projectAuthority']);
+  assert.equal(result.evidence.officeSource.approvedPrior, lastApprovedReleaseSha);
+  assert.equal(result.evidence.projectSource.approvedPrior, lastApprovedReleaseSha);
+  assert.equal(result.evidence.stage, 'complete');
+  assert.equal(result.exitCode, undefined);
+});
+test('an unapproved deployed Office dependency blocks release before either Function changes', async () => {
+  for (const officeDriftFile of ['bookingRegularHistoricalCapacity.js', 'bookingCapacityAvailability.js', 'projectCommercialGuard.js']) {
+    const result = await simulate({ officeSource: 'last-release', projectSource: 'last-release', officeDriftFile });
+    assert.equal(result.exitCode, 1, officeDriftFile);
+    assert.equal(result.evidence.stage, 'verify-existing-office', officeDriftFile);
+    assert.deepEqual(result.deployments, [], officeDriftFile);
+  }
 });
 test('an already deployed candidate is an idempotent approved source', async () => {
   const result = await simulate({ officeSource: 'candidate', projectSource: 'candidate' });

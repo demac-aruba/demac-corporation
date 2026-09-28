@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import { canOfferRegularHistoricalCapacityCorrection } from '../../lib/regular-historical-capacity';
 import { assignmentReservedSlots, hasServiceWorkEstimate, schedulingWorkSummary } from '../../lib/scheduling-card-presentation';
 import {
   cancelOfficeAppointment,
@@ -12,14 +13,16 @@ import {
 import { AppointmentCommunicationPanel } from './appointment-communication-panel';
 import { LiveAppointmentEditPanel } from './live-appointment-edit-panel';
 import { PartialCompletionPanel } from './partial-completion-panel';
+import { RegularHistoricalCapacityPanel } from './regular-historical-capacity-panel';
 import { AppointmentRescheduleSchedulePicker } from './remaining-work-schedule-picker';
 import styles from './scheduling-overview-v2.module.css';
 
-type Mode = 'details' | 'edit' | 'reschedule' | 'cancel' | 'outcome';
+type Mode = 'details' | 'edit' | 'reschedule' | 'cancel' | 'outcome' | 'capacity';
 
 type Props = {
   appointment: BrowserAppointmentRecord;
   project?: import('../../lib/scheduling-project-labels').SchedulingProjectLabel;
+  canManage: boolean;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 };
@@ -107,7 +110,7 @@ function Field({ label, value, wide = false }: { label: string; value: React.Rea
   return <div className={wide ? styles.wide : undefined}><span style={{ color: 'var(--muted)', fontSize: 7 }}>{label}</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{value || '—'}</strong></div>;
 }
 
-export function LiveAppointmentDetailsDrawer({ appointment, project, onClose, onChanged }: Props) {
+export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, onClose, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>('details');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -125,6 +128,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, onClose, on
   const temporaryHold = appointment.status === 'temporary_hold';
   const workLabel = schedulingWorkSummary(appointment, undefined, project);
   const serviceEstimate = hasServiceWorkEstimate(appointment, project);
+  const canCorrectHistoricalCapacity = canManage && !partialOutcome
+    && canOfferRegularHistoricalCapacityCorrection(appointment, Boolean(project));
 
   const refreshPartialOutcome = async () => {
     try {
@@ -289,11 +294,14 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, onClose, on
             {!temporaryHold ? <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>Record Actual Outcome</button> : null}
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>{temporaryHold ? 'Cancel Hold' : 'Cancel Appointment'}</button>
           </div>}
+          {canCorrectHistoricalCapacity ? <div style={{ padding: '0 11px 11px' }}><button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('capacity')}>Correct past reserved slots</button><p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 11 }}>Capacity only; not technician actual hours or billing.</p></div> : null}
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
 
         {mode === 'edit' ? <LiveAppointmentEditPanel appointment={appointment} onBack={() => begin('details')} onSaved={async () => { await onChanged(); onClose(); }} /> : null}
+
+        {mode === 'capacity' ? <RegularHistoricalCapacityPanel appointment={appointment} onBack={() => begin('details')} onSaved={onChanged} onBusyChange={setBusy} /> : null}
 
         {mode === 'outcome' ? <PartialCompletionPanel appointment={appointment} onBack={backFromOutcome} onSaved={async () => { await onChanged(); onClose(); }} /> : null}
 

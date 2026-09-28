@@ -936,7 +936,7 @@ function LiveSchedulingSession() {
         </nav> : null}
       </div>
 
-      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
+      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
