@@ -4,21 +4,26 @@ const COLLECTION = 'projectRecords';
 const GENERAL_PHASE = 'GENERAL-PROJECT-WORK';
 const MANAGERS = new Set(['owner', 'admin', 'superadmin', 'super_admin', 'operation', 'operations', 'manager', 'supervisor', 'project_manager', 'projects']);
 const READERS = new Set([...MANAGERS, 'finance', 'accounting']);
+const SCHEDULERS = new Set([...MANAGERS, 'office', 'operator', 'office_operator']);
 const MAX_ASSIGNMENTS = 150;
 function fail(message, code = 'invalid_request') { throw new BookingAuthorityError(code, message); }
 function identifier(value) {
   if (typeof value !== 'string' || !/^[\w.-]{1,180}$/.test(value)) fail('A valid record identifier is required.');
   return value;
 }
-function roleAllows(role, write) {
-  return (write ? MANAGERS : READERS).has(String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_'));
+function roleAllows(role, access) {
+  const allowed = access === 'schedule' ? SCHEDULERS : access ? MANAGERS : READERS;
+  return allowed.has(String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_'));
 }
-async function authorize(db, uid, write = false, transaction) {
+async function authorize(db, uid, access = false, transaction) {
   identifier(uid);
   const ref = db.collection('users').doc(uid);
   const snapshot = await (transaction ? transaction.get(ref) : ref.get());
   const profile = snapshot.exists && snapshot.data();
-  if (!profile || profile.active === false || !roleAllows(profile.role, write)) fail('Projects permission is required.', 'permission_denied');
+  const unprovisionedScheduler = access === 'schedule' && !roleAllows(profile?.role, true) && profile?.active !== true;
+  if (!profile || profile.active === false || unprovisionedScheduler || !roleAllows(profile.role, access)) {
+    fail('Projects permission is required.', 'permission_denied');
+  }
   return { id: uid, name: String(profile.name || profile.displayName || '').slice(0, 180), source: 'project-authority' };
 }
 function phaseExists(project, phaseId) {
@@ -160,6 +165,49 @@ function createProjectRecords({ db, clock = () => new Date() }) {
     if (snapshot.size > 200) fail('Project portfolio limit reached; pagination is required.');
     return { success: true, projects: snapshot.docs.map(doc => doc.data()) };
   }
+  async function scheduleList(uid) {
+    await authorize(db, uid, 'schedule');
+    const snapshot = await db.collection(COLLECTION).orderBy('id').limit(201).get();
+    if (snapshot.size > 200) fail('Project portfolio limit reached; pagination is required.');
+    return { success: true, projects: snapshot.docs.map(doc => {
+      const project = doc.data();
+      return {
+        serverVersion: project.serverVersion,
+        id: project.id,
+        projectNumber: project.projectNumber,
+        name: project.name,
+        customerId: project.customerId,
+        customerName: project.customerName,
+        siteId: project.siteId,
+        location: project.location,
+        type: project.type,
+        status: project.status,
+        technicianInstructions: project.technicianInstructions || '',
+        slotsPerWorkDay: project.slotsPerWorkDay,
+        slotDurationMinutes: project.slotDurationMinutes,
+        estimatedSlots: project.estimatedSlots,
+        estimatedLaborHours: project.estimatedLaborHours,
+        scheduledFutureHours: project.scheduledFutureHours,
+        actualLaborHours: project.actualLaborHours,
+        phases: (project.phases || []).map(phase => ({
+          id: phase.id,
+          name: phase.name,
+          status: phase.status,
+          workflowStatus: phase.workflowStatus,
+          estimatedLaborHours: phase.estimatedLaborHours,
+          actualLaborHours: phase.actualLaborHours,
+        })),
+        assignments: (project.assignments || []).map(assignment => ({
+          projectId: assignment.projectId,
+          phaseId: assignment.phaseId,
+          appointmentId: assignment.appointmentId,
+          workOrderId: assignment.workOrderId,
+          scheduledHours: assignment.scheduledHours,
+          postedAt: assignment.postedAt,
+        })),
+      };
+    }) };
+  }
   async function save({ project: input, expectedVersion, requestId, dryRun = false }, uid) {
     await authorize(db, uid, true);
     identifier(requestId);
@@ -218,6 +266,6 @@ function createProjectRecords({ db, clock = () => new Date() }) {
       return { success: true, dryRun, project: next };
     });
   }
-  return { list, save };
+  return { list, scheduleList, save };
 }
 module.exports = { COLLECTION, GENERAL_PHASE, MAX_ASSIGNMENTS, fail, identifier, authorize, phaseExists, createProjectRecords };
