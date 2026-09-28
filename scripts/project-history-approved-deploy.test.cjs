@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const script = fs.readFileSync(path.join(__dirname, 'project-history-approved-deploy.cjs'), 'utf8');
 const mainSha = '38542864b07ef18b32542ff08118fe9eea1526aa';
 const lastApprovedReleaseSha = 'd029ee4b9c5d9ffdc395f51ae9edb48f783d4ea2';
+const latestApprovedProjectSha = '83332590c50b8101990a447e4497bd76114feafd';
 const releaseSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const advancedMain = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const officeName = 'projects/demac-corporation/locations/us-central1/functions/officeBookingAuthority';
@@ -62,7 +63,8 @@ async function simulate({ officeSource = 'prior', projectSource = 'prior', inven
       if (args[0] === 'merge-base') return '';
       if (args[0] === 'show') {
         const [revision, file] = args[1].split(':');
-        return source(revision === lastApprovedReleaseSha ? 'last-release' : 'prior', path.basename(file));
+        return source(revision === latestApprovedProjectSha ? 'latest-project-release'
+          : revision === lastApprovedReleaseSha ? 'last-release' : 'prior', path.basename(file));
       }
       if (args[0] === 'archive') return '';
     }
@@ -93,6 +95,17 @@ test('the exact last successful Office and Project release is an approved deploy
   assert.equal(result.evidence.projectSource.approvedPrior, lastApprovedReleaseSha);
   assert.equal(result.evidence.stage, 'complete');
   assert.equal(result.exitCode, undefined);
+});
+test('the latest successful Project release is approved without expanding the Office baseline', async () => {
+  const result = await simulate({ officeSource: 'candidate', projectSource: 'latest-project-release' });
+  assert.deepEqual(result.deployments, ['officeBookingAuthority', 'projectAuthority']);
+  assert.equal(result.evidence.officeSource.alreadyCandidate, true);
+  assert.equal(result.evidence.projectSource.approvedPrior, latestApprovedProjectSha);
+  assert.equal(result.evidence.stage, 'complete');
+  assert.equal(result.exitCode, undefined);
+  const officeNotApproved = await simulate({ officeSource: 'latest-project-release', projectSource: 'latest-project-release' });
+  assert.equal(officeNotApproved.evidence.stage, 'verify-existing-office');
+  assert.deepEqual(officeNotApproved.deployments, []);
 });
 test('an unapproved deployed Office dependency blocks release before either Function changes', async () => {
   for (const officeDriftFile of ['bookingRegularHistoricalCapacity.js', 'bookingCapacityAvailability.js', 'projectCommercialGuard.js']) {
