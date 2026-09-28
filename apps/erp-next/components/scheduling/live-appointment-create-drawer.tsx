@@ -1507,7 +1507,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
             {isAfterHours ? (
-              <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '5.5px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetCapacityValidation(); }} /></div>
+              <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '12px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)', fontSize: '14px' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetCapacityValidation(); }} /></div>
             ) : <div><span>START</span><strong>{formatTime(requestTarget.start)}</strong></div>}
             <div><span>{isAfterHours ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
           </section>
@@ -1694,8 +1694,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     return (
                       <div key={line.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto auto', gap: 10, alignItems: 'center', padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)' }}>
                         <div>
-                          <strong style={{ display: 'block', fontSize: '6.9px' }}>{preset.label}</strong>
-                          <span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: '5.7px' }}>{durationLabel(lineMinutes)} scheduled{other ? ' · manual' : ` · ${durationLabel(preset.durationMinutesPerUnit)} each`}</span>
+                          <strong style={{ display: 'block', fontSize: '12px' }}>{preset.label}</strong>
+                          <span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: '12px' }}>{durationLabel(lineMinutes)} scheduled{other ? ' · manual' : ` · ${durationLabel(preset.durationMinutesPerUnit)} each`}</span>
                         </div>
                         {other ? (
                           <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual hours</span><input type="number" min="1" max="12" step="0.5" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 1))} /></label>
@@ -1736,8 +1736,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             {supportSlotCandidates.length ? (
               <div style={{ margin: '10px 8px 0', padding: 10, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
-                  <div><strong style={{ display: 'block', fontSize: 7 }}>AVAILABLE SUPPORT SLOTS</strong><span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: 5.8 }}>Select {supportMinSlots === supportMaxSlots ? supportMinSlots : `${supportMinSlots}–${supportMaxSlots}`} open spot{supportMaxSlots === 1 ? '' : 's'}. You may combine different times and different Vans.</span></div>
-                  <b style={{ color: 'var(--brand)', whiteSpace: 'nowrap', fontSize: 6.2 }}>{selectedSupportSlotIds.length} selected</b>
+                  <div><strong style={{ display: 'block', fontSize: 12 }}>AVAILABLE SUPPORT SLOTS</strong><span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: 12 }}>Select {supportMinSlots === supportMaxSlots ? supportMinSlots : `${supportMinSlots}–${supportMaxSlots}`} open spot{supportMaxSlots === 1 ? '' : 's'}. You may combine different times and different Vans.</span></div>
+                  <b style={{ color: 'var(--brand)', whiteSpace: 'nowrap', fontSize: 12 }}>{selectedSupportSlotIds.length} selected</b>
                 </div>
                 <div className={styles.choiceGrid}>
                   {supportSlotCandidates.map((candidate) => {
@@ -1781,7 +1781,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       : 'Capacity remains approved while appointment details synchronize with Booking Authority.'}</span></div></div></header>
                 {!supportSlotCandidates.length && capacityValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
+                    <div style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
                     <div className={styles.choiceGrid}>
                       {capacityValidation.options.map((option) => {
                         const supportWindows = optionSupportWindows(option);

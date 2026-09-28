@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   liveOperationalStartTimes,
   liveOperationalWindowAllows,
@@ -30,6 +31,44 @@ import { getRuntimeSchedulingSettings } from '../lib/scheduling';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
+}
+
+const appointmentDrawerCss = readFileSync('components/scheduling/live-appointment-create-drawer.module.css', 'utf8');
+const schedulingReadableCss = readFileSync('components/scheduling/scheduling-readable-type.module.css', 'utf8');
+requireCondition(schedulingReadableCss.includes('.readable :where(input, select, textarea)'), 'Scheduling typography must retain its ancestor selector for this cascade guard.');
+for (const rule of [
+  '.overlay .drawer :where(span,small,em,time,label,b){font-size:12px!important}',
+  '.overlay .drawer :where(p,strong,button){font-size:12px!important}',
+  '.overlay .drawer :where(input,select,textarea){font-size:14px!important}',
+  '.overlay .drawer :where(input,textarea)::placeholder{font-size:14px!important}',
+]) {
+  requireCondition(appointmentDrawerCss.includes(rule), `The drawer must outrank Scheduling's important type minimum: ${rule}`);
+}
+function lastDrawerFontSize(selector: string): number {
+  let size = Number.NaN;
+  for (const [, selectors, declarations] of appointmentDrawerCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!selectors.split(',').some((candidate) => candidate.trim() === selector)) continue;
+    const declaredSize = declarations.match(/font-size:\s*([\d.]+)px/);
+    if (declaredSize) size = Number(declaredSize[1]);
+  }
+  return size;
+}
+for (const [selector, minimum] of [
+  ['.sectionBody input', 14],
+  ['.sectionBody input::placeholder', 14],
+  ['.sectionBody textarea::placeholder', 14],
+  ['.sectionBody label>span', 12],
+  ['.emptyResult', 12],
+  ['.previewBoundary', 12],
+  ['.sourceOption span', 12],
+  ['.searchResult strong', 12],
+  ['.validateButton', 12],
+] as const) {
+  requireCondition(lastDrawerFontSize(selector) >= minimum, `${selector} must stay legible at a minimum of ${minimum}px.`);
+}
+const appointmentDrawerSource = readFileSync('components/scheduling/live-appointment-create-drawer.tsx', 'utf8');
+for (const match of appointmentDrawerSource.matchAll(/fontSize:\s*(?:'([\d.]+)px'|([\d.]+))/g)) {
+  requireCondition(Number(match[1] ?? match[2]) >= 12, 'Inline appointment guidance must not use miniature type.');
 }
 
 const arubaNoon = new Date('2026-09-01T16:11:00.000Z');
