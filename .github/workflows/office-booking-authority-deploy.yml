@@ -171,6 +171,7 @@ jobs:
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
+          node --test functions/projectOperatorBooking.test.js
           node --test functions/officeBookingAuthorityCommunication.test.js
           node --test functions/officeBookingAuthorityCatalog.test.js
           node --test functions/officeBookingAuthorityMasterData.test.js

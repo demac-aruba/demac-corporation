@@ -132,6 +132,14 @@ test("owner and super-admin roles can use the authenticated office booking autho
   }
 });
 
+test("canonical and legacy office operator roles share Scheduling access", async () => {
+  for (const role of ["office", "operator", "office_operator"]) {
+    const api = createOfficeBookingApi({ db: createDb({ role }), verifyIdToken, bookingAuthority: createAuthority(), schedulingProvider: {} });
+    const result = await api.handle(request({ action: OFFICE_BOOKING_ACTIONS.LIST_PRESETS }));
+    assert.equal(result.status, 200, `expected ${role} to be authorized`);
+  }
+});
+
 test("list_presets exposes the eight canonical Scheduling Work Types instead of Legacy picker variants", async () => {
   const db = createDb({ presets: [
     { id: "standard_service", label: "Servicio estándar", durationMinutesPerUnit: 60, active: true },

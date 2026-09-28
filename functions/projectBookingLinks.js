@@ -5,7 +5,7 @@ function withProjectBookingLinks({ db, provider }) {
   async function readProject({ request, context, transaction }) {
     if (!request.project) return null;
     if (context.channel !== 'office' || !context.projectActorId || context.bookingMode === 'backdated') fail('Use the historical correction action for past Project work.');
-    const actor = await authorize(db, context.projectActorId, true, transaction);
+    const actor = await authorize(db, context.projectActorId, 'schedule', transaction);
     const ref = db.collection(COLLECTION).doc(identifier(request.project.id));
     const snapshot = await (transaction ? transaction.get(ref) : ref.get());
     const project = snapshot.exists && snapshot.data();
@@ -20,7 +20,7 @@ function withProjectBookingLinks({ db, provider }) {
     ...provider, supportsProjectLinks: true,
     authorizeProjectRequest: readProject,
     async authorizeProjectReplay({ appointment, actor, transaction }) {
-      if (appointment.projectId) await authorize(db, actor.id || actor.userId, true, transaction);
+      if (appointment.projectId) await authorize(db, actor.id || actor.userId, 'schedule', transaction);
     },
     async checkAvailability(args) { return provider.checkAvailability(args); },
     async revalidateSelection(args) { await readProject(args); return provider.revalidateSelection(args); },

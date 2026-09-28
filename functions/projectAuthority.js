@@ -20,9 +20,10 @@ function createProjectApi({ db, verifyIdToken, clock = () => new Date() }) {
       try { decoded = await verifyIdToken(token); } catch { fail('Your session expired.', 'unauthenticated'); }
       const uid = identifier(decoded.uid);
       const { action, data = {} } = request.body || {};
-      const actor = await authorize(db, uid, action !== 'list');
+      const actor = await authorize(db, uid, action === 'list' ? false : action === 'schedule_list' ? 'schedule' : true);
       let result;
       if (action === 'list') result = await records.list(uid);
+      else if (action === 'schedule_list') result = await records.scheduleList(uid);
       else if (action === 'save') result = await records.save(data, uid);
       else if (action === 'history_capacity_sources') result = await historicalCapacity.sources(uid, data.projectId);
       else if (action === 'history_adjust_capacity') result = await historicalCapacity.adjust(uid, data);
