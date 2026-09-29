@@ -14,6 +14,7 @@ import {
   type PayrollPeriod,
 } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
+import { payrollBonusReport } from '@/lib/employee-bonuses';
 import styles from './employee-payroll-workspace.module.css';
 
 function decimalHours(value: number) {
@@ -73,6 +74,7 @@ export function EmployeePayrollWorkspace() {
   const [attendance, setAttendance] = useState<EmployeeAttendanceState>({ payrollSettings: [], timesheets: [], advances: [] });
   const [period, setPeriod] = useState<PayrollPeriod>(() => payrollPeriodForReference(new Date()));
   const [loading, setLoading] = useState(true);
+  const [payrollLoaded, setPayrollLoaded] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
@@ -83,11 +85,13 @@ export function EmployeePayrollWorkspace() {
   const load = useCallback(async () => {
     if (!canViewPayroll) return;
     setLoading(true);
+    setPayrollLoaded(false);
     setError('');
     try {
       const [canonical, records] = await Promise.all([loadCanonicalOperationsState(), loadEmployeeAttendanceState()]);
       setOperations(canonical);
       setAttendance(records);
+      setPayrollLoaded(true);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -97,14 +101,17 @@ export function EmployeePayrollWorkspace() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], { id: period.id, start: period.startDate, end: period.endDate }), [attendance.payrollSettings, operations?.staffProfiles, period]);
+
   const employees = useMemo(() => {
     const all = ((operations?.staffProfiles ?? []) as LifecycleProfile[]).filter((profile) => {
+      if (bonusReport.byEmployee[profile.id] > 0) return true;
       if (profile.employmentStartedAt && profile.employmentStartedAt > period.endDate) return false;
       if (profile.active === false && profile.employmentEndedAt && profile.employmentEndedAt < period.startDate) return false;
       return profile.active !== false || Boolean(profile.employmentEndedAt && profile.employmentEndedAt >= period.startDate);
     });
     return all.sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b)));
-  }, [operations?.staffProfiles, period.endDate, period.startDate]);
+  }, [operations?.staffProfiles, period.endDate, period.startDate, bonusReport]);
 
   const summaries = useMemo(() => {
     if (!operations) return [];
@@ -157,10 +164,11 @@ export function EmployeePayrollWorkspace() {
   const totalAdvances = useMemo(() => periodAdvances.reduce((sum, advance) => sum + Number(advance.amount || 0), 0), [periodAdvances]);
 
   function exportSummary() {
+    if (!payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
     downloadCsv(`DEMAC-payroll-summary-${period.id}.csv`, [
-      ['Employee', 'Role', 'Type', 'Weekly paid base', `Monthly base x ${MONTHLY_HOURS_FACTOR}`, 'Actual regular', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Paid free', 'Payable hours estimate', 'Salary Advances Afl.', 'Exception days'],
+      ['Employee', 'Role', 'Type', 'Weekly paid base', `Monthly base x ${MONTHLY_HOURS_FACTOR}`, 'Actual regular', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Paid free', 'Payable hours estimate', 'Salary Advances Afl.', 'Exception days', 'Bonuses Afl.', 'Bonus Details'],
       ...summaries.map((item) => [
-        staffDisplayName(item.employee), item.employee.role ?? '', employeeType(item.employee), decimalHours(item.weeklyPaidBaseHours), decimalHours(item.monthlyBaseHours), decimalHours(item.actualRegularHours), decimalHours(item.overtimeHours), decimalHours(item.aoHours), decimalHours(item.vacationHours), decimalHours(item.noWorkNoPayHours), decimalHours(item.paidFreeHours), decimalHours(item.payableHoursEstimate), (advanceByEmployee.get(item.employee.id) ?? 0).toFixed(2), item.exceptionDays,
+        staffDisplayName(item.employee), item.employee.role ?? '', employeeType(item.employee), decimalHours(item.weeklyPaidBaseHours), decimalHours(item.monthlyBaseHours), decimalHours(item.actualRegularHours), decimalHours(item.overtimeHours), decimalHours(item.aoHours), decimalHours(item.vacationHours), decimalHours(item.noWorkNoPayHours), decimalHours(item.paidFreeHours), decimalHours(item.payableHoursEstimate), (advanceByEmployee.get(item.employee.id) ?? 0).toFixed(2), item.exceptionDays, (bonusReport.byEmployee[item.employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[item.employee.id] ?? '',
       ]),
     ]);
   }
@@ -178,11 +186,13 @@ export function EmployeePayrollWorkspace() {
   function downloadPdf() {
     setMessage('');
     setError('');
+    if (!payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
     const ok = downloadPayrollAccountingPdf({
       filename: `DEMAC_Payroll_Contabilidad_${period.startDate}_${period.endDate}.pdf`,
       periodLabel: period.label,
       summaries,
       advancesByEmployee: Object.fromEntries(advanceByEmployee),
+      bonusesByEmployee: bonusReport.byEmployee,
     });
     if (ok) setMessage(`Payroll PDF downloaded directly. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`);
     else setError('The PDF could not be generated in this browser.');
@@ -194,6 +204,7 @@ export function EmployeePayrollWorkspace() {
 
   return <div className={styles.workspace}>
     {error ? <div className={styles.error}>{error}</div> : null}
+    {bonusReport.issues.length ? <div className={styles.error}>{bonusReport.issues.join(' ')}</div> : null}
     {message ? <div className={styles.notice}>{message}</div> : null}
 
     <section className={styles.heroCard}>
@@ -227,6 +238,7 @@ export function EmployeePayrollWorkspace() {
         <Kpi icon="vacation" tone="green" label="Vacation" value={hoursMinutes(totals.vacation)} sub="Recorded vacation" />
         <Kpi icon="ban" tone="orange" label="No Work No Pay" value={hoursMinutes(totals.noWork)} sub="Unpaid exception hours" />
         <Kpi icon="wallet" tone="cyan" label="Salary Advances" value={money(totalAdvances)} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
+        <Kpi icon="wallet" tone="green" label="Bonuses" value={money(bonusReport.total)} sub="Approved amounts for Accounting" />
       </div>
     </section>
 
@@ -247,7 +259,7 @@ export function EmployeePayrollWorkspace() {
 
       <div className={styles.tableWrap}>
         <table className={styles.table}>
-          <thead><tr><th>Employee</th><th className={styles.metric}>Weekly Base</th><th className={styles.metric}>Regular</th><th className={styles.metric}>OT</th><th className={styles.metric}>AO / Sick</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>Advance</th><th className={styles.metric}>Payable Est.</th><th className={styles.metric}>Exceptions</th></tr></thead>
+          <thead><tr><th>Employee</th><th className={styles.metric}>Weekly Base</th><th className={styles.metric}>Regular</th><th className={styles.metric}>OT</th><th className={styles.metric}>AO / Sick</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>Advance</th><th className={styles.metric}>Bonuses</th><th className={styles.metric}>Payable Est.</th><th className={styles.metric}>Exceptions</th></tr></thead>
           <tbody>{filtered.map((item) => {
             const selected = item.employee.id === selectedEmployee?.id;
             return <tr key={item.employee.id} className={`${styles.row} ${selected ? styles.rowSelected : ''}`} onClick={() => setSelectedEmployeeId(item.employee.id)}>
@@ -260,6 +272,7 @@ export function EmployeePayrollWorkspace() {
               <MetricCell value={hoursMinutes(item.noWorkNoPayHours)} active={item.noWorkNoPayHours > 0} risk={item.noWorkNoPayHours > 0} />
               <MetricCell value={hoursMinutes(item.paidFreeHours)} active={item.paidFreeHours > 0} />
               <MetricCell value={money(advanceByEmployee.get(item.employee.id) ?? 0)} active={(advanceByEmployee.get(item.employee.id) ?? 0) > 0} />
+              <MetricCell value={money(bonusReport.byEmployee[item.employee.id] ?? 0)} active={(bonusReport.byEmployee[item.employee.id] ?? 0) > 0} />
               <MetricCell value={hoursMinutes(item.payableHoursEstimate)} active />
               <td className={styles.metric}><span className={item.exceptionDays ? styles.exceptionPill : styles.metricZero}>{item.exceptionDays}</span></td>
             </tr>;

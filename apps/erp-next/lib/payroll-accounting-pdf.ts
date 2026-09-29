@@ -22,23 +22,25 @@ type PayrollAccountingPdfOptions = {
   periodLabel: string;
   summaries: PayrollEmployeeSummary[];
   advancesByEmployee?: Record<string, number>;
+  bonusesByEmployee?: Record<string, number>;
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance';
+  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus';
   label: string;
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: 'Employee', width: 230, align: 'left' },
-  { key: 'weeklyBase', label: 'Weekly Base', width: 90, align: 'center' },
-  { key: 'overtime', label: 'Overtime', width: 80, align: 'center' },
-  { key: 'ao', label: 'AO / Sick', width: 75, align: 'center' },
-  { key: 'vacation', label: 'Vacation', width: 85, align: 'center' },
-  { key: 'noWork', label: 'No Work / No Pay', width: 105, align: 'center' },
-  { key: 'advance', label: 'Salary Advance', width: CONTENT_WIDTH - 665, align: 'center' },
+  { key: 'employee', label: 'Employee', width: 205, align: 'left' },
+  { key: 'weeklyBase', label: 'Weekly Base', width: 75, align: 'center' },
+  { key: 'overtime', label: 'Overtime', width: 75, align: 'center' },
+  { key: 'ao', label: 'AO / Sick', width: 65, align: 'center' },
+  { key: 'vacation', label: 'Vacation', width: 70, align: 'center' },
+  { key: 'noWork', label: 'No Work / No Pay', width: 95, align: 'center' },
+  { key: 'advance', label: 'Salary Advance', width: 95, align: 'center' },
+  { key: 'bonus', label: 'Bonuses (Afl.)', width: CONTENT_WIDTH - 680, align: 'center' },
 ];
 
 function formatWeeklyBase(value: number) {
@@ -123,7 +125,7 @@ function concatBytes(chunks: Uint8Array[]) {
   return output;
 }
 
-function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[], advancesByEmployee: Record<string, number>) {
+function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[], advancesByEmployee: Record<string, number>, bonusesByEmployee: Record<string, number>) {
   const groups: PayrollEmployeeSummary[][] = [];
   for (let index = 0; index < summaries.length; index += ROWS_PER_PAGE) groups.push(summaries.slice(index, index + ROWS_PER_PAGE));
   if (!groups.length) groups.push([]);
@@ -135,6 +137,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     vacation: summaries.reduce((sum, item) => sum + item.vacationHours, 0),
     noWork: summaries.reduce((sum, item) => sum + item.noWorkNoPayHours, 0),
     advance: summaries.reduce((sum, item) => sum + Number(advancesByEmployee[item.employee.id] ?? 0), 0),
+    bonus: summaries.reduce((sum, item) => sum + Number(bonusesByEmployee[item.employee.id] ?? 0), 0),
   };
 
   return groups.map((group, pageIndex) => {
@@ -194,10 +197,10 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       COLUMNS.forEach((column) => {
         fillRect(x, top, column.width, rowHeight, fill, BORDER);
         if (column.key === 'employee') {
-          drawText(truncate(summary.employee.name ?? 'Employee', 34), x + 8, top + 6, 9.1, { bold: true, fill: NAVY });
-          drawText(truncate(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, 55), x + 8, top + 18, 6.5, { fill: MUTED });
-        } else if (column.key === 'advance') {
-          const value = Number(advancesByEmployee[summary.employee.id] ?? 0);
+          drawText(truncate(summary.employee.name ?? 'Employee', 32), x + 8, top + 6, 9.1, { bold: true, fill: NAVY });
+          drawText(truncate(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, 52), x + 8, top + 18, 6.5, { fill: MUTED });
+        } else if (column.key === 'advance' || column.key === 'bonus') {
+          const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
           drawText(formatMoney(value), x + 5, top + 11, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
         } else {
           const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
@@ -216,7 +219,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       COLUMNS.forEach((column) => {
         fillRect(x, top, column.width, rowHeight, BLUE_LIGHT, BORDER);
         if (column.key === 'employee') drawText('TOTALS', x + 8, top + 10, 9, { bold: true, fill: BLUE_DARK });
-        else if (column.key === 'advance') drawText(formatMoney(totals.advance), x + 5, top + 10, 7.7, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
+        else if (column.key === 'advance' || column.key === 'bonus') drawText(formatMoney(totals[column.key]), x + 5, top + 10, 7.7, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
         else {
           const value = totals[column.key];
           const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
@@ -229,7 +232,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     if (!group.length) drawText('No employees are included in the selected payroll period.', MARGIN, 190, 11, { fill: MUTED });
 
     line(MARGIN, PAGE_HEIGHT - 33, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 33, BORDER, 0.6);
-    drawText('Weekly Base comes from schedule. OT, AO/Sick, Vacation and NWNP are exceptions. Salary Advance is an input only; no automatic deduction is applied.', MARGIN, PAGE_HEIGHT - 25, 6.7, { fill: MUTED });
+    drawText('Hours are schedule-based inputs. Bonuses and advances are Afl. amounts for Accounting; no automatic deductions are applied.', MARGIN, PAGE_HEIGHT - 25, 6.7, { fill: MUTED });
     drawText(`Page ${pageIndex + 1} of ${groups.length}`, PAGE_WIDTH - MARGIN - 90, PAGE_HEIGHT - 25, 7.1, { fill: MUTED, align: 'right', width: 90 });
     return commands.join('\n');
   });
@@ -269,9 +272,13 @@ function buildPdf(pageStreams: string[]) {
   return concatBytes(chunks);
 }
 
-export function downloadPayrollAccountingPdf({ filename, periodLabel, summaries, advancesByEmployee = {} }: PayrollAccountingPdfOptions) {
+export function buildPayrollAccountingPdf({ periodLabel, summaries, advancesByEmployee = {}, bonusesByEmployee = {} }: Omit<PayrollAccountingPdfOptions, 'filename'>) {
+  return buildPdf(buildAccountingPages(periodLabel, summaries, advancesByEmployee, bonusesByEmployee));
+}
+
+export function downloadPayrollAccountingPdf({ filename, ...options }: PayrollAccountingPdfOptions) {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return false;
-  const pdf = buildPdf(buildAccountingPages(periodLabel, summaries, advancesByEmployee));
+  const pdf = buildPayrollAccountingPdf(options);
   const blob = new Blob([pdf], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');

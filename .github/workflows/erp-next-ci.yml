@@ -104,6 +104,19 @@ jobs:
           path: ${{ runner.temp }}/attendance-evidence/
           if-no-files-found: warn
           retention-days: 7
+      - name: Employee bonus save, cancellation and accountant exports in desktop and mobile
+        env:
+          BONUS_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          BONUS_TEST_OUTPUT: ${{ runner.temp }}/bonus-evidence
+        run: node apps/erp-next/scripts/employee-bonuses-browser.cjs
+      - name: Retain synthetic bonus browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: employee-bonuses-browser-evidence
+          path: ${{ runner.temp }}/bonus-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain synthetic browser evidence
         if: always()
         uses: actions/upload-artifact@v4

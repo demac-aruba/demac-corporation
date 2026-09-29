@@ -173,6 +173,16 @@ Production activation remains separately owner-approved through the server-side 
 
 ## Current payroll-attendance ownership
 
+- `OPS-STAFF-BONUS-MANUAL`: authorized payroll users enter approved employee bonuses
+  manually by employee, date and 27–26 payroll period, with category, positive Afl. amount
+  (at most two decimals), concept/reason and actor/time audit. Categories describe the
+  input; they do not award automatic attendance bonuses or calculate sales commission rates.
+  Existing `employeePayrollSettings.payrollAdjustments` entries remain authoritative,
+  including Legacy records; active bonuses are included in Employees and Finance PDF/CSV
+  exports. Cancellations retain the original entry and a reason, and exclude its amount
+  from totals. Bonuses never change attendance hours or offset salary advances automatically.
+  Ambiguous identity/history blocks exports instead of silently reporting a zero amount.
+
 - Payroll attendance periods are canonical 27th-through-26th ranges. The selected day is a
   child selection inside that range; selecting July 27 in the July 27–August 26 period does
   not change the payroll period to July.
