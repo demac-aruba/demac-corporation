@@ -57,3 +57,14 @@ The historical Legacy editor still uses its old unconditional array update if se
 run; this change does not rewrite that retired UI. Existing document-size and manual-export
 snapshot limits remain. Concurrent new-ERP edits use version preconditions. No bulk repair.
 Release follows the owner's existing merge/deploy authorization for this payroll session.
+
+## Release verification follow-up
+
+- The first CI browser run failed because a text locator matched the reason textarea
+  before the second save completed. The test now waits for the saved ledger row, both
+  before checking the unchanged expected total and after reload; no assertion is removed.
+- Recovered local Chromium and ran the complete synthetic browser test: desktop and mobile
+  each passed three saves, one cancellation and five exports; restricted-role check passed
+  with zero payroll reads. No external or production requests were made.
+- Integrated current `main` (including PR #548) before release verification. The owner
+  explicitly confirmed merge and deploy again in this conversation. Final CI remains required.

@@ -40,6 +40,12 @@ export function liveSchedulingInteractionActive(state: LiveSchedulingInteraction
   );
 }
 
+export function canPlanCoworkerSupport(dateKey: string) {
+  const parsed = new Date(`${dateKey}T12:00:00Z`);
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) && Number.isFinite(parsed.getTime())
+    && parsed.toISOString().slice(0, 10) === dateKey;
+}
+
 export function canPlanAfterHours(dateKey: string, today: string) {
   return dateKey >= today;
 }

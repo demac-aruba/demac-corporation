@@ -49,10 +49,12 @@ async function runCase(browser, origin, name, viewport) {
     await page.getByLabel('Bonus amount', { exact: true }).fill('75.25');
     await page.getByLabel('Bonus reason', { exact: true }).fill('Approved equipment sale');
     await page.getByRole('button', { name: 'Save Bonus', exact: true }).click();
-    await page.getByText('Approved equipment sale', { exact: true }).waitFor();
+    // The reason textarea already contains this text before the asynchronous save finishes.
+    // Wait for the persisted ledger row, not the still-visible form value.
+    await page.getByRole('row').filter({ hasText: 'Approved equipment sale' }).waitFor();
     assert.match(await page.getByLabel('Employee bonuses').innerText(), /Afl\. 275\.25/);
     await page.reload(); await page.getByRole('button', { name: 'Bonuses', exact: true }).click();
-    await page.getByText('Approved equipment sale', { exact: true }).waitFor();
+    await page.getByRole('row').filter({ hasText: 'Approved equipment sale' }).waitFor();
     await page.getByRole('row').filter({ hasText: 'Approved perfect attendance' }).getByRole('button', { name: 'Cancel bonus', exact: true }).click();
     await page.getByLabel('Bonus cancellation reason', { exact: true }).fill('Correction approved');
     await page.getByRole('button', { name: 'Confirm Cancellation', exact: true }).click();
