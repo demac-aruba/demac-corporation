@@ -23,12 +23,12 @@ const entry = `
 import React from 'react'; import {createRoot} from 'react-dom/client';
 import {PropertyEditor} from './components/crm/property-editor';
 import {emptyPropertyEditor} from './lib/property-editor-draft';
-window.saved=[]; window.closed=0; window.failSave=false;
+window.saved=[]; window.__addressCloseCount=0; window.failSave=false;
 const edit=new URLSearchParams(location.search).has('edit');
 createRoot(document.getElementById('app')).render(<PropertyEditor
  mode={edit?'edit':'create'} requestId="synthetic-request" customerId="synthetic-customer" customerName="Cliente de prueba" contacts={[]}
  initial={edit?{...emptyPropertyEditor,id:'synthetic-property',address:'Stale address',zone:'Stale zone'}:emptyPropertyEditor}
- onClose={()=>window.closed++} onSave={async value=>{window.saved.push(structuredClone(value));if(window.failSave)throw Error('Synthetic lost response');}}
+ onClose={()=>window.__addressCloseCount++} onSave={async value=>{window.saved.push(structuredClone(value));if(window.failSave)throw Error('Synthetic lost response');}}
  />);`;
 
 async function verify(browser, origin, name, viewport) {
@@ -99,7 +99,7 @@ async function verify(browser, origin, name, viewport) {
   await street.fill('Seroe');
   await street.press('Escape');
   assert.equal(await page.getByRole('listbox').count(), 0);
-  assert.equal(await page.evaluate(() => window.closed), 1, 'Escape closes only the suggestions, not the dialog.');
+  assert.equal(await page.evaluate(() => window.__addressCloseCount), 1, 'Escape closes only the suggestions, not the dialog.');
   await street.fill('Lugar sintético desconocido');
   assert.equal(await zone.inputValue(), '', 'An unrelated address must not retain the old zone.');
   assert.equal(await create.isDisabled(), true);
