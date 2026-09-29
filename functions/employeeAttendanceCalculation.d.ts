@@ -1,4 +1,4 @@
-export type AttendanceExceptionKind = 'late_arrival' | 'early_departure' | 'extended_break';
+export type AttendanceExceptionKind = 'late_arrival' | 'early_departure' | 'extended_break' | 'partial_day';
 export type AttendancePaymentTreatment = 'paid' | 'no_work_no_pay';
 
 export type AttendanceExceptionClassification = {
@@ -45,6 +45,7 @@ export type AttendanceVariance = {
   unusedBreakMinutes: number;
   breakAppliedToEarlyDepartureMinutes: number;
   overtimeMinutes: number;
+  /** Clock deviation; partial-day no-work totals are owned by missingSegments. */
   lateArrivalMinutes: number;
   earlyDepartureMinutes: number;
   extendedBreakMinutes: number;

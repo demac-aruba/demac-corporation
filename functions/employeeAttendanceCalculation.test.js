@@ -12,10 +12,10 @@ for (const [clockOutTime, breakMinutes, worked, overtime, missing, applied] of [
   ['16:00', 0, 480, 0, 0, 60],
   ['16:30', 0, 510, 30, 0, 30],
   ['17:00', 0, 540, 60, 0, 0],
-  ['15:30', 0, 450, 0, 30, 60],
-  ['12:00', 0, 240, 0, 240, 60],
+  ['15:30', 0, 450, 0, 30, 0],
+  ['12:00', 0, 240, 0, 240, 0],
   ['16:30', 30, 480, 0, 0, 30],
-  ['16:00', 30, 450, 0, 30, 30],
+  ['16:00', 30, 450, 0, 30, 0],
   ['16:30', 60, 450, 0, 30, 0],
   ['17:00', 60, 480, 0, 0, 0],
   ['16:30', 90, 420, 0, 60, 0],
@@ -34,11 +34,48 @@ for (const [clockOutTime, breakMinutes, worked, overtime, missing, applied] of [
   });
 }
 
-test('only the uncovered departure interval is classified, with the break at the end', () => {
+test('a partial day records net no-work time without claiming a moved break or inventing a time range', () => {
   const result = calculateAttendanceVariance({ schedule, clockInTime: '08:00', clockOutTime: '15:30', breakMinutes: 0 });
   assert.deepEqual(result.missingSegments, [
-    { kind: 'early_departure', minutes: 30, fromTime: '15:30', toTime: '16:00' },
+    { kind: 'partial_day', minutes: 30 },
   ]);
+  assert.equal(result.unusedBreakMinutes, 0);
+  assert.equal(result.breakAppliedToEarlyDepartureMinutes, 0);
+});
+
+for (const [clockInTime, clockOutTime, breakMinutes, worked, overtime, missing] of [
+  ['13:00', '16:00', 0, 180, 0, 300],
+  ['13:00', '16:30', 0, 210, 0, 270],
+  ['13:00', '17:00', 0, 240, 0, 240],
+  ['13:00', '18:00', 0, 300, 60, 240],
+  ['08:00', '12:00', 0, 240, 0, 240],
+  ['08:00', '15:59', 0, 479, 0, 1],
+  ['13:00', '16:00', 15, 165, 0, 315],
+  ['07:00', '12:00', 0, 300, 60, 240],
+]) {
+  test(`partial ${clockInTime}–${clockOutTime} with break ${breakMinutes} earns no unused lunch`, () => {
+    const result = calculateAttendanceVariance({ schedule, clockInTime, clockOutTime, breakMinutes });
+    assert.equal(result.workedMinutes, worked);
+    assert.equal(result.overtimeMinutes, overtime);
+    assert.equal(result.unusedBreakMinutes, 0);
+    assert.equal(result.breakAppliedToEarlyDepartureMinutes, 0);
+    assert.equal(result.missingScheduledMinutes, missing);
+    assert.equal(480 - missing + overtime, worked);
+    assert.deepEqual(result.missingSegments, [{ kind: 'partial_day', minutes: missing }]);
+    assert.throws(() => classifyAttendanceExceptions(result, []), /Choose Paid or No Work No Pay for no work/);
+    assert.throws(() => classifyAttendanceExceptions(result, [{ kind: 'partial_day', treatment: 'paid', reason: ' ' }]), /Enter a reason for no work/);
+    for (const treatment of ['paid', 'no_work_no_pay']) {
+      assert.deepEqual(classifyAttendanceExceptions(result, [{ kind: 'partial_day', treatment, reason: 'Test reason' }]),
+        [{ kind: 'partial_day', minutes: missing, treatment, reason: 'Test reason' }]);
+    }
+  });
+}
+
+test('partial no-work rule follows the configured shift, not an employee identity or fixed clock', () => {
+  const shifted = calculateAttendanceVariance({ schedule: { startTime: '09:00', endTime: '18:00', scheduledMinutes: 480 }, clockInTime: '14:00', clockOutTime: '17:00', breakMinutes: 0 });
+  assert.equal(shifted.workedMinutes, 180);
+  assert.equal(shifted.overtimeMinutes, 0);
+  assert.deepEqual(shifted.missingSegments, [{ kind: 'partial_day', minutes: 300 }]);
 });
 
 test('shifted break does not erase lateness or offset genuine early-start overtime', () => {

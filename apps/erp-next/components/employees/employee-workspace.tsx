@@ -201,6 +201,7 @@ export function EmployeeWorkspace() {
   const selectedVariance = selectedRecord && draft ? calculateAttendanceVariance({ schedule: selectedRecord.schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes }) : null;
   const workedStatus = draft?.status === 'Present' || draft?.status === 'Late';
   const detectedAttendanceExceptions = workedStatus ? selectedVariance?.missingSegments ?? [] : [];
+  const partialWorkday = detectedAttendanceExceptions.some((segment) => segment.kind === 'partial_day');
   const selectedWorkedMinutes = selectedRecord?.assumedRegular && !selectedRecord.entry && draft?.status === 'Present' && !detectedAttendanceExceptions.length && !(selectedVariance?.overtimeMinutes ?? 0)
     ? selectedRecord.schedule.scheduledMinutes
     : selectedVariance?.workedMinutes ?? 0;
@@ -466,16 +467,18 @@ export function EmployeeWorkspace() {
                   {selectedVariance.breakAppliedToEarlyDepartureMinutes > 0 ? <SummaryRow icon="clock" label="Break applied to early departure" value={hoursAndMinutes(selectedVariance.breakAppliedToEarlyDepartureMinutes)} tone="blue" /> : null}
                 </div> : null}
 
+                {partialWorkday ? <div className={styles.notice} role="status">Partial workday: {hoursAndMinutes(selectedVariance?.workedMinutes)} worked and {hoursAndMinutes(selectedVariance?.missingScheduledMinutes)} no work. No unused lunch break is credited for this partial day. Should the no-work time be paid or unpaid? Choose below and enter a reason.</div> : null}
+
                 {detectedAttendanceExceptions.map((segment) => {
                   const classification = draft.attendanceExceptionClassifications?.find((item) => item.kind === segment.kind);
                   return <div key={segment.kind} className={styles.dailySummary}>
                     <strong>{attendanceExceptionTitle(segment.kind, segment.fromTime, segment.toTime, segment.minutes)}</strong>
-                    <Field label="Payment Treatment" full><select className={styles.control} value={classification?.treatment ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { treatment: event.target.value ? event.target.value as AttendancePaymentTreatment : undefined })}><option value="">Select treatment…</option><option value="paid">Paid</option><option value="no_work_no_pay">No Work No Pay</option></select></Field>
+                    <Field label="Payment Treatment" full><select className={styles.control} value={classification?.treatment ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { treatment: event.target.value ? event.target.value as AttendancePaymentTreatment : undefined })}><option value="">Select treatment…</option><option value="paid">No Work — Paid</option><option value="no_work_no_pay">No Work No Pay</option></select></Field>
                     <Field label="Reason" full><input className={styles.control} value={classification?.reason ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { reason: event.target.value })} placeholder="Doctor appointment, personal permission, sick, other…" /></Field>
                   </div>;
                 })}
 
-                {incompleteAttendanceException ? <div className={styles.notice}>Classify every missing-time segment as Paid or No Work No Pay and enter a reason before saving.</div> : null}
+                {incompleteAttendanceException && !partialWorkday ? <div className={styles.notice}>Classify every missing-time segment as No Work — Paid or No Work No Pay and enter a reason before saving.</div> : null}
 
                 <Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add notes for this exception…" /></Field>
                 <div className={styles.dailySummary}>
@@ -484,8 +487,9 @@ export function EmployeeWorkspace() {
                   <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
                   <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
                   {workedStatus ? <SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /> : null}
-                  {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="Paid Missing Time" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
+                  {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
+                  {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}
                 </div>
                 <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
               </div> : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}

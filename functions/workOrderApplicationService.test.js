@@ -282,6 +282,32 @@ test("work-order evidence fully covered by the attendance interval is not added 
   assert.equal(entry.overtimeHours, 2.25);
 });
 
+test("after-hours completion preserves partial-day paid/no-pay decisions without unused lunch overtime", async () => {
+  for (const treatment of ['paid', 'no_work_no_pay']) {
+    const existingId = `driver-1_${WORK_DATE}`;
+    const { db, service } = fixture({
+      [`employeeTimesheets/${existingId}`]: existingAttendance({
+        clockInTime: '13:00', clockOutTime: '16:00', breakMinutes: 0,
+        regularHours: 3, workedMinutes: 180,
+        paidFreeHours: treatment === 'paid' ? 5 : 0,
+        noWorkNoPayHours: treatment === 'paid' ? 0 : 5,
+        attendanceExceptions: [{ kind: 'partial_day', minutes: 300, treatment, reason: 'Test decision' }],
+        overtimeCalculationSource: 'attendance_authority',
+      }),
+    });
+    await service.completeAfterHours(input());
+    await service.completeAfterHours(input());
+    const entry = db.read(`employeeTimesheets/${existingId}`);
+    assert.equal(entry.regularHours, 3);
+    assert.equal(entry.workedMinutes, 285);
+    assert.equal(entry.overtimeMinutes, 105);
+    assert.equal(entry.paidFreeHours, treatment === 'paid' ? 5 : 0);
+    assert.equal(entry.noWorkNoPayHours, treatment === 'paid' ? 0 : 5);
+    assert.deepEqual(entry.attendanceExceptions, [{ kind: 'partial_day', minutes: 300, treatment, reason: 'Test decision' }]);
+    assert.equal(entry.workOrderAttendanceSegments.length, 1);
+  }
+});
+
 test("legacy overtime without a valid Clock In/Out is preserved conservatively and flagged for reconciliation", async () => {
   const existingId = `driver-1_${WORK_DATE}`;
   const { db, service } = fixture({

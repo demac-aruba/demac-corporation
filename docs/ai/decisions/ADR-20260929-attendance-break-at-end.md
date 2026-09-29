@@ -5,6 +5,8 @@
 - Owner: DEMAC business owner
 - Rule: `OPS-STAFF-ATTENDANCE-BREAK-END`
 - Supersedes: blanket no-offset wording in BUSINESS_RULES.md only for this specific case
+- Partially superseded by `ADR-20260929-partial-day-no-work.md`: unused-break credit
+  requires completion of scheduled regular worked minutes; partial days use actual hours.
 
 ## Context and decision
 

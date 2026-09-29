@@ -185,14 +185,25 @@ Production activation remains separately owner-approved through the server-side 
 - Late arrival, early departure, and break time beyond the scheduled break are independent
   missing-scheduled-time segments. Each segment must be explicitly classified as Paid or
   No Work No Pay and carry a reason before it can be saved.
-- `OPS-STAFF-ATTENDANCE-BREAK-END`: unused scheduled break first covers an early
-  departure from a shift actually worked within the scheduled interval. Only the remaining
+- `OPS-STAFF-ATTENDANCE-BREAK-END`: after completing the scheduled regular worked
+  minutes, unused scheduled break first covers an early departure. Only the remaining
   unused break becomes overtime and only the uncovered departure requires Paid/No Work
   No Pay classification. For 08:00–17:00 / 480 scheduled minutes, break 0 and departure at
   16:00 / 16:30 / 17:00 produce 0 / 30 / 60 overtime minutes and 480 regular minutes.
   This does not offset late arrival or missing time using early-start/late-finish overtime.
   Shifted breaks remain explicit attendance records even when payroll totals match normal
   attendance; retain actual Clock In/Out and Break Minutes, never a fictitious break.
+- `OPS-STAFF-ATTENDANCE-PARTIAL-NO-WORK`: when fewer than the scheduled regular
+  worked minutes were actually worked and the recorded break is shorter than the normal
+  allowance, no unused lunch allowance is earned or applied to early departure. Calculate
+  no-work minutes as scheduled worked minutes minus actual regular worked minutes; store
+  one `partial_day` classification with no invented clock interval. Outside-shift overtime
+  remains independent. This rule applies to every employee, using their resolved schedule.
+  For 08:00–17:00 / 480 scheduled minutes, 13:00–16:00 with break 0 is 180 worked,
+  300 no-work, zero unused break and zero overtime. Require an explicit Paid or No Work
+  No Pay decision and reason. Paid permission contributes to paid-free hours (3 worked +
+  5 paid no-work = 8 payable); unpaid contributes to NWNP (3 payable + 5 NWNP).
+  Clock-deviation diagnostics are not the partial-day payroll absence total.
 - All other overtime and missing scheduled time remain independent. Payroll retains both facts.
 - Paid partial missing time contributes to paid-free time; unpaid partial missing time
   contributes to No Work No Pay. A partially affected employee can remain `Present`.

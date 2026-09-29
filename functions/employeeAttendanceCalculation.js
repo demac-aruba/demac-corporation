@@ -75,14 +75,43 @@ function calculateAttendanceVariance(input) {
   const lateFinishMinutes = actualEnd > scheduleEnd
     ? Math.max(0, actualEnd - Math.max(actualStart, scheduleEnd))
     : 0;
-  const unusedBreakMinutes = Math.max(0, expectedBreakMinutes - actualBreakMinutes);
+  const scheduledMinutes = Math.max(0, Number(schedule.scheduledMinutes) || 0);
+  const outsideShiftOvertime = Math.min(workedMinutesValue, earlyStartMinutes + lateFinishMinutes);
+  const regularWorkedMinutes = Math.max(0, workedMinutesValue - outsideShiftOvertime);
+  const overlapsSchedule = actualStart < scheduleEnd && actualEnd > scheduleStart;
+  const rawLateArrivalMinutes = actualStart > scheduleStart
+    ? Math.max(0, Math.min(actualStart, scheduleEnd) - scheduleStart)
+    : 0;
   const rawEarlyDepartureMinutes = actualEnd < scheduleEnd
     ? Math.max(0, scheduleEnd - Math.max(actualEnd, scheduleStart))
     : 0;
-  // Unused break may move to the end of a worked shift. Apply it before
-  // bounding missing time, so a short shift cannot receive excess regular hours.
+
+  // A partial worked day does not earn an unused lunch allowance. Reconcile
+  // actual regular work against scheduled *worked* minutes, not the gross
+  // clock span (which includes scheduled non-working lunch). Keep outside-shift
+  // overtime independent. This aggregate has no invented absence time range.
+  if (overlapsSchedule && regularWorkedMinutes < scheduledMinutes && actualBreakMinutes < expectedBreakMinutes) {
+    const missingScheduledMinutes = scheduledMinutes - regularWorkedMinutes;
+    const lateArrivalMinutes = Math.min(scheduledMinutes, rawLateArrivalMinutes);
+    return {
+      ...emptyVariance(expectedBreakMinutes, workedMinutesValue),
+      earlyStartMinutes,
+      lateFinishMinutes,
+      overtimeMinutes: outsideShiftOvertime,
+      // Clock deviations remain diagnostic; only missingSegments determines
+      // payable/unpaid no-work time for this partial day.
+      lateArrivalMinutes,
+      earlyDepartureMinutes: Math.min(scheduledMinutes - lateArrivalMinutes, rawEarlyDepartureMinutes),
+      missingScheduledMinutes,
+      missingSegments: [{ kind: 'partial_day', minutes: missingScheduledMinutes }],
+    };
+  }
+
+  const unusedBreakMinutes = regularWorkedMinutes >= scheduledMinutes
+    ? Math.max(0, expectedBreakMinutes - actualBreakMinutes)
+    : 0;
+  // Only a completed regular workday may move unused break to its end.
   // Late arrival and work outside the scheduled shift retain their own treatment.
-  const overlapsSchedule = actualStart < scheduleEnd && actualEnd > scheduleStart;
   const breakAppliedToEarlyDepartureMinutes = overlapsSchedule
     ? Math.min(unusedBreakMinutes, rawEarlyDepartureMinutes)
     : 0;
@@ -90,9 +119,6 @@ function calculateAttendanceVariance(input) {
     + unusedBreakMinutes - breakAppliedToEarlyDepartureMinutes;
   const overtimeMinutes = Math.min(workedMinutesValue, rawOvertimeMinutes);
 
-  const rawLateArrivalMinutes = actualStart > scheduleStart
-    ? Math.max(0, Math.min(actualStart, scheduleEnd) - scheduleStart)
-    : 0;
   const lateArrivalMinutes = Math.min(Number(schedule.scheduledMinutes) || 0, rawLateArrivalMinutes);
   const remainingAfterLateArrival = Math.max(0, (Number(schedule.scheduledMinutes) || 0) - lateArrivalMinutes);
 
@@ -147,6 +173,7 @@ function calculateAttendanceVariance(input) {
 }
 
 function attendanceExceptionKindLabel(kind) {
+  if (kind === 'partial_day') return 'no work';
   if (kind === 'late_arrival') return 'late arrival';
   if (kind === 'early_departure') return 'early departure';
   return 'extended break';
