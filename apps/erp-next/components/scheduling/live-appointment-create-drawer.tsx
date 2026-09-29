@@ -13,7 +13,7 @@ import type { PropertyEditorValue } from '../../lib/property-editor-draft';
 import { emptyPropertyEditor } from '../../lib/property-editor-draft';
 import propertyEditorStyles from '../crm/property-editor.module.css';
 import type { PropertyLocationData } from '../../lib/property-locations';
-import { createAfterHoursEmergency, prepareRestDayOvertime, createRestDayOvertime, SpecialBookingError, type SpecialBookingInput, type RestDayOvertimeProposal } from '../../lib/after-hours-booking';
+import { createAfterHoursEmergency, prepareRestDayOvertime, createRestDayOvertime, prepareCapacityOvertime, createCapacityOvertime, SpecialBookingError, type SpecialBookingInput, type RestDayOvertimeProposal } from '../../lib/after-hours-booking';
 import {
   BROWSER_PROJECTS_PREVIEW_KEY,
   linkProjectSchedulingAssignment,
@@ -412,6 +412,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [budgetConfirmation, setBudgetConfirmation] = useState<{ action: 'confirm' | 'hold'; signature: string } | null>(null);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+  const [capacityOvertime, setCapacityOvertime] = useState<{ signature: string; proposal: RestDayOvertimeProposal } | null>(null);
   const [supportSlotCandidates, setSupportSlotCandidates] = useState<OfficeSupportSlotCandidate[]>([]);
   const [supportMinSlots, setSupportMinSlots] = useState(0);
   const [supportMaxSlots, setSupportMaxSlots] = useState(0);
@@ -814,6 +815,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     projectMode && selectedProject?.serverVersion ? `${selectedProject.id}:${selectedProjectPhase?.id || 'GENERAL-PROJECT-WORK'}:${selectedProject.serverVersion}` : '',
   ].join('|');
   offerSignatureRef.current = offerSignature;
+  const activeCapacityOvertime = !isSpecialBooking && !projectMode && !backdatedTarget
+    && capacityOvertime?.signature === offerSignature ? capacityOvertime.proposal : null;
   const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
   const activeValidation = capacityValidation?.offerSignature === offerSignature ? capacityValidation : null;
   const selectedCapacityOption = capacityValidation?.options.find((option) => option.id === capacityValidation.selectedOptionId)
@@ -867,6 +870,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const resetCapacityValidation = () => {
+    setCapacityOvertime(null);
     cancelValidationRequest();
     validationChangeKindRef.current = 'capacity';
     validationEpochRef.current += 1;
@@ -880,6 +884,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const invalidateOfferValidation = () => {
+    setCapacityOvertime(null);
     cancelValidationRequest();
     validationChangeKindRef.current = capacityValidation ? 'metadata' : 'capacity';
     validationEpochRef.current += 1;
@@ -1151,6 +1156,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const validationOfferSignature = offerSignature;
     setChecking(true);
     setAuthorityError('');
+    setCapacityOvertime(null);
     setValidated((current) => {
       if (current?.capacitySignature !== validationCapacitySignature) return null;
       return current.offerSignature === validationOfferSignature
@@ -1177,6 +1183,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       }, requestController.signal);
       if (requestEpoch !== validationEpochRef.current || offerSignatureRef.current !== validationOfferSignature) return;
 
+      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
+      let overtimeProposal: RestDayOvertimeProposal | null = null;
+      // This explicit office alternative never changes ordinary offers or automatic availability.
+      if (!projectMode && !backdatedTarget && !exactOptions.some(option => option.assignments.length === 1)) {
+        try {
+          const prepared = await prepareCapacityOvertime({
+            requestId: createOfficeLifecycleRequestId('capacity-overtime-preview'),
+            customerId: selectedCustomer.id, propertyId: selectedProperty.id, dwellingId, requesterId, accessContactId,
+            workLines: workRequestLines(), requestedDate: requestTarget.dateKey, requestedTime: requestTarget.start,
+            requiredVanId: requestTarget.vanId, customerFacingDescription: authorizedDescription.trim(),
+            technicianInstructions: authorizedTechnicianInstructions.trim(), recipientSelections: effectiveRecipientSelections,
+          });
+          overtimeProposal = prepared.proposal;
+        } catch {
+          // Ineligible/conflicting overtime does not replace the ordinary validation result.
+        }
+        if (requestEpoch !== validationEpochRef.current || offerSignatureRef.current !== validationOfferSignature) return;
+        if (overtimeProposal) setCapacityOvertime({ signature: validationOfferSignature, proposal: overtimeProposal });
+      }
+
       const candidates = supportCandidatesFromMetadata(result.metadata);
       const candidateIds = new Set(candidates.map((candidate) => candidate.id));
       const nextMinSlots = metadataNumber(result.metadata, 'supportMinSlots');
@@ -1196,10 +1222,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setSupportMaxSlots(nextMaxSlots);
       if (!sameStringArray(selectedSupportSlotIds, nextSelection)) setSelectedSupportSlotIds(nextSelection);
 
-      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
       const offer = result.offer;
       if (!result.available || !offer || !exactOptions.length) {
         setValidated(null);
+        if (overtimeProposal) return;
         if (result.reason === 'required-primary-target-unavailable') {
           setAuthorityError(`${requestTarget.vanName} no longer has the complete requested capacity at ${formatTime(requestTarget.start)}. Another appointment or Temporary Hold may already reserve one or more of these slots. The live agenda is being refreshed; choose another open Van/day or review the existing reservation. Nothing was changed.`);
           void onAvailabilityConflict?.();
@@ -1334,7 +1360,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     scheduledHours: bookingBudgetPlan?.scheduledHours ?? projectPlan.scheduledHours,
   } : undefined;
 
-  const confirmBooking = async (acknowledgedBudget?: string) => {
+  const confirmBooking = async (acknowledgedBudget?: string, requestCapacityOvertime = false) => {
+    if (requestCapacityOvertime && !activeCapacityOvertime) return;
+    const useCapacityOvertime = Boolean(activeCapacityOvertime && (requestCapacityOvertime || !selectedValidatedOption));
     const projectBookingRequested = !isSpecialBooking && appointmentSource === 'project';
     if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
       || (selectedProject && !selectedProject.serverVersion && !projectAccessRef.current.canManage))) {
@@ -1346,7 +1374,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
       return;
     }
-    if (isSpecialBooking) {
+    if (isSpecialBooking || useCapacityOvertime) {
       if (isAfterHours && !validAfterHoursStart(requestTarget.start)) {
         setAuthorityError('After-hours work must start at 5:00 PM or later.');
         return;
@@ -1357,9 +1385,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requiredVanId: requestTarget.vanId, customerFacingDescription: authorizedDescription.trim(),
         technicianInstructions: authorizedTechnicianInstructions.trim(), recipientSelections,
       };
-      const signature = JSON.stringify({ mode, data });
+      const signature = JSON.stringify({ mode: useCapacityOvertime ? 'capacity_overtime' : mode, data });
       if (specialRequestRef.current.signature !== signature) specialRequestRef.current = {
-        signature, requestId: createOfficeLifecycleRequestId(isRestDayOvertime ? 'weekly-rest-overtime' : 'after-hours-emergency'),
+        signature, requestId: createOfficeLifecycleRequestId(useCapacityOvertime ? 'capacity-overtime' : isRestDayOvertime ? 'weekly-rest-overtime' : 'after-hours-emergency'),
       };
       const input: SpecialBookingInput = { ...data, requestId: specialRequestRef.current.requestId };
       const commit = async (proposal?: RestDayOvertimeProposal) => {
@@ -1367,7 +1395,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         setSaving(true);
         try {
           const result = proposal
-            ? await createRestDayOvertime({ ...input, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } })
+            ? await (useCapacityOvertime ? createCapacityOvertime : createRestDayOvertime)({ ...input, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } })
             : await createAfterHoursEmergency(input);
           setBookingRecovery(null);
           onCreated({
@@ -1388,12 +1416,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         }
       };
       setAuthorityError('');
-      if (isRestDayOvertime) {
+      if (isRestDayOvertime || useCapacityOvertime) {
         bookingInFlight.current = true;
         setSaving(true);
         try {
-          const { proposal } = await prepareRestDayOvertime(input);
-          const approved = window.confirm(`${proposal.vanName} tiene libre en este horario. Este trabajo se agendará como overtime.\n\n${proposal.requiredSlots} cupos · ${formatTime(proposal.start)}–${formatTime(proposal.estimatedEnd)}\n\nEl pago se calculará con las horas realmente trabajadas. ¿Confirmar reserva?`);
+          const { proposal } = await (useCapacityOvertime ? prepareCapacityOvertime : prepareRestDayOvertime)(input);
+          const warning = useCapacityOvertime
+            ? `Este trabajo requiere ${proposal.requiredSlots} cupos y ${proposal.vanName} tiene ${proposal.ordinarySlots} cupos normales disponibles desde ${formatTime(proposal.start)}. Posiblemente el equipo tendrá que trabajar overtime. Toda la carga quedará en ${proposal.vanName}.`
+            : `${proposal.vanName} tiene libre en este horario. Este trabajo se agendará como overtime.`;
+          const approved = window.confirm(`${warning}\n\n${proposal.requiredSlots} cupos · ${formatTime(proposal.start)}–${formatTime(proposal.estimatedEnd)}\n\nEl pago se calculará con las horas realmente trabajadas. ¿Confirmar reserva?`);
           if (approved) await commit(proposal);
         } catch (error) {
           setAuthorityError(error instanceof Error ? error.message : 'Overtime could not be validated.');
@@ -1782,6 +1813,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <section className={styles.authoritySection}>
             <div className={styles.authorityHeading}><div><span>5</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
+            {activeCapacityOvertime ? <div className={styles.authorityIdle} role="status" style={{ margin: 10, border: '1px solid var(--warning)', borderRadius: 10 }}>
+              <strong style={{ display: 'block', color: 'var(--warning)' }}>Posible overtime · {activeCapacityOvertime.vanName}</strong>
+              <p>Este trabajo requiere {activeCapacityOvertime.requiredSlots} cupos y quedan {activeCapacityOvertime.ordinarySlots} cupos normales. Puedes reservar toda la carga en esta van, con fin estimado a las {formatTime(activeCapacityOvertime.estimatedEnd)}, aceptando posible overtime.</p>
+              <button type="button" className={styles.confirmButton} disabled={busy || checking} onClick={() => void confirmBooking(undefined, true)}>Confirmar con posible overtime</button>
+            </div> : null}
+
             {supportSlotCandidates.length ? (
               <div style={{ margin: '10px 8px 0', padding: 10, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
@@ -1886,7 +1923,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 ) : supportSlotCandidates.length ? <div className={styles.authorityIdle} style={{ marginTop: 8 }}>Validating the exact selected support spots before this allocation can be confirmed…</div> : null}
                 <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>
-            ) : (
+            ) : activeCapacityOvertime ? null : (
               <div className={styles.authorityIdle}>{supportSlotCandidates.length
                 ? checking
                   ? 'Validating the selected support slots with Booking Authority…'
@@ -1915,7 +1952,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             {!isSpecialBooking && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
             <button type="button" className={styles.confirmButton} disabled={isSpecialBooking
               ? busy || !selectedCustomer || !selectedProperty || !workValid || (isAfterHours && !validAfterHoursStart(requestTarget.start))
-              : !selectedValidatedOption || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isRestDayOvertime ? 'Review and confirm overtime' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
+              : (!selectedValidatedOption && !activeCapacityOvertime) || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isRestDayOvertime ? 'Review and confirm overtime' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : activeCapacityOvertime && !selectedValidatedOption ? 'Revisar posible overtime' : 'Confirm appointment'}</button>
           </div>
           </>}
         </footer>

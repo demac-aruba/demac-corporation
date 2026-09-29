@@ -43,7 +43,7 @@ type LiveWorkItem = {
 type LiveWorkOrder = {
   dwellingId?: string;
   locationSnapshot?: { locationLabel?: string; accessInstructions?: string };
-  scheduledOvertime?: { accepted?: boolean; capacityEnd?: string; slotStarts?: string[] } | null;
+  scheduledOvertime?: { kind?: string; accepted?: boolean; capacityEnd?: string; slotStarts?: string[] } | null;
   operationalMoveOvertime?: { accepted?: boolean; capacityEnd?: string } | null;
   id: string;
   appointmentId?: string;
@@ -459,6 +459,7 @@ function workOrderAssignment(
     capacitySlotStarts,
     possibleOvertime: order.operationalMoveOvertime?.accepted === true || order.scheduledOvertime?.accepted === true,
     scheduledOvertime: order.scheduledOvertime?.accepted === true,
+    scheduledOvertimeKind: order.scheduledOvertime?.kind,
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),

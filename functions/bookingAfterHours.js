@@ -112,7 +112,8 @@ function createAfterHoursAuthority({
     recipientSelections = [],
     actor = {},
     overtimeConsent,
-  } = {}, { restDay = false, prepareOnly = false } = {}) {
+  } = {}, { restDay = false, capacityOvertime = false, prepareOnly = false } = {}) {
+    const boundedOvertime = restDay || capacityOvertime;
     const stableRequestId = cleanText(requestId, 240);
     const clientId = cleanText(customerId, 180);
     const siteId = cleanText(propertyId, 180);
@@ -129,7 +130,7 @@ function createAfterHoursAuthority({
         "After-hours emergency requires requestId, customer, property, work type, date, time and Van.",
       );
     }
-    if (!Number.isFinite(startMinutes) || (!restDay && startMinutes < AFTER_HOURS_START_MINUTES)) {
+    if (!Number.isFinite(startMinutes) || (!boundedOvertime && startMinutes < AFTER_HOURS_START_MINUTES)) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
         "After-hours emergency work must start at 17:00 or later.",
@@ -143,9 +144,9 @@ function createAfterHoursAuthority({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dateKey) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'A valid appointment date is required.');
     }
-    const requestFingerprint = hashId(JSON.stringify({ restDay, clientId, siteId, dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '',
+    const requestFingerprint = hashId(JSON.stringify({ restDay, ...(capacityOvertime ? { capacityOvertime: true } : {}), clientId, siteId, dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '',
       requestedWorkLines, dateKey, startTime, rawVanId, customerFacingDescription, technicianInstructions, recipientSelections, actorId: actor.id || actor.userId || '' }), 64);
-    const appointmentId = restDay ? `APT-OT-${hashId(stableRequestId, 20).toUpperCase()}` : afterHoursAppointmentId(stableRequestId);
+    const appointmentId = boundedOvertime ? `APT-${capacityOvertime ? 'CO' : 'OT'}-${hashId(stableRequestId, 20).toUpperCase()}` : afterHoursAppointmentId(stableRequestId);
     const workOrderId = afterHoursWorkOrderId(appointmentId);
     const appointmentRef = db.collection(collections.appointments).doc(appointmentId);
     const workOrderRef = db.collection(collections.workOrders).doc(workOrderId);
@@ -163,7 +164,7 @@ function createAfterHoursAuthority({
       const replaySnapshot = await transaction.get(appointmentRef);
       if (replaySnapshot.exists) {
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
-        if (cleanText(restDay ? replay.overtimeRequestId : replay.afterHoursRequestId, 240) !== stableRequestId
+        if (cleanText(boundedOvertime ? replay.overtimeRequestId : replay.afterHoursRequestId, 240) !== stableRequestId
             || (replay.specialBookingFingerprint && replay.specialBookingFingerprint !== requestFingerprint)) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -277,7 +278,7 @@ function createAfterHoursAuthority({
         return { line, preset };
       });
 
-      const overtime = restDay ? require('./bookingRestDayOvertime').restDayOvertimePlan({
+      const overtime = boundedOvertime ? require('./bookingRestDayOvertime')[capacityOvertime ? 'capacityOvertimePlan' : 'restDayOvertimePlan']({
         data: canonical, van, crew, date: dateKey, time: startTime, workLines: requestedWorkLines,
         now, actor, requestId: stableRequestId, fingerprint: requestFingerprint,
       }) : null;
@@ -380,7 +381,7 @@ function createAfterHoursAuthority({
         workItems,
         ...(overtime ? { scheduledOvertime, overtimeRequestId: stableRequestId,
           endTime: overtime.proposal.estimatedEnd, capacityEndTime: overtime.proposal.capacityEnd,
-          lifecycleHistory: [{ kind: 'weekly_rest_overtime_booked', actorId: actor.id, atIso: now.toISOString(), scheduledOvertime }] }
+          lifecycleHistory: [{ kind: capacityOvertime ? 'capacity_overflow_overtime_booked' : 'weekly_rest_overtime_booked', actorId: actor.id, atIso: now.toISOString(), scheduledOvertime }] }
           : { afterHoursKind: AFTER_HOURS_KIND, afterHoursOpenEnded: true, afterHoursRequestId: stableRequestId }),
         specialBookingFingerprint: requestFingerprint,
         actualCompletedAt: null,
@@ -460,6 +461,8 @@ function createAfterHoursAuthority({
     createEmergency: (input) => createSpecialBooking(input),
     prepareRestDayOvertime: (input) => createSpecialBooking(input, { restDay: true, prepareOnly: true }),
     createRestDayOvertime: (input) => createSpecialBooking(input, { restDay: true }),
+    prepareCapacityOvertime: (input) => createSpecialBooking(input, { capacityOvertime: true, prepareOnly: true }),
+    createCapacityOvertime: (input) => createSpecialBooking(input, { capacityOvertime: true }),
   };
 }
 

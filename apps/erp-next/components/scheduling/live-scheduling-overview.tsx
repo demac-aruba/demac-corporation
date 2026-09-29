@@ -1146,8 +1146,8 @@ function AppointmentBlock({ job, appointment, project, span, crossesLunch, conti
           {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity, project)}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation ? <small>{formatTime(job.start)}–{formatTime(capacityEnd)} · {assignmentReservationLabel(job)}</small> : null}
-          {job.scheduledOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Overtime programado · descanso semanal · hasta {formatTime(job.end)}</small> : null}
-          {job.possibleOvertime && !job.scheduledOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
+          {job.scheduledOvertime && job.scheduledOvertimeKind !== 'capacity_overflow_overtime' ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Overtime programado · descanso semanal · hasta {formatTime(job.end)}</small> : null}
+          {job.possibleOvertime && (!job.scheduledOvertime || job.scheduledOvertimeKind === 'capacity_overflow_overtime') ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
           {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment, project) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>{project ? 'Lunch / break · Van capacity remains reserved' : 'Lunch remains non-sellable · service-capacity ownership is preserved'}</small> : null}

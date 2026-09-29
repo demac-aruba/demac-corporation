@@ -33,6 +33,7 @@ export type SpecialBookingInput = {
 };
 
 export type RestDayOvertimeProposal = {
+  kind: 'weekly_rest_overtime' | 'capacity_overflow_overtime'; ordinarySlots?: number;
   date: string; vanId: string; vanName: string; start: string; estimatedEnd: string; capacityEnd: string;
   requiredSlots: number; durationMinutes: number; regularEnd: string; confirmationToken: string;
 };
@@ -62,7 +63,7 @@ async function specialBookingRequest<T>(action: string, input: SpecialBookingInp
       const reason = typeof payload.error?.details?.reason === 'string' ? ` · ${payload.error.details.reason}` : '';
       throw new SpecialBookingError(`${payload.error?.message ?? 'The booking could not be created.'}${reason}`, response.status >= 500);
     }
-    if (!payload.success || (action !== 'prepare_rest_day_overtime' && (!payload.appointmentId || !payload.workOrderIds?.length))) {
+    if (!payload.success || (!['prepare_rest_day_overtime', 'prepare_capacity_overtime'].includes(action) && (!payload.appointmentId || !payload.workOrderIds?.length))) {
       throw new SpecialBookingError('The booking response could not be verified. Retry the original request.', true);
     }
     return payload as T;
@@ -85,4 +86,10 @@ export function prepareRestDayOvertime(input: SpecialBookingInput) {
 }
 export function createRestDayOvertime(input: SpecialBookingInput & { overtimeConsent: { accepted: true; confirmationToken: string } }) {
   return specialBookingRequest<AfterHoursEmergencyResult>('create_rest_day_overtime', input);
+}
+export function prepareCapacityOvertime(input: SpecialBookingInput) {
+  return specialBookingRequest<{ success: true; proposal: RestDayOvertimeProposal }>('prepare_capacity_overtime', input);
+}
+export function createCapacityOvertime(input: SpecialBookingInput & { overtimeConsent: { accepted: true; confirmationToken: string } }) {
+  return specialBookingRequest<AfterHoursEmergencyResult>('create_capacity_overtime', input);
 }

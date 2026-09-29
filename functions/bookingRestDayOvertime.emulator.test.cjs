@@ -92,3 +92,66 @@ test('ordinary availability still excludes weekly rest, including after confirme
   await authority.createRestDayOvertime(await prepared());
   assert.equal((await check()).available, false);
 });
+
+const capacityInput = extra => input({ requestId: 'synthetic-capacity-overtime', requiredVanId: 'VAN-4', ...extra });
+async function preparedCapacity(request = capacityInput()) {
+  const { proposal } = await authority.prepareCapacityOvertime(request);
+  return { ...request, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } };
+}
+
+test('four new afternoon services: read-only preparation and concurrent exact retries save one complete booking', async () => {
+  const before = await snapshot();
+  const request = await preparedCapacity();
+  assert.deepEqual(await snapshot(), before);
+  const results = await Promise.all([authority.createCapacityOvertime(request), authority.createCapacityOvertime(request)]);
+  assert.equal(results.filter(result => !result.replayed).length, 1);
+  assert.equal(results[0].appointment.endTime, '17:30');
+  assert.equal(results[0].workOrder.airConditionerCount, 4);
+  assert.equal(results[0].appointment.capacityLockIds.length, 4);
+});
+
+test('new overflow bookings and emergencies serialize, preventing overlapping overtime reservations', async () => {
+  for (const emergency of [false, true]) {
+    await resetSynthetic(db, date);
+    const first = await preparedCapacity();
+    const second = emergency ? capacityInput({ requestId: 'emergency-capacity-race', requestedTime: '17:00', quantity: 1 })
+      : await preparedCapacity(capacityInput({ requestId: 'second-capacity-race' }));
+    const results = await Promise.allSettled([authority.createCapacityOvertime(first), emergency ? authority.createEmergency(second) : authority.createCapacityOvertime(second)]);
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  }
+});
+
+test('ordinary confirmation and capacity overflow compete atomically for the same afternoon', async () => {
+  const request = await preparedCapacity();
+  const booking = createBookingAuthority({ db, availabilityProvider: createSchedulingProvider({ db }), clock: () => new Date('2098-12-22T12:00:00Z') });
+  const checked = await booking.checkAvailability({ request: { customerId: 'DEMO-CUSTOMER', propertyId: 'DEMO-PROPERTY', workLines: [{ presetId: 'standard_service', quantity: 1 }], constraints: { requestedDate: date, requestedTime: '13:30' } }, actor: { id: 'demo-office' }, context: { channel: 'office', requiredPrimaryVanId: 'VAN-4' } });
+  assert.equal(checked.available, true);
+  const result = await Promise.allSettled([
+    authority.createCapacityOvertime(request),
+    booking.createAppointment({ idempotencyKey: 'ordinary-capacity-race', offerId: checked.offer.id, offerVersion: checked.offer.version, optionId: checked.options[0].id, actor: { id: 'demo-office' }, context: { channel: 'office' } }),
+  ]);
+  assert.equal(result.filter(item => item.status === 'fulfilled').length, 1, JSON.stringify(result));
+  assert.equal((await db.collection('appointments').where('primaryVanId', '==', 'VAN-4').get()).size, 1);
+});
+
+test('new overtime endpoints enforce office authentication and bind current crew/consent', async () => {
+  for (const action of ['prepare_capacity_overtime', 'create_capacity_overtime']) {
+    for (const token of ['', 'demo-technician', 'invalid']) {
+      const result = await facade.handle({ method: 'POST', headers: { authorization: token ? `Bearer ${token}` : '' }, body: { action, data: capacityInput() } });
+      assert.ok([401, 403].includes(result.status));
+    }
+  }
+  const handle = (action, data) => facade.handle({ method: 'POST', headers: { authorization: 'Bearer demo-office' }, body: { action, data } });
+  const preview = await handle('prepare_capacity_overtime', capacityInput());
+  assert.equal(preview.status, 200, JSON.stringify(preview));
+  const data = { ...capacityInput(), overtimeConsent: { accepted: true, confirmationToken: preview.body.proposal.confirmationToken } };
+  await db.doc('dailyVanAssignments/stale-crew').set({ date, vanId: 'VAN-4', driverStaffId: 'DRIVER-4', helperStaffId: '' });
+  const before = await snapshot();
+  const result = await handle('create_capacity_overtime', data);
+  assert.notEqual(result.status, 200);
+  assert.deepEqual(await snapshot(), before);
+  await db.doc('dailyVanAssignments/stale-crew').delete();
+  const success = await handle('create_capacity_overtime', data);
+  assert.equal(success.status, 200, JSON.stringify(success));
+  assert.equal(success.body.workOrder.scheduledOvertime.kind, 'capacity_overflow_overtime');
+});
