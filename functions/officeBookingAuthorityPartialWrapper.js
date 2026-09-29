@@ -8,6 +8,7 @@ const {
 } = require("./bookingAuthorityCore");
 const { createBookingAuthority } = require("./bookingAuthorityFirestore");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
+const { withProjectBookingLinks } = require("./projectBookingLinks");
 const { createOfficeBookingApi } = require("./officeBookingAuthority");
 const { createPartialCompletionAuthority } = require("./bookingPartialCompletion");
 
@@ -61,7 +62,9 @@ function createOfficeBookingPartialWrapper({ db, verifyIdToken } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
 
-  const provider = createSchedulingProvider({ db });
+  // This authority is injected into the Office API, so its provider must already
+  // include Project authorization and atomic links before the authority is built.
+  const provider = withProjectBookingLinks({ db, provider: createSchedulingProvider({ db }) });
   const bookingAuthority = createBookingAuthority({ db, availabilityProvider: provider });
   const api = createOfficeBookingApi({
     db,
