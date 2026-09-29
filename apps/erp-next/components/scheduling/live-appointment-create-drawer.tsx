@@ -101,6 +101,7 @@ type Props = {
   onClose: () => void;
   onCreated: (booking: LiveCreatedBooking) => void;
   onAvailabilityConflict?: () => Promise<void> | void;
+  onSendSupport?: () => void;
 };
 
 type CustomerDraft = NewBookingCustomer & {
@@ -334,7 +335,7 @@ function sameStringArray(left: string[], right: string[]) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
-export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict }: Props) {
+export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict, onSendSupport }: Props) {
   const { principal } = useAuth();
   const canScheduleProjects = principal.active && principal.capabilities.has('projects.schedule');
   const canManageProjects = principal.active && principal.capabilities.has('projects.view') && principal.capabilities.has('projects.manage');
@@ -1604,6 +1605,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
                   </button> : null}
                 </div>
+                {onSendSupport ? <button type="button" className={styles.sourceOption} style={{ width: '100%', marginTop: 10 }} onClick={onSendSupport}>
+                  <strong>Send van support</strong><span>Use this open slot to help another Van with an existing appointment.</span>
+                </button> : null}
                 {projectMode ? (
                   <div className={styles.projectPicker}>
                     <label className={styles.fieldWide}>

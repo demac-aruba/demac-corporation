@@ -748,6 +748,8 @@ export async function moveOfficeAppointment(input: OfficeMoveInput) {
 }
 
 export async function addOfficeAdhocSupport(input: {
+  bookingMode?: 'backdated';
+  backdatingAcknowledged?: boolean;
   appointmentId: string;
   requestId: string;
   requestedDate: string;

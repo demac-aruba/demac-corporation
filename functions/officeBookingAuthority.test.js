@@ -454,3 +454,20 @@ test("move_appointment delegates directly to dedicated operational transaction w
   assert.equal(captured.actor.source, "office-scheduling");
   assert.equal(captured.actor.id, "user-1");
 });
+
+
+test("office historical support forwards the operator acknowledgement to the support authority", async () => {
+  let captured;
+  const api = createOfficeBookingApi({ db: createDb(), verifyIdToken,
+    bookingAuthority: createAuthority(), adhocSupportAuthority: { addSupport: async input => { captured = input; return { success: true }; } } });
+  const input = { appointmentId: "APT-1", requestId: "historical-support-123", requestedDate: "2026-08-20", requestedTime: "08:30", requiredVanId: "VAN-3", reason: "Support actually provided", bookingMode: "backdated", backdatingAcknowledged: true };
+  const result = await api.handle(request({ action: "add_adhoc_support", data: input }));
+  assert.equal(result.status, 200);
+  assert.equal(captured.bookingMode, "backdated");
+  assert.equal(captured.backdatingAcknowledged, true);
+  assert.equal(captured.targetVanId, "VAN-3");
+  assert.equal(captured.actor.id, "user-1");
+  const incomplete = await api.handle(request({ action: "add_adhoc_support", data: { ...input, backdatingAcknowledged: false } }));
+  assert.equal(incomplete.status, 409);
+  assert.equal(incomplete.body.error.details.reason, "backdating-confirmation-required");
+});

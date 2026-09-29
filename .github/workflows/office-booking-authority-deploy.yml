@@ -28,6 +28,8 @@ on:
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/customerContactDirectory.js'
       - 'functions/customerContactDirectory.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
       - 'functions/bookingRegularHistoricalCapacity.js'
@@ -81,6 +83,8 @@ on:
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/customerContactDirectory.js'
       - 'functions/customerContactDirectory.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
       - 'functions/bookingRegularHistoricalCapacity.js'
@@ -147,6 +151,7 @@ jobs:
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/customerContactDirectory.js
+          node --check functions/bookingAdhocSupport.js
           node --check functions/bookingOperationalMove.js
           node --check functions/bookingRegularHistoricalCapacity.js
           node --check functions/bookingAuthorityCore.js
@@ -167,6 +172,7 @@ jobs:
           node --test functions/appointmentCommunicationAuthority.test.js
           node --test functions/customerContactDirectory.test.js
           node --test functions/bookingAuthorityWorkOrders.test.js
+          node --test functions/bookingAdhocSupport.test.js
           node --test functions/bookingOperationalMove.test.js
           node --test functions/bookingRegularHistoricalCapacity.test.js
           node --test functions/bookingCapacityAvailability.test.js

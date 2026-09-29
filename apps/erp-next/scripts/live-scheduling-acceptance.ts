@@ -18,7 +18,7 @@ import {
   optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
 import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
-import { afterHoursTargetForVan, canPlanAfterHours, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
+import { afterHoursTargetForVan, canPlanAfterHours, canPlanCoworkerSupport, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -533,3 +533,9 @@ requireCondition(!weeklyRestSlotEligible({ ...restSlot, start: '08:30' }), 'Ordi
 const restBooking = projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], time: '13:30', vanId: 'VAN-2', appointmentDurationMinutes: 240, scheduledSlots: 4, appointmentEndTime: '17:30', appointmentCapacityEndTime: '17:30', scheduledOvertime: { accepted: true, capacityEnd: '17:30', slotStarts: ['13:30', '14:30', '15:30', '16:30'] } }], clients, properties, [], [], halfDayCapacity)[0];
 requireCondition(restBooking.assignments[0].scheduledOvertime === true && restBooking.assignments[0].capacitySlotStarts?.length === 4, 'Reload must retain scheduled overtime and all four slots on a half-day.');
 requireCondition(jobOwnsCapacityStart(restBooking.assignments[0], '16:30'), 'Fourth overtime slot must remain occupied after refresh.');
+
+requireCondition(canPlanCoworkerSupport('2026-09-29'), 'Today support remains available.');
+requireCondition(canPlanCoworkerSupport('2026-09-30'), 'Tomorrow support is available from an open slot.');
+requireCondition(canPlanCoworkerSupport('2026-09-28'), 'Past support is available for acknowledged historical corrections.');
+
+requireCondition(!canPlanCoworkerSupport('2026-09-31'), 'Invalid calendar dates remain blocked for support.');
