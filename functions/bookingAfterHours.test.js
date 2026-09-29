@@ -495,3 +495,78 @@ test('cancelling weekly-rest overtime releases its slots and preserves the emerg
   const next = await confirmedRest(authority, restInput({ requestId: 'replacement-overtime' }));
   assert.equal((await authority.createRestDayOvertime(next)).success, true);
 });
+
+async function confirmedCapacity(authority, request = restInput()) {
+  const { proposal } = await authority.prepareCapacityOvertime(request);
+  return { ...request, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } };
+}
+const capacityFixture = (extra = {}) => fixture(extra, '2026-09-28T14:00:00.000Z');
+
+test('new regular booking: four services, three ordinary afternoon slots, explicit possible overtime through 17:30', async () => {
+  const { db, authority } = capacityFixture();
+  const before = [...db.store];
+  const { proposal } = await authority.prepareCapacityOvertime(restInput());
+  assert.deepEqual([...db.store], before);
+  assert.equal(proposal.ordinarySlots, 3);
+  assert.equal(proposal.requiredSlots, 4);
+  assert.equal(proposal.estimatedEnd, '17:30');
+  const request = await confirmedCapacity(authority);
+  const saved = await authority.createCapacityOvertime(request);
+  assert.equal(saved.workOrder.scheduledOvertime.kind, 'capacity_overflow_overtime');
+  assert.equal(saved.workOrder.airConditionerCount, 4);
+  assert.equal(saved.workOrder.appointmentDurationMinutes, 240);
+  assert.equal(saved.appointment.capacityLockIds.length, 4);
+  assert.equal(saved.appointment.lifecycleHistory[0].kind, 'capacity_overflow_overtime_booked');
+  assert.equal(saved.workOrder.afterHoursOpenEnded, undefined);
+  assert.deepEqual(saved.workOrder.scheduledOvertime.slotStarts, ['13:30', '14:30', '15:30', '16:30']);
+  assert.equal((await authority.createCapacityOvertime(request)).replayed, true);
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('appointments/')).length, 1);
+  await assert.rejects(() => authority.createCapacityOvertime({ ...restInput(), quantity: 5 }), error => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
+});
+
+test('afternoon overflow preserves three-at-14:30 and mixed workloads; ordinary fitting work uses the ordinary route', async () => {
+  for (const [extra, slots, end] of [
+    [{ quantity: 3, requestedTime: '14:30' }, 3, '17:30'],
+    [{ workLines: [{ presetId: 'standard_service', quantity: 2 }, { presetId: 'other', quantity: 1, manualDurationMinutes: 90 }] }, 4, '17:00'],
+    [{ quantity: 6 }, 6, '19:30'],
+  ]) {
+    const { authority } = capacityFixture();
+    const result = await authority.createCapacityOvertime(await confirmedCapacity(authority, restInput(extra)));
+    assert.equal(result.workOrder.scheduledSlots, slots); assert.equal(result.appointment.endTime, end);
+  }
+  const { authority } = capacityFixture();
+  for (const extra of [{ quantity: 3 }, { requestedTime: '10:30' }, { requestedTime: '17:00' }, { requestedTime: '12:30' }]) {
+    await assert.rejects(() => authority.prepareCapacityOvertime(restInput(extra)));
+  }
+  await assert.rejects(() => authority.prepareCapacityOvertime(restInput({ quantity: 11 })), /finish on the selected date/);
+  await assert.rejects(() => restFixture().authority.prepareCapacityOvertime(restInput()), /remaining ordinary afternoon slots/);
+});
+
+test('capacity overflow consent is mandatory; changes, absences and actual reservations still block', async () => {
+  const { db, authority } = capacityFixture();
+  const request = await confirmedCapacity(authority);
+  await assert.rejects(() => authority.createCapacityOvertime(restInput()), /Confirm the current overtime/);
+  for (const change of [{ quantity: 5 }, { technicianInstructions: 'Changed' }, { actor: { id: 'office-2', source: 'office-scheduling' } }]) {
+    await assert.rejects(() => authority.createCapacityOvertime({ ...request, ...change }), /Confirm the current overtime/);
+  }
+  db.store.set('staffAbsences/off', { staffId: 'helper-1', fromDate: REST_DATE, toDate: REST_DATE, active: true });
+  const before = [...db.store];
+  await assert.rejects(() => authority.createCapacityOvertime(request));
+  assert.deepEqual([...db.store], before);
+  for (const time of ['14:30', '16:30', '17:15']) {
+    const next = capacityFixture({ 'workOrders/real-conflict': { date: REST_DATE, time, vanId: 'VAN-1', status: 'Confirmada', appointmentDurationMinutes: 60 } });
+    await assert.rejects(() => next.authority.prepareCapacityOvertime(restInput()), error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+  }
+});
+
+test('capacity overtime cancellation frees all four locks and exact retry stays the original canceled identity', async () => {
+  const { createBookingAppointmentLifecycle } = require('./bookingAuthorityAppointmentLifecycle');
+  const { db, authority } = capacityFixture();
+  const request = await confirmedCapacity(authority);
+  const saved = await authority.createCapacityOvertime(request);
+  const lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: {}, clock: () => new Date(CLOCK), serverTimestamp: () => 'SERVER_TIMESTAMP' });
+  await lifecycle.cancelAppointment({ appointmentId: saved.appointmentId, reason: 'Test', actor: { id: 'office-1' } });
+  for (const id of saved.appointment.capacityLockIds) assert.equal(db.read(`bookingCapacityLocks/${id}`).active, false);
+  assert.equal((await authority.createCapacityOvertime(request)).appointment.status, 'cancelled');
+  assert.equal((await authority.createCapacityOvertime(await confirmedCapacity(authority, restInput({ requestId: 'capacity-replacement' })))).success, true);
+});

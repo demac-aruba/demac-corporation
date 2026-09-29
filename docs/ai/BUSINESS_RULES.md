@@ -221,3 +221,20 @@ Production activation remains separately owner-approved through the server-side 
   Ordinary reschedule/move clears current planning metadata and keeps the original audit event.
 - Owner: DEMAC Operations / Booking Authority. Source: Christian's Scheduling & Dispatch request
   2026-09-29. Migration: none; existing appointments, CRM and calendar records are not rewritten.
+
+## New regular booking beyond afternoon capacity
+
+- `OPS-SCHED-CREATE-OT-001` — Owner request 2026-09-29: an authenticated office operator may
+  explicitly accept possible overtime when creating a fixed-workload Regular Booking in a Van's
+  remaining ordinary afternoon tail. This extends the prior transfer-only exception to creation.
+  Read-only preparation states required slots, available ordinary slots and estimated finish;
+  confirmation binds actor, work, dated crew/schedule and exact request. Four services at 13:30
+  preserve four slots through 17:30, with three ordinary slots. Three at 14:30 preserve three
+  slots through 17:30, with two ordinary slots. Fitting work uses the ordinary booking route.
+- Only the end of ordinary capacity may be exceeded. Existing reservations/holds, crew absence,
+  unavailable Vans, company closure, weekly rest, protected lunch and midnight remain enforced.
+  Canonical Appointment/Work Order/locks are atomic, replay is exact, and canceled consent writes
+  no appointment. Explicit single-Van overtime never silently replaces a selected support booking.
+- Persist `scheduledOvertime.kind = capacity_overflow_overtime` as accepted planning evidence,
+  displayed as possible overtime. Ordinary/automated availability and actual payroll remain
+  unchanged; elapsed real attendance determines payable overtime. No existing data migration.

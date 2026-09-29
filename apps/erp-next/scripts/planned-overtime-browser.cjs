@@ -33,7 +33,7 @@ let date = addDays(today, 1);
 if (new Date(`${date}T12:00:00Z`).getUTCDay() === 0) date = addDays(date, 1);
 const dateLabel = new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const stubs = {
-  'auth-provider': `const principal={userId:'demo-office',displayName:'Synthetic office operator',active:true,capabilities:new Set(['scheduling.view','scheduling.manage'])};export function useAuth(){return {principal,refreshPrincipal:async()=>{}};}`,
+  'auth-provider': `const principal={userId:'demo-office',displayName:'Synthetic office operator',active:true,capabilities:new Set(['scheduling.view','scheduling.manage'])};const refreshPrincipal=async()=>{};export function useAuth(){return {principal,refreshPrincipal};}`,
   'session': `export async function requireFirebaseWebSession(){return {uid:'demo-office',idToken:'synthetic-overtime-token'};}`,
   'isolated-preview': `export function firebaseTransportUrl(url){const u=new URL(url);if(u.hostname==='firestore.googleapis.com')return '/firestore'+u.pathname+u.search;if(u.hostname==='us-central1-demo-demac-overtime.cloudfunctions.net'&&u.pathname==='/officeBookingAuthority')return '/authority';throw Error('Non-synthetic destination rejected: '+u.hostname);}`,
 };
@@ -41,6 +41,7 @@ const entry = `import React from 'react';import {createRoot} from 'react-dom/cli
 const actions = [];
 let loseCreateResponse = false;
 async function main() {
+  fs.rmSync(path.join(output, 'integration-result.json'), { force: true });
   await resetSynthetic(db, date);
   await db.doc('clients/DEMO-CUSTOMER').update({ name: 'Synthetic overtime customer' });
   await db.doc('properties/DEMO-PROPERTY').update({ name: 'Synthetic overtime property' });
@@ -60,7 +61,7 @@ async function main() {
         const requestBody = JSON.parse(body.toString());
         actions.push(requestBody);
         const result = await facade.handle({ method: req.method, headers: req.headers, body: requestBody });
-        if (loseCreateResponse && requestBody.action === 'create_rest_day_overtime' && result.status === 200) { loseCreateResponse = false; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+        if (loseCreateResponse && ['create_rest_day_overtime', 'create_capacity_overtime'].includes(requestBody.action) && result.status === 200) { loseCreateResponse = false; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
         res.writeHead(result.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body)); return;
       }
       if (req.url.startsWith('/firestore/v1/projects/demo-demac-overtime/')) {
@@ -141,6 +142,51 @@ async function main() {
     await drawer.waitFor({ state: 'detached' });
     const emergency = (await db.collection('appointments').where('primaryVanId', '==', 'VAN-3').get()).docs[0].data();
     assert.equal(emergency.date, date); assert.equal(emergency.afterHoursOpenEnded, true);
+    // The reported case: new regular four-service booking on an ordinary Van afternoon.
+    await db.doc('vans/VAN-4').update({ status: 'Disponible' });
+    await page.reload();
+    await page.locator('[data-schedule-day]').filter({ hasText: dateLabel }).click();
+    const van4 = page.getByRole('region', { name: 'Van 4 schedule', exact: true });
+    await van4.getByRole('button', { name: 'Book VAN-4 at 1:30 PM', exact: true }).click();
+    await drawer.getByPlaceholder(/Name, company, phone/).fill('Synthetic overtime');
+    await drawer.getByRole('button').filter({ hasText: 'Synthetic overtime customer' }).first().click();
+    await drawer.getByRole('button', { name: /Standard Service/ }).first().click();
+    for (let i = 0; i < 2; i++) await drawer.getByRole('button', { name: '＋', exact: true }).click();
+    await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    assert.equal(await drawer.getByRole('button', { name: 'Confirmar con posible overtime', exact: true }).count(), 0);
+    await drawer.getByRole('button', { name: '＋', exact: true }).click();
+    const capacityConfirm = drawer.getByRole('button', { name: 'Confirmar con posible overtime', exact: true });
+    await capacityConfirm.waitFor();
+    assert.match(await drawer.innerText(), /requiere 4 cupos y quedan 3 cupos normales/);
+    // Changing the scope retires the proposal; returning to four regenerates it.
+    await drawer.getByRole('button', { name: '−', exact: true }).click();
+    await capacityConfirm.waitFor({ state: 'detached' });
+    await drawer.getByRole('button', { name: '＋', exact: true }).click();
+    await capacityConfirm.waitFor();
+    acceptDialog = false;
+    await Promise.all([page.waitForEvent('dialog'), capacityConfirm.click()]);
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Confirmar con posible overtime' && !button.disabled));
+    assert.equal(actions.filter(item => item.action === 'create_capacity_overtime').length, 0);
+    assert.equal((await db.collection('appointments').where('primaryVanId', '==', 'VAN-4').get()).size, 0);
+    assert(dialogs.some(message => message.includes('requiere 4 cupos') && message.includes('3 cupos normales') && message.includes('5:30 PM')));
+    await page.screenshot({ path: path.join(output, 'capacity-overtime-warning.png'), fullPage: true });
+    acceptDialog = true; loseCreateResponse = true;
+    await capacityConfirm.click();
+    await drawer.getByRole('button', { name: 'Recuperar reserva original' }).waitFor();
+    await page.keyboard.press('Escape');
+    await drawer.getByRole('button', { name: 'Recuperar reserva original' }).click();
+    await drawer.waitFor({ state: 'detached' });
+    const capacityCreates = actions.filter(item => item.action === 'create_capacity_overtime');
+    assert.equal(capacityCreates.length, 2); assert.deepEqual(capacityCreates[0].data, capacityCreates[1].data);
+    const capacitySaved = (await db.collection('appointments').where('primaryVanId', '==', 'VAN-4').get()).docs;
+    assert.equal(capacitySaved.length, 1); assert.equal(capacitySaved[0].data().endTime, '17:30');
+    assert.equal(capacitySaved[0].data().capacityLockIds.length, 4);
+    await page.reload();
+    await page.locator('[data-schedule-day]').filter({ hasText: dateLabel }).click();
+    await van4.getByText('Posible overtime aceptado', { exact: false }).waitFor();
+    assert.equal(await van4.getByText('descanso semanal', { exact: false }).count(), 0);
+    assert.equal(await van4.getByText('Outside canonical operating capacity', { exact: false }).count(), 0);
+    await page.screenshot({ path: path.join(output, 'capacity-overtime-saved.png'), fullPage: true });
     // Mobile review of actual persisted agenda.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Next van', exact: true }).click();
@@ -148,7 +194,7 @@ async function main() {
     assert.deepEqual(errors, []); assert.deepEqual(external, []);
     assert.equal((await db.collection('employeeTimesheets').get()).size, 0);
     assert.equal((await db.collection('whatsappOutboundQueue').get()).size, 0);
-    fs.writeFileSync(path.join(output, 'integration-result.json'), JSON.stringify({ status: 'PASS', date, scenarios: ['future emergency', 'rest warning cancel', 'four services', 'final cancel', 'lost response exact retry', 'Escape preserves recovery', 'reload overtime slots', 'unavailable Van'], pageErrors: errors, externalRequests: external }, null, 2));
+    fs.writeFileSync(path.join(output, 'integration-result.json'), JSON.stringify({ status: 'PASS', date, scenarios: ['future emergency', 'rest warning cancel', 'four services', 'final cancel', 'lost response exact retry', 'Escape preserves recovery', 'reload overtime slots', 'unavailable Van', 'ordinary three-slot booking unchanged', 'new four-service afternoon booking', 'scope change retires warning', 'capacity confirmation cancel writes nothing', 'capacity lost-response exact retry', 'capacity reload label and four locks'], pageErrors: errors, externalRequests: external }, null, 2));
     console.log('PASS integrated browser assertions; checking agent-browser CLI smoke separately.');
     // Keep CLI smoke failure visible; never turn a failed tool check into PASS.
     const cli = path.join(testTools, 'node_modules/.bin/agent-browser');
