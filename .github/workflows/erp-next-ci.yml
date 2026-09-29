@@ -76,6 +76,19 @@ jobs:
           SCHEDULING_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           SCHEDULING_TEST_OUTPUT: ${{ runner.temp }}/scheduling-evidence
         run: node apps/erp-next/scripts/scheduling-refresh-browser.cjs
+      - name: Partial-day attendance payment decision and save in desktop and mobile
+        env:
+          ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence
+        run: node apps/erp-next/scripts/employee-partial-day-browser.cjs
+      - name: Retain synthetic attendance browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attendance-partial-day-browser-evidence
+          path: ${{ runner.temp }}/attendance-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain synthetic browser evidence
         if: always()
         uses: actions/upload-artifact@v4
