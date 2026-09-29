@@ -35,7 +35,7 @@ async function verify(browser, origin, name, viewport) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   const errors = [], external = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => { errors.push(error.message); console.error('Property browser error:', error.message); });
   await context.route('**/*', route => {
     if (new URL(route.request().url()).origin === origin) return route.continue();
     external.push(route.request().url()); return route.abort();
@@ -45,7 +45,15 @@ async function verify(browser, origin, name, viewport) {
   const zone = page.getByLabel('Zona *', { exact: true });
   const create = page.getByRole('button', { name: 'Crear propiedad', exact: true });
   const saved = () => page.evaluate(() => window.saved.at(-1));
-  const fresh = () => page.goto(origin);
+  const fresh = async () => {
+    await page.goto(origin);
+    try { await page.getByRole('dialog').waitFor({ timeout: 10000 }); }
+    catch (error) {
+      await page.screenshot({ path: path.join(output, `${name}-load-failure.png`), fullPage: true });
+      console.error('Property editor failed to mount:', JSON.stringify({ errors, external, body: await page.locator('body').innerText() }));
+      throw error;
+    }
+  };
 
   await fresh();
   await house.fill('54 C');
