@@ -41,7 +41,8 @@ async function runCase(browser, origin, name, viewport) {
   assert.equal(await page.getByText('Unused scheduled break', { exact: true }).count(), 0);
   assert.equal(await page.getByText('Break applied to early departure', { exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Classify Missing Time to Save' }).isDisabled(), true);
-  const treatment = page.getByLabel('Payment Treatment', { exact: true });
+  // A wrapping label also includes the select's option text in its name.
+  const treatment = page.getByRole('combobox', { name: /^Payment Treatment\b/ });
   await treatment.selectOption('paid');
   assert.equal(await page.getByRole('button', { name: 'Classify Missing Time to Save' }).isDisabled(), true);
   await page.getByLabel('Reason', { exact: true }).fill('Approved synthetic permission');
