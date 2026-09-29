@@ -71,6 +71,21 @@ jobs:
           npm install --prefix apps/erp-next --no-audit --no-fund
           npm install --prefix "$SCHEDULING_TEST_TOOLS" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
           "$SCHEDULING_TEST_TOOLS/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Property address autocomplete on desktop and mobile
+        env:
+          ADDRESS_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          ADDRESS_TEST_OUTPUT: ${{ runner.temp }}/address-evidence
+        run: node apps/erp-next/scripts/property-address-browser.cjs
+      - name: Retain synthetic property address browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-address-browser-evidence
+          path: |
+            ${{ runner.temp }}/address-evidence/*.png
+            ${{ runner.temp }}/address-evidence/results.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Real 90-second desktop and mobile refresh simulations
         env:
           SCHEDULING_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools

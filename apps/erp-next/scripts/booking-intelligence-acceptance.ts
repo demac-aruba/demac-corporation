@@ -7,6 +7,7 @@ import { rankRouteAwareCandidates } from '../lib/booking-intelligence/route-rank
 import { summarizeAppointmentScope } from '../lib/booking-intelligence/appointment-scope';
 import { formatArubaServiceAddress, navigationUrlForAddress, parseArubaAddressParts, parseLocationInput, resolveArubaAddressSuggestion, suggestArubaServiceAddresses } from '../lib/booking-intelligence/address';
 import type { BookingRequest, CandidateSlot, DispatchJob } from '../lib/scheduling';
+import { composePropertyAddress, selectPropertyAddress, splitPropertyAddress } from '../lib/property-address-draft';
 
 const identity = resolveCustomerIdentity(
   { name: 'Christian Marquez', phone: '5606772', email: '' },
@@ -55,6 +56,27 @@ assert.equal(tankiSuggestions[0]?.demacSector, 'Oranjestad');
 const tankiResolved = resolveArubaAddressSuggestion('Tanki Leendert 23 apt 2', tankiSuggestions[0]);
 assert.equal(tankiResolved.address, 'Tanki Leendert 23, Apt 2');
 assert.equal(tankiResolved.sector, 'Oranjestad', 'Unit details must never erase the derived DEMAC sector.');
+
+const blanco = suggestArubaServiceAddresses('Sero Blanco', 6).find((item) => item.canonical === 'Seroe Blanco');
+assert(blanco, 'An incomplete/misspelled address must still offer the canonical Aruba name.');
+const separateHouse = selectPropertyAddress({ street: 'Sero Blanco', house: '54 C' }, blanco);
+assert.equal(separateHouse.address, 'Seroe Blanco 54 C');
+assert.equal(separateHouse.zone, 'Oranjestad Centro');
+assert.equal(separateHouse.neighborhood, 'Seroe Blanco');
+assert.equal(composePropertyAddress({ ...separateHouse.draft, house: '175K' }), 'Seroe Blanco 175K');
+const pastedHouse = selectPropertyAddress({ street: 'Seru Blanco 23-B', house: '99' }, blanco);
+assert.equal(pastedHouse.address, 'Seroe Blanco 23-B', 'A pasted number must not be lost or duplicated.');
+const legacyApartment = splitPropertyAddress('Tanki Leendert 23 A, Apt 2');
+assert.deepEqual(legacyApartment, { street: 'Tanki Leendert', house: '23A, Apt 2' });
+assert.equal(composePropertyAddress(legacyApartment), 'Tanki Leendert 23A, Apt 2');
+assert.equal(selectPropertyAddress(legacyApartment, blanco).address, 'Seroe Blanco 23A, Apt 2');
+const betico = suggestArubaServiceAddresses('Betico Croes 42', 1)[0];
+const playa = selectPropertyAddress({ street: 'Betico Croes 42', house: '' }, betico);
+assert.equal(playa.address, 'Caya G. F. Betico Croes 42');
+assert.equal(playa.neighborhood, 'Playa');
+assert.equal(playa.zone, 'Oranjestad Centro');
+const missingZone = selectPropertyAddress({ street: 'Acordeonstraat', house: '12' }, suggestArubaServiceAddresses('Acordeonstraat', 1)[0]);
+assert.equal(missingZone.zone, '', 'Unknown OSM metadata must not invent or retain a previous zone.');
 
 const mapsMeLocation = parseLocationInput('mapsme://map?v=1&ll=12.450000,-69.950000');
 assert.equal(mapsMeLocation?.latitude, 12.45, 'MAPS.ME-style ll coordinates should be captured.');
