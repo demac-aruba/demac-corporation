@@ -180,11 +180,20 @@ Production activation remains separately owner-approved through the server-side 
   Explicit `employeeTimesheets` records are created only for payroll-relevant exceptions.
 - For a worked day, overtime is derived deterministically from the resolved schedule and
   actual Clock In, Clock Out, and Break Minutes. Early start, late finish, and unused
-  scheduled break add independently; overtime is not a manual payroll input.
+  scheduled break add independently after applying unused break to early departure as
+  described below; overtime is not a manual payroll input.
 - Late arrival, early departure, and break time beyond the scheduled break are independent
   missing-scheduled-time segments. Each segment must be explicitly classified as Paid or
   No Work No Pay and carry a reason before it can be saved.
-- Overtime and missing scheduled time never offset each other. Payroll retains both facts.
+- `OPS-STAFF-ATTENDANCE-BREAK-END`: unused scheduled break first covers an early
+  departure from a shift actually worked within the scheduled interval. Only the remaining
+  unused break becomes overtime and only the uncovered departure requires Paid/No Work
+  No Pay classification. For 08:00–17:00 / 480 scheduled minutes, break 0 and departure at
+  16:00 / 16:30 / 17:00 produce 0 / 30 / 60 overtime minutes and 480 regular minutes.
+  This does not offset late arrival or missing time using early-start/late-finish overtime.
+  Shifted breaks remain explicit attendance records even when payroll totals match normal
+  attendance; retain actual Clock In/Out and Break Minutes, never a fictitious break.
+- All other overtime and missing scheduled time remain independent. Payroll retains both facts.
 - Paid partial missing time contributes to paid-free time; unpaid partial missing time
   contributes to No Work No Pay. A partially affected employee can remain `Present`.
 - New or edited explicit attendance records preserve an additive snapshot of the resolved

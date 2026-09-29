@@ -11,6 +11,7 @@ import {
 import {
   ATTENDANCE_STATUS_LABELS,
   dateKey,
+  hasAttendanceTimeChange,
   loadEmployeeAttendanceState,
   payrollPeriodBounds,
   saveAttendanceDay,
@@ -221,6 +222,7 @@ export function EmployeeWorkspace() {
   });
   const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular
     && draft?.status === 'Present'
+    && !hasAttendanceTimeChange(selectedRecord.schedule, draft)
     && (selectedVariance?.overtimeMinutes ?? 0) === 0
     && detectedAttendanceExceptions.length === 0
     && !draft?.notes.trim());
@@ -461,6 +463,7 @@ export function EmployeeWorkspace() {
                   {selectedVariance.earlyStartMinutes > 0 ? <SummaryRow icon="clock" label="Early start" value={hoursAndMinutes(selectedVariance.earlyStartMinutes)} tone="blue" /> : null}
                   {selectedVariance.lateFinishMinutes > 0 ? <SummaryRow icon="clock" label="Late finish" value={hoursAndMinutes(selectedVariance.lateFinishMinutes)} tone="blue" /> : null}
                   {selectedVariance.unusedBreakMinutes > 0 ? <SummaryRow icon="timer" label="Unused scheduled break" value={hoursAndMinutes(selectedVariance.unusedBreakMinutes)} tone="green" /> : null}
+                  {selectedVariance.breakAppliedToEarlyDepartureMinutes > 0 ? <SummaryRow icon="clock" label="Break applied to early departure" value={hoursAndMinutes(selectedVariance.breakAppliedToEarlyDepartureMinutes)} tone="blue" /> : null}
                 </div> : null}
 
                 {detectedAttendanceExceptions.map((segment) => {

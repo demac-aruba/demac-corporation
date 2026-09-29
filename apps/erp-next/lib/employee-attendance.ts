@@ -370,6 +370,12 @@ export async function saveSalaryAdvance(input: {
   return advance;
 }
 
+export function hasAttendanceTimeChange(schedule: AttendanceSchedule, draft: Pick<AttendanceDayDraft, 'clockInTime' | 'clockOutTime' | 'breakMinutes'>) {
+  return draft.clockInTime !== schedule.startTime
+    || draft.clockOutTime !== schedule.endTime
+    || draft.breakMinutes !== scheduledBreakMinutes(schedule);
+}
+
 export async function saveAttendanceDay(input: {
   employee: CanonicalStaffProfile;
   date: string;
