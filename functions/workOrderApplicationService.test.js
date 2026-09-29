@@ -239,6 +239,32 @@ test("existing attendance and after-hours evidence are unioned without double co
   assert.equal(entry.overtimeReconciliationRequired, false);
 });
 
+test("after-hours completion preserves regular pay and shifted-break overtime on replay", async () => {
+  const existingId = `driver-1_${WORK_DATE}`;
+  const { db, service } = fixture({
+    [`employeeTimesheets/${existingId}`]: existingAttendance({
+      clockOutTime: "16:30",
+      breakMinutes: 0,
+      overtimeMinutes: 30,
+      overtimeHours: 0.5,
+      workedMinutes: 510,
+      attendanceExceptions: [],
+      overtimeCalculationSource: "attendance_authority",
+    }),
+  });
+  await service.completeAfterHours(input());
+  await service.completeAfterHours(input());
+  const entry = db.read(`employeeTimesheets/${existingId}`);
+  assert.equal(entry.regularHours, 8);
+  assert.equal(entry.overtimeMinutes, 135, "30 shifted-break overtime minutes plus 105 after-hours minutes, once.");
+  assert.equal(entry.workedMinutes, 615);
+  assert.equal(entry.noWorkNoPayHours, 0);
+  assert.equal(entry.breakMinutes, 0);
+  assert.equal(entry.clockOutTime, "16:30");
+  assert.deepEqual(entry.attendanceExceptions, []);
+  assert.equal(entry.workOrderAttendanceSegments.length, 1);
+});
+
 test("work-order evidence fully covered by the attendance interval is not added twice", async () => {
   const existingId = `driver-1_${WORK_DATE}`;
   const { db, service } = fixture({

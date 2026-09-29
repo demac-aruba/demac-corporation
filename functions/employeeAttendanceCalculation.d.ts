@@ -43,6 +43,7 @@ export type AttendanceVariance = {
   earlyStartMinutes: number;
   lateFinishMinutes: number;
   unusedBreakMinutes: number;
+  breakAppliedToEarlyDepartureMinutes: number;
   overtimeMinutes: number;
   lateArrivalMinutes: number;
   earlyDepartureMinutes: number;
