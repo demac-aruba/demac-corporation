@@ -6,6 +6,8 @@ on:
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -57,6 +59,8 @@ on:
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -134,6 +138,7 @@ jobs:
           node --check functions/bootstrap.js
           node --check functions/officeBookingAuthority.js
           node --check functions/officeBookingAuthorityFacade.js
+          node --check functions/officeBookingAuthorityPartialWrapper.js
           node --check functions/appointmentCommunicationAuthority.js
           node --check functions/appointmentCommunicationRenderer.js
           node --check functions/vanScheduleCommunicationAuthority.js
@@ -172,6 +177,7 @@ jobs:
           node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
           node --test functions/projectOperatorBooking.test.js
+          node --test functions/officeBookingAuthorityFacadeProject.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js
           node --test functions/officeBookingAuthorityCommunication.test.js
           node --test functions/officeBookingAuthorityCatalog.test.js
           node --test functions/officeBookingAuthorityMasterData.test.js
