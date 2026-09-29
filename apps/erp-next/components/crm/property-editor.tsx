@@ -5,7 +5,8 @@ import type { BookingContact } from '@/lib/customer-contacts';
 import { OfficeBookingRequestError } from '@/lib/office-booking-authority';
 import { loadPropertyLocations, type LocationDraft, type PropertyLocationData } from '@/lib/property-locations';
 import { changedDwellings, dwellingDrafts, dwellingTypeLabels, emptyPropertyEditor, newDwelling, validateDwellingDrafts, type DwellingDraft, type PropertyEditorValue } from '@/lib/property-editor-draft';
-import { suggestArubaAddresses } from '@/lib/aruba-address-directory';
+import { splitPropertyAddress } from '@/lib/property-address-draft';
+import { PropertyAddressFields } from './property-address-fields';
 import { useDialogFocus } from './use-dialog-focus';
 import { PropertyIcon } from './property-icons';
 import styles from './property-editor.module.css';
@@ -22,6 +23,7 @@ const message = (cause: unknown) => cause instanceof Error ? cause.message : 'No
 /** One draft and one atomic save for the property and its independent units. */
 export function PropertyEditor({ mode, requestId, customerId, customerName, contacts, initial, extraFields, submitLabel, validationMessage, onClose, onSave }: Props) {
   const [form, setForm] = useState<PropertyEditorValue>(initial ?? emptyPropertyEditor);
+  const [addressDraft, setAddressDraft] = useState(() => splitPropertyAddress(initial?.address || ''));
   const [data, setData] = useState<PropertyLocationData | null>(null);
   const [rows, setRows] = useState<DwellingDraft[]>([]);
   const [original, setOriginal] = useState<DwellingDraft[]>([]);
@@ -39,7 +41,6 @@ export function PropertyEditor({ mode, requestId, customerId, customerName, cont
   const inFlight = useRef(false);
   const sequence = useRef(0);
   const titleId = useId();
-  const addressListId = useId();
   const dialogRef = useDialogFocus(true, onClose, saving || uncertain);
   const load = useCallback(async () => {
     if (mode !== 'edit' || !initial?.id) return;
@@ -53,6 +54,7 @@ export function PropertyEditor({ mode, requestId, customerId, customerName, cont
       setRows(drafts); setOriginal(drafts); setMultiple(drafts.length > 0);
       const property = result.property;
       setForm({ id: property.id, expectedUpdatedAt: property.updatedAt, name: property.name || '', type: property.type || 'Casa', address: property.address || property.addressRaw || '', zone: property.zone || property.operationalZone || '', neighborhood: property.neighborhood || '', accessInstructions: property.accessInstructions || '', notes: property.notes || '' });
+      setAddressDraft(splitPropertyAddress(property.address || property.addressRaw || ''));
       setPrincipalType(drafts.some((row) => row.type === 'main_office') || property.type === 'Complejo de apartamentos' ? 'main_office' : 'main_house');
     } catch (cause) { if (sequence.current === current) { setError(message(cause)); setLoadFailed(true); } }
     finally { if (sequence.current === current) setLoading(false); }
@@ -100,7 +102,6 @@ export function PropertyEditor({ mode, requestId, customerId, customerName, cont
   const title = mode === 'create' ? 'Crear propiedad' : 'Editar propiedad';
   const blocked = saving || uncertain || loading || loadFailed;
   const principalLabel = dwellingTypeLabels[principalType];
-  const suggestions = form.address.length > 1 ? suggestArubaAddresses(form.address, 6) : [];
 
   return <div className={styles.overlay}>
     <section ref={dialogRef} className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={loading || saving}>
@@ -115,8 +116,9 @@ export function PropertyEditor({ mode, requestId, customerId, customerName, cont
 
               <div className={styles.fields}>
                 <label className={`${styles.field} ${styles.full}`}><span>Nombre de la propiedad</span><input autoFocus value={form.name} maxLength={180} onChange={(event) => update('name', event.target.value)} placeholder="Ej. Morgenster Apartments" /></label>
-                <label className={`${styles.field} ${styles.full}`}><span>Dirección completa *</span><input required value={form.address} list={addressListId} onChange={(event) => { const address = event.target.value; const match = suggestions.find((item) => item.canonical === address); setForm((current) => ({ ...current, address, ...(match ? { zone: match.operationalZone || current.zone, neighborhood: match.neighborhood || current.neighborhood } : {}) })); }} placeholder="Calle y número de propiedad" /><datalist id={addressListId}>{suggestions.map((suggestion) => <option key={suggestion.canonical} value={suggestion.canonical} />)}</datalist></label>
-                <label className={styles.field}><span>Zona *</span><input required value={form.zone} onChange={(event) => update('zone', event.target.value)} placeholder="Ej. Oranjestad" /></label>
+                <PropertyAddressFields draft={addressDraft} zone={form.zone} onChange={(draft, value) => {
+                  setAddressDraft(draft); setForm((current) => ({ ...current, ...value }));
+                }} />
 
                 <label className={styles.field}><span>Tipo de propiedad</span><select value={form.type} onChange={(event) => { update('type', event.target.value); setPrincipalType(event.target.value === 'Complejo de apartamentos' ? 'main_office' : 'main_house'); }}><option>Casa</option><option>Complejo de apartamentos</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option>{!['Casa', 'Complejo de apartamentos', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'].includes(form.type) ? <option>{form.type}</option> : null}</select></label>
               </div>
