@@ -243,6 +243,19 @@ test('a later canonical reschedule clears the current overtime estimate but pres
   assert.deepEqual(db.read('appointments/APT-LIVE-1').lifecycleHistory[0].possibleOvertime, acceptance);
 });
 
+test('a normal reschedule clears weekly-rest overtime but retains acceptance history', async () => {
+  const acceptance = { accepted: true, capacityEnd: '17:30' };
+  const { db, lifecycle } = fixture({
+    'appointments/APT-LIVE-1': { ...appointmentSeed(), scheduledOvertime: acceptance, lifecycleHistory: [{ kind: 'operational_move', possibleOvertime: acceptance }] },
+    'bookingOffers/OFR-RESCHEDULE-1': openOffer(),
+  });
+  const result = await lifecycle.rescheduleAppointment({ appointmentId: 'APT-LIVE-1', offerId: 'OFR-RESCHEDULE-1', offerVersion: 1, optionId: 'OPT-NEW', reason: 'Return to ordinary schedule', actor: { id: 'owner-1' } });
+  assert.equal(result.appointment.scheduledOvertime, null);
+  assert.equal(db.read('appointments/APT-LIVE-1').scheduledOvertime, null);
+  assert.equal(db.read('workOrders/WO-APT-LIVE-1-1').scheduledOvertime, null);
+  assert.deepEqual(db.read('appointments/APT-LIVE-1').lifecycleHistory[0].possibleOvertime, acceptance);
+});
+
 test("details edit may change workload but never date, start time, or primary Van", () => {
   assert.doesNotThrow(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
     date: "2098-12-20",

@@ -135,10 +135,12 @@ function workOrderCapacityInterval(order, services, halfDay) {
   const capacityEnd = clockMinutes(endTimeFromOccupiedSlots(lockSlots));
   const boundedMoveEnd = order?.operationalMoveOvertime?.accepted === true
     ? clockMinutes(order.operationalMoveOvertime.capacityEnd) : null;
+  const scheduledOvertimeEnd = order?.scheduledOvertime?.accepted === true
+    ? clockMinutes(order.scheduledOvertime.capacityEnd) : null;
   return {
     start,
     end,
-    capacityEnd: fullDay && operationalEnd !== null ? operationalEnd : Math.max(end, capacityEnd ?? end, boundedMoveEnd ?? end),
+    capacityEnd: fullDay && operationalEnd !== null ? operationalEnd : Math.max(end, capacityEnd ?? end, boundedMoveEnd ?? end, scheduledOvertimeEnd ?? end),
     durationMinutes,
     lockSlots,
   };

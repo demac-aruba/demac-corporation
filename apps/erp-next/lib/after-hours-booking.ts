@@ -18,7 +18,7 @@ function endpoint() {
   return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
 }
 
-export async function createAfterHoursEmergency(input: {
+export type SpecialBookingInput = {
   dwellingId?: string; requesterId?: string; accessContactId?: string;
   requestId: string;
   customerId: string;
@@ -30,7 +30,18 @@ export async function createAfterHoursEmergency(input: {
   customerFacingDescription?: string;
   technicianInstructions?: string;
   recipientSelections?: AppointmentRecipientSelection[];
-}) {
+};
+
+export type RestDayOvertimeProposal = {
+  date: string; vanId: string; vanName: string; start: string; estimatedEnd: string; capacityEnd: string;
+  requiredSlots: number; durationMinutes: number; regularEnd: string; confirmationToken: string;
+};
+
+export class SpecialBookingError extends Error {
+  constructor(message: string, readonly uncertain: boolean) { super(message); }
+}
+
+async function specialBookingRequest<T>(action: string, input: SpecialBookingInput & { overtimeConsent?: { accepted: true; confirmationToken: string } }): Promise<T> {
   const session = await requireFirebaseWebSession();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 12_000);
@@ -41,7 +52,7 @@ export async function createAfterHoursEmergency(input: {
         Authorization: `Bearer ${session.idToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ action: 'create_after_hours_emergency', data: input }),
+      body: JSON.stringify({ action, data: input }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({})) as AfterHoursEmergencyResult & {
@@ -49,18 +60,29 @@ export async function createAfterHoursEmergency(input: {
     };
     if (!response.ok) {
       const reason = typeof payload.error?.details?.reason === 'string' ? ` · ${payload.error.details.reason}` : '';
-      throw new Error(`${payload.error?.message ?? 'After-hours emergency could not be created.'}${reason}`);
+      throw new SpecialBookingError(`${payload.error?.message ?? 'The booking could not be created.'}${reason}`, response.status >= 500);
     }
-    if (!payload.success || !payload.appointmentId || !payload.workOrderIds?.length) {
-      throw new Error('Booking Authority did not return a verified after-hours Work Order. Nothing was scheduled.');
+    if (!payload.success || (action !== 'prepare_rest_day_overtime' && (!payload.appointmentId || !payload.workOrderIds?.length))) {
+      throw new SpecialBookingError('The booking response could not be verified. Retry the original request.', true);
     }
-    return payload;
+    return payload as T;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Booking Authority took too long to respond. Nothing was scheduled.');
+      throw new SpecialBookingError('The booking response timed out. Retry the original request to verify whether it was saved.', true);
     }
-    throw error;
+    if (error instanceof SpecialBookingError) throw error;
+    throw new SpecialBookingError(error instanceof Error ? error.message : 'Booking connection failed.', true);
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+export function createAfterHoursEmergency(input: SpecialBookingInput) {
+  return specialBookingRequest<AfterHoursEmergencyResult>('create_after_hours_emergency', input);
+}
+export function prepareRestDayOvertime(input: SpecialBookingInput) {
+  return specialBookingRequest<{ success: true; proposal: RestDayOvertimeProposal }>('prepare_rest_day_overtime', input);
+}
+export function createRestDayOvertime(input: SpecialBookingInput & { overtimeConsent: { accepted: true; confirmationToken: string } }) {
+  return specialBookingRequest<AfterHoursEmergencyResult>('create_rest_day_overtime', input);
 }

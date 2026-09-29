@@ -200,3 +200,24 @@ Production activation remains separately owner-approved through the server-side 
   scheduled start, end, break allowance, and scheduled paid-free minutes. Existing records
   without snapshot fields remain valid; no historical backfill is required.
 - `CRM-LOCATION-001` (isolated preview): independent dwellings require explicit selection; stable Property-contained IDs and server membership checks preserve owner, contacts, equipment and visit scope. No apartment-count rule implies equipment count or automatic historical classification. See `decisions/ADR-20260921-property-dwellings.md`.
+
+## Planned emergency and weekly-rest work
+
+- `OPS-SCHED-PLANNED-OT-001` — Owner request 2026-09-29, effective with the approved release:
+  an authenticated office scheduler may create an after-hours emergency for today or a future
+  canonical open business date, starting at or after 17:00. Past dates remain rejected. The
+  dated Van/crew and open-ended emergency guard remain authoritative.
+- `OPS-SCHED-PLANNED-OT-002` — The same office scheduler may explicitly book a fixed workload
+  in a Van's recurring weekly rest window. Preparation is read-only; confirmation binds the
+  operator, request, dated crew/schedule, complete work selection and estimated finish. Three,
+  four or more required slots are preserved through the same-date end, including a bounded
+  extension after ordinary closing. All assigned crew must remain available; company closure,
+  protected lunch, overlapping Van/staff work, midnight and stale consent still block commit.
+  Only explicit office entry gets this exception; automated/ordinary availability is unchanged.
+  Appointment/Work Order and canonical locks commit atomically and exact retries do not duplicate.
+- Accepted weekly-rest work carries `scheduledOvertime` planning/audit metadata. It never writes
+  actual attendance, payroll amounts or a different weekly schedule. Actual payable overtime
+  continues to derive from real worked times against the employee's canonical schedule.
+  Ordinary reschedule/move clears current planning metadata and keeps the original audit event.
+- Owner: DEMAC Operations / Booking Authority. Source: Christian's Scheduling & Dispatch request
+  2026-09-29. Migration: none; existing appointments, CRM and calendar records are not rewritten.
