@@ -18,7 +18,7 @@ import {
   optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
 import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
-import { afterHoursTargetForVan, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
+import { afterHoursTargetForVan, canPlanAfterHours, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -522,3 +522,14 @@ requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short v
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
 console.log('Live scheduling acceptance passed: canonical duration drives elapsed work time while scheduled slot ownership drives capacity; flexible lunch, per-Van after-hours targeting, full-card booking, full-day Saturdays, half-days, closures and communication ownership remain protected.');
+
+requireCondition(canPlanAfterHours('2026-09-30', '2026-09-29'), 'Future emergency must be enabled.');
+requireCondition(!canPlanAfterHours('2026-09-28', '2026-09-29'), 'Past emergency remains blocked.');
+const restSlot = { dateKey: '2026-09-29', today: '2026-09-28', start: '13:30', companyOpen: true, vanAvailable: true, schedule: { workdayStart: '08:00', workdayEnd: '13:00' } };
+requireCondition(weeklyRestSlotEligible(restSlot), 'Weekly rest can be explicitly selected for overtime.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, vanAvailable: false }), 'Out-of-service Van is not weekly rest.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, companyOpen: false }), 'Closure cannot be overridden by weekly-rest booking.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, start: '08:30' }), 'Ordinary morning must retain normal booking.');
+const restBooking = projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], time: '13:30', vanId: 'VAN-2', appointmentDurationMinutes: 240, scheduledSlots: 4, appointmentEndTime: '17:30', appointmentCapacityEndTime: '17:30', scheduledOvertime: { accepted: true, capacityEnd: '17:30', slotStarts: ['13:30', '14:30', '15:30', '16:30'] } }], clients, properties, [], [], halfDayCapacity)[0];
+requireCondition(restBooking.assignments[0].scheduledOvertime === true && restBooking.assignments[0].capacitySlotStarts?.length === 4, 'Reload must retain scheduled overtime and all four slots on a half-day.');
+requireCondition(jobOwnsCapacityStart(restBooking.assignments[0], '16:30'), 'Fourth overtime slot must remain occupied after refresh.');

@@ -176,12 +176,12 @@ function input(overrides = {}) {
   };
 }
 
-test("after-hours emergency is same-day only", async () => {
+test("after-hours emergency rejects past dates", async () => {
   const { authority } = fixture({}, "2026-08-28T18:00:00.000Z");
   await assert.rejects(
     authority.createEmergency(input()),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST
-      && error.details?.reason === "after-hours-same-day-only",
+      && error.details?.reason === "after-hours-past-date",
   );
 });
 
@@ -356,4 +356,142 @@ test("after-hours emergency respects the canonical company closure calendar", as
     (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
       && error.details?.reason === "company-calendar-closed",
   );
+});
+
+const REST_DATE = '2026-09-29';
+function restFixture(extra = {}) {
+  return fixture({
+    'vanHalfDaySchedules/rest-1': { vanId: 'VAN-1', weekday: 2, active: true, workdayStart: '08:00', workdayEnd: '13:00' },
+    ...extra,
+  }, '2026-09-28T14:00:00.000Z');
+}
+const restInput = (extra = {}) => input({ requestedDate: REST_DATE, requestedTime: '13:30', quantity: 4,
+  actor: { id: 'office-1', name: 'Dispatcher', source: 'office-scheduling' }, ...extra });
+async function confirmedRest(authority, request = restInput()) {
+  const { proposal } = await authority.prepareRestDayOvertime(request);
+  return { ...request, overtimeConsent: { accepted: true, confirmationToken: proposal.confirmationToken } };
+}
+
+test('future after-hours emergencies preserve the selected date and dated crew; malformed dates fail', async () => {
+  const { authority } = restFixture();
+  const result = await authority.createEmergency(input({ requestedDate: REST_DATE }));
+  assert.equal(result.appointment.date, REST_DATE);
+  assert.equal(result.workOrder.date, REST_DATE);
+  assert.equal(result.workOrder.afterHoursOpenEnded, true);
+  for (const requestedDate of ['2026-02-30', 'tomorrow', '2026-13-01']) {
+    await assert.rejects(() => authority.createEmergency(input({ requestedDate })), /valid appointment date/);
+  }
+});
+
+test('weekly-rest preparation writes nothing; four services reserve 13:30 to 17:30 with audit', async () => {
+  const { db, authority } = restFixture();
+  const before = [...db.store];
+  const request = await confirmedRest(authority);
+  assert.deepEqual([...db.store], before);
+  const result = await authority.createRestDayOvertime(request);
+  assert.equal(result.appointment.endTime, '17:30');
+  assert.equal(result.appointment.capacityLockIds.length, 4);
+  assert.equal(result.workOrder.appointmentDurationMinutes, 240);
+  assert.equal(result.workOrder.scheduledSlots, 4);
+  assert.equal(result.workOrder.airConditionerCount, 4);
+  assert.equal(result.workOrder.afterHoursOpenEnded, undefined);
+  assert.equal(result.workOrder.scheduledOvertime.acceptedBy, 'office-1');
+  assert.deepEqual(result.workOrder.scheduledOvertime.slotStarts, ['13:30', '14:30', '15:30', '16:30']);
+  assert.equal(result.appointment.lifecycleHistory[0].kind, 'weekly_rest_overtime_booked');
+  assert.equal(db.read(`bookingCapacityLocks/${afterHoursGuard(REST_DATE, 'VAN-1').id}`).active, false);
+  assert.equal([...db.store.keys()].some((key) => /employeeTimesheets|payroll|whatsappOutboundQueue/.test(key)), false);
+});
+
+test('three services and mixed manual work retain canonical duration without ordinary capacity limit', async () => {
+  for (const [extra, minutes, slots, end] of [
+    [{ quantity: 3 }, 180, 3, '16:30'],
+    [{ workLines: [{ presetId: 'standard_service', quantity: 2 }, { presetId: 'other', quantity: 1, manualDurationMinutes: 90 }] }, 210, 4, '17:00'],
+    [{ quantity: 7 }, 420, 7, '20:30'],
+  ]) {
+    const { authority } = restFixture();
+    const result = await authority.createRestDayOvertime(await confirmedRest(authority, restInput(extra)));
+    assert.equal(result.workOrder.appointmentDurationMinutes, minutes);
+    assert.equal(result.workOrder.scheduledSlots, slots);
+    assert.equal(result.appointment.endTime, end);
+  }
+});
+
+test('confirmation is required and bound to actor, work, schedule and crew', async () => {
+  const { db, authority } = restFixture();
+  const before = [...db.store];
+  await assert.rejects(() => authority.createRestDayOvertime(restInput()), /Confirm the current overtime/);
+  assert.deepEqual([...db.store], before);
+  const request = await confirmedRest(authority);
+  for (const changed of [{ quantity: 3 }, { actor: { id: 'office-2', source: 'office-scheduling' } }, { customerFacingDescription: 'Changed scope' }]) {
+    await assert.rejects(() => authority.createRestDayOvertime({ ...request, ...changed }), /Confirm the current overtime/);
+  }
+  db.store.set('vanHalfDaySchedules/rest-1', { ...db.read('vanHalfDaySchedules/rest-1'), workdayEnd: '12:30' });
+  await assert.rejects(() => authority.createRestDayOvertime(request), /Confirm the current overtime/);
+});
+
+test('overtime retry is exact and changed payload is rejected without duplicate appointment', async () => {
+  const { db, authority } = restFixture();
+  const request = await confirmedRest(authority);
+  const saved = await authority.createRestDayOvertime(request);
+  assert.equal((await authority.createRestDayOvertime(request)).replayed, true);
+  await assert.rejects(() => authority.createRestDayOvertime({ ...request, quantity: 3 }), (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
+  assert.equal([...db.store.keys()].filter((key) => key.startsWith('appointments/')).length, 1);
+  assert.equal(db.read(`appointments/${saved.appointmentId}`).endTime, '17:30');
+});
+
+test('weekly-rest overtime rejects unavailable crew, duplicate crew, closures and ordinary slots', async () => {
+  const variants = [
+    { 'vans/VAN-1': { ...baseSeed()['vans/VAN-1'], status: 'Mantenimiento' } },
+    { 'staffProfiles/helper-1': { ...baseSeed()['staffProfiles/helper-1'], active: false } },
+    { 'staffAbsences/off': { staffId: 'driver-1', fromDate: REST_DATE, toDate: REST_DATE, active: true } },
+    { 'vans/VAN-2': { id: 'VAN-2', responsibleStaffId: 'driver-1', active: true } },
+    { 'calendarClosures/closed': { date: REST_DATE, active: true } },
+    { 'vanHalfDaySchedules/rest-1': { vanId: 'VAN-1', weekday: 3, active: true } },
+  ];
+  for (const extra of variants) {
+    const { db, authority } = restFixture(extra);
+    const before = [...db.store];
+    await assert.rejects(() => authority.prepareRestDayOvertime(restInput()), undefined, JSON.stringify(extra));
+    assert.deepEqual([...db.store], before);
+  }
+  const { authority } = restFixture();
+  await assert.rejects(() => authority.prepareRestDayOvertime(restInput({ requestedTime: '08:30' })), /blocked weekly rest/);
+  await assert.rejects(() => authority.prepareRestDayOvertime(restInput({ quantity: 11 })), /finish on the selected date/);
+  await assert.rejects(() => authority.prepareRestDayOvertime(restInput({ actor: { id: 'external' } })), /authenticated office/);
+});
+
+test('new conflict or orphan capacity lock after preparation fails without partial writes', async () => {
+  for (const orphan of [false, true]) {
+    const { db, authority } = restFixture();
+    const request = await confirmedRest(authority);
+    if (orphan) {
+      const { hashId } = require('./bookingSchedulingPrimitives');
+      const id = `BAL-${hashId(`${REST_DATE}|VAN-1|16:30`, 32).toUpperCase()}`;
+      db.store.set(`bookingCapacityLocks/${id}`, { active: true, appointmentId: 'other' });
+    } else db.store.set('workOrders/conflict', { date: REST_DATE, time: '16:00', vanId: 'VAN-1', status: 'Confirmada', appointmentDurationMinutes: 60 });
+    const before = [...db.store];
+    await assert.rejects(() => authority.createRestDayOvertime(request), (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('overtime and emergency intervals reject overlap but allow an emergency after the reserved end', async () => {
+  const { authority } = restFixture();
+  await authority.createRestDayOvertime(await confirmedRest(authority));
+  await assert.rejects(() => authority.createEmergency(input({ requestId: 'emergency-overlap', requestedDate: REST_DATE, requestedTime: '17:00' })), /reserved by a fixed-duration/);
+  await authority.createEmergency(input({ requestId: 'emergency-after-end', requestedDate: REST_DATE, requestedTime: '17:30' }));
+  const reverse = restFixture();
+  await reverse.authority.createEmergency(input({ requestedDate: REST_DATE, requestedTime: '17:30' }));
+  await reverse.authority.createRestDayOvertime(await confirmedRest(reverse.authority));
+});
+
+test('cancelling weekly-rest overtime releases its slots and preserves the emergency serialization guard', async () => {
+  const { createBookingAppointmentLifecycle } = require('./bookingAuthorityAppointmentLifecycle');
+  const { db, authority } = restFixture();
+  const saved = await authority.createRestDayOvertime(await confirmedRest(authority));
+  const lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: {}, clock: () => new Date(CLOCK), serverTimestamp: () => 'SERVER_TIMESTAMP' });
+  await lifecycle.cancelAppointment({ appointmentId: saved.appointmentId, reason: 'Test cancellation', actor: { id: 'office-1' } });
+  for (const id of saved.appointment.capacityLockIds) assert.equal(db.read(`bookingCapacityLocks/${id}`).active, false);
+  const next = await confirmedRest(authority, restInput({ requestId: 'replacement-overtime' }));
+  assert.equal((await authority.createRestDayOvertime(next)).success, true);
 });

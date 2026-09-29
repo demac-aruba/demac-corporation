@@ -43,6 +43,7 @@ type LiveWorkItem = {
 type LiveWorkOrder = {
   dwellingId?: string;
   locationSnapshot?: { locationLabel?: string; accessInstructions?: string };
+  scheduledOvertime?: { accepted?: boolean; capacityEnd?: string; slotStarts?: string[] } | null;
   operationalMoveOvertime?: { accepted?: boolean; capacityEnd?: string } | null;
   id: string;
   appointmentId?: string;
@@ -342,6 +343,7 @@ function assignmentCapacitySlotStarts(
   vanId: string,
   operationalState: LiveOperationalCapacityState | null,
 ) {
+  if (order.scheduledOvertime?.accepted && order.scheduledOvertime.slotStarts?.length) return order.scheduledOvertime.slotStarts.filter((slot) => Boolean(validTime(slot)));
   const schedule = canonicalSlotStarts(operationalState, vanId, text(order.date));
   if (order.fullDaySingleProperty === true) return schedule;
   const count = numericSlotCount(order.scheduledSlots)
@@ -455,7 +457,8 @@ function workOrderAssignment(
     segment: daySegment(start, end),
     vanId: resolvedVanId,
     capacitySlotStarts,
-    possibleOvertime: order.operationalMoveOvertime?.accepted === true,
+    possibleOvertime: order.operationalMoveOvertime?.accepted === true || order.scheduledOvertime?.accepted === true,
+    scheduledOvertime: order.scheduledOvertime?.accepted === true,
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),

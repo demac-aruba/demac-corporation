@@ -42,7 +42,7 @@ const stubs = {
   'live-operational-capacity': `export async function loadLiveOperationalCapacityState(){return {};} export function liveVanCrew(){return {label:'Synthetic crew'};}`,
   'aruba-address-directory': `export async function suggestArubaAddresses(){return [];}`,
   'property-communication-editor': `export function PropertyCommunicationPanel(){return null;} export function PropertyContactDraftEditor(){return null;}`,
-  'after-hours-booking': `export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
+  'after-hours-booking': `export class SpecialBookingError extends Error {} export async function prepareRestDayOvertime(){throw Error('Unexpected overtime preparation');} export async function createRestDayOvertime(){throw Error('Unexpected overtime write');} export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
   'office-booking-authority': `
     export async function updateOfficeProperty(){throw Error('Unexpected property edit in budget acceptance');}
     export class OfficeBookingRequestError extends Error {}

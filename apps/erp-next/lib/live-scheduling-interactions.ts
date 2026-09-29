@@ -39,3 +39,16 @@ export function liveSchedulingInteractionActive(state: LiveSchedulingInteraction
       || state.manualRefreshing,
   );
 }
+
+export function canPlanAfterHours(dateKey: string, today: string) {
+  return dateKey >= today;
+}
+
+export function weeklyRestSlotEligible(input: {
+  dateKey: string; today: string; start: string; companyOpen: boolean; vanAvailable: boolean;
+  schedule?: { workdayStart?: string; workdayEnd?: string };
+}) {
+  if (!input.companyOpen || !input.vanAvailable || !input.schedule || input.dateKey < input.today) return false;
+  if (!['08:30', '09:30', '10:30', '13:30', '14:30', '15:30'].includes(input.start)) return false;
+  return input.start < (input.schedule.workdayStart || '08:00') || input.start >= (input.schedule.workdayEnd || '13:00');
+}

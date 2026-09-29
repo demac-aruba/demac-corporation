@@ -471,3 +471,18 @@ test('ordinary manual moves cannot consume the owned tail of a shorter bounded o
   await assert.rejects(() => authority.moveAppointment(moveInput({ requestedTime: '15:30' })), { code: BOOKING_ERROR_CODES.SLOT_CONFLICT });
   assert.deepEqual([...db.store], before);
 });
+
+test('moving planned weekly-rest work to ordinary capacity clears current markers and stale capacity ends', async () => {
+  const original = baseSeed();
+  const accepted = { accepted: true, capacityEnd: '17:30', slotStarts: ['14:30', '15:30', '16:30'] };
+  const { db, authority } = fixture({
+    'appointments/APT-1': { ...original['appointments/APT-1'], scheduledOvertime: accepted, capacityEndTime: '17:30', lifecycleHistory: [{ kind: 'weekly_rest_overtime_booked', scheduledOvertime: accepted }] },
+    'workOrders/WO-1': { ...original['workOrders/WO-1'], scheduledOvertime: accepted, appointmentCapacityEndTime: '17:30' },
+  });
+  await authority.moveAppointment(moveInput());
+  assert.equal(db.read('appointments/APT-1').scheduledOvertime, null);
+  assert.equal(db.read('appointments/APT-1').capacityEndTime, '16:30');
+  assert.equal(db.read('workOrders/WO-1').scheduledOvertime, null);
+  assert.equal(db.read('workOrders/WO-1').appointmentCapacityEndTime, '16:30');
+  assert.deepEqual(db.read('appointments/APT-1').lifecycleHistory[0].scheduledOvertime, accepted);
+});

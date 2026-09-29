@@ -37,6 +37,8 @@ import {
 } from '../../lib/office-booking-authority';
 import {
   afterHoursTargetForVan,
+  canPlanAfterHours,
+  weeklyRestSlotEligible,
   availableSlotAction,
   liveSchedulingInteractionActive,
   type AfterHoursVanTarget,
@@ -54,7 +56,7 @@ import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer'
 import laneStyles from './live-scheduling-lane-actions.module.css';
 import styles from './scheduling-overview-v2.module.css';
 
-type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
+type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string; restDayOvertime?: boolean };
 type DisplayVan = { id: string; name: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord; project?: SchedulingProjectLabel };
 type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot; requestId: string };
@@ -96,7 +98,8 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
           : halfDay
             ? `Weekly half-day · off after ${formatTime(halfDay.workdayEnd || '13:00')}`
             : liveCompanyClosureReason(capacityState, day.dateKey) || 'Outside operating capacity';
-    return { start, end, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, offReason };
+    const restDayOvertime = weeklyRestSlotEligible({ dateKey: day.dateKey, today: currentArubaDateKey(), start, companyOpen: day.isOpen && !liveCompanyClosureReason(capacityState, day.dateKey), vanAvailable, schedule: halfDay });
+    return { start, end, restDayOvertime, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, offReason };
   });
 }
 
@@ -447,6 +450,8 @@ function LiveSchedulingSession() {
     return total + displaySlotsForVan(activeDay, van.id, capacityState).filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
   }, 0);
   const outsideCapacityJobs = activeJobs.filter((job) => {
+    if (job.scheduledOvertime && activeDay.isOpen && !liveCompanyClosureReason(capacityState, activeDay.dateKey)
+      && liveVanOperationallyAvailable(capacityState, job.vanId, activeDay.dateKey)) return false;
     const slots = displaySlotsForVan(activeDay, job.vanId, capacityState);
     return slots.some((slot) => !slot.operational && overlapsSlot(job, slot));
   });
@@ -508,7 +513,7 @@ function LiveSchedulingSession() {
     }, 220);
   };
 
-  const openCreateAppointment = (vanId: string, start: string, end: string) => {
+  const openCreateAppointment = (vanId: string, start: string, end: string, restDayOvertime = false) => {
     if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget) return;
     if (!canManage) {
       setMoveNotice('Your account does not have permission to create appointments.');
@@ -522,7 +527,8 @@ function LiveSchedulingSession() {
     if (!van) return;
     setSelectedAppointmentId('');
     setMoveNotice('');
-    setBookingTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+    if (restDayOvertime && !window.confirm(`${van.name} tiene libre en este horario. Cualquier trabajo agendado en este bloque será considerado overtime.\n\n¿Deseas continuar?`)) return;
+    setBookingTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end, restDayOvertime });
   };
 
   const openSupportAssignment = (vanId: string, start: string, end: string) => {
@@ -552,8 +558,8 @@ function LiveSchedulingSession() {
       setMoveNotice('Your account does not have permission to create after-hours jobs.');
       return;
     }
-    if (activeDay.dateKey !== today) {
-      setMoveNotice('After-hours emergencies are same-day operational jobs. Return to Today and choose the Van again.');
+    if (!canPlanAfterHours(activeDay.dateKey, today)) {
+      setMoveNotice('Choose today or a future date for an after-hours emergency.');
       return;
     }
     setSelectedAppointmentId('');
@@ -823,7 +829,7 @@ function LiveSchedulingSession() {
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
         <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
         <article><span>Temporary holds</span><strong style={{ color: 'var(--warning, #b45309)' }}>{temporaryHolds}</strong><small>Canonical capacity reserved · customer not confirmed</small></article>
-        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} />{activeJobs.some((job) => job.possibleOvertime) ? <small style={{ color: 'var(--warning)' }}>{activeJobs.filter((job) => job.possibleOvertime).length} traslado(s) con posible overtime</small> : null}</article>
+        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} />{activeJobs.some((job) => job.possibleOvertime) ? <small style={{ color: 'var(--warning)' }}>{activeJobs.filter((job) => job.possibleOvertime).length} trabajo(s) con overtime programado</small> : null}</article>
       </div>
 
       <div className={styles.board} data-schedule-board>
@@ -905,9 +911,9 @@ function LiveSchedulingSession() {
                     <button
                       type="button"
                       className={styles.secondary}
-                      disabled={!canManage || activeDay.dateKey !== today || !operational || interactionActive}
+                      disabled={!canManage || !canPlanAfterHours(activeDay.dateKey, today) || !operational || interactionActive}
                       onClick={() => openAfterHours(van)}
-                      title={activeDay.dateKey === today ? `Create after-hours emergency for ${van.name}` : 'After-hours jobs can be created for Today only'}
+                      title={canPlanAfterHours(activeDay.dateKey, today) ? `Create after-hours emergency for ${van.name} on ${activeDay.dateKey}` : 'Choose today or a future date'}
                     >＋ AFTER-HOURS / EMERGENCY</button>
                   </div>
                 </section>
@@ -948,7 +954,7 @@ function LiveSchedulingSession() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
-      {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
@@ -983,7 +989,7 @@ function VanScheduleSlots({
   canSupport: boolean;
   validDropTargets: Set<string>;
   overtimeDropTargets: Set<string>;
-  onCreateAppointment: (vanId: string, start: string, end: string) => void;
+  onCreateAppointment: (vanId: string, start: string, end: string, restDayOvertime?: boolean) => void;
   onSendSupport: (vanId: string, start: string, end: string) => void;
   onOpenAppointment: (jobId: string) => void;
   onArmMove: (jobId: string) => void;
@@ -1000,15 +1006,16 @@ function VanScheduleSlots({
 
     const active = activeJobsForSlot(jobs, slot);
     if (!active.length && !slot.operational) {
+      const canBookOvertime = slot.restDayOvertime && canCreate && !moveArmedJobId && !moveBusy;
       rows.push(<div
         className={styles.openSlot}
         data-schedule-slot="off"
         key={`off-${slot.start}`}
-        style={{ borderStyle: 'solid', borderColor: 'var(--border)', background: 'var(--surface-2)', cursor: 'default', opacity: 0.76 }}
+        style={{ borderStyle: 'solid', borderColor: 'var(--border)', background: 'var(--surface-2)', cursor: canBookOvertime ? 'pointer' : 'default', opacity: canBookOvertime ? 1 : 0.76 }}
       >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong style={{ color: 'var(--muted)' }}>Not available</strong><span>{slot.offReason || 'Outside operating capacity'}</span></div>
-        <b style={{ color: 'var(--muted)' }}>OFF</b>
+        <div><strong style={{ color: canBookOvertime ? 'var(--warning)' : 'var(--muted)' }}>{canBookOvertime ? 'Weekly rest · overtime' : 'Not available'}</strong><span>{slot.offReason || 'Outside operating capacity'}</span></div>
+        {canBookOvertime ? <button type="button" className={styles.secondary} style={{ color: 'var(--warning)' }} onClick={() => onCreateAppointment(vanId, slot.start, slot.end, true)}>BOOK OVERTIME</button> : <b style={{ color: 'var(--muted)' }}>OFF</b>}
       </div>);
       index += 1;
       continue;
@@ -1139,11 +1146,12 @@ function AppointmentBlock({ job, appointment, project, span, crossesLunch, conti
           {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{schedulingWorkSummary(appointment, job.quantity, project)}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation ? <small>{formatTime(job.start)}–{formatTime(capacityEnd)} · {assignmentReservationLabel(job)}</small> : null}
-          {job.possibleOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
+          {job.scheduledOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Overtime programado · descanso semanal · hasta {formatTime(job.end)}</small> : null}
+          {job.possibleOvertime && !job.scheduledOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Posible overtime aceptado · finalización estimada {formatTime(job.end)}</small> : null}
           {!continuation && capacityOutlastsWork && hasServiceWorkEstimate(appointment, project) ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>{project ? 'Lunch / break · Van capacity remains reserved' : 'Lunch remains non-sellable · service-capacity ownership is preserved'}</small> : null}
-          {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
+          {outsideCapacity && !job.scheduledOvertime ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
           <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
