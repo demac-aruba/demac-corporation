@@ -19,8 +19,9 @@ const { isOpenBusinessDate } = require("./operatingCalendarService");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const ADHOC_SUPPORT_VERSION = 1;
+const ADHOC_SUPPORT_VERSION = 3;
 const SUPPORT_KIND = "adhoc_rescue";
+const FINISHED_STATUSES = new Set(["completada", "completed", "facturada", "invoiced", "pagada", "paid"]);
 const INACTIVE_STATUSES = new Set([
   "cancelada",
   "cancelled",
@@ -59,7 +60,10 @@ function primaryAssignment(appointment) {
   return assignments.find((item) => cleanText(item?.role, 40) !== "support") || assignments[0] || null;
 }
 
-function primaryWorkOrder(orders) {
+function primaryWorkOrder(orders, backdated = false) {
+  if (backdated) return orders.find((order) =>
+    normalizedStatus(order.appointmentAssignmentRole || order.assignmentRole) !== "support"
+      && (activeWorkOrder(order) || FINISHED_STATUSES.has(normalizedStatus(order.status)))) || null;
   return orders.find((order) => activeWorkOrder(order) && normalizedStatus(order.appointmentAssignmentRole || order.assignmentRole) !== "support")
     || orders.find(activeWorkOrder)
     || null;
@@ -95,10 +99,11 @@ function supportCapacityLock(dateKey, vanId, time) {
   };
 }
 
-function supportHistoryEvent({ requestId, actor, reason, now, primaryVanId, supportVanId, supportStart, supportEnd }) {
+function supportHistoryEvent({ requestId, actor, reason, now, primaryVanId, supportVanId, supportStart, supportEnd, historicalAudit }) {
   return compactObject({
     id: `LIFE-SUPPORT-${hashId(requestId, 20).toUpperCase()}`,
     kind: "support_added",
+    ...historicalAudit,
     at: now.toISOString(),
     actorId: cleanText(actor?.id || actor?.userId, 160),
     actorName: cleanText(actor?.name || actor?.displayName, 160),
@@ -125,6 +130,7 @@ function supportOrderSnapshot({
   reason,
   actor,
   now,
+  historicalAudit,
 }) {
   const supportReason = cleanText(reason, 500);
   const inheritedDescription = cleanText(primaryOrder.customerFacingDescription || primaryOrder.problem, 1_500);
@@ -165,6 +171,7 @@ function supportOrderSnapshot({
     notificationRecipients: [],
     customerCommunicationOwner: false,
     supportNonBillable: true,
+    ...historicalAudit,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     createdBy: cleanText(actor?.id || actor?.userId, 160) || "office-scheduling",
@@ -189,6 +196,8 @@ function createAdhocSupportAuthority({
     requestedTime,
     targetVanId,
     reason = "",
+    bookingMode = "",
+    backdatingAcknowledged = false,
     actor = {},
   } = {}) {
     const id = cleanText(appointmentId, 180);
@@ -206,13 +215,33 @@ function createAdhocSupportAuthority({
 
     const now = asDate(clock());
     const today = arubaDateParts(now).date;
-    if (targetDate !== today) {
+    const parsedDate = new Date(`${targetDate}T12:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)
+      || !Number.isFinite(parsedDate.getTime())
+      || parsedDate.toISOString().slice(0, 10) !== targetDate) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
-        "Ad-hoc coworker support is a same-day operational action. Future multi-Van support must use the planned Booking Authority allocation.",
-        { reason: "adhoc-support-same-day-only", requestedDate: targetDate, currentDate: today },
+        "Coworker support requires a valid calendar date.",
+        { reason: "support-date-invalid", requestedDate: targetDate, currentDate: today },
       );
     }
+
+    const backdated = targetDate < today;
+    if (backdated && (bookingMode !== "backdated" || backdatingAcknowledged !== true)) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Confirm that this support actually happened on the selected past date.",
+        { reason: "backdating-confirmation-required", requestedDate: targetDate });
+    }
+    if (backdated && !cleanText(reason, 500)) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Record the reason for this historical support correction.", { reason: "historical-support-reason-required" });
+    }
+    const historicalAudit = backdated ? {
+      bookingMode: "backdated", backdated: true, backdatingAcknowledged: true, workAlreadyPerformed: true,
+      backdatedRecordedAtIso: now.toISOString(),
+      backdatedRecordedBy: cleanText(actor.id || actor.userId, 160),
+      backdatedRecordedByName: cleanText(actor.name || actor.displayName, 160),
+    } : {};
 
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const supportId = supportWorkOrderId(id, stableRequestId);
@@ -227,7 +256,8 @@ function createAdhocSupportAuthority({
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.APPOINTMENT_NOT_FOUND, "The appointment does not exist.", { appointmentId: id });
       }
       const appointment = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
-      if (normalizedStatus(appointment.status) !== "confirmed") {
+      if (normalizedStatus(appointment.status) !== "confirmed"
+        && !(backdated && FINISHED_STATUSES.has(normalizedStatus(appointment.status)))) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.INVALID_REQUEST,
           "Ad-hoc support can only be attached to a confirmed appointment.",
@@ -334,11 +364,11 @@ function createAdhocSupportAuthority({
       }
 
       const appointmentOrders = canonical.workOrders.filter((order) => cleanText(order.appointmentId, 180) === id);
-      const primaryOrder = primaryWorkOrder(appointmentOrders);
+      const primaryOrder = primaryWorkOrder(appointmentOrders, backdated);
       if (!primaryOrder) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "The appointment has no active primary Work Order to receive support.",
+          backdated ? "The appointment has no eligible primary Work Order for historical support." : "The appointment has no active primary Work Order to receive support.",
           { appointmentId: id },
         );
       }
@@ -408,6 +438,7 @@ function createAdhocSupportAuthority({
         reason,
         actor,
         now,
+        historicalAudit,
       });
       const supportAssignment = compactObject({
         id: supportId,
@@ -424,6 +455,7 @@ function createAdhocSupportAuthority({
         role: "support",
         supportAssignmentKind: SUPPORT_KIND,
         parentWorkOrderId: primaryOrder.id,
+        ...historicalAudit,
       });
       const existingAssignments = Array.isArray(appointment.assignments) ? appointment.assignments : [];
       const existingWorkOrderIds = Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : [];
@@ -437,6 +469,7 @@ function createAdhocSupportAuthority({
         supportVanId: requestedVanId,
         supportStart: targetTime,
         supportEnd: availability.endTime,
+        historicalAudit: backdated ? { ...historicalAudit, workDate: targetDate } : {},
       });
       const patch = compactObject({
         assignments: [...existingAssignments, supportAssignment],

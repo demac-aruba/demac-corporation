@@ -38,6 +38,7 @@ import {
 import {
   afterHoursTargetForVan,
   canPlanAfterHours,
+  canPlanCoworkerSupport,
   weeklyRestSlotEligible,
   availableSlotAction,
   liveSchedulingInteractionActive,
@@ -532,7 +533,7 @@ function LiveSchedulingSession() {
   };
 
   const openSupportAssignment = (vanId: string, start: string, end: string) => {
-    if (moveArmedJobId || pendingDragMove || moveBusy || bookingTarget) return;
+    if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget) return;
     if (!canManage) {
       setMoveNotice('Your account does not have permission to assign operational support.');
       return;
@@ -541,14 +542,15 @@ function LiveSchedulingSession() {
       setMoveNotice(`Live capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before assigning support.`);
       return;
     }
-    if (activeDay.dateKey !== today) {
-      setMoveNotice('Ad-hoc coworker support is a same-day operational action. Future multi-Van work must use the planned Booking Authority support allocation.');
+    if (!canPlanCoworkerSupport(activeDay.dateKey)) {
+      setMoveNotice('Choose a valid date to assign coworker support.');
       return;
     }
     const van = vans.find((item) => item.id === vanId);
     if (!van) return;
     setSelectedAppointmentId('');
     setMoveNotice('');
+    setBookingTarget(null);
     setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
   };
 
@@ -596,8 +598,9 @@ function LiveSchedulingSession() {
     const target = supportTarget;
     setSupportTarget(null);
     setSelectedAppointmentId('');
-    setMoveNotice(target
-      ? `${target.vanName} was assigned to support ${appointment.customer} at ${formatTime(target.start)}. The primary appointment remains unchanged and same-day Van alerts use the internal WhatsApp authority.`
+    setMoveNotice(result.supportWorkOrder.backdated === true && target
+      ? `${target.vanName} support was recorded for ${target.dateKey} at ${formatTime(target.start)}. The original work remains unchanged. No customer or technician alerts were sent.`
+      : target ? `${target.vanName} was assigned to support ${appointment.customer} at ${formatTime(target.start)}. The primary appointment remains unchanged. Support is included in the Van schedule; immediate internal alerts apply to same-day changes.`
       : `Operational support ${result.supportWorkOrderId} was assigned to ${appointment.customer}.`);
     await refresh();
   };
@@ -897,7 +900,7 @@ function LiveSchedulingSession() {
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
                     canCreate={canManage && Boolean(capacityState)}
-                    canSupport={canManage && Boolean(capacityState) && activeDay.dateKey === today}
+                    canSupport={canManage && Boolean(capacityState) && canPlanCoworkerSupport(activeDay.dateKey)}
                     validDropTargets={validDropTargets}
                     overtimeDropTargets={overtimeDropTargets}
                     onCreateAppointment={openCreateAppointment}
@@ -954,7 +957,7 @@ function LiveSchedulingSession() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
-      {bookingTarget ? <LiveAppointmentCreateDrawer mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onSendSupport={canManage && Boolean(capacityState) && !bookingTarget.restDayOvertime && canPlanCoworkerSupport(bookingTarget.dateKey) ? () => openSupportAssignment(bookingTarget.vanId, bookingTarget.start, bookingTarget.end) : undefined} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}

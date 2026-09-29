@@ -7,6 +7,7 @@ import {
   createOfficeLifecycleRequestId,
   type OfficeAdhocSupportResult,
 } from '../../lib/office-booking-authority';
+import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
 
 export type AdhocSupportTarget = {
@@ -68,6 +69,8 @@ function appointmentWorkLabel(appointment: BrowserAppointmentRecord) {
 }
 
 export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }: Props) {
+  const historical = target.dateKey < currentArubaDateKey();
+  const [backdatingAcknowledged, setBackdatingAcknowledged] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -105,6 +108,10 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
       setError('Describe the support reason.');
       return;
     }
+    if (historical && !backdatingAcknowledged) {
+      setError('Confirm that this support actually happened on the selected date.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -115,6 +122,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         requestedTime: target.start,
         requiredVanId: target.vanId,
         reason: composedReason,
+        ...(historical ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
       await onCreated(result, selected);
       onClose();
@@ -130,13 +138,20 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
       <header className={styles.drawerHeader}>
         <div>
           <span>Operational support · Booking Authority</span>
-          <h2>Send support to a coworker</h2>
+          <h2>{historical ? 'Record past van support' : 'Send support to a coworker'}</h2>
           <p>{target.vanName} · {formatDate(target.dateKey)} · {formatTime(target.start)}–{formatTime(target.end)}</p>
         </div>
         <button type="button" disabled={busy} onClick={onClose}>×</button>
       </header>
 
       <div className={styles.drawerBody}>
+        {historical ? <section className={styles.formSection}>
+          <header><strong>Historical schedule correction</strong><span>Record support that actually happened on {formatDate(target.dateKey)}. No customer or technician alerts will be sent.</span></header>
+          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: 12 }}>
+            <input type="checkbox" checked={backdatingAcknowledged} disabled={busy} onChange={(event) => { setBackdatingAcknowledged(event.target.checked); setError(''); }} />
+            <span>I confirm this Van actually provided support on the selected date and time.</span>
+          </label>
+        </section> : null}
         <section className={styles.formSection}>
           <header><strong>Support capacity</strong><span>This open slot will become a linked SUPPORT assignment. The primary appointment does not move.</span></header>
           <div className={styles.formGrid}>
@@ -147,7 +162,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         </section>
 
         <section className={styles.formSection}>
-          <header><strong>Which appointment needs help?</strong><span>Only confirmed appointments on another primary Van are shown.</span></header>
+          <header><strong>{historical ? 'Which appointment received support?' : 'Which appointment needs help?'}</strong><span>{historical ? 'Choose the original appointment on that date, including work already completed.' : 'Only confirmed appointments on another primary Van are shown.'}</span></header>
           {candidates.length ? <div className={styles.slotOptions}>
             {candidates.map((appointment) => {
               const primary = primaryAssignment(appointment);
@@ -171,10 +186,10 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         </section>
 
         <section className={styles.formSection}>
-          <header><strong>Reason / operational note</strong><span>Recorded on the linked support Work Order and included in the technician alert.</span></header>
+          <header><strong>Reason / operational note</strong><span>{historical ? 'Recorded with the correction, your identity and the time it was entered.' : 'Recorded on the linked support Work Order and included in the technician alert.'}</span></header>
           <div className={styles.formGrid}>
             <label className={styles.wide}><span>Reason</span><select value={reason} disabled={busy} onChange={(event) => { setReason(event.target.value); setError(''); }}><option value="">Select reason</option>{supportReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label className={styles.wide}><span>{reason === 'Other' ? 'Describe support *' : 'Additional note'}</span><textarea rows={3} value={note} disabled={busy} onChange={(event) => { setNote(event.target.value); setError(''); }} placeholder="What should the support team know before going to help?" /></label>
+            <label className={styles.wide}><span>{reason === 'Other' ? 'Describe support *' : 'Additional note'}</span><textarea rows={3} value={note} disabled={busy} onChange={(event) => { setNote(event.target.value); setError(''); }} placeholder={historical ? 'Describe the support that actually happened.' : 'What should the support team know before going to help?'} /></label>
           </div>
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
         </section>
@@ -184,7 +199,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         <div><span>CANONICAL WRITE</span><strong>Existing appointment → linked SUPPORT Work Order + capacity lock</strong></div>
         <div>
           <button type="button" className={styles.secondary} disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="button" className={styles.primary} disabled={busy || !selected || !reason || (reason === 'Other' && !text(note))} onClick={() => void submit()}>{busy ? 'Assigning support…' : 'Send support'}</button>
+          <button type="button" className={styles.primary} disabled={busy || !selected || !reason || (reason === 'Other' && !text(note)) || (historical && !backdatingAcknowledged)} onClick={() => void submit()}>{busy ? 'Saving support…' : historical ? 'Save historical support' : 'Send support'}</button>
         </div>
       </footer>
     </aside>

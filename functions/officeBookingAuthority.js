@@ -1350,6 +1350,7 @@ function createOfficeBookingApi({
         requestedTime: data.requestedTime,
         targetVanId: data.requiredVanId,
         reason: data.reason,
+        ...bookingIntentFromOffice(data),
         actor,
       });
     }
