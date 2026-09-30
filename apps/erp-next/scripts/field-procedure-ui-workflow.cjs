@@ -49,7 +49,9 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
     const linked=page.waitForResponse(response=>response.request().method()==='POST' && response.request().postData()?.startsWith('{') && response.request().postDataJSON()?.data?.command?.action==='commit_media');
     if(d.id==='I01')await page.getByRole('button',{name:'Reintentar protección del original',exact:true}).click();
     else await page.getByLabel('Seleccionar Foto: '+views[view],{exact:true}).setInputFiles({name:`synthetic-${++imageId}.png`,mimeType:'image/png',buffer:png(imageId)});
-    assert.equal((await linked).status(),200);
+    const outcome=await Promise.race([linked.then(response=>({response})),page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Reintentar archivos pendientes'&&!button.disabled)).then(()=>({pending:true}))]);
+    if(outcome.pending)await page.getByRole('button',{name:'Reintentar archivos pendientes',exact:true}).click();
+    assert.equal((outcome.response||await linked).status(),200);
     assert.equal(state.store.all('fieldEvidence').length,before+1);
    }
    if(d.id==='I01'){
