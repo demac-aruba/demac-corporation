@@ -55,7 +55,7 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
    if(d.id==='I01'){
     await page.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
     const image=page.getByAltText('Evidencia privada del procedimiento');await image.waitFor();
-    assert.equal(await image.evaluate(img=>new Promise(resolve=>{if(img.complete)return resolve(img.naturalWidth===1);img.onload=()=>resolve(img.naturalWidth===1);img.onerror=()=>resolve(false);})),true,'actual private PNG decodes');
+    assert.equal(await image.evaluate(async img=>{await img.decode();return img.naturalWidth===1&&img.naturalHeight===1;}),true,'actual private PNG decodes');
     assert.match(await image.getAttribute('src'),/^blob:/);
     await page.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
    }
