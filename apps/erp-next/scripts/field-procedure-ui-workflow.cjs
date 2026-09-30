@@ -32,8 +32,23 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
    const photoViews=d.measurement&&!d.views.includes('instrument')?[...d.views,'instrument']:d.views;
    for(const view of photoViews){
     const before=state.store.all('fieldEvidence').length;
+    if(d.id==='I01'){
+      await page.evaluate(()=>{
+        const original=IDBObjectStore.prototype.add;
+        IDBObjectStore.prototype.add=function(value,...args){
+          if(this.name==='captures'){IDBObjectStore.prototype.add=original;throw new DOMException('Synthetic device quota','QuotaExceededError');}
+          return original.call(this,value,...args);
+        };
+      });
+      await page.getByLabel('Seleccionar Foto: '+views[view],{exact:true}).setInputFiles({name:'synthetic-quota.png',mimeType:'image/png',buffer:png(++imageId)});
+      await page.getByRole('button',{name:'Reintentar protección del original',exact:true}).waitFor();
+      await page.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
+      assert.equal(await page.getByRole('heading',{name:d.title,exact:true}).count(),1,'unprotected original blocks step navigation');
+      assert.equal(state.store.all('fieldEvidence').length,before);
+    }
     const linked=page.waitForResponse(response=>response.request().method()==='POST' && response.request().postData()?.startsWith('{') && response.request().postDataJSON()?.data?.command?.action==='commit_media');
-    await page.getByLabel('Seleccionar Foto: '+views[view],{exact:true}).setInputFiles({name:`synthetic-${++imageId}.png`,mimeType:'image/png',buffer:png(imageId)});
+    if(d.id==='I01')await page.getByRole('button',{name:'Reintentar protección del original',exact:true}).click();
+    else await page.getByLabel('Seleccionar Foto: '+views[view],{exact:true}).setInputFiles({name:`synthetic-${++imageId}.png`,mimeType:'image/png',buffer:png(imageId)});
     assert.equal((await linked).status(),200);
     assert.equal(state.store.all('fieldEvidence').length,before+1);
    }
@@ -83,7 +98,7 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
    await page.getByText('Documentación de parte finalizada. Esto no envía el cierre global del servicio.',{exact:true}).waitFor();
   }
   await refresh(lead);await lead.getByText('Prueba final coordinada — técnico responsable',{exact:true}).click();
-  await lead.getByLabel('Resultado',{exact:true}).selectOption('no_enfria');
+  await lead.getByLabel('Resultado de prueba final',{exact:true}).selectOption('no_enfria');
   await lead.getByLabel('Nota de prueba',{exact:true}).fill('Falla sintética persiste; no afirmar reparación');
   await lead.getByLabel(/La prueba fue coordinada y verificada/).check();
   await lead.getByRole('button',{name:'Registrar prueba final',exact:true}).click();

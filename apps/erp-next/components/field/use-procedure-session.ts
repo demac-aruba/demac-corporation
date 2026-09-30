@@ -96,7 +96,10 @@ export function useProcedureSession(input: FieldProcedureTarget) {
   async function capture(input: Parameters<typeof storeProcedureCapture>[1]) {
     // The input retains the coordination revision at file selection/recording start, not upload time.
     const saved=await storeProcedureCapture(target,input);
-    if (alive.current) {await refreshLocal();setNotice('Original guardado en este dispositivo; aún requiere vínculo del servidor.');}
+    if (alive.current) {
+      try{await refreshLocal();setNotice('Original guardado en este dispositivo; aún requiere vínculo del servidor.');}
+      catch(e){setLocalReady(false);setError('Original protegido en el dispositivo. No se pudo actualizar el listado: '+message(e));return saved;}
+    }
     if (alive.current && !lock.current && state.current.fresh && !state.current.operation) void sync([saved.id]);
     return saved;
   }

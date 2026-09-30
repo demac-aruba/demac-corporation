@@ -238,7 +238,7 @@ export function FieldProcedureWorkspace({target,initialPart,initialStepId,equipm
       <section className={styles.card}>
         <p>Ambas partes están finalizadas y marcadas listas para prueba. Registra la prueba únicamente después de coordinar físicamente a la cuadrilla y verificar que no quede un riesgo abierto.</p>
         <label>Resultado
-          <select value={finalResult} onChange={e=>setFinalResult(e.target.value)}>
+          <select aria-label="Resultado de prueba final" value={finalResult} onChange={e=>setFinalResult(e.target.value)}>
             <option value="">Seleccionar</option><option value="enfria">Enfría</option><option value="no_enfria">No enfría</option><option value="inconcluso">Inconcluso</option><option value="no_se_pudo_verificar">No se pudo verificar</option>
           </select>
         </label>

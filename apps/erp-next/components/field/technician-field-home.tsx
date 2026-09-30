@@ -2574,13 +2574,13 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   if (!adminSimulation) {
     const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey && detail?.workOrderId === selectedWorkOrderId ? detail : null;
     const hasSelectedJob = selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey;
-    const navigate = (tab: FieldPortalTab) => { setPortalTab(tab); setShowDetail(false); };
+    const navigate = (tab: FieldPortalTab) => { if(!requestProcedureExit())return; setPortalTab(tab); setShowDetail(false); };
     return <>
       <div hidden={Boolean(hasSelectedJob && showDetail)}>
         <FieldDayOverview tab={portalTab} identity={principal} date={today} jobs={todayJobs} nextJob={nextJob}
           loading={loading} error={scheduleError} stale={Boolean(scheduleOfflineCapturedAt)}
           synchronization={<OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
-          onRetry={() => void loadSchedule()} onOpen={openJob} onNavigate={navigate} onSignOut={() => { if (outboxSummary.total === 0 || window.confirm('Hay capturas pendientes de sincronizar en este dispositivo. Se conservarán para tu cuenta. ¿Cerrar sesión?')) signOut(); }} />
+          onRetry={() => void loadSchedule()} onOpen={openJob} onNavigate={navigate} onSignOut={() => { if(!requestProcedureExit())return; if (outboxSummary.total === 0 || window.confirm('Hay capturas pendientes de sincronizar en este dispositivo. Se conservarán para tu cuenta. ¿Cerrar sesión?')) signOut(); }} />
       </div>
       {hasSelectedJob ? <div hidden={!showDetail}>
       <DetailView

@@ -1,12 +1,13 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FieldProcedurePart } from '../../lib/field-procedure-contract';
 import { procedureLabel } from '../../lib/field-procedure-ui-model';
 import type { ProcedureMediaKind, ProcedureMediaSource, ProcedureStep } from '../../lib/field-procedure-workspace';
 import type { ProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 import { ProcedureEvidenceViewer } from './procedure-evidence-viewer';
+import { registerProcedureExitGuard } from '../../lib/field-procedure-navigation';
 
 const stageLabel: Record<string,string> = {
   local:'Guardado solo en este dispositivo',
@@ -30,30 +31,41 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
 }) {
   const [error,setError]=useState('');
   const [capturing,setCapturing]=useState('');
+  const [unprotected,setUnprotected]=useState(false);
+  const original=useRef<{input:Parameters<ProcedureSession['capture']>[0];key:string}|null>(null);
   const [recoveryReasons,setRecoveryReasons]=useState<Record<string,string>>({});
   const pickedAt=useRef<Record<string,{revision:number;at:string}>>({});
   const evidence=session.workspace?.evidence.filter(e=>e.part===part && e.procedureId===step.id) ?? [];
   const local=session.captures.filter(c=>c.part===part && c.stepId===step.id && c.stage!=='confirmed');
   const safetyRevision=session.workspace?.safety?.revision ?? null;
   const photoViews=step.measurement && !step.views.includes('instrument') ? [...step.views,'instrument'] : step.views;
+  useEffect(()=>{
+    const remove=registerProcedureExitGuard(()=>Boolean(original.current));
+    const unloading=(event:BeforeUnloadEvent)=>{if(original.current){event.preventDefault();event.returnValue='';}};
+    window.addEventListener('beforeunload',unloading);
+    return()=>{remove();window.removeEventListener('beforeunload',unloading);};
+  },[]);
+
+  async function protectOriginal(){
+    const pending=original.current;
+    if(!pending||capturing)return;
+    setCapturing(pending.key);setError('');
+    try{await session.capture(pending.input);original.current=null;setUnprotected(false);}
+    catch(e){setError(e instanceof Error?e.message:'No se pudo proteger el archivo original.');}
+    finally{setCapturing('');}
+  }
 
   async function receive(view:string,kind:ProcedureMediaKind,camera:boolean,file:File|null) {
-    if(!file || safetyRevision===null)return;
+    if(!file || safetyRevision===null || original.current)return;
     const key=view+':'+kind+':'+(camera?'camera':'file');
     const selected=pickedAt.current[key] || {revision:safetyRevision,at:new Date().toISOString()};
     delete pickedAt.current[key];
-    setCapturing(key); setError('');
-    try {
-      await session.capture({
+    original.current={key,input:{
         part,stepId:step.id,view,kind,source:sourceFor(kind,camera),blob:file,
         safetyRevision:selected.revision,declaredCapturedAt:selected.at,
         limitBytes:session.workspace!.mediaLimits[kind].bytes,
-      });
-    } catch(e) {
-      setError(e instanceof Error?e.message:'No se pudo proteger el archivo original.');
-    } finally {
-      setCapturing('');
-    }
+    }};
+    setUnprotected(true);await protectOriginal();
   }
   function mark(key:string) {
     if(safetyRevision!==null)pickedAt.current[key]={revision:safetyRevision,at:new Date().toISOString()};
@@ -66,6 +78,11 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
     </div>
     {!session.persisted?<div className={styles.warning}>Este navegador no confirmó almacenamiento persistente. Mantén la app abierta hasta que los originales pendientes queden vinculados.</div>:null}
     {error?<div className={styles.error} role="alert">{error}</div>:null}
+    {unprotected&&!capturing?<div className={styles.warning}>
+      <p>El original sigue abierto en esta pantalla y todavía no está protegido en el dispositivo. Reintenta antes de salir.</p>
+      <button type="button" onClick={()=>void protectOriginal()}>Reintentar protección del original</button>
+      <button type="button" onClick={()=>{original.current=null;setUnprotected(false);setError('');}}>Descartar este original sin guardar</button>
+    </div>:null}
     <div className={styles.media}>
       {photoViews.map(view=>{
         const remote=evidence.filter(e=>e.view===view);
@@ -79,13 +96,13 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
             <label data-disabled={!canCapture}>
               <span>{capturing===cameraKey?'Guardando…':'Tomar foto'}</span>
               <input aria-label={'Tomar '+procedureLabel('photo:'+view)} type="file" accept={accept('photo')} capture="environment"
-                disabled={!canCapture||Boolean(capturing)} onClick={()=>mark(cameraKey)}
+                disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(cameraKey)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,'photo',true,file);e.currentTarget.value='';}}/>
             </label>
             <label data-disabled={!canCapture}>
               <span>{capturing===galleryKey?'Guardando…':'Galería'}</span>
               <input aria-label={'Seleccionar '+procedureLabel('photo:'+view)} type="file" accept={accept('photo')}
-                disabled={!canCapture||Boolean(capturing)} onClick={()=>mark(galleryKey)}
+                disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(galleryKey)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,'photo',false,file);e.currentTarget.value='';}}/>
             </label>
           </div>
@@ -122,7 +139,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
             const key=view+':'+kind+':file';
             return <label key={kind} data-disabled={!canCapture}>
               {capturing===key?'Guardando…':'Agregar '+(kind==='audio'?'audio':'video')}
-              <input type="file" accept={accept(kind)} disabled={!canCapture||Boolean(capturing)} onClick={()=>mark(key)}
+              <input type="file" accept={accept(kind)} disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(key)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,kind,false,file);e.currentTarget.value='';}}/>
             </label>;
           })}

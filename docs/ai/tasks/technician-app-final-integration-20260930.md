@@ -14,7 +14,8 @@ weekday clock retained. Main itself was not changed.
 ## Implemented integration
 
 - Existing technician/controller/Field Authority flow remains the application.
-  Part-selector exit refreshes canonical versions; leaving procedures refreshes
+  Unsaved text and originals block in-app navigation; failed local original saves
+  retain the bytes for retry or explicit discard. Part-selector exit refreshes canonical versions; leaving procedures refreshes
   the parent intervention before an add-on or closure action.
 - Editors are scoped to part/step; pending text and binary storage remain scoped
   to original user/visit/intervention/asset. Late command/sync responses cannot
@@ -70,8 +71,10 @@ claimed from this container: browser downloads were rejected by its network.
 ## Activation and rollback
 
 Owner approval is still required for merge/deploy, including the scoped helper
-sale capability. Deploy compatible Field backend readers/guards before the new
-frontend and before opting Standard Service catalog items into protocol v1.
+sale capability. Deploy the backward-compatible frontend before granting the new helper sale
+capability in the Field backend: older clients expect execute-only sale flags.
+Deploy the compatible Field backend/readers before opting Standard Service
+catalog items into protocol v1.
 Catalog opt-in is a separately governed production change; no item was activated.
 Other services retain the existing report flow and do not inherit a made-up 14/9
 protocol. No Firebase rules, IAM, secrets, billing or production records changed.

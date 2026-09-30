@@ -8,6 +8,7 @@ import { ProcedureMediaPanel } from './procedure-media-panel';
 import type { ProcedureSession } from './use-procedure-session';
 import { useProcedureDraft } from './use-procedure-draft';
 import styles from './field-procedure-workspace.module.css';
+import { requestProcedureExit } from '../../lib/field-procedure-navigation';
 
 export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
   session:ProcedureSession; part:FieldProcedurePart; step:ProcedureStep; onBack:()=>void; onOpenAddons?:()=>void;
@@ -32,6 +33,7 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
   const canSave=canEdit && session.canCommand && !draft.conflict && !draft.saving;
   const decisionRequired=Boolean(step.recommendation && draft.value.result && !['buen_estado','alto_riesgo'].includes(draft.value.result));
   const localFiles=session.captures.filter(c=>c.part===part && c.stepId===step.id && c.stage!=='confirmed').length;
+  function goBack(){if(requestProcedureExit())onBack();}
 
   async function save() {
     if(!canSave || !await draft.flush())return;
@@ -76,7 +78,7 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
 
   return <>
     <div className={styles.toolbar}>
-      <button type="button" onClick={onBack}>Volver a procedimientos</button>
+      <button type="button" onClick={goBack}>Volver a procedimientos</button>
       <span className={styles.pill}>{part==='indoor'?'Evaporadora':'Condensadora'} · {step.id}</span>
     </div>
 
@@ -166,7 +168,7 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
           <textarea value={reviewNote} onChange={e=>setReviewNote(e.target.value)} rows={3} maxLength={1500}/>
         </label>
         <label>Disposición al aprobar
-          <select value={reviewDisposition} onChange={e=>setReviewDisposition(e.target.value as typeof reviewDisposition)}>
+          <select aria-label="Disposición al aprobar" value={reviewDisposition} onChange={e=>setReviewDisposition(e.target.value as typeof reviewDisposition)}>
             <option value="not_documented">Trabajo sin documentación suficiente</option>
             <option value="not_applicable">No aplica a este procedimiento</option>
             <option value="not_performed">Trabajo no realizado — continúa pendiente</option>
@@ -209,7 +211,7 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
 
     {feedback?<p className={styles.notice} role="status">{feedback}</p>:null}
     {owner?<div className={styles.sticky}>
-      <button type="button" onClick={onBack}>Volver a lista</button>
+      <button type="button" onClick={goBack}>Volver a lista</button>
       <button type="button" className={styles.primary} disabled={!canSave} onClick={()=>void save()}>Guardar procedimiento</button>
     </div>:null}
   </>;
