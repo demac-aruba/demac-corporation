@@ -1,5 +1,8 @@
+import { FrozenProcedureContent } from '../components/work-orders/frozen-procedure-content';
+import { parseFieldOfficeReviewQueueResponse, type FieldOfficeReviewQueueItem } from '../lib/field-office-review-contract';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ProcedureExceptionOfficeQueue } from '../components/work-orders/procedure-exception-office-queue';
 import { FieldPartSelector } from '../components/field/field-part-selector';
 import { FieldPortalHeader, FieldPortalNavigation, FieldPortalIdentity, FieldJobContext, fieldPortalStyles } from '../components/field/field-portal-chrome';
 import { persistFirebaseWebSession } from '../lib/firebase/session';
@@ -18,6 +21,8 @@ function setSession(uid:string) {
 function App() {
  const [uid,setUid]=useState(new URLSearchParams(location.search).get('actor')||'test-tech');
  const [assetId,setAssetId]=useState('AC-1');
+ const [frozenReview,setFrozenReview]=useState<FieldOfficeReviewQueueItem|null>(null);
+ (window as any).showFrozenReview=(raw:unknown)=>setFrozenReview(parseFieldOfficeReviewQueueResponse(raw).reviews[0]);
  (window as any).changePartActor=(next:string)=>{setSession(next);setUid(next);};
  (window as any).changePartTarget=(next:string)=>setAssetId(next);
  (window as any).directPartRead=()=>getFieldProcedureSummary({ownerUserId:uid,visitId:'VISIT-1',interventionId:'WI-1',assetId});
@@ -27,7 +32,7 @@ function App() {
   <main className={fieldPortalStyles.surface}>
    <div role="note">DEMO · Prueba de componente con backend sintético local. No es un preview publicado.</div>
    <FieldJobContext job={job}/><FieldPortalIdentity name={uid==='test-tech'?'DEMO Technician':'DEMO Helper'} staffId={uid==='test-tech'?'staff-tech':'staff-helper'} date={job.date} job={job} compact />
-   <FieldPartSelector target={{ownerUserId:uid,visitId:'VISIT-1',interventionId:'WI-1',assetId}} equipmentLabel="DEMO · Sala" equipmentDescription="Equipo sintético · Standard Service" onBack={()=>{(window as any).backCount=((window as any).backCount||0)+1;}}/>
+   {uid==='test-office'?frozenReview?<FrozenProcedureContent review={frozenReview} userId={uid}/>:<ProcedureExceptionOfficeQueue userId={uid}/>:<FieldPartSelector target={{ownerUserId:uid,visitId:'VISIT-1',interventionId:'WI-1',assetId}} equipmentLabel="DEMO · Sala" equipmentDescription="Equipo sintético · Standard Service" onBack={()=>{(window as any).backCount=((window as any).backCount||0)+1;}}/>}
   </main><FieldPortalNavigation active="jobs" onNavigate={()=>{}}/>
  </div>;
 }

@@ -953,7 +953,8 @@ function DetailView({
   onSyncOutbox,
   onDiscardOutboxConflict,
   onBack,
-}: DetailViewProps) {
+  onRefreshProcedureContext,
+}: DetailViewProps & {onRefreshProcedureContext:()=>void}) {
   const { principal: currentPrincipal } = useAuth();
   const canonicalStage = fieldExperienceStageForStatus(job?.fieldVisit?.status);
   const [activeStage, setActiveStage] = useState<FieldExperienceStage>(canonicalStage);
@@ -987,7 +988,7 @@ function DetailView({
     const asset = job.visitAssets.find((item) => item.assetId === selectedProcedure.assetId);
     const equipment = job.knownEquipment.find((item) => item.id === selectedProcedure.assetId);
     return <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`}>
-      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => { if (requestProcedureExit()) setProcedureInterventionId(null); }} />
+      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => { if (requestProcedureExit()) { setProcedureInterventionId(null); onRefreshProcedureContext(); } }} />
       <main className={styles.mobileContent}>
         <FieldJobContext job={job} />
         <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
@@ -995,10 +996,11 @@ function DetailView({
           target={{ ownerUserId:currentPrincipal.userId, visitId:job.fieldVisit.id, interventionId:selectedProcedure.id, assetId:selectedProcedure.assetId }}
           equipmentLabel={asset?.locationLabel || equipment?.locationLabel || 'Aire seleccionado'}
           equipmentDescription={[equipment?.brand, equipment?.model, selectedProcedure.interventionType].filter(Boolean).join(' · ')}
-          onBack={() => { if (requestProcedureExit()) setProcedureInterventionId(null); }}
+          onBack={() => { if (requestProcedureExit()) { setProcedureInterventionId(null); onRefreshProcedureContext(); } }}
           onOpenAddons={() => {
             if (!requestProcedureExit()) return;
             setProcedureInterventionId(null);
+            onRefreshProcedureContext();
             setActiveStage('service');
           }}
           correctionRequested={job.officeReviewSubmission?.correctionRequired === true}
@@ -2582,6 +2584,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
       </div>
       {hasSelectedJob ? <div hidden={!showDetail}>
       <DetailView
+        onRefreshProcedureContext={()=>{if(selectedWorkOrderId)void loadDetail(selectedWorkOrderId,true);}}
         job={authorizedDetail}
         loading={detailLoading}
         error={detailError}

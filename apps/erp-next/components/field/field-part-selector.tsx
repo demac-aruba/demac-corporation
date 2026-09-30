@@ -81,7 +81,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
     && ['confirmed','in_progress'].includes(snapshot.interventionStatus);
   const mine = part?.ownerUserId === target.ownerUserId;
   const officeReview = snapshot?.allowedActions.includes('office.review') === true;
-  if (openPart) return <FieldProcedureWorkspace target={target} initialPart={openPart} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={()=>setOpenPart(null)} onOpenAddons={onOpenAddons} correctionRequested={correctionRequested} reviewerNote={reviewerNote} />;
+  if (openPart) return <FieldProcedureWorkspace target={target} initialPart={openPart} equipmentLabel={equipmentLabel} equipmentDescription={equipmentDescription} onBack={()=>{setOpenPart(null);void load();}} onOpenAddons={onOpenAddons} correctionRequested={correctionRequested} reviewerNote={reviewerNote} />;
   return <section className={styles.panel} aria-label="Selección compartida de parte">
     <div className={styles.air}><PortalIcon name="unit" /><div><strong>{equipmentLabel}</strong><small>{equipmentDescription}</small>{snapshot?.protocolName ? <span className={styles.status}>{snapshot.protocolName}</span> : null}</div></div>
     <div className={styles.refresh}><h2>¿Qué vas a trabajar?</h2><button type="button" onClick={()=>void load()} disabled={loading||busy}>Actualizar</button></div>

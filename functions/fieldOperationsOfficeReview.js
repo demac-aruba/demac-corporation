@@ -1,5 +1,5 @@
 const procedureProtocol = require('./fieldOperationsServiceProtocol');
-const { canonicalEvidence, validateProcedureContent } = require('./fieldOperationsProcedureWorkflow');
+const { canonicalEvidence, validateProcedureContent, projectProcedureEvidence, MEDIA_LIMITS } = require('./fieldOperationsProcedureWorkflow');
 'use strict';
 
 const crypto = require('node:crypto');
@@ -205,6 +205,20 @@ function projectOfficeReviewRevision(record, expected = {}) {
     if (wanted && projected[field] !== wanted) {
       throw fieldError('office_review_revision_identity_conflict', `Office Review revision ${field} does not match canonical truth.`, 409);
     }
+  }
+  if (Array.isArray(projected.snapshot.interventions)) {
+    const documents = projected.snapshot.interventions.filter(item => item.procedureWorkflow).map(item => {
+      const asset = projected.snapshot.visitAssets?.find(asset => asset.id === item.visitAssetId);
+      if (!asset || asset.assetId !== item.assetId || asset.visitId !== item.visitId) throw fieldError('office_review_procedure_context_conflict', 'Frozen procedure does not match its equipment.', 409);
+      const evidence = (projected.snapshot.procedureEvidence || []).filter(e => e.interventionId === item.id).map(e => projectProcedureEvidence({
+        ...e,fieldAuthorityVersion:1,targetType:'service_procedure',createdAt:e.receivedAt,createdByUserId:e.createdBy,
+      },{visitId:item.visitId,interventionId:item.id,assetId:item.assetId,visitAssetId:item.visitAssetId,workOrderId:projected.workOrderId,customerId:projected.customerId,propertyId:projected.propertyId}));
+      const workflow = validateProcedureContent(item.procedureWorkflow, evidence);
+      return {success:true,version:1,visitId:item.visitId,interventionId:item.id,assetId:item.assetId,interventionStatus:item.status,interventionVersion:item.version,
+        workflow:structuredClone(workflow),evidence,allowedActions:[],serverTime:projected.submittedAt,replayed:false,mediaLimits:structuredClone(MEDIA_LIMITS),
+        readiness:procedureProtocol.completion(workflow,evidence),stepReadiness:Object.fromEntries(procedureProtocol.PARTS.map(part=>[part,Object.fromEntries(workflow.protocol.parts[part].steps.map(step=>[step.id,procedureProtocol.stepMissing(workflow,part,step.id,evidence)]))]))};
+    });
+    if(documents.length)projected.procedureDocuments=documents;
   }
   return projected;
 }

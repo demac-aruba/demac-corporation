@@ -201,7 +201,8 @@ test('assigned helper receives scoped capture/asset/service actions but no globa
   assert.ok(jobs[0].allowedActions.includes('evidence.add'));
   assert.ok(jobs[0].allowedActions.includes('asset.add'));
   assert.ok(jobs[0].allowedActions.includes('intervention.add'));
-  assert.ok(!jobs[0].allowedActions.includes('sale.propose'));
+  assert.ok(jobs[0].allowedActions.includes('sale.propose'));
+  assert.ok(!jobs[0].allowedActions.includes('intervention.complete'));
   assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
   assert.ok(!jobs[0].allowedActions.includes('execute'));
   assert.ok(!jobs[0].allowedActions.includes('office.review'));

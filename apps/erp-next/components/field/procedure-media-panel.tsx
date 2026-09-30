@@ -129,6 +129,14 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
           {local.filter(c=>c.view==='supplemental').map(c=><div key={c.id} className={styles.receipt}>
             <strong>{stageLabel[c.stage]}</strong><small>{c.contentType} · {Math.round(c.sizeBytes/1024)} KB</small>
             {c.stage==='local'&&!c.prepare?<button type="button" disabled={session.busy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
+            {['reserved','uploaded'].includes(c.stage)?<details className={styles.coordination}>
+              <summary>Recuperar vínculo si cambió la coordinación</summary>
+              <label>Motivo de recuperación
+                <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
+              </label>
+              <button type="button" disabled={!session.fresh||session.busy||Boolean(session.operation)||(recoveryReasons[c.id]||'').trim().length<3}
+                onClick={()=>void session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim())}>Confirmar recuperación documental y reintentar</button>
+            </details>:null}
           </div>)}
           {evidence.filter(e=>e.view==='supplemental').map(e=><div key={e.id} className={styles.receipt}>
             <strong>{e.kind==='audio'?'Audio':'Video'} · vínculo confirmado</strong>

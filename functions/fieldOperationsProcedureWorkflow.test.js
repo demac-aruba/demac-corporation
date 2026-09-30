@@ -97,6 +97,11 @@ test('Office return/correction preserves prior revision and resubmits before app
  const submit=createSubmitOfficeReviewCommand({db:f.store.db,resolveAssignment:f.resolveAssignment,appendAuditInTransaction:f.appender});
  const request={identity:lead,visitId:'VISIT-1',expectedVersion:f.store.get('workVisits','VISIT-1').version,requestId:'office-submit-procedures-001'};
  await assert.rejects(()=>submit({...request,identity:helper}),error('permission_denied'));const sent=await submit(request);assert.equal(sent.review.status,'pending');
+ assert.equal(sent.revision.procedureDocuments.length,1);
+ assert.deepEqual(sent.revision.procedureDocuments[0].allowedActions,[]);
+ assert.equal(sent.revision.procedureDocuments[0].readiness.complete,true);
+ assert.equal(sent.revision.procedureDocuments[0].workflow.parts.indoor.ownerUserId,lead.uid);
+ assert.equal(sent.revision.procedureDocuments[0].evidence.length,f.store.all('fieldEvidence').length);
  const old=JSON.stringify(f.store.all('fieldOfficeReviewRevisions'));
  const decide=createDecideOfficeReviewCommand({db:f.store.db,appendAuditInTransaction:f.appender});
  await decide({identity:office,reviewId:sent.review.id,decision:'return',note:'Clarify the final functional result',expectedVersion:sent.review.version,requestId:'office-return-procedures-001'});

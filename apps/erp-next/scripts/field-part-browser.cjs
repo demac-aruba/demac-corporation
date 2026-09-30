@@ -117,28 +117,6 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      await winner.getByRole('heading',{name:'Evidencia por procedimiento',exact:true}).waitFor();
      assert.equal(await winner.getByRole('button',{name:'Reportar anomalía',exact:true}).count(),0,'anomaly entry is not repeated in step detail');
      assert.equal(await winner.getByLabel('Tomar Foto: ANTES').count(),1,'required photo control is tied to the procedure view');
-     // Exercise actual visible capture -> binary upload -> private read -> result save.
-     const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6XzQAAAAASUVORK5CYII=','base64');
-     await winner.getByLabel('Seleccionar Foto: ANTES').setInputFiles({name:'synthetic-before.png',mimeType:'image/png',buffer:image});
-     await winner.getByText('Vínculo confirmado',{exact:true}).waitFor();
-     await winner.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
-     await winner.getByAltText('Evidencia privada del procedimiento').waitFor();
-     assert.equal(await winner.getByAltText('Evidencia privada del procedimiento').getAttribute('src').then(s=>s.startsWith('blob:')),true);
-     await winner.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
-     await winner.getByLabel('Observación técnica').fill('I01: nota persistida de vista inicial');
-     await winner.getByRole('button',{name:'Guardar procedimiento',exact:true}).click();
-     await winner.getByText('Procedimiento documentado y confirmado.',{exact:true}).waitFor();
-     assert.equal(state.store.get('workInterventions','WI-1').procedureWorkflow.parts.indoor.steps.I01.note,'I01: nota persistida de vista inicial');
-     await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
-     await winner.getByRole('button',{name:/Verificar flapper/}).click();
-     await winner.getByLabel('Observación técnica').fill('I02: borrador exclusivo del flapper');
-     await winner.getByLabel('Resultado observado').selectOption('funciona');
-     await winner.getByRole('button',{name:'Guardar procedimiento',exact:true}).click();
-     await winner.getByText('Procedimiento documentado y confirmado.',{exact:true}).waitFor();
-     assert.equal(state.store.get('workInterventions','WI-1').procedureWorkflow.parts.indoor.steps.I02.note,'I02: borrador exclusivo del flapper');
-     await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
-     await winner.getByRole('button',{name:/Verificar enfriamiento inicial/}).click();
-     assert.equal(await winner.getByLabel('Seleccionar Foto: Instrumento legible').count(),1,'measured indoor temperature has an instrument photo control');
      await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
      await winner.getByRole('button',{name:'Volver a seleccionar parte',exact:true}).click();
      await winner.getByText('Tu parte está identificada.',{exact:true}).waitFor();
@@ -180,8 +158,9 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      reports.push({browser:browserName,viewport:{width,height},passed:true,checks:['two separate visible browser devices','no implicit claim','two-user contention','other part','release with reason','exact lost-response retry','stale read locked','late write after interruption remains unconfirmed','late account response rejected','foreign context rejected','revocation','no duplicate visit/intervention','no business/media/communication effects','touch targets','no overflow','no external requests','no page errors','actual procedure workspace 14/9 entry','single anomaly entry','per-step photo controls']});
      console.log(`PASS shared parts ${browserName} ${label}`);await Promise.all([context.close(),otherContext.close()]);
     }
+    reports.push(await require('./field-procedure-ui-workflow.cjs')({browser,companion,type,launchOptions,origin,reset,getState:()=>state,browserName}));
    }finally{await Promise.all([browser.close(),companion?.close()]);}
   }
-  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({sourceHead:require('node:child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),synthetic:true,backend:'loopback HTTP with deterministic database/auth fixtures',notClaimed:['hosted-preview','real-Firebase-auth','Firestore-emulator','physical-devices','procedure-media-capture-UI'],reports},null,2));
+  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({sourceHead:require('node:child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),synthetic:true,backend:'loopback HTTP with deterministic database/auth fixtures',notClaimed:['hosted-preview','real-Firebase-auth','Firestore-emulator','physical-devices'],reports},null,2));
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.closeAllConnections();server.close();});
