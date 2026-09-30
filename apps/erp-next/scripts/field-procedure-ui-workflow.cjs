@@ -12,7 +12,7 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
  reset();const state=getState();await state.claim('indoor');await state.claim('outdoor');
  const contexts=await Promise.all([browser.newContext({viewport:{width:390,height:844}}),companion.newContext({viewport:{width:390,height:844}})]);
  const errors=[],external=[];let officeBrowser;
- for(const context of contexts)await context.route('**/*',route=>{if(route.request().url().startsWith(origin+'/'))return route.continue();external.push(route.request().url());return route.abort();});
+ for(const context of contexts)await context.route('**/*',route=>{if(route.request().url().startsWith(origin+'/')||route.request().url().startsWith('blob:'+origin+'/'))return route.continue();external.push(route.request().url());return route.abort();});
  try{
   const pages=await Promise.all(contexts.map(c=>c.newPage())),[lead,helper]=pages;
   pages.forEach(p=>p.on('pageerror',e=>errors.push(e.message)));
@@ -77,7 +77,7 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
   await lead.getByRole('button',{name:'Solicitar revisión de excepción',exact:true}).click();
   await lead.getByText('Pendiente de oficina',{exact:true}).waitFor();
   officeBrowser=await type.launch(launchOptions);const officeContext=await officeBrowser.newContext({viewport:{width:1365,height:1000}});
-  await officeContext.route('**/*',route=>{if(route.request().url().startsWith(origin+'/'))return route.continue();external.push(route.request().url());return route.abort();});
+  await officeContext.route('**/*',route=>{if(route.request().url().startsWith(origin+'/')||route.request().url().startsWith('blob:'+origin+'/'))return route.continue();external.push(route.request().url());return route.abort();});
   const office=await officeContext.newPage();office.on('pageerror',e=>errors.push(e.message));await office.goto(origin+'/?actor=test-office');
   await office.getByRole('button').filter({hasText:'WO-1 · Verificar flapper'}).click();
   await office.getByLabel('Motivo de la revisión',{exact:true}).fill('Revisión documental sintética; no ejecución ficticia');
