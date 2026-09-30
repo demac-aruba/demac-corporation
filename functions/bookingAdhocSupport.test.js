@@ -257,11 +257,11 @@ test("retrying the same support request is idempotent and does not append anothe
   assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
 });
 
-test("ad hoc coworker support is same-day only", async () => {
+test("historical support requires explicit acknowledgement", async () => {
   const { authority } = fixture({}, "2026-08-28T14:00:00.000Z");
   await assert.rejects(
     authority.addSupport(addInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && error.details?.reason === "adhoc-support-same-day-only",
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && error.details?.reason === "backdating-confirmation-required",
   );
 });
 
@@ -331,4 +331,156 @@ test("support respects the canonical company closure calendar", async () => {
     authority.addSupport(addInput()),
     (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details?.reason === "company-calendar-closed",
   );
+});
+
+// Reported case: plan tomorrow's first slot, keeping the following job intact.
+test("Wednesday Van 3 supports Van 1 for one slot, using tomorrow's crew without duplicating work", async () => {
+  const date = "2026-09-30";
+  const seed = JSON.parse(JSON.stringify(baseSeed()).replaceAll(DATE, date).replaceAll("VAN-2", "VAN-3").replaceAll("Van 2", "Van 3"));
+  const primary = seed["appointments/APT-SUPPORT-1"];
+  primary.startTime = primary.assignments[0].time = "08:30";
+  primary.endTime = primary.assignments[0].endTime = "12:30";
+  const primaryOrder = seed["workOrders/WO-APT-SUPPORT-1-1"];
+  Object.assign(primaryOrder, { time: "08:30", appointmentEndTime: "12:30", scheduledSlots: 4,
+    appointmentDurationMinutes: 240, customerFacingDescription: "Two standard installations" });
+  const nextJob = { id: "NEXT-VAN-3", date, time: "09:30", vanId: "VAN-3", status: "Confirmada",
+    propertyId: "property-1", zone: "Santa Cruz", scheduledSlots: 1, appointmentDurationMinutes: 60 };
+  seed["workOrders/NEXT-VAN-3"] = nextJob;
+  const db = new FakeFirestore(seed);
+  const authority = createAdhocSupportAuthority({ db, clock: () => new Date("2026-09-29T16:35:00Z"), serverTimestamp: () => "SERVER_TIMESTAMP" });
+  const input = addInput({ requestedDate: date, requestedTime: "08:30", targetVanId: "VAN-3" });
+  const result = await authority.addSupport(input);
+  const support = db.read(`workOrders/${result.supportWorkOrderId}`);
+  assert.equal(support.date, date);
+  assert.equal(support.time, "08:30");
+  assert.equal(support.appointmentEndTime, "09:30");
+  assert.equal(support.scheduledSlots, 1);
+  assert.equal(support.customerFacingDescription, "Two standard installations");
+  assert.deepEqual(support.technicianIds, ["support-driver-date", "support-helper-date", "support-third-date"]);
+  assert.equal(support.supportNonBillable, true);
+  assert.equal(support.customerCommunicationOwner, false);
+  assert.equal(support.whatsappNotificationsEnabled, false);
+  assert.deepEqual(support.notificationRecipients, []);
+  assert.deepEqual(db.read("workOrders/WO-APT-SUPPORT-1-1"), primaryOrder);
+  assert.deepEqual(db.read("workOrders/NEXT-VAN-3"), nextJob);
+  assert.deepEqual(db.read("appointments/APT-SUPPORT-1").assignments[0], primary.assignments[0]);
+  assert.equal([...db.store.keys()].filter(key => key.startsWith("appointments/")).length, 1);
+  const replay = await authority.addSupport(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
+  const lock = supportCapacityLock(date, "VAN-3", "08:30");
+  assert.equal(db.read(`bookingCapacityLocks/${lock.id}`).appointmentId, primary.id);
+});
+
+test("future support must match the primary appointment date", async () => {
+  const { authority } = fixture({}, "2026-08-26T14:00:00Z");
+  await assert.rejects(authority.addSupport(addInput({ requestedDate: "2026-08-28" })),
+    error => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && /same canonical date/.test(error.message));
+});
+
+test("future support still respects closures and occupied capacity", async () => {
+  for (const extra of [
+    { "calendarClosures/future-closure": { date: DATE, active: true } },
+    { "workOrders/future-job": { date: DATE, time: "13:30", vanId: "VAN-2", status: "Confirmada", scheduledSlots: 1, appointmentDurationMinutes: 60 } },
+    { [`bookingCapacityLocks/${supportCapacityLock(DATE, "VAN-2", "13:30").id}`]: { active: true, appointmentId: "ANOTHER-APT" } },
+    { "staffAbsences/future-absence": { staffId: "support-driver-date", fromDate: DATE, toDate: DATE, active: true } },
+  ]) {
+    const { db, authority } = fixture(extra, "2026-08-26T14:00:00Z");
+    const before = JSON.stringify([...db.store]);
+    await assert.rejects(authority.addSupport(addInput()), error => [BOOKING_ERROR_CODES.AVAILABILITY_CHANGED, BOOKING_ERROR_CODES.SLOT_CONFLICT].includes(error.code));
+    assert.equal(JSON.stringify([...db.store]), before);
+  }
+});
+
+test("invalid support dates are rejected before any write", async () => {
+  const { db, authority } = fixture();
+  for (const requestedDate of ["2026-09-31", "tomorrow", "2026-13-01"]) {
+    await assert.rejects(authority.addSupport(addInput({ requestedDate })), error => error.details?.reason === "support-date-invalid");
+  }
+  assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 1);
+});
+
+const historyIntent = { bookingMode: "backdated", backdatingAcknowledged: true };
+
+test("historical support uses the dated crew and audits the correction without reopening or billing the primary", async () => {
+  const { confirmationEligible, reminderEligible } = require("./appointmentNotificationService");
+  const { sameDayScheduleChangeRequired } = require("./technicianScheduleChangeService");
+  for (const status of ["Completada", "Facturada", "Pagada"]) {
+    const primaryOrder = { ...baseSeed()["workOrders/WO-APT-SUPPORT-1-1"], status };
+    const primaryAppointment = { ...baseSeed()["appointments/APT-SUPPORT-1"], status: "completed" };
+    const { db, authority } = fixture({
+      "workOrders/WO-APT-SUPPORT-1-1": primaryOrder,
+      "appointments/APT-SUPPORT-1": primaryAppointment,
+      "invoices/HISTORY-INVOICE": { status: "paid", total: 100 },
+      "employeeTimesheets/HISTORY-TIMESHEET": { workedMinutes: 480 },
+    }, "2026-08-28T14:00:00Z");
+    const input = addInput(historyIntent);
+    const result = await authority.addSupport(input);
+    const support = db.read(`workOrders/${result.supportWorkOrderId}`);
+    assert.equal(support.backdated, true);
+    assert.equal(support.bookingMode, "backdated");
+    assert.equal(support.backdatingAcknowledged, true);
+    assert.equal(support.workAlreadyPerformed, true);
+    assert.equal(support.date, DATE);
+    assert.equal(support.backdatedRecordedAtIso, "2026-08-28T14:00:00.000Z");
+    assert.equal(support.backdatedRecordedBy, "office-1");
+    assert.equal(support.backdatedRecordedByName, "Dispatcher");
+    assert.deepEqual(support.technicianIds, ["support-driver-date", "support-helper-date", "support-third-date"]);
+    assert.equal(support.supportNonBillable, true);
+    assert.equal(confirmationEligible(support), false);
+    assert.equal(reminderEligible(support), false);
+    // Suppression remains explicit even when inspected with the work date as today.
+    assert.equal(sameDayScheduleChangeRequired(null, support, { date: DATE, time: "14:00" }), false);
+    const appointment = db.read("appointments/APT-SUPPORT-1");
+    assert.equal(appointment.status, "completed");
+    assert.equal(appointment.backdated, undefined);
+    assert.deepEqual(appointment.assignments[0], primaryAppointment.assignments[0]);
+    assert.equal(appointment.assignments[1].backdated, true);
+    assert.equal(appointment.lifecycleHistory[0].workDate, DATE);
+    assert.equal(appointment.lifecycleHistory[0].backdatedRecordedBy, "office-1");
+    assert.deepEqual(db.read("workOrders/WO-APT-SUPPORT-1-1"), primaryOrder);
+    assert.deepEqual(db.read("invoices/HISTORY-INVOICE"), { status: "paid", total: 100 });
+    assert.deepEqual(db.read("employeeTimesheets/HISTORY-TIMESHEET"), { workedMinutes: 480 });
+    assert.equal((await authority.addSupport(input)).replayed, true);
+    assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
+  }
+});
+
+test("historical support cannot attach to cancelled/rescheduled/held appointments or cancelled primary work", async () => {
+  for (const status of ["cancelled", "rescheduled", "temporary_hold"]) {
+    const { db, authority } = fixture({ "appointments/APT-SUPPORT-1": { ...baseSeed()["appointments/APT-SUPPORT-1"], status } }, "2026-08-28T14:00:00Z");
+    const before = JSON.stringify([...db.store]);
+    await assert.rejects(authority.addSupport(addInput(historyIntent)), error => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST);
+    assert.equal(JSON.stringify([...db.store]), before);
+  }
+  const { db, authority } = fixture({
+    "workOrders/WO-APT-SUPPORT-1-1": { ...baseSeed()["workOrders/WO-APT-SUPPORT-1-1"], status: "Cancelada" },
+    "workOrders/OLD-SUPPORT": { ...baseSeed()["workOrders/WO-APT-SUPPORT-1-1"], id: "OLD-SUPPORT", appointmentAssignmentRole: "support", vanId: "VAN-4" },
+  }, "2026-08-28T14:00:00Z");
+  const before = JSON.stringify([...db.store]);
+  await assert.rejects(authority.addSupport(addInput(historyIntent)), error => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && /eligible primary/.test(error.message));
+  assert.equal(JSON.stringify([...db.store]), before);
+});
+
+test("historical support still rejects completed conflicting work, locks, closures and absent dated crew", async () => {
+  for (const extra of [
+    { "workOrders/finished-conflict": { date: DATE, time: "13:30", vanId: "VAN-2", status: "Completada", scheduledSlots: 1, appointmentDurationMinutes: 60 } },
+    { [`bookingCapacityLocks/${supportCapacityLock(DATE, "VAN-2", "13:30").id}`]: { active: true, appointmentId: "OTHER" } },
+    { "calendarClosures/history-closure": { date: DATE, active: true } },
+    { "staffAbsences/history-absence": { staffId: "support-driver-date", fromDate: DATE, toDate: DATE, active: true } },
+  ]) {
+    const { db, authority } = fixture(extra, "2026-08-28T14:00:00Z");
+    const before = JSON.stringify([...db.store]);
+    await assert.rejects(authority.addSupport(addInput(historyIntent)), error => [BOOKING_ERROR_CODES.SLOT_CONFLICT, BOOKING_ERROR_CODES.AVAILABILITY_CHANGED].includes(error.code));
+    assert.equal(JSON.stringify([...db.store]), before);
+  }
+});
+
+test("historical support requires a reason and a complete acknowledgement", async () => {
+  for (const intent of [{ bookingMode: "backdated" }, { backdatingAcknowledged: true }, { ...historyIntent, reason: "" }]) {
+    const { db, authority } = fixture({}, "2026-08-28T14:00:00Z");
+    const before = JSON.stringify([...db.store]);
+    await assert.rejects(authority.addSupport(addInput(intent)), error => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST);
+    assert.equal(JSON.stringify([...db.store]), before);
+  }
 });

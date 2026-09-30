@@ -11,6 +11,7 @@ import {
 import {
   ATTENDANCE_STATUS_LABELS,
   dateKey,
+  hasAttendanceTimeChange,
   loadEmployeeAttendanceState,
   payrollPeriodBounds,
   saveAttendanceDay,
@@ -34,11 +35,13 @@ import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
 import { EmployeeProfileDialog } from './employee-profile-dialog';
+import { EmployeeBonusesPanel } from './employee-bonuses-panel';
+import { payrollBonusReport } from '@/lib/employee-bonuses';
 import styles from './employee-attendance-command-center.module.css';
 
 const STATUS_OPTIONS = Object.keys(ATTENDANCE_STATUS_LABELS) as AttendanceStatus[];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-type WorkspaceTab = 'overview' | 'calendar' | 'advances';
+type WorkspaceTab = 'overview' | 'calendar' | 'advances' | 'bonuses';
 type IconName = 'clock' | 'timer' | 'heart' | 'ban' | 'vacation' | 'wallet' | 'calendar' | 'user' | 'bolt' | 'briefcase';
 type EmployeePeriodSummary = {
   employee: CanonicalStaffProfile;
@@ -66,6 +69,7 @@ export function EmployeeWorkspace() {
   const [operations, setOperations] = useState<CanonicalOperationsState | null>(null);
   const [attendance, setAttendance] = useState<EmployeeAttendanceState>({ payrollSettings: [], timesheets: [], advances: [] });
   const [loading, setLoading] = useState(true);
+  const [payrollLoaded, setPayrollLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -89,8 +93,8 @@ export function EmployeeWorkspace() {
       setSelectedEmployeeId((current) => active.some((profile) => profile.id === current) ? current : first?.id ?? '');
       setAdvanceDraft((current) => ({ ...current, employeeId: active.some((profile) => profile.id === current.employeeId) ? current.employeeId : first?.id ?? '' }));
       if (canManageSensitiveAttendance) {
-        try { setAttendance(await loadEmployeeAttendanceState()); }
-        catch (cause) { setError(`Attendance/payroll records are restricted or unavailable: ${errorText(cause)}`); }
+        try { setAttendance(await loadEmployeeAttendanceState()); setPayrollLoaded(true); }
+        catch (cause) { setPayrollLoaded(false); setError(`Attendance/payroll records are restricted or unavailable: ${errorText(cause)}`); }
       }
     } catch (cause) {
       setError(errorText(cause));
@@ -121,6 +125,8 @@ export function EmployeeWorkspace() {
   const employees = useMemo(() => (operations?.staffProfiles ?? []).filter((profile) => profile.active !== false), [operations]);
   const selectedEmployee = employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const period = useMemo(() => payrollPeriodBounds(periodAnchor), [periodAnchor]);
+  const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], period), [attendance.payrollSettings, operations?.staffProfiles, period]);
+  const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0), [operations?.staffProfiles, bonusReport]);
   const calendarCells = useMemo(() => payrollCalendarDays(period.start, period.end), [period.end, period.start]);
 
   useEffect(() => {
@@ -200,6 +206,7 @@ export function EmployeeWorkspace() {
   const selectedVariance = selectedRecord && draft ? calculateAttendanceVariance({ schedule: selectedRecord.schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes }) : null;
   const workedStatus = draft?.status === 'Present' || draft?.status === 'Late';
   const detectedAttendanceExceptions = workedStatus ? selectedVariance?.missingSegments ?? [] : [];
+  const partialWorkday = detectedAttendanceExceptions.some((segment) => segment.kind === 'partial_day');
   const selectedWorkedMinutes = selectedRecord?.assumedRegular && !selectedRecord.entry && draft?.status === 'Present' && !detectedAttendanceExceptions.length && !(selectedVariance?.overtimeMinutes ?? 0)
     ? selectedRecord.schedule.scheduledMinutes
     : selectedVariance?.workedMinutes ?? 0;
@@ -221,11 +228,12 @@ export function EmployeeWorkspace() {
   });
   const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular
     && draft?.status === 'Present'
+    && !hasAttendanceTimeChange(selectedRecord.schedule, draft)
     && (selectedVariance?.overtimeMinutes ?? 0) === 0
     && detectedAttendanceExceptions.length === 0
     && !draft?.notes.trim());
   const selectedAbsenceRanges = useMemo(() => (operations?.staffAbsences ?? []).filter((item) => item.staffId === selectedEmployee?.id && item.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))).slice(0, 4), [operations?.staffAbsences, selectedEmployee?.id]);
-  const activeSectionLabel = tab === 'calendar' ? 'Employee Calendar' : tab === 'advances' ? 'Salary Advances' : 'Overview';
+  const activeSectionLabel = tab === 'calendar' ? 'Employee Calendar' : tab === 'advances' ? 'Salary Advances' : tab === 'bonuses' ? 'Bonuses' : 'Overview';
 
   async function refreshAfterEmployeeChange(employeeId?: string) {
     if (employeeId) setSelectedEmployeeId(employeeId);
@@ -254,8 +262,13 @@ export function EmployeeWorkspace() {
   }
 
   function exportAccountingCsv() {
-    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records'];
-    const rows = periodSummaries.map((summary) => [staffDisplayName(summary.employee), summary.employee.role ?? '', summary.vanLabel, summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), summary.advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays)]);
+    if (!operations || !payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
+    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records', 'Bonuses Afl', 'Bonus Details'];
+    const rows = accountingEmployees.map((employee) => {
+      const summary = summarizeAttendancePeriod({ employee, period, operations, attendance });
+      const advances = periodAdvances.filter((advance) => advance.employeeId === employee.id).reduce((sum, advance) => sum + advance.amount, 0);
+      return [staffDisplayName(employee), employee.role ?? '', employeeVan(employee)?.name ?? 'UNASSIGNED', summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays), (bonusReport.byEmployee[employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[employee.id] ?? ''];
+    });
     const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -271,16 +284,17 @@ export function EmployeeWorkspace() {
   function exportPayrollPdf() {
     setError('');
     setMessage('');
-    if (!operations) return;
+    if (!operations || !payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
     try {
       const payrollPeriod = payrollPeriodFromDates(period.start, period.end);
-      const summaries = employees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance }));
+      const summaries = accountingEmployees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance }));
       const advancesByEmployee = Object.fromEntries(periodSummaries.map((summary) => [summary.employee.id, summary.advances]));
       const downloaded = downloadPayrollAccountingPdf({
         filename: `DEMAC_Payroll_Contabilidad_${period.start}_${period.end}.pdf`,
         periodLabel: payrollPeriod.label,
         summaries,
         advancesByEmployee,
+        bonusesByEmployee: bonusReport.byEmployee,
       });
       setMessage(downloaded
         ? `Premium payroll accounting PDF downloaded. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`
@@ -337,7 +351,7 @@ export function EmployeeWorkspace() {
         <div className={styles.headerText}>
           <div className={styles.breadcrumb}><span>Workforce</span><b>›</b><span>Employees</span><b>›</b><span>{activeSectionLabel}</span></div>
           <h1>Employees</h1>
-          <p>One canonical workspace for employee profiles, attendance exceptions and salary advances. Normal scheduled attendance is automatic.</p>
+          <p>One canonical workspace for employee profiles, attendance exceptions, salary advances and bonuses. Normal scheduled attendance is automatic.</p>
         </div>
         <div className={styles.headerActions}>
           <details
@@ -353,6 +367,7 @@ export function EmployeeWorkspace() {
               <button type="button" onClick={() => { setQuickActionsOpen(false); exportPayrollPdf(); }} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button>
               <button type="button" onClick={() => { setQuickActionsOpen(false); exportAccountingCsv(); }} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button>
               <button type="button" onClick={() => { setQuickActionsOpen(false); setTab('advances'); }} disabled={!canManageSensitiveAttendance}>Record salary advance</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); setTab('bonuses'); }} disabled={!canManageSensitiveAttendance}>Add employee bonus</button>
             </div>
           </details>
         </div>
@@ -362,11 +377,13 @@ export function EmployeeWorkspace() {
         <button type="button" className={tab === 'overview' ? styles.activeTab : ''} onClick={() => setTab('overview')}>Overview</button>
         <button type="button" className={tab === 'calendar' ? styles.activeTab : ''} onClick={() => setTab('calendar')}>Employee Calendar</button>
         <button type="button" className={tab === 'advances' ? styles.activeTab : ''} onClick={() => setTab('advances')}>Salary Advances</button>
+        {canManageSensitiveAttendance ? <button type="button" className={tab === 'bonuses' ? styles.activeTab : ''} onClick={() => setTab('bonuses')}>Bonuses</button> : null}
       </nav>
 
       {!canManageSensitiveAttendance ? <div className={styles.notice}>Payroll-sensitive columns are protected. Employee profiles remain available according to your workforce permissions.</div> : null}
       {error ? <div className={styles.error}>{error}</div> : null}
       {message ? <div className={styles.success}>{message}</div> : null}
+      {canManageSensitiveAttendance && bonusReport.issues.length ? <div className={styles.error}>{bonusReport.issues.join(' ')}</div> : null}
 
       {tab === 'overview' ? <>
         {canManageSensitiveAttendance ? <section className={styles.metricsGrid}>
@@ -375,6 +392,7 @@ export function EmployeeWorkspace() {
           <Metric icon="ban" tone="orange" label="No Work No Pay" value={hours(totals.nwnp)} sub="Unpaid exception hours" />
           <Metric icon="vacation" tone="green" label="Vacation" value={hours(totals.vacation)} sub="Recorded vacation exception hours" />
           <Metric icon="wallet" tone="blue" label="Salary Advances" value={money(totals.advances)} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
+          <Metric icon="wallet" tone="green" label="Bonuses" value={money(bonusReport.total)} sub="Approved amounts for Accounting" />
         </section> : null}
         <EmployeeDirectoryOverview
           operations={operations}
@@ -461,18 +479,21 @@ export function EmployeeWorkspace() {
                   {selectedVariance.earlyStartMinutes > 0 ? <SummaryRow icon="clock" label="Early start" value={hoursAndMinutes(selectedVariance.earlyStartMinutes)} tone="blue" /> : null}
                   {selectedVariance.lateFinishMinutes > 0 ? <SummaryRow icon="clock" label="Late finish" value={hoursAndMinutes(selectedVariance.lateFinishMinutes)} tone="blue" /> : null}
                   {selectedVariance.unusedBreakMinutes > 0 ? <SummaryRow icon="timer" label="Unused scheduled break" value={hoursAndMinutes(selectedVariance.unusedBreakMinutes)} tone="green" /> : null}
+                  {selectedVariance.breakAppliedToEarlyDepartureMinutes > 0 ? <SummaryRow icon="clock" label="Break applied to early departure" value={hoursAndMinutes(selectedVariance.breakAppliedToEarlyDepartureMinutes)} tone="blue" /> : null}
                 </div> : null}
+
+                {partialWorkday ? <div className={styles.notice} role="status">Partial workday: {hoursAndMinutes(selectedVariance?.workedMinutes)} worked and {hoursAndMinutes(selectedVariance?.missingScheduledMinutes)} no work. No unused lunch break is credited for this partial day. Should the no-work time be paid or unpaid? Choose below and enter a reason.</div> : null}
 
                 {detectedAttendanceExceptions.map((segment) => {
                   const classification = draft.attendanceExceptionClassifications?.find((item) => item.kind === segment.kind);
                   return <div key={segment.kind} className={styles.dailySummary}>
                     <strong>{attendanceExceptionTitle(segment.kind, segment.fromTime, segment.toTime, segment.minutes)}</strong>
-                    <Field label="Payment Treatment" full><select className={styles.control} value={classification?.treatment ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { treatment: event.target.value ? event.target.value as AttendancePaymentTreatment : undefined })}><option value="">Select treatment…</option><option value="paid">Paid</option><option value="no_work_no_pay">No Work No Pay</option></select></Field>
+                    <Field label="Payment Treatment" full><select className={styles.control} value={classification?.treatment ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { treatment: event.target.value ? event.target.value as AttendancePaymentTreatment : undefined })}><option value="">Select treatment…</option><option value="paid">No Work — Paid</option><option value="no_work_no_pay">No Work No Pay</option></select></Field>
                     <Field label="Reason" full><input className={styles.control} value={classification?.reason ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { reason: event.target.value })} placeholder="Doctor appointment, personal permission, sick, other…" /></Field>
                   </div>;
                 })}
 
-                {incompleteAttendanceException ? <div className={styles.notice}>Classify every missing-time segment as Paid or No Work No Pay and enter a reason before saving.</div> : null}
+                {incompleteAttendanceException && !partialWorkday ? <div className={styles.notice}>Classify every missing-time segment as No Work — Paid or No Work No Pay and enter a reason before saving.</div> : null}
 
                 <Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add notes for this exception…" /></Field>
                 <div className={styles.dailySummary}>
@@ -481,8 +502,9 @@ export function EmployeeWorkspace() {
                   <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
                   <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
                   {workedStatus ? <SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /> : null}
-                  {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="Paid Missing Time" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
+                  {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
+                  {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}
                 </div>
                 <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
               </div> : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}
@@ -496,6 +518,8 @@ export function EmployeeWorkspace() {
         <section className={styles.advanceLedger}><div className={styles.sectionHeader}><div><span className={styles.sectionEyebrow}>Payroll input ledger</span><h2>Salary Advances</h2><p>Cash and bank-transfer advances tied to the selected payroll period.</p></div><span className={styles.totalPill}>{periodAdvances.length} records · {money(totals.advances)}</span></div><div className={styles.tableWrap}><table className={styles.advanceTable}><thead><tr><th>Date</th><th>Employee</th><th>Method</th><th>Reference</th><th>Amount</th><th>Recorded by</th></tr></thead><tbody>{periodAdvances.map((advance: EmployeeSalaryAdvance) => <tr key={advance.id}><td>{shortDate(advance.date)}</td><td>{advance.employeeName}</td><td><span className={styles.methodPill}>{advance.method}</span></td><td>{advance.reference || '—'}</td><td><strong>{money(advance.amount)}</strong></td><td>{advance.recordedByName || '—'}</td></tr>)}</tbody></table></div>{!periodAdvances.length ? <div className={styles.empty}>No salary advances recorded for this payroll period.</div> : null}</section>
         <section className={styles.advanceFormCard}><span className={styles.sectionEyebrow}>New payroll input</span><h2>Record Salary Advance</h2><p>This records the advance only; it does not apply an automatic deduction.</p><div className={styles.dailyForm}><Field label="Employee" full><select className={styles.control} value={advanceDraft.employeeId} onChange={(event) => setAdvanceDraft({ ...advanceDraft, employeeId: event.target.value })}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select></Field><Field label="Date"><input className={styles.control} type="date" value={advanceDraft.date} onChange={(event) => setAdvanceDraft({ ...advanceDraft, date: event.target.value })} /></Field><Field label="Amount (Afl.)"><input className={styles.control} type="number" min="0" step="0.01" value={advanceDraft.amount} onChange={(event) => setAdvanceDraft({ ...advanceDraft, amount: event.target.value })} /></Field><Field label="Method"><select className={styles.control} value={advanceDraft.method} onChange={(event) => setAdvanceDraft({ ...advanceDraft, method: event.target.value as SalaryAdvanceMethod })}><option value="Bank Transfer">Bank Transfer</option><option value="Cash">Cash</option></select></Field><Field label="Reference / Receipt"><input className={styles.control} value={advanceDraft.reference} onChange={(event) => setAdvanceDraft({ ...advanceDraft, reference: event.target.value })} placeholder="Optional reference" /></Field><Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={advanceDraft.notes} onChange={(event) => setAdvanceDraft({ ...advanceDraft, notes: event.target.value })} placeholder="Reason or internal note…" /></Field><button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || !advanceDraft.amount} onClick={() => void recordAdvance()}>{busy ? 'Saving…' : 'Record Advance'}</button></div></section>
       </div> : null}
+
+      {tab === 'bonuses' && canManageSensitiveAttendance ? payrollLoaded ? <EmployeeBonusesPanel key={period.id} employees={operations.staffProfiles} settings={attendance.payrollSettings} period={period} selectedEmployeeId={selectedEmployeeId} onMovePeriod={movePayrollPeriod} onCurrentPeriod={goToToday} onSaved={(record) => setAttendance((current) => ({ ...current, payrollSettings: [...current.payrollSettings.filter((item) => item.id !== record.id), record] }))} /> : <div className={styles.error}>Payroll records must load before bonuses can be managed. <button type="button" onClick={() => void load()}>Retry</button></div> : null}
 
       <EmployeeProfileDialog
         open={profileTargetId !== undefined}

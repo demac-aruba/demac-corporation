@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   liveOperationalStartTimes,
   liveOperationalWindowAllows,
@@ -17,7 +18,7 @@ import {
   optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
 import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
-import { afterHoursTargetForVan, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
+import { afterHoursTargetForVan, canPlanAfterHours, canPlanCoworkerSupport, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -25,10 +26,49 @@ import {
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
 import { arubaBookingClock, isBackdatedAppointmentTarget } from '../lib/scheduling-backdating';
+import { canOfferRegularHistoricalCapacityCorrection, regularHistoricalCapacitySource } from '../lib/regular-historical-capacity';
 import { getRuntimeSchedulingSettings } from '../lib/scheduling';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
+}
+
+const appointmentDrawerCss = readFileSync('components/scheduling/live-appointment-create-drawer.module.css', 'utf8');
+const schedulingReadableCss = readFileSync('components/scheduling/scheduling-readable-type.module.css', 'utf8');
+requireCondition(schedulingReadableCss.includes('.readable :where(input, select, textarea)'), 'Scheduling typography must retain its ancestor selector for this cascade guard.');
+for (const rule of [
+  '.overlay .drawer :where(span,small,em,time,label,b){font-size:12px!important}',
+  '.overlay .drawer :where(p,strong,button){font-size:12px!important}',
+  '.overlay .drawer :where(input,select,textarea){font-size:14px!important}',
+  '.overlay .drawer :where(input,textarea)::placeholder{font-size:14px!important}',
+]) {
+  requireCondition(appointmentDrawerCss.includes(rule), `The drawer must outrank Scheduling's important type minimum: ${rule}`);
+}
+function lastDrawerFontSize(selector: string): number {
+  let size = Number.NaN;
+  for (const [, selectors, declarations] of appointmentDrawerCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!selectors.split(',').some((candidate) => candidate.trim() === selector)) continue;
+    const declaredSize = declarations.match(/font-size:\s*([\d.]+)px/);
+    if (declaredSize) size = Number(declaredSize[1]);
+  }
+  return size;
+}
+for (const [selector, minimum] of [
+  ['.sectionBody input', 14],
+  ['.sectionBody input::placeholder', 14],
+  ['.sectionBody textarea::placeholder', 14],
+  ['.sectionBody label>span', 12],
+  ['.emptyResult', 12],
+  ['.previewBoundary', 12],
+  ['.sourceOption span', 12],
+  ['.searchResult strong', 12],
+  ['.validateButton', 12],
+] as const) {
+  requireCondition(lastDrawerFontSize(selector) >= minimum, `${selector} must stay legible at a minimum of ${minimum}px.`);
+}
+const appointmentDrawerSource = readFileSync('components/scheduling/live-appointment-create-drawer.tsx', 'utf8');
+for (const match of appointmentDrawerSource.matchAll(/fontSize:\s*(?:'([\d.]+)px'|([\d.]+))/g)) {
+  requireCondition(Number(match[1] ?? match[2]) >= 12, 'Inline appointment guidance must not use miniature type.');
 }
 
 const arubaNoon = new Date('2026-09-01T16:11:00.000Z');
@@ -87,6 +127,24 @@ requireCondition(canonical.assignments[0].end === '10:30', 'Canonical elapsed du
 requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain capacity/history metadata.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
+requireCondition(canOfferRegularHistoricalCapacityCorrection(canonical, false, arubaNoon), 'A past confirmed single-Van Regular Booking must offer slot correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection(canonical, true, arubaNoon), 'Project bookings must stay in the Project correction flow.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, durationMinutesPerUnit: 120 }, false, arubaNoon), 'Known two-hour-per-unit service must not advertise the hourly correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, dateKey: '2026-09-01' }, false, arubaNoon), 'A same-day booking must not offer historical correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, status: 'temporary_hold' }, false, arubaNoon), 'A hold must not offer historical correction.');
+requireCondition(!canOfferRegularHistoricalCapacityCorrection({ ...canonical, assignments: [canonical.assignments[0], canonical.assignments[0]] }, false, arubaNoon), 'A multi-Van booking must not offer historical correction.');
+const regularHistoryRecord = {
+  bookingAuthorityVersion: 1, status: 'confirmed', date: '2026-08-18', startTime: '08:30',
+  customerId: 'CUSTOMER-1', propertyId: 'PROPERTY-1', primaryVanId: 'VAN-1',
+  assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2, quantity: 2, durationMinutes: 120 }], workOrderIds: ['WO-1'],
+};
+requireCondition(regularHistoricalCapacitySource(regularHistoryRecord, arubaNoon)?.currentSlots === 2, 'Correction must read current slots from the fresh canonical Appointment.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, projectId: 'PRJ-1' }, arubaNoon) === null, 'A canonical Project identity must block Regular correction even if the board label is missing.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2.5 }] }, arubaNoon) === null, 'Fractional historical slots must not be offered.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 2, quantity: 1, durationMinutes: 120 }] }, arubaNoon) === null, 'A two-hour service must not be presented as an hourly slot correction.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, regularCapacityCorrectionRequestId: 'prior-safe-correction', assignments: [{ vanId: 'VAN-1', time: '08:30', slots: 3, quantity: 2, durationMinutes: 180 }] }, arubaNoon)?.currentSlots === 3, 'A previously corrected hourly booking must allow another reviewed adjustment.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, workOrderIds: ['WO-1', 'WO-2'] }, arubaNoon) === null, 'Multi-Work-Order booking must not be offered.');
+requireCondition(regularHistoricalCapacitySource({ ...regularHistoryRecord, date: '2026-09-01' }, arubaNoon) === null, 'Canonical same-day bookings must not use the historical correction flow.');
 
 const sixService = projectLiveSchedulingAppointments([{
   ...canonicalWorkOrders[0],
@@ -464,3 +522,20 @@ requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short v
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
 console.log('Live scheduling acceptance passed: canonical duration drives elapsed work time while scheduled slot ownership drives capacity; flexible lunch, per-Van after-hours targeting, full-card booking, full-day Saturdays, half-days, closures and communication ownership remain protected.');
+
+requireCondition(canPlanAfterHours('2026-09-30', '2026-09-29'), 'Future emergency must be enabled.');
+requireCondition(!canPlanAfterHours('2026-09-28', '2026-09-29'), 'Past emergency remains blocked.');
+const restSlot = { dateKey: '2026-09-29', today: '2026-09-28', start: '13:30', companyOpen: true, vanAvailable: true, schedule: { workdayStart: '08:00', workdayEnd: '13:00' } };
+requireCondition(weeklyRestSlotEligible(restSlot), 'Weekly rest can be explicitly selected for overtime.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, vanAvailable: false }), 'Out-of-service Van is not weekly rest.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, companyOpen: false }), 'Closure cannot be overridden by weekly-rest booking.');
+requireCondition(!weeklyRestSlotEligible({ ...restSlot, start: '08:30' }), 'Ordinary morning must retain normal booking.');
+const restBooking = projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], time: '13:30', vanId: 'VAN-2', appointmentDurationMinutes: 240, scheduledSlots: 4, appointmentEndTime: '17:30', appointmentCapacityEndTime: '17:30', scheduledOvertime: { accepted: true, capacityEnd: '17:30', slotStarts: ['13:30', '14:30', '15:30', '16:30'] } }], clients, properties, [], [], halfDayCapacity)[0];
+requireCondition(restBooking.assignments[0].scheduledOvertime === true && restBooking.assignments[0].capacitySlotStarts?.length === 4, 'Reload must retain scheduled overtime and all four slots on a half-day.');
+requireCondition(jobOwnsCapacityStart(restBooking.assignments[0], '16:30'), 'Fourth overtime slot must remain occupied after refresh.');
+
+requireCondition(canPlanCoworkerSupport('2026-09-29'), 'Today support remains available.');
+requireCondition(canPlanCoworkerSupport('2026-09-30'), 'Tomorrow support is available from an open slot.');
+requireCondition(canPlanCoworkerSupport('2026-09-28'), 'Past support is available for acknowledged historical corrections.');
+
+requireCondition(!canPlanCoworkerSupport('2026-09-31'), 'Invalid calendar dates remain blocked for support.');

@@ -64,12 +64,12 @@ export function useProcedureSession(input: FieldProcedureTarget) {
       if (alive.current) setOperation(pending);
       const next=await recordFieldProcedureAction(target,pending.command,pending.requestId);
       await acknowledgeProcedureOperation(target,pending.requestId);
-      if (!alive.current) return next;
+      if (!alive.current || version!==epoch.current) return null;
       setWorkspace(next);setOperation(null);setFresh(version===epoch.current && navigator.onLine && document.visibilityState==='visible');
       setNotice('Cambio confirmado por el servidor.');
       return next;
     } catch (e) {
-      if (alive.current) {
+      if (alive.current && version===epoch.current) {
         setError(message(e));
         // Keep exact persisted intent, even across a lost acknowledgement or reload.
         try { const pending=await readProcedureOperation(target); if(alive.current)setOperation(pending); } catch { if(alive.current)setLocalReady(false); }
@@ -88,9 +88,9 @@ export function useProcedureSession(input: FieldProcedureTarget) {
         await synchronizeProcedureCapture(target,row.id); await refreshLocal();
       }
       const next=await getFieldProcedureWorkspace(target);
-      if (alive.current) {setWorkspace(next);setFresh(version===epoch.current && navigator.onLine && document.visibilityState==='visible');setNotice('Archivos vinculados y verificados por el servidor.');}
+      if (alive.current && version===epoch.current) {setWorkspace(next);setFresh(navigator.onLine && document.visibilityState==='visible');setNotice('Archivos vinculados y verificados por el servidor.');}
     } catch(e) {
-      if(alive.current){setError(message(e));try{await refreshLocal();}catch{setLocalReady(false);} if([401,403].includes((e as {status?:number})?.status || 0)){setWorkspace(null);setCaptures([]);}}
+      if(alive.current && version===epoch.current){setError(message(e));try{await refreshLocal();}catch{setLocalReady(false);} if([401,403].includes((e as {status?:number})?.status || 0)){setWorkspace(null);setCaptures([]);}}
     } finally {lock.current=false;if(alive.current){setBusy(false);setLoading(false);}}
   }
   async function capture(input: Parameters<typeof storeProcedureCapture>[1]) {

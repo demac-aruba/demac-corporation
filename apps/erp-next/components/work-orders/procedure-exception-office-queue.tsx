@@ -1,28 +1,35 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getFieldProcedureExceptionQueue, type FieldProcedureExceptionQueueItem } from '@/lib/field-authority';
 import { FieldProcedureWorkspace } from '@/components/field/field-procedure-workspace';
 import styles from '@/components/field/field-procedure-workspace.module.css';
 
 export function ProcedureExceptionOfficeQueue({ userId }: { userId:string }) {
+  return <OfficeQueueSession key={userId} userId={userId}/>;
+}
+function OfficeQueueSession({ userId }: { userId:string }) {
   const [items,setItems]=useState<FieldProcedureExceptionQueueItem[]>([]);
   const [selected,setSelected]=useState<FieldProcedureExceptionQueueItem|null>(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const epoch=useRef(0);
 
   const load=useCallback(async()=>{
+    const version=++epoch.current;
     setLoading(true);setError('');
     try {
       const response=await getFieldProcedureExceptionQueue();
+      if(version!==epoch.current)return;
       setItems(response.exceptions);
     } catch(e) {
+      if(version!==epoch.current)return;
       setItems([]);
       setError(e instanceof Error?e.message:'No se pudieron cargar las excepciones de procedimientos.');
-    } finally { setLoading(false); }
+    } finally { if(version===epoch.current)setLoading(false); }
   },[]);
 
-  useEffect(()=>{void load();},[load]);
+  useEffect(()=>{void load();return()=>{epoch.current+=1;};},[load]);
 
   if(selected) {
     return <section className={styles.workspace} aria-label="Revisión de excepción de procedimiento">
@@ -32,6 +39,7 @@ export function ProcedureExceptionOfficeQueue({ userId }: { userId:string }) {
         <p>La decisión queda en el expediente del procedimiento. No aprueba el reporte final ni crea una ejecución ficticia.</p>
       </div>
       <FieldProcedureWorkspace
+        key={selected.key}
         target={{ownerUserId:userId,visitId:selected.visitId,interventionId:selected.interventionId,assetId:selected.assetId}}
         initialPart={selected.part}
         initialStepId={selected.stepId}

@@ -440,7 +440,7 @@ function createOperationalMoveAuthority({
         ...(overtime ? { additionalHelperStaffId: crew.additionalHelperStaffId } : {}),
         time: targetTime,
         endTime: targetEnd,
-        ...(overtime || appointment.operationalMoveOvertime ? { capacityEndTime: capacityEnd } : {}),
+        ...(overtime || appointment.operationalMoveOvertime || appointment.scheduledOvertime ? { capacityEndTime: capacityEnd } : {}),
         slots: slotCount,
         role: assignment.role || "primary",
       });
@@ -475,7 +475,7 @@ function createOperationalMoveAuthority({
         date: targetDate,
         startTime: targetTime,
         endTime: targetEnd,
-        ...(overtime || appointment.operationalMoveOvertime ? { capacityEndTime: capacityEnd } : {}),
+        ...(overtime || appointment.operationalMoveOvertime || appointment.scheduledOvertime ? { capacityEndTime: capacityEnd } : {}),
         assignments: [nextAssignment],
         primaryVanId: requiredVanId,
         capacityLockIds: newLocks.map((lock) => lock.id),
@@ -493,6 +493,7 @@ function createOperationalMoveAuthority({
         lastOperationalMoveAtIso: now.toISOString(),
         operationalMoveVersion: OPERATIONAL_MOVE_VERSION,
         operationalMoveOvertime: overtimeAcceptance ? compactObject(overtimeAcceptance) : null,
+        ...(appointment.scheduledOvertime ? { scheduledOvertime: null } : {}),
         updatedAt: serverTimestamp(),
       });
 
@@ -505,8 +506,9 @@ function createOperationalMoveAuthority({
           vanId: requiredVanId,
           technicianIds: crew.technicianIds,
           scheduledSlots: slotCount,
-          ...(overtime || appointment.operationalMoveOvertime ? { appointmentCapacityEndTime: capacityEnd } : {}),
+          ...(overtime || appointment.operationalMoveOvertime || appointment.scheduledOvertime ? { appointmentCapacityEndTime: capacityEnd } : {}),
           operationalMoveOvertime: overtimeAcceptance ? compactObject(overtimeAcceptance) : null,
+          ...(appointment.scheduledOvertime ? { scheduledOvertime: null } : {}),
           updatedAt: now.toISOString(),
           lastOperationalMoveRequestId: stableRequestId,
         }), { merge: true });

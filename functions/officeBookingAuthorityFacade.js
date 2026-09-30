@@ -21,6 +21,10 @@ const COMMUNICATION_ACTIONS = new Set([
 ]);
 const AFTER_HOURS_ACTIONS = new Set([
   "create_after_hours_emergency",
+  "prepare_rest_day_overtime",
+  "create_rest_day_overtime",
+  "prepare_capacity_overtime",
+  "create_capacity_overtime",
 ]);
 
 function officeActor(identity = {}) {
@@ -64,7 +68,12 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
       if (VAN_SCHEDULE_ACTIONS.has(action)) {
         result = await vanSchedules.execute({ action, data, identity });
       } else if (AFTER_HOURS_ACTIONS.has(action)) {
-        result = await afterHours.createEmergency({
+        const method = action === 'prepare_rest_day_overtime' ? 'prepareRestDayOvertime'
+          : action === 'create_rest_day_overtime' ? 'createRestDayOvertime'
+          : action === 'prepare_capacity_overtime' ? 'prepareCapacityOvertime'
+          : action === 'create_capacity_overtime' ? 'createCapacityOvertime' : 'createEmergency';
+        result = await afterHours[method]({
+          overtimeConsent: data.overtimeConsent,
           requestId: data.requestId,
           customerId: data.customerId,
           propertyId: data.propertyId,

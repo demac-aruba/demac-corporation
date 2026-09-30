@@ -22,9 +22,18 @@ const fixture = {
   estimatedSlots: 66, estimatedLaborHours: 66, scheduledFutureHours: 63, actualLaborHours: 0,
   materialBudget: null, materialActual: 0, assignedVans: [], phases: [], assignments: [], materials: [], expenses: [], costEntries: [],
 };
+const publishedProjection = {
+  serverVersion: 1, id: fixture.id, projectNumber: fixture.projectNumber, name: fixture.name,
+  customerId: fixture.customerId, customerName: fixture.customerName, siteId: fixture.siteId,
+  location: fixture.location, type: fixture.type, status: fixture.status,
+  technicianInstructions: '', estimatedSlots: fixture.estimatedSlots,
+  slotsPerWorkDay: fixture.slotsPerWorkDay, slotDurationMinutes: fixture.slotDurationMinutes,
+  estimatedLaborHours: fixture.estimatedLaborHours, scheduledFutureHours: fixture.scheduledFutureHours,
+  actualLaborHours: fixture.actualLaborHours, phases: [], assignments: [],
+};
 const stubs = {
   'session': `export async function requireFirebaseWebSession(){return {uid:'SYNTHETIC-ACTOR',idToken:'synthetic-project-token'};}`,
-  'auth-provider': `const principal = {userId:'SYNTHETIC-ACTOR',active:true, role:'operations', displayName:'Synthetic operator', capabilities:new Set(window.__readOnly ? ['projects.view'] : ['projects.view','projects.manage'])}; export function useAuth(){return {principal};}`,
+  'auth-provider': `const principal = {userId:'SYNTHETIC-ACTOR',active:true, role:window.__schedulerOnly ? 'office_operator' : 'operations', displayName:'Synthetic operator', capabilities:new Set(window.__readOnly ? ['projects.view'] : window.__schedulerOnly ? ['projects.schedule'] : ['projects.view','projects.manage','projects.schedule'])}; export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[{id:'CUSTOMER-BROWSER-TEST',name:'Synthetic customer',active:true}],properties:[{id:'PROPERTY-BROWSER-TEST',clientId:'CUSTOMER-BROWSER-TEST',name:'Synthetic site',address:'Synthetic site',active:true}]};}
     export async function loadBookingContactReferenceData(){return {contacts:[],contactAssignments:[]};}
@@ -33,7 +42,7 @@ const stubs = {
   'live-operational-capacity': `export async function loadLiveOperationalCapacityState(){return {};} export function liveVanCrew(){return {label:'Synthetic crew'};}`,
   'aruba-address-directory': `export async function suggestArubaAddresses(){return [];}`,
   'property-communication-editor': `export function PropertyCommunicationPanel(){return null;} export function PropertyContactDraftEditor(){return null;}`,
-  'after-hours-booking': `export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
+  'after-hours-booking': `export class SpecialBookingError extends Error {} export async function prepareCapacityOvertime(){throw Error('Unexpected capacity overtime preparation');} export async function createCapacityOvertime(){throw Error('Unexpected capacity overtime write');} export async function prepareRestDayOvertime(){throw Error('Unexpected overtime preparation');} export async function createRestDayOvertime(){throw Error('Unexpected overtime write');} export async function createAfterHoursEmergency(){throw Error('Unexpected after-hours write');}`,
   'office-booking-authority': `
     export async function updateOfficeProperty(){throw Error('Unexpected property edit in budget acceptance');}
     export class OfficeBookingRequestError extends Error {}
@@ -72,7 +81,7 @@ import {LiveAppointmentCreateDrawer} from './components/scheduling/live-appointm
 import {ProjectLaborBudgetSummary} from './components/projects/project-labor-budget-status';
 function Harness(){
  const [created,setCreated]=useState(null);
- if(created) return <main><h1>Synthetic booking result</h1><ProjectLaborBudgetSummary project={JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')).projects[0]} /></main>;
+ if(created) return <main><h1>Synthetic booking result</h1>{!window.__schedulerOnly && <ProjectLaborBudgetSummary project={JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')).projects[0]} />}</main>;
  return <LiveAppointmentCreateDrawer target={{dateKey:'2099-09-18',vanId:'VAN-TEST',vanName:'Test Van',start:'08:30',end:'09:30'}} onClose={()=>{}} onCreated={value=>{window.__created=value;setCreated(value);}} />;
 }
 createRoot(document.getElementById('app')).render(<Harness/>);`;
@@ -106,28 +115,47 @@ async function main() {
     for(const [name,engine] of [['chromium',chromium],['webkit',webkit]]) {
       const browser=await engine.launch({headless:true});
       try {
-        for(const scenario of ['confirmed','hold','cancel','selection-change','forecast-change','forecast-70','support','within-budget','lost-response','lost-hold-response','availability-conflict','commit-conflict','read-only']) {
+        for(const scenario of ['confirmed','hold','cancel','selection-change','forecast-change','forecast-70','support','within-budget','lost-response','lost-hold-response','availability-conflict','commit-conflict','published-operator','read-only']) {
           const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
           const unexpected=[];const errors=[];
-          await context.route('**/*',route=>{
+          let projectReads=0;
+          let page;
+          await context.route('**/*',async route=>{
             if(new URL(route.request().url()).origin===url)return route.continue();
             if(route.request().url()==='https://us-central1-demo-demac-projects.cloudfunctions.net/projectAuthority') {
               assert.equal(route.request().headers().authorization,'Bearer synthetic-project-token');
-              assert.equal(route.request().postDataJSON().action,'list');
+              const request=route.request().postDataJSON();
+              if(scenario==='published-operator') {
+                assert.deepEqual(request,{action:'schedule_list',data:{}});
+                const linked=await page.evaluate(()=>Object.keys(window.__records||{}).length>0);
+                projectReads++;
+                const project={...publishedProjection,serverVersion:linked?2:1,
+                  scheduledFutureHours:linked?69:63,
+                  assignments:linked?[{projectId:fixture.id,phaseId:'GENERAL-PROJECT-WORK',scheduledHours:6,postedAt:'',appointmentId:'SYNTHETIC-APT',workOrderId:'SYNTHETIC-WO'}]:[]};
+                return route.fulfill({json:{success:true,projects:[project]}});
+              }
+              assert.equal(request.action,'list');
+              projectReads++;
               return route.fulfill({json:{success:true,projects:[]}});
             }
             unexpected.push(route.request().url());return route.abort();
           });
           await context.addInitScript(({project,scenario})=>{
-            localStorage.setItem('demac.erp-next.projects.preview.v1',JSON.stringify({version:1,selectedProjectId:project.id,projects:[project]}));
+            localStorage.setItem('demac.erp-next.projects.preview.v1',JSON.stringify({version:1,selectedProjectId:scenario==='published-operator'?'':project.id,projects:scenario==='published-operator'?[]:[project]}));
             window.__checks=[];window.__commits=[];window.__holds=[];window.__requests=0;window.__records={};window.__locationReads=[];
             window.__loseResponse=scenario==='lost-response'||scenario==='lost-hold-response';
             window.__support=scenario==='support';
-            window.__readOnly=scenario==='read-only';window.__unavailable=scenario==='availability-conflict';window.__failCommit=scenario==='commit-conflict';
+            window.__readOnly=scenario==='read-only';window.__schedulerOnly=scenario==='published-operator';window.__unavailable=scenario==='availability-conflict';window.__failCommit=scenario==='commit-conflict';
           },{project:{...fixture,scheduledFutureHours:['forecast-70','support'].includes(scenario)?64:63},scenario});
-          const page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
+          page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
           try {
             await page.goto(url);
+            if(scenario==='read-only') {
+              await page.getByRole('dialog',{name:'Create appointment',exact:true}).waitFor();
+              assert.equal(await page.getByRole('button',{name:/^Project Find a Project/i}).count(),0);
+              assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length),0);
+              assert.equal(projectReads,0,'Read-only principal must not load Project booking records');
+            } else {
             await page.getByRole('button',{name:/^Project Find a Project/i}).click();
             await page.getByRole('button',{name:/PRJ-BROWSER-TEST/}).click();
             await page.getByLabel(/Planned Project slots/i).fill(scenario==='within-budget'?'3':'6');
@@ -138,8 +166,6 @@ async function main() {
             const confirm=page.getByRole('button',{name:'Confirm appointment',exact:true});
             if(scenario==='availability-conflict') {
               await page.getByText(/no longer has the complete requested capacity/).waitFor();
-              assert.equal(await confirm.isDisabled(),true);
-            } else if(scenario==='read-only') {
               assert.equal(await confirm.isDisabled(),true);
             } else {
               await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Confirm appointment'&&!button.disabled));
@@ -194,25 +220,33 @@ async function main() {
                 }
                 await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
                 const data=await page.evaluate(()=>({state:JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')),created:window.__created,checks:window.__checks,commits:window.__commits,holds:window.__holds,records:window.__records}));
-                const scheduled=scenario==='within-budget'?66:scenario==='selection-change'?68:['forecast-70','forecast-change','support'].includes(scenario)?70:69;
-                assert.equal(data.state.projects[0].estimatedLaborHours,66);
-                assert.equal(data.state.projects[0].scheduledFutureHours,scheduled);
-                assert.equal(data.state.projects[0].actualLaborHours,0);
-                assert.equal(data.state.projects[0].assignments.length,scenario==='support'?2:1);
-                assert.equal(data.state.projects[0].assignments.at(-1).laborBudgetAtScheduling.overBudgetHoursAfter,scheduled-66);
                 assert.equal(data.created.project.syncStatus,'linked');
                 const calls=isHold?data.holds:data.commits;
                 assert.equal(calls.length,scenario==='lost-response'||scenario==='lost-hold-response'?2:1);
                 if(calls.length===2)assert.deepEqual(calls[0],calls[1]);
                 assert.equal(Object.keys(data.records).length,1);
-                if(scenario!=='within-budget') {
-                  await page.getByText('Recorded allocation warnings ('+(scenario==='support'?2:1)+')',{exact:true}).click();
-                  await page.getByText(new RegExp('Project forecast at scheduling: '+scheduled+' slots / 66 slots')).waitFor();
+                if(scenario==='published-operator') {
+                  assert.deepEqual(data.state.projects,[],'Operator booking must not use a browser-local Project');
+                  assert.equal(data.holds.length,0);
+                  assert.deepEqual(data.checks.at(-1).project,{id:fixture.id,phaseId:'GENERAL-PROJECT-WORK',version:1});
+                  assert.ok(projectReads>=2,'Published Project must be reloaded after the canonical booking');
+                } else {
+                  const scheduled=scenario==='within-budget'?66:scenario==='selection-change'?68:['forecast-70','forecast-change','support'].includes(scenario)?70:69;
+                  assert.equal(data.state.projects[0].estimatedLaborHours,66);
+                  assert.equal(data.state.projects[0].scheduledFutureHours,scheduled);
+                  assert.equal(data.state.projects[0].actualLaborHours,0);
+                  assert.equal(data.state.projects[0].assignments.length,scenario==='support'?2:1);
+                  assert.equal(data.state.projects[0].assignments.at(-1).laborBudgetAtScheduling.overBudgetHoursAfter,scheduled-66);
+                  if(scenario!=='within-budget') {
+                    await page.getByText('Recorded allocation warnings ('+(scenario==='support'?2:1)+')',{exact:true}).click();
+                    await page.getByText(new RegExp('Project forecast at scheduling: '+scheduled+' slots / 66 slots')).waitFor();
+                  }
                 }
                 await page.setViewportSize({width:390,height:844});
                 assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
                 await page.screenshot({path:path.join(artifacts,`${name}-${scenario}-mobile.png`),fullPage:true});
               }
+            }
             }
             if(['cancel','availability-conflict','commit-conflict','read-only'].includes(scenario)) {
               const local=await page.evaluate(()=>JSON.parse(localStorage.getItem('demac.erp-next.projects.preview.v1')).projects[0]);
@@ -220,7 +254,8 @@ async function main() {
             }
             assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
             const locationReads=await page.evaluate(()=>window.__locationReads);
-            assert.ok(locationReads.length>0,'Real location panel must load its canonical property before availability');
+            if(scenario==='read-only')assert.equal(locationReads.length,0);
+            else assert.ok(locationReads.length>0,'Real location panel must load its canonical property before availability');
             for(const read of locationReads)assert.deepEqual(read,{customerId:'CUSTOMER-BROWSER-TEST',propertyId:'PROPERTY-BROWSER-TEST'});
             console.log(`PASS ${name}: ${scenario}; real drawer, synthetic backend, zero external requests.`);
           } catch(error) {

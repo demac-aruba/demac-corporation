@@ -1,3 +1,7 @@
+import type { PrivacyTranslation, PublicPrivacy } from '../../../../functions/careers/privacy-contract';
+import type { SupportingCategory } from '../../../../functions/careers/document-contract.js';
+import type { CandidateMessage, CandidateMailSummary } from '../../../../functions/careers/mail-contract';
+import type { SubmissionSnapshot } from '../../../../functions/careers/submission-contract';
 import { firebaseClientConfig } from './client-config';
 import { requireFirebaseWebSession } from './session';
 import type { Vacancy, ApplicationDraft, Question, Stage } from '../careers-preview';
@@ -6,13 +10,13 @@ export type RecruitmentVacancy = Omit<Vacancy, 'status'> & {
   publishFrom: string | null; publishUntil: string | null; photoRequired: boolean;
 };
 export type PublicVacancy = Omit<RecruitmentVacancy, 'internalNotes'>;
-export type CareersSettings = { intakeEnabled: boolean; privacyText: string; privacyVersion: string; retentionDays: number; talentRetentionDays: number; from: string; replyTo: string; senderName: string; version: number; verification?: { at: number; signature: string } | null };
-export type DocumentRecord = { id: string; kind: 'photo' | 'cv' | 'document'; name: string; size: number; mime: string; status: string };
-export type ApplicantSummary = { id: string; title: string; name: string; stage: Stage; version: number; experience: string; country: string; createdAt: string };
-export type ApplicantRecord = { id: string; reference: string; jobSnapshot: PublicVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
+export type CareersSettings = { privacyLocale?: "en"|"es"|null; privacyTranslation?: PrivacyTranslation|null; intakeEnabled: boolean; privacyText: string; privacyVersion: string; retentionDays: number; talentRetentionDays: number; from: string; replyTo: string; senderName: string; version: number; verification?: { at: number; signature: string } | null };
+export type DocumentRecord = { category?: SupportingCategory; id: string; kind: 'photo' | 'cv' | 'document'; name: string; size: number; mime: string; status: string };
+export type ApplicantSummary = { localeAtSubmit?: 'en' | 'es'; id: string; title: string; name: string; stage: Stage; version: number; experience: string; country: string; createdAt: string };
+export type ApplicantRecord = { candidateMail?: CandidateMailSummary; candidateMessage?: CandidateMessage | null; submissionSnapshot?: SubmissionSnapshot; id: string; reference: string; jobSnapshot: PublicVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents' | 'documentAssignments'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
 export type ApplicantSession = { sessionId: string; token: string; expiresAt: number };
-export type Receipt = { id: string; reference: string; emailStatus: string };
-export type PublicJobs = { available: boolean; jobs: PublicVacancy[]; privacy?: { text: string; version: string } };
+export type Receipt = { localeAtSubmit?: 'en' | 'es'; presentationVersion?: string; jobTitle?: string; id: string; reference: string; emailStatus: string };
+export type PublicJobs = { available: boolean; jobs: PublicVacancy[]; privacy?: PublicPrivacy };
 export type Page<T> = { items: T[]; nextCursor: string | null };
 export class CareersError extends Error { constructor(message: string, public readonly code: string, public readonly status: number) { super(message); } }
 function base() {
@@ -45,6 +49,6 @@ export async function downloadApplicantDocument(applicationId: string, file: Doc
 function fileBase64(file: File) {
   return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('The selected file cannot be read.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file); });
 }
-export async function uploadApplicantDocument(session: ApplicantSession, file: File, kind: DocumentRecord['kind']) {
-  return careersPublic<DocumentRecord>('file.upload', { ...session, name: file.name, kind, base64: await fileBase64(file) });
+export async function uploadApplicantDocument(session: ApplicantSession, file: File, kind: DocumentRecord['kind'], category?: SupportingCategory, replaceFileId?: string) {
+  return careersPublic<DocumentRecord>('file.upload', { ...session, name: file.name, kind, ...(replaceFileId ? { replaceFileId } : {}), ...(kind === "document" ? { category: category || "document" } : {}), base64: await fileBase64(file) });
 }

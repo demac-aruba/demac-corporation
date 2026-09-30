@@ -17,6 +17,7 @@ const {
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createAdhocSupportAuthority } = require("./bookingAdhocSupport");
+const { createRegularHistoricalCapacityAuthority } = require("./bookingRegularHistoricalCapacity");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 const { mergeBookablePresets } = require("./serviceCatalog");
 const {
@@ -33,11 +34,13 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 18;
+const OFFICE_BOOKING_API_VERSION = 19;
 const BACKDATED_BOOKING_MODE = "backdated";
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
+  "operator",
+  "office_operator",
   "supervisor",
   "owner",
   "super_admin",
@@ -69,10 +72,11 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   MOVE_APPOINTMENT: "move_appointment",
   PREPARE_MOVE: "prepare_appointment_move",
   ADD_ADHOC_SUPPORT: "add_adhoc_support",
+  ADJUST_HISTORICAL_REGULAR_CAPACITY: "adjust_historical_regular_capacity",
 });
 
 function requireOfficeRole(role) {
-  const normalized = cleanText(role, 80).toLowerCase();
+  const normalized = cleanText(role, 80).toLowerCase().replace(/[\s-]+/g, "_");
   if (!OFFICE_BOOKING_ROLES.includes(normalized)) {
     const error = new Error("This user is not allowed to schedule appointments.");
     error.code = "permission_denied";
@@ -500,6 +504,7 @@ function createOfficeBookingApi({
   lifecycleAuthority = null,
   operationalMoveAuthority = null,
   adhocSupportAuthority = null,
+  regularHistoricalCapacityAuthority = null,
   appointmentNotificationService = null,
 } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
@@ -510,6 +515,7 @@ function createOfficeBookingApi({
   let lifecycle = lifecycleAuthority;
   let operationalMove = operationalMoveAuthority;
   let adhocSupport = adhocSupportAuthority;
+  let regularHistoricalCapacity = regularHistoricalCapacityAuthority;
   const getLifecycle = () => {
     if (!lifecycle) lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
     return lifecycle;
@@ -521,6 +527,10 @@ function createOfficeBookingApi({
   const getAdhocSupport = () => {
     if (!adhocSupport) adhocSupport = createAdhocSupportAuthority({ db });
     return adhocSupport;
+  };
+  const getRegularHistoricalCapacity = () => {
+    if (!regularHistoricalCapacity) regularHistoricalCapacity = createRegularHistoricalCapacityAuthority({ db });
+    return regularHistoricalCapacity;
   };
 
   async function authenticate(request) {
@@ -1340,8 +1350,12 @@ function createOfficeBookingApi({
         requestedTime: data.requestedTime,
         targetVanId: data.requiredVanId,
         reason: data.reason,
+        ...bookingIntentFromOffice(data),
         actor,
       });
+    }
+    if (action === OFFICE_BOOKING_ACTIONS.ADJUST_HISTORICAL_REGULAR_CAPACITY) {
+      return getRegularHistoricalCapacity().adjust(actor, data);
     }
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,

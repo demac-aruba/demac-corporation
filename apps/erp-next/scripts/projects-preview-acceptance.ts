@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import type { BrowserProject, ProjectAssignment } from '../lib/browser-projects';
+import { BROWSER_PROJECTS_PREVIEW_KEY, type BrowserProject, type ProjectAssignment } from '../lib/browser-projects';
+import { commitProjectsWithoutSamples, loadProjectsWithoutSamples, saveProjectsWithoutSamples } from '../lib/project-record-sanitizer';
 import {
   commitBrowserProjectsPreviewMutation,
   createProjectsPreviewState,
@@ -45,10 +46,12 @@ assert.deepEqual(
   ['super_admin', 'operations', 'project_manager', 'finance'],
   'Projects navigation must remain visible only to the roles with projects.view capability.',
 );
-assert.equal(roleCapabilities.office_operator.has('projects.view'), false, 'Office operators must not read Projects or Project technician instructions from Scheduling.');
-assert.equal(roleCapabilities.office_operator.has('projects.manage'), false, 'Office operators must not link Scheduling writes to Projects.');
+assert.equal(roleCapabilities.office_operator.has('projects.view'), false, 'Office operators must not receive full Project planning access.');
+assert.equal(roleCapabilities.office_operator.has('projects.manage'), false, 'Office operators must not create or edit Project planning.');
+assert.equal(roleCapabilities.office_operator.has('projects.schedule'), true, 'Office operators may schedule an existing shared Project.');
 assert.equal(roleCapabilities.finance.has('projects.view'), true, 'Finance keeps read-only Project visibility.');
 assert.equal(roleCapabilities.finance.has('projects.manage'), false, 'Read-only Project visibility must not imply permission to link or write Project scheduling records.');
+assert.equal(roleCapabilities.finance.has('projects.schedule'), false, 'Finance must not gain Project booking access.');
 
 const state = createProjectsPreviewState();
 const project = state.projects.find((row) => row.id === state.selectedProjectId);
@@ -66,6 +69,43 @@ assert.equal(normalizeOptionalMaterialBudget('1250.50'), 1250.5, 'A positive opt
 assert.throws(() => normalizeOptionalMaterialBudget('-1'), /non-negative AWG amount/, 'A negative material budget must be rejected.');
 
 assert.ok(project, 'The preview must select a canonical project that exists in the seeded portfolio.');
+
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+let storedProjectsRaw: string | null = null;
+let browserWriteCount = 0;
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: { localStorage: {
+    getItem: (key: string) => key === BROWSER_PROJECTS_PREVIEW_KEY ? storedProjectsRaw : null,
+    setItem: (_key: string, value: string) => { browserWriteCount += 1; storedProjectsRaw = value; },
+  } },
+});
+try {
+  const savedProject: BrowserProject = { ...project, id: 'BROWSER-USER-001', projectNumber: 'PRJ-2001', name: 'Saved non-demo project' };
+  storedProjectsRaw = JSON.stringify({ version: 1, selectedProjectId: project.id, projects: [
+    project,
+    savedProject,
+    { id: 'BROWSER-MALFORMED', projectNumber: 'PRJ-2002', name: 'Incomplete record', phases: null, assignments: [] },
+  ] });
+  const mixedRaw = storedProjectsRaw;
+  const filtered = loadProjectsWithoutSamples();
+  assert.deepEqual(filtered.state.projects.map((row) => row.id), [savedProject.id], 'Reads must hide demo and malformed records without hiding valid browser Projects.');
+  assert.equal(storedProjectsRaw, mixedRaw, 'A filtered read must preserve the exact raw browser record for recovery.');
+
+  storedProjectsRaw = JSON.stringify({ version: 0, selectedProjectId: savedProject.id, projects: [savedProject] });
+  const legacyRaw = storedProjectsRaw;
+  assert.deepEqual(loadProjectsWithoutSamples().state.projects, [], 'Unknown legacy versions must not be shown as current Projects.');
+  assert.equal(storedProjectsRaw, legacyRaw, 'Reading an unknown legacy version must not erase its recoverable raw record.');
+
+  storedProjectsRaw = '{invalid-json';
+  assert.deepEqual(loadProjectsWithoutSamples().state.projects, [], 'Malformed JSON must not be shown as a Project.');
+  assert.equal(storedProjectsRaw, '{invalid-json', 'Reading malformed JSON must not overwrite the raw browser record.');
+  assert.equal(browserWriteCount, 0, 'No Projects read may write browser storage.');
+} finally {
+  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+  else Reflect.deleteProperty(globalThis, 'window');
+}
+
 assert.equal(project.id, 'DEMO-PRJ-VRF-001', 'The canonical preview project ID must remain stable.');
 assert.equal(project.projectNumber, 'PRJ-1007', 'The canonical preview project number must remain stable.');
 assert.equal(project.totalUnits, 12, 'The canonical VRF project must seed twelve planned units.');
@@ -1053,6 +1093,107 @@ async function verifyPreviewTransactions() {
   );
   assert.equal(unauthorizedReads, 0, 'A revoked Project permission must fail before preview data is read.');
   assert.equal(unauthorizedWrites, 0, 'A revoked Project permission must fail before preview data is written.');
+
+  const validBrowserProject: BrowserProject = { ...transactionProject, id: 'BROWSER-USER-LOCKED', projectNumber: 'PRJ-2003' };
+  const malformedBrowserProject = { id: 'BROWSER-INCOMPLETE', projectNumber: 'PRJ-2004', name: 'Incomplete record', phases: null, assignments: [] };
+  const mixedBrowserSource = { version: 1 as const, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject, malformedBrowserProject] };
+  let unsafeWriteCalls = 0;
+  await assert.rejects(
+    commitProjectsWithoutSamples({ version: 1, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] }, latest => latest, {
+      read: () => mixedBrowserSource,
+      write: () => { unsafeWriteCalls += 1; return true; },
+      runExclusive: async operation => operation(),
+    }),
+    /needs recovery before editing/,
+    'Editing a valid Project must not silently discard a hidden malformed Project in the same browser store.',
+  );
+  assert.equal(unsafeWriteCalls, 0, 'A lossy mixed-record mutation must fail before writing.');
+
+  await assert.rejects(
+    commitProjectsWithoutSamples({ version: 1, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] }, latest => latest, {
+      read: () => ({ version: 0, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] }),
+      write: () => { unsafeWriteCalls += 1; return true; },
+      runExclusive: async operation => operation(),
+    }),
+    /needs recovery before editing/,
+    'An unknown legacy state must not be overwritten by a new edit.',
+  );
+  assert.equal(unsafeWriteCalls, 0, 'A legacy mutation must fail before writing.');
+
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: {
+      getItem: () => '{invalid-json',
+      setItem: () => { unsafeWriteCalls += 1; },
+    } },
+  });
+  try {
+    await assert.rejects(
+      commitProjectsWithoutSamples({ version: 1, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] }, latest => latest, {
+        runExclusive: async operation => operation(),
+      }),
+      /needs recovery before editing/,
+      'Malformed raw browser JSON must fail closed rather than replacing it with the fallback state.',
+    );
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+  assert.equal(unsafeWriteCalls, 0, 'Malformed raw JSON must remain untouched.');
+
+  const editedKnownSample: BrowserProject = { ...transactionProject, name: 'Customer-authored project on a former sample ID', technicianInstructions: 'Preserve these instructions.' };
+  let knownDemoWriteCalls = 0;
+  let persistedWithHidden: BrowserProject[] = [];
+  const knownDemoFiltered = await commitProjectsWithoutSamples({ version: 1, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] }, latest => latest, {
+    read: () => ({ version: 1, selectedProjectId: validBrowserProject.id, projects: [editedKnownSample, validBrowserProject] }),
+    write: next => { knownDemoWriteCalls += 1; persistedWithHidden = next.projects; return true; },
+    runExclusive: async operation => operation(),
+  });
+  assert.equal(knownDemoWriteCalls, 1, 'An explicit save must persist the complete validated store.');
+  assert.deepEqual(knownDemoFiltered.projects.map(item => item.id), [validBrowserProject.id], 'The UI-facing mutation result may still hide known sample IDs.');
+  assert.deepEqual(persistedWithHidden.map(item => item.id), [editedKnownSample.id, validBrowserProject.id], 'A save must retain every existing well-formed Project, including a known sample ID.');
+  assert.deepEqual(persistedWithHidden[0], editedKnownSample, 'A user-edited Project on a former sample ID must be preserved exactly.');
+
+  const savedState = { version: 1 as const, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] };
+  let directRaw = JSON.stringify(mixedBrowserSource);
+  let directWrites = 0;
+  const directSaveWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: {
+      getItem: () => directRaw,
+      setItem: (_key: string, value: string) => { directWrites += 1; directRaw = value; },
+    } },
+  });
+  try {
+    const mixedRaw = directRaw;
+    assert.equal(saveProjectsWithoutSamples(savedState), false, 'Direct save must reject a hidden malformed Project.');
+    assert.equal(directRaw, mixedRaw, 'Rejected direct save must preserve the exact mixed raw record.');
+
+    directRaw = '{invalid-json';
+    assert.equal(saveProjectsWithoutSamples(savedState), false, 'Direct save must reject malformed raw JSON.');
+    assert.equal(directRaw, '{invalid-json', 'Rejected direct save must preserve malformed raw JSON.');
+
+    directRaw = JSON.stringify({ version: 0, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] });
+    const legacyRaw = directRaw;
+    assert.equal(saveProjectsWithoutSamples(savedState), false, 'Direct save must reject an unknown legacy version.');
+    assert.equal(directRaw, legacyRaw, 'Rejected direct save must preserve the legacy raw record.');
+
+    directRaw = JSON.stringify({ version: 1, selectedProjectId: validBrowserProject.id, projects: [validBrowserProject] });
+    assert.equal(saveProjectsWithoutSamples({ ...savedState, projects: [] }), false, 'Direct save must not discard an existing non-demo Project.');
+    assert.equal(JSON.parse(directRaw).projects.length, 1, 'Rejected direct save must preserve the existing non-demo Project.');
+
+    directRaw = JSON.stringify({ version: 1, selectedProjectId: validBrowserProject.id, projects: [editedKnownSample, validBrowserProject] });
+    assert.equal(saveProjectsWithoutSamples(savedState), true, 'Direct save may filter known demo IDs from its input without deleting their stored records.');
+    const afterDirectSave = JSON.parse(directRaw).projects as BrowserProject[];
+    assert.deepEqual(afterDirectSave.map(item => item.id), [editedKnownSample.id, validBrowserProject.id], 'Direct save must retain both known-sample and non-demo Project IDs.');
+    assert.deepEqual(afterDirectSave[0], editedKnownSample, 'Direct save must preserve user edits on a former sample ID.');
+    assert.equal(directWrites, 1, 'Only the safe direct save may write to browser storage.');
+  } finally {
+    if (directSaveWindow) Object.defineProperty(globalThis, 'window', directSaveWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
 }
 
 void verifyPreviewTransactions()

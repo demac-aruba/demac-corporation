@@ -253,3 +253,34 @@ export async function updateFirestoreDocument<T extends { id: string }>(collecti
 export async function getFirebaseUserProfile<T extends { id: string }>(uid: string): Promise<T | null> {
   return getFirestoreDocument<T>('users', uid);
 }
+
+/** Read/modify/patch with a server-enforced version check; never replace unrelated fields. */
+export async function mutateFirestoreDocument<T extends { id: string }>(
+  collectionPath: string,
+  id: string,
+  changesFor: (current: T | null) => Record<string, unknown> | null,
+): Promise<T> {
+  const url = `${baseUrl()}/${collectionPath}/${encodeURIComponent(id)}`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const read = await authenticatedFetch(url);
+    if (!read.ok && read.status !== 404) throw new Error(await readError(read, 'Unable to read the current payroll record.'));
+    const raw = read.status === 404 ? null : await read.json() as FirestoreDocument;
+    if (raw && !raw.updateTime) throw new Error('The payroll record has no concurrency version. Refresh and retry.');
+    const current = raw ? { ...decodeFirestoreFields(raw.fields ?? {}), id } as T : null;
+    const changes = changesFor(current);
+    if (!changes && current) return current;
+    if (!changes || !Object.keys(changes).length) throw new Error('No payroll changes to save.');
+    const encoded = encodeFirestoreFields(changes);
+    if (!Object.keys(encoded).length) throw new Error('No serializable payroll changes to save.');
+    const query = new URLSearchParams();
+    for (const key of Object.keys(encoded)) query.append('updateMask.fieldPaths', key);
+    query.set(raw ? 'currentDocument.updateTime' : 'currentDocument.exists', raw?.updateTime ?? 'false');
+    const written = await authenticatedFetch(`${url}?${query}`, { method: 'PATCH', body: JSON.stringify({ fields: encoded }) });
+    if (written.ok) return decodeDocument<T>(await written.json() as FirestoreDocument);
+    const failure = await written.json().catch(() => null) as { error?: { status?: string; message?: string } } | null;
+    // A fresh read fixes the failed document-version precondition before retrying.
+    if (['FAILED_PRECONDITION', 'ABORTED', 'ALREADY_EXISTS'].includes(failure?.error?.status ?? '') && attempt < 2) continue;
+    throw new Error(failure?.error?.message ?? 'Unable to save payroll changes. Refresh and retry.');
+  }
+  throw new Error('Payroll changed concurrently. Refresh and retry.');
+}

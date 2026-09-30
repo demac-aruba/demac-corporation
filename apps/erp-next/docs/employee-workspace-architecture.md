@@ -28,11 +28,17 @@ The deprecated `weeklyDayOffWeekday` / `weeklyDayOffEffectiveFrom` fields introd
 
 ## UI ownership
 
-`/employees` is the canonical employee workspace with three operational views:
+`/employees` is the canonical employee workspace with four operational views:
 
 1. **Overview** — complete active/former employee directory, profile editing, add employee, lifecycle controls, and payroll-exception columns when the current role is authorized.
 2. **Employee Calendar** — schedule-first attendance and explicit exception entry.
 3. **Salary Advances** — payroll-sensitive salary advance ledger and entry.
+4. **Bonuses** — approved manual monetary inputs, categories, reasons and cancellation
+   history. Reuses `employeePayrollSettings.payrollAdjustments` from Legacy; no new store.
+   Field-masked writes enforce document update-time preconditions and preserve schedule,
+   deduction and historical adjustment fields. Exact request replay does not append twice.
+   Employees and Finance consume one bonus projection for PDF/CSV totals; CSV carries
+   detailed concepts and the bonus ledger exports its full history for accounting review.
 
 The employee profile is a facade over the existing schedule authorities, not a new schedule store:
 

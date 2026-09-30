@@ -1,10 +1,15 @@
+'use client';
+import { useCareersLanguage } from './careers-language';
+import { careersTemplate } from '../../lib/careers-locale';
 import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
 import { sizeLabel } from './careers-ui';
 import s from './careers.module.css';
 
-export type IconName = 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
+export type IconName = 'diploma' | 'id' | 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
 const paths: Record<IconName, ReactNode> = {
+  diploma: <><path d="m2 8 10-5 10 5-10 5zM5 10v7c4 3 10 3 14 0v-7M22 8v9"/></>,
+  id: <><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="2"/><path d="M5 16c0-4 6-4 6 0M14 9h5M14 13h5M14 17h3"/></>,
   person: <><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></>,
   file: <><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h6"/></>,
   certificate: <><path d="m12 2 3 2 4 1 1 4 2 3-2 3-1 4-4 1-3 2-3-2-4-1-1-4-2-3 2-3 1-4 4-1z"/><path d="m8 12 3 3 5-6"/></>,
@@ -27,22 +32,37 @@ export function CareerIcon({ name, className }: { name: IconName; className?: st
   return <svg data-career-icon={name} className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 export function BackControl({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
-  return <button className={s.backControl} type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/></button>;
+  const { text } = useCareersLanguage();
+  return <button className={s.backControl} type="button" data-career-back aria-label={text(label)} title={text(label)} onClick={onClick} disabled={disabled}><CareerIcon name="back"/><span className={s.backText}>{text('Back')}</span></button>;
 }
 export function IconTile({ name, children }: { name: IconName; children?: ReactNode }) {
   return <span className={s.iconTile}><CareerIcon name={name}/>{children}</span>;
 }
-export function VacancyFacts({ vacancy }: { vacancy: Vacancy }) {
+export function VacancyFacts({ vacancy, presentation = vacancy }: { vacancy: Vacancy; presentation?: Vacancy }) {
+  const { text } = useCareersLanguage();
   const experience = vacancy.requirements.find(item => /\b\d+\+?\s+years?\b/i.test(item));
   const facts: [IconName, string, string][] = [
-    ['location', 'Location', vacancy.location], ['briefcase', 'Department', vacancy.department],
-    ['clock', 'Type', vacancy.contract], ['chart', 'Experience', experience || 'See requirements'],
+    ['location', 'Location', presentation.location], ['briefcase', 'Department', presentation.department],
+    ['clock', 'Type', presentation.contract],
+    ...(experience ? [['chart', 'Experience', presentation.requirements[vacancy.requirements.indexOf(experience)] || experience] as [IconName, string, string]] : []),
   ];
-  return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{label}</dt><dd>{value}</dd></div></div>)}</dl>;
+  return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{text(label)}</dt><dd>{value}</dd></div></div>)}</dl>;
 }
-export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
-  return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · Selected for review</small></div><button type="button" className={s.iconButton} aria-label={`Remove ${file.name}`} onClick={onRemove}><CareerIcon name="close"/></button></div>;
+export type SelectedFileState = 'selected'|'processing'|'stored'|'uncertain'|'error';
+export function ReadyFile({ file, onRemove, state='selected' }: { file: File; onRemove: () => void; state?:SelectedFileState }) {
+  const { locale, text } = useCareersLanguage();
+  const stateText={selected:'Selected for review',processing:'Processing and security checking…',stored:'Stored securely · Not yet reviewed by a recruiter',uncertain:'Awaiting server confirmation · Retry checks the stored state',error:'File not stored · Retry or choose another file'}[state];
+  return <div className={s.selectedFile} data-file-state={state}><span className={state==='stored'||state==='selected'?s.greenCheck:s.iconTile}><CareerIcon name={state==='processing'||state==='uncertain'?'clock':state==='error'?'close':'check'}/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · {text(stateText)}</small></div><button type="button" className={s.iconButton} aria-label={careersTemplate(locale, 'Remove {name}', { name: file.name })} onClick={onRemove}><CareerIcon name="close"/></button></div>;
 }
-export function FunnelSteps({ step, disabled, onSelect }: { step: number; disabled: boolean; onSelect: (index: number) => void }) {
-  return <nav className={s.steps} aria-label="Application progress">{['Your details', 'Experience', 'Documents'].map((label, index) => <button key={label} type="button" data-step-state={index < step ? 'complete' : index === step ? 'active' : 'upcoming'} disabled={index > step || disabled} onClick={() => onSelect(index)} aria-current={index === step ? 'step' : undefined} aria-label={`Step ${index + 1}: ${label}${index < step ? ', completed' : ''}`} className={index <= step ? s.stepActive : s.step}><span className={s.stepCircle}>{index < step ? <CareerIcon name="check"/> : index + 1}</span><small>{label}</small></button>)}</nav>;
+export function FunnelSteps({ step, completed, disabled, onSelect }: { step: number; completed: boolean[]; disabled: boolean; onSelect: (index: number) => void }) {
+  const { locale, text } = useCareersLanguage();
+  return <nav className={s.steps} aria-label={text('Application progress')}>{['Your details', 'Experience', 'Documents & review'].map((label, index) => {
+    const complete = index !== step && completed[index];
+    const accessible = index <= step || completed.slice(0, index).every(Boolean);
+    return <button key={label} type="button" data-step-state={index === step ? 'active' : complete ? 'complete' : 'upcoming'} disabled={!accessible || disabled}
+      onClick={() => onSelect(index)} aria-current={index === step ? 'step' : undefined}
+      aria-label={careersTemplate(locale, 'Step {step}: {label}', { step: index + 1, label: text(label) }) + (complete ? text(', completed') : '')} className={index === step || complete ? s.stepActive : s.step}>
+      <span className={s.stepCircle}>{complete ? <CareerIcon name="check"/> : index + 1}</span><small>{text(label)}</small>
+    </button>;
+  })}</nav>;
 }

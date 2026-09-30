@@ -81,7 +81,7 @@ export function FieldProcedureWorkspace({target,initialPart,initialStepId,equipm
           <button type="button" disabled={!session.fresh||session.busy} onClick={()=>void session.stopRetrying()}>Conservar sin reenviar</button>
         </div>
       </div>:null}
-      <ProcedureStepEditor session={session} part={part} step={step} onBack={()=>setStepId(null)} onOpenAddons={onOpenAddons}/>
+      <ProcedureStepEditor key={part+':'+step.id} session={session} part={part} step={step} onBack={()=>setStepId(null)} onOpenAddons={onOpenAddons}/>
     </section>;
   }
 

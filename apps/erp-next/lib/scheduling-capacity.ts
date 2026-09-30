@@ -12,6 +12,8 @@ export type OperationalDay = {
 
 export type CalendarDispatchJob = DispatchJob & {
   possibleOvertime?: boolean;
+  scheduledOvertime?: boolean;
+  scheduledOvertimeKind?: string;
   dateKey: string;
   capacitySlotStarts?: string[];
   capacityEnd?: string;

@@ -8,13 +8,18 @@ const approvedOffice = [
   '0f0bd3f08301e9759df16ddd98b5ec16085a11ed',
   'ce2b4b701ab3161d41e3aade76c6dde2f7b0e872',
   '38542864b07ef18b32542ff08118fe9eea1526aa',
+  'd029ee4b9c5d9ffdc395f51ae9edb48f783d4ea2',
 ];
 const approvedProject = [
   'ce2b4b701ab3161d41e3aade76c6dde2f7b0e872',
   '38542864b07ef18b32542ff08118fe9eea1526aa',
+  'd029ee4b9c5d9ffdc395f51ae9edb48f783d4ea2',
+  // Successful bounded release run 36368235378 deployed projectauthority-00003-noh.
+  '83332590c50b8101990a447e4497bd76114feafd',
 ];
 const firstApprovedMain = '38542864b07ef18b32542ff08118fe9eea1526aa';
-const officeFiles = ['officeBookingAuthority.js', 'officeBookingAuthorityFacade.js', 'bookingAuthorityCore.js',
+const officeFiles = ['officeBookingAuthority.js', 'officeBookingAuthorityFacade.js',
+  'bookingRegularHistoricalCapacity.js', 'bookingCapacityAvailability.js', 'projectCommercialGuard.js', 'bookingAuthorityCore.js',
   'bookingAuthorityFirestore.js', 'bookingAuthoritySchedulingProvider.js', 'bookingAuthorityAppointmentLifecycle.js',
   'bookingOperationalMove.js', 'bookingSchedulingPrimitives.js', 'projectBookingLinks.js', 'projectRecords.js',
   'propertyLocations.js'];

@@ -1,15 +1,26 @@
-import type { ReactNode } from 'react';
-import { PublicBrand, PublicHeader, PublicFooter } from '../public/public-site-shell';
+'use client';
+
+import { CareersLanguageSelector, useCareersLanguage } from './careers-language';
+import { PublicFooter, PublicHeader } from '../public/public-site-shell';
 import s from './careers.module.css';
 
-/** The existing website owns its chrome; Careers owns the application content.
- * The page-wide `.public-site` class includes viewport layout and illustration
- * sizing. Reuse branded components and their tokens, not that page wrapper.
+/**
+ * Careers reuses the exact public website header/footer components.
+ * The lightweight brand wrapper supplies the public design tokens only; unlike
+ * .public-site it does not reserve a full viewport or alter Careers layout.
  */
-function BrandChrome({ children }: { children: ReactNode }) {
-  return <div className={`public-subsite ${s.brandChrome}`} data-careers-chrome>{children}</div>;
+export function CareersHeader({ compactLabel: _compactLabel }: { compactLabel?: string }) {
+  const { locale } = useCareersLanguage();
+  return <>
+    <div className={`public-subsite ${s.brandChrome}`} data-careers-chrome="site-header">
+      <PublicHeader active="careers" locale={locale}/>
+    </div>
+    <CareersLanguageSelector/>
+  </>;
 }
-export function CareersHeader({ compactLabel }: { compactLabel?: string }) {
-  return <BrandChrome>{compactLabel ? <header className={s.compactHeader}><PublicBrand/><span>{compactLabel}</span></header> : <PublicHeader active="careers"/>}</BrandChrome>;
+
+export function CareersFooter() {
+  return <div className={`public-subsite ${s.brandChrome}`} data-careers-chrome="site-footer">
+    <PublicFooter/>
+  </div>;
 }
-export function CareersFooter() { return <BrandChrome><PublicFooter/></BrandChrome>; }

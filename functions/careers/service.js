@@ -1,11 +1,18 @@
 'use strict';
+const Documents=require('./document-contract');
+const Privacy=require('./privacy-contract');
 const crypto = require('node:crypto');
 const C = require('./core');
+const Editorial = require('./editorial-contract');
+const Submission = require('./submission-contract');
+const Mail = require('./mail-contract');
 const COLLECTIONS = Object.freeze({ jobs:'careersVacancies', applications:'careersApplications', sessions:'careersSessions', settings:'careersSettings', operations:'careersOperations', audit:'careersAudit', mail:'careersEmailJobs', rate:'careersRateLimits', deletions:'careersFileDeletions' });
 function createService({ db, files, infrastructure, now = Date.now }) {
   const ref = (kind,key) => db.collection(COLLECTIONS[kind]).doc(C.id(key));
   const configRef = ref('settings','default');
   const at = () => new Date(now()).toISOString();
+  const receiptFor = (session, status) => ({ id: session.applicationId, reference: session.reference, emailStatus: status,
+    ...(session.receiptPresentation || {}) });
   const assertAdmin = async (uid, reader = db) => {
     C.id(uid);
     const snapshot = await reader.get(db.collection('users').doc(uid));
@@ -44,14 +51,15 @@ function createService({ db, files, infrastructure, now = Date.now }) {
   }
   async function getSettings(uid) {
     await readAdmin(uid); const s = (await configRef.get()).data();
-    return {settings:s || null,blockers:configReady(s),backend:'firestore'};
+    return {settings:s || null,blockers:configReady(s),idDocumentsAllowed:infrastructure.idDocumentsAllowed?.()===true,backend:'firestore'};
   }
   async function saveSettings(uid,p) {
     const clean=C.settings(p.settings);
     return adminMutation(uid,p.requestId,'settings.save',{clean,expectedVersion:p.expectedVersion},async tx=>{
       const previous=(await tx.get(configRef)).data();
       C.requireValue((previous?.version || 0) === p.expectedVersion,'Settings changed. Reload before saving.','version-conflict',409);
-      if (previous?.privacyText !== clean.privacyText && previous?.privacyVersion === clean.privacyVersion) throw C.fault('privacy-version','Change the notice version when editing privacy text.',409);
+      for(const key of ['privacyLocale','privacyTranslation'])if(!Object.hasOwn(p.settings,key)&&Object.hasOwn(previous||{},key))clean[key]=previous[key];
+      if (Privacy.policyIdentity(previous) !== Privacy.policyIdentity(clean) && previous?.privacyVersion === clean.privacyVersion) throw C.fault('privacy-version','Change the notice version when editing privacy text.',409);
       const verification=previous?.verification?.signature === infrastructure.signature(clean) ? previous.verification : null;
       const next={...clean,verification,version:(previous?.version || 0)+1,updatedAt:at(),updatedBy:uid};
       C.requireValue(!clean.intakeEnabled || configReady(next).length===0,'Complete and verify setup before enabling applications.','setup-required',409);
@@ -77,12 +85,16 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     return adminMutation(uid,p.requestId,'vacancy.save',{key,clean,expectedVersion:p.expectedVersion},async tx=>{
       const document=ref('jobs',key), existing=(await tx.get(document)).data();
       C.requireValue((existing?.version || 0)===p.expectedVersion,'This vacancy changed. Reload before saving.','version-conflict',409);
+      if (!Object.hasOwn(p.vacancy, 'documentRequirements') && existing?.documentRequirements) clean.documentRequirements=existing.documentRequirements;
+      const editorial = Editorial.reconcileEditorial(clean, existing);
       if(clean.status==='Open') {
+        if(Documents.requirementsFor(clean).some(r=>r.category==='id')) C.requireValue(infrastructure.idDocumentsAllowed?.()===true,'Identification policy approval is required before publishing this requirement.','document-policy',409);
+        if (editorial.translations.es?.status === 'Approved') C.requireValue(!Editorial.translationIssues(editorial).length, 'Spanish needs review before opening. Save a draft or review the translation.', 'translation-review-required', 409);
         const config=(await tx.get(configRef)).data();
         C.requireValue(config?.intakeEnabled===true && configReady(config).length===0,'Complete Careers setup before opening a vacancy.','setup-required',409);
       }
       const version=(existing?.version || 0)+1;
-      tx.set(document,{...clean,id:key,version,createdAt:existing?.createdAt || at(),createdBy:existing?.createdBy || uid,updatedAt:at(),updatedBy:uid});
+      tx.set(document,{...editorial,id:key,version,createdAt:existing?.createdAt || at(),createdBy:existing?.createdBy || uid,updatedAt:at(),updatedBy:uid});
       return {id:key,version};
     });
   }
@@ -90,7 +102,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     const config=(await configRef.get()).data();
     if(!config?.intakeEnabled || configReady(config).length) return {jobs:[],available:false};
     const snapshot=await db.collection(COLLECTIONS.jobs).where('status','==','Open').limit(100).get();
-    return {available:true,jobs:snapshot.docs.map(d=>d.data()).filter(j=>C.isOpen(j,now())).map(C.publicVacancy),privacy:{text:config.privacyText,version:config.privacyVersion}};
+    return {available:true,jobs:snapshot.docs.map(d=>d.data()).filter(j=>C.isOpen(j,now())).map(C.publicVacancy),privacy:Privacy.publicPrivacy(config)};
   }
   async function list(uid,kind,p={}) {
     await readAdmin(uid);
@@ -108,13 +120,13 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const matches=kind==='jobs'
         ? (!p.status || d.status===p.status) && (!search || `${d.title} ${d.department}`.toLowerCase().includes(search))
         : (!p.jobId || d.jobId===p.jobId) && (!p.stage || d.stage===p.stage) && (!p.country || d.profile.residence===p.country) && (minimum===null || Number(d.profile.relevantExperience)>=minimum) && (!search || `${d.profile.givenName} ${d.profile.familyName} ${d.jobSnapshot.title} ${Object.values(d.profile.answers).flat().join(' ')}`.toLowerCase().includes(search));
-      if(matches) items.push(kind==='jobs'?d:{id:d.id,jobId:d.jobId,title:d.jobSnapshot.title,name:`${d.profile.givenName} ${d.profile.familyName}`,stage:d.stage,version:d.version,experience:d.profile.relevantExperience,country:d.profile.residence,createdAt:d.createdAt});
+      if(matches) items.push(kind==='jobs'?d:{id:d.id,jobId:d.jobId,title:d.jobSnapshot.title,name:`${d.profile.givenName} ${d.profile.familyName}`,stage:d.stage,version:d.version,experience:d.profile.relevantExperience,country:d.profile.residence,createdAt:d.createdAt,...(d.submissionSnapshot?{localeAtSubmit:d.submissionSnapshot.localeAtSubmit}:{})});
       if(items.length===count) break;
     }
     return {items,nextCursor:processed<scan.size || scan.size===200?cursor:null};
   }
   async function getVacancy(uid,key){await readAdmin(uid);const doc=await ref('jobs',key).get();C.requireValue(doc.exists,'Vacancy not found.','not-found',404);return doc.data();}
-  async function getApplication(uid,key) {await readAdmin(uid); const snap=await ref('applications',key).get();C.requireValue(snap.exists && snap.data().expiresAt>now() && !snap.data().deleting,'Application not found.','not-found',404); const notes=await snap.ref.collection('notes').orderBy('at','desc').limit(50).get();const events=await snap.ref.collection('events').orderBy('at','desc').limit(50).get();const mail=(await ref('mail',key).get()).data();return {...snap.data(),notes:notes.docs.map(d=>({id:d.id,...d.data()})),events:events.docs.map(d=>({id:d.id,...d.data()})),emailStatus:mail?.status || 'unavailable'};}
+  async function getApplication(uid,key) {await readAdmin(uid); const snap=await ref('applications',key).get();C.requireValue(snap.exists && snap.data().expiresAt>now() && !snap.data().deleting,'Application not found.','not-found',404); const notes=await snap.ref.collection('notes').orderBy('at','desc').limit(50).get();const events=await snap.ref.collection('events').orderBy('at','desc').limit(50).get();const mail=(await ref('mail',key).get()).data();return {...snap.data(),notes:notes.docs.map(d=>({id:d.id,...d.data()})),events:events.docs.map(d=>({id:d.id,...d.data()})),emailStatus:mail?.status || 'unavailable',candidateMail:Mail.mailSummary(mail),candidateMessage:mail?.message || null};}
   async function updateApplication(uid,p) {
     const key=C.id(p.id); C.requireValue(p.note != null || C.STAGES.includes(p.stage),'Select a valid stage.');
     const note=p.note == null?null:C.text(p.note,'note',2000);
@@ -149,26 +161,43 @@ function createService({ db, files, infrastructure, now = Date.now }) {
   async function sessionStatus(p) {
     const session=sessionAccess(await ref('sessions',p.sessionId).get(),p.token);
     const mail=session.status==='submitted'?(await ref('mail',session.applicationId).get()).data():null;
-    return {files:Object.values(session.files).map(files.publicFile),...(session.status==='submitted'?{receipt:{id:session.applicationId,reference:session.reference,emailStatus:mail?.status || 'unavailable'}}:{})};
+    return {files:Object.values(session.files).map(files.publicFile),...(session.status==='submitted'?{receipt:receiptFor(session,mail?.status || 'unavailable')}:{})};
   }
   async function upload(p) {
     const sessionRef=ref('sessions',p.sessionId);
     const bytes=files.decode(p.base64), kind=p.kind;
     C.requireValue(['photo','cv','document'].includes(kind),'Invalid document category.');
-    const name=C.text(p.name,'file name',180); const key=C.digest(`${kind}|${C.digest(bytes)}`), lease=crypto.randomUUID();
+    const category=Documents.categoryFor(kind,p.category);
+    const name=C.text(p.name,'file name',180); const key=C.digest(Documents.uploadIdentityMaterial(kind,C.digest(bytes),category)), lease=crypto.randomUUID();
     const attemptPath=`careers-private/${C.id(p.sessionId)}/${key}-${lease}`;
+    const replaceId=p.replaceFileId == null ? null : C.id(p.replaceFileId);
     const reserved=await db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sessionRef),p.token);
       C.requireValue(session.status==='draft','This application was already submitted.','already-submitted',409);
+      if(kind==='document'){
+        const job=(await tx.get(ref('jobs',session.jobId))).data();
+        C.requireValue(job && job.version===session.jobVersion,'This vacancy changed. Review its document requirements.','version-conflict',409);
+        Documents.validateCategory(job,category,infrastructure.idDocumentsAllowed?.()===true);
+      }
       const existing=session.files[key];
       if(existing?.status==='clean') return existing;
       C.requireValue(!existing || existing.status!=='uploading' || existing.leaseUntil<now(),'This file is still being processed. Retry shortly.','upload-busy',409);
-      const active=Object.values(session.files).filter(f=>f.id!==key && ['clean','uploading'].includes(f.status));
+      // A replacement retains the last accepted object until the new object is
+      // scanned, stored and transactionally adopted. Never delete first.
+      const replaced=replaceId ? session.files[replaceId] : null;
+      if (replaceId) {
+        C.requireValue(replaceId!==key && replaced?.status==='clean' && replaced.kind===kind,
+          'The previous file changed. Refresh the upload state before retrying.','upload-conflict',409);
+        C.requireValue(!Object.values(session.files).some(f=>f.id!==key && f.status==='uploading' && f.replaces),
+          'Another replacement is still processing. Retry shortly.','upload-busy',409);
+      }
+      const active=Object.values(session.files).filter(f=>f.id!==key && f.id!==replaceId && ['clean','uploading'].includes(f.status));
       C.requireValue(Object.keys(session.files).length<16 || !!existing,'Too many upload attempts. Start another application session.','file-limit',409);
       C.requireValue(active.reduce((n,f)=>n+f.size,0)+bytes.length<=C.MAX_TOTAL,'Combined files exceed 30 MB.');
       C.requireValue(kind==='document'?active.filter(f=>f.kind==='document').length<5:!active.some(f=>f.kind===kind),'Remove the previous file before replacing it.','file-slot',409);
       if(existing?.path)tx.set(ref('deletions',C.digest(existing.path)),{path:existing.path,generation:existing.generation || null,notBefore:now()+300000,createdAt:at()});
-      const file={id:key,kind,name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000,path:attemptPath,generation:null};
+      const file={id:key,kind,...(category?{category}:{}),name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000,path:attemptPath,generation:null,
+        ...(replaced ? {replaces:{id:replaced.id,path:replaced.path,generation:replaced.generation}} : {})};
       tx.update(sessionRef,{[`files.${key}`]:file}); return file;
     });
     if(reserved.status==='clean') return files.publicFile(reserved);
@@ -176,11 +205,18 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     try {
       const prepared=await files.prepare(bytes,name,kind);
       stored=await files.store(p.sessionId,key,prepared,lease);
-      const record={id:key,kind,name,size:bytes.length,storedSize:prepared.bytes.length,mime:prepared.mime,status:'clean',path:stored.path,generation:stored.generation,sha256:C.digest(prepared.bytes),scannedAt:at(),lease};
+      const record={id:key,kind,...(category?{category}:{}),name,size:bytes.length,storedSize:prepared.bytes.length,mime:prepared.mime,status:'clean',path:stored.path,generation:stored.generation,sha256:C.digest(prepared.bytes),scannedAt:at(),lease};
       await db.runTransaction(async tx=>{
         const session=sessionAccess(await tx.get(sessionRef),p.token);
         C.requireValue(session.status==='draft' && session.files[key]?.lease===lease,'Upload session changed.','upload-conflict',409);
-        tx.update(sessionRef,{[`files.${key}`]:record});
+        if (reserved.replaces) {
+          const previous=session.files[reserved.replaces.id];
+          C.requireValue(previous?.status==='clean' && previous.path===reserved.replaces.path && previous.generation===reserved.replaces.generation,
+            'The previous file changed during replacement. Retry with the current state.','upload-conflict',409);
+          const nextFiles={...session.files,[key]:record}; delete nextFiles[previous.id];
+          tx.update(sessionRef,{files:nextFiles});
+          tx.set(ref('deletions',C.digest(previous.path)),{path:previous.path,generation:previous.generation,notBefore:now()+300000,createdAt:at()});
+        } else tx.update(sessionRef,{[`files.${key}`]:record});
       });
       return files.publicFile(record);
     } catch(error) {
@@ -208,7 +244,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
         });
         if (session?.status === 'draft' && currentFile?.lease === lease) {
           tx.update(sessionRef, { [`files.${key}`]: {
-            id: key, kind, name, size: bytes.length, status: 'rejected',
+            id: key, kind, ...(category?{category}:{}), name, size: bytes.length, status: 'rejected',
             path: attemptPath, generation: stored?.generation || null,
           } });
         }
@@ -225,15 +261,21 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const file=session.files[key];
       if (!file) return null; // Exact removal retries are successful, not upload errors.
       C.requireValue(file.status!=='uploading' || file.leaseUntil<=now(),'File cannot be removed during upload.','upload-busy',409);
+      C.requireValue(!Object.values(session.files).some(f=>f.status==='uploading' && f.leaseUntil>now() && f.replaces?.id===key),
+        'The accepted file is protected while its replacement is processing.','upload-busy',409);
       const remaining={...session.files}; delete remaining[key]; tx.update(sref,{files:remaining}); if(file.path)tx.set(ref('deletions',C.digest(file.path)),{path:file.path,generation:file.generation,createdAt:at()}); return file;
     });
     if(record?.path) {try{await files.remove(record);await ref('deletions',C.digest(record.path)).delete();}catch{ }} return {removed:true};
   }
   async function submit(p) {
-    const sref=ref('sessions',p.sessionId); const fingerprint=C.digest(C.stable(p.profile));
+    const sref=ref('sessions',p.sessionId);
+    const hasPresentation=Object.hasOwn(p,'localeAtSubmit') || Object.hasOwn(p,'presentationVersion');
+    // Old sessions keep their existing profile-only fingerprint. New requests freeze
+    // explicit locale/version too; retry must never mutate a committed presentation.
+    const fingerprint=C.digest(C.stable(hasPresentation ? {profile:p.profile,localeAtSubmit:p.localeAtSubmit ?? null,presentationVersion:p.presentationVersion ?? null} : p.profile));
     return db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sref),p.token);
-      if(session.status==='submitted') { C.requireValue(session.fingerprint===fingerprint,'This session has already been submitted.','already-submitted',409);const mail=(await tx.get(ref('mail',session.applicationId))).data();return {id:session.applicationId,reference:session.reference,emailStatus:mail?.status || 'unavailable'}; }
+      if(session.status==='submitted') { C.requireValue(session.fingerprint===fingerprint,'This session has already been submitted.','already-submitted',409);const mail=(await tx.get(ref('mail',session.applicationId))).data();return receiptFor(session,mail?.status || 'unavailable'); }
       const [jobSnap,configSnap]=await Promise.all([tx.get(ref('jobs',session.jobId)),tx.get(configRef)]);
       const job=jobSnap.data(),config=configSnap.data();
       C.requireValue(config?.intakeEnabled && configReady(config).length===0,'Applications are temporarily paused.','intake-paused',409);
@@ -242,15 +284,20 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       const profile=C.profile(p.profile,job,config), docs=Object.values(session.files);
       C.requireValue(!docs.some(d=>d.status==='uploading'),'Wait for document processing to finish.','upload-busy',409);
       const clean=docs.filter(d=>d.status==='clean');
+      Documents.validateDocuments(job,clean,infrastructure.idDocumentsAllowed?.()===true);
       C.requireValue(clean.filter(d=>d.kind==='photo').length===1,'A recent profile photo is required.');
       C.requireValue(clean.some(d=>d.kind==='cv') || (!job.cvRequired && profile.noCv),'Your CV is required.');
+      const submissionSnapshot=hasPresentation ? Submission.createSubmissionSnapshot(job,p.profile,profile,p.localeAtSubmit,p.presentationVersion,
+        Privacy.selectPrivacy(Privacy.publicPrivacy(config),p.localeAtSubmit)) : null;
+      const receiptPresentation=submissionSnapshot ? {localeAtSubmit:submissionSnapshot.localeAtSubmit,presentationVersion:submissionSnapshot.presentationVersion,jobTitle:submissionSnapshot.title} : null;
       const id=session.id, reference=`DEMAC-${new Date(now()).getUTCFullYear()}-${id.slice(0,8).toUpperCase()}`;
       const expiresAt=now()+(profile.futureTalent?config.talentRetentionDays:config.retentionDays)*86400000;
-      tx.create(ref('applications',id),{id,reference,jobId:job.id,jobSnapshot:C.publicVacancy(job),profile,documents:clean,stage:'New',version:1,createdAt:at(),updatedAt:at(),expiresAt});
-      tx.create(ref('mail',id),{id,applicationId:id,status:'queued',attempts:0,notBefore:now(),createdAt:at(),expiresAt});
+      const application={id,reference,jobId:job.id,jobSnapshot:C.publicVacancy(job),profile,...(submissionSnapshot?{submissionSnapshot}:{}),documents:clean,stage:'New',version:1,createdAt:at(),updatedAt:at(),expiresAt};
+      tx.create(ref('applications',id),application);
+      tx.create(ref('mail',id),{id,applicationId:id,kind:'candidate-confirmation',message:Mail.candidateMessage(application),status:'queued',attempts:0,notBefore:now(),createdAt:at(),expiresAt});
       tx.create(ref('applications',id).collection('events').doc('submitted'),{action:'Application received',at:at(),actorUid:null});
-      tx.update(sref,{status:'submitted',applicationId:id,reference,fingerprint});
-      return {id,reference,emailStatus:'queued'};
+      tx.update(sref,{status:'submitted',applicationId:id,reference,fingerprint,...(receiptPresentation?{receiptPresentation}:{})});
+      return {id,reference,emailStatus:'queued',...(receiptPresentation || {})};
     });
   }
   async function document(uid,applicationId,fileId) {

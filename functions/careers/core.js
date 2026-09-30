@@ -1,7 +1,10 @@
 'use strict';
+const Documents=require('./document-contract');
+const Privacy=require('./privacy-contract');
 const crypto = require('node:crypto');
 const STAGES = ['New','In review','Shortlisted','Interview','Technical test','Offer','Hired','Not selected','Withdrawn'];
 const Form = require('./form-contract');
+const Editorial = require('./editorial-contract');
 const KINDS = Form.QUESTION_KINDS;
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_TOTAL = 30 * 1024 * 1024;
@@ -44,6 +47,7 @@ function vacancy(input) {
     const key = id(q.id);
     requireValue(!earlier.has(key) && KINDS.includes(q.kind), 'Question identifiers and types must be valid.');
     const clean = { id:key, label:text(q.label,'question',240), kind:q.kind, required:boolean(q.required,'required') };
+    if (q.help !== undefined) clean.help = text(q.help, 'question help', 600, true);
     if (['select','multiselect'].includes(q.kind)) {
       clean.options = list(Array.isArray(q.options)?q.options.filter(v=>typeof v!=='string'||v.trim()):q.options,'options',40,120);
       requireValue(clean.options.length >= 1 && new Set(clean.options).size === clean.options.length, 'Options must be non-empty and unique.');
@@ -67,6 +71,8 @@ function vacancy(input) {
   };
   requireValue(!clean.publishFrom || !clean.publishUntil || clean.publishFrom <= clean.publishUntil, 'The closing date must follow the publication date.');
   if (clean.status === 'Open') requireValue(clean.responsibilities.length && clean.requirements.length, 'Add responsibilities and requirements before opening this vacancy.');
+  if (Object.hasOwn(input, 'documentRequirements')) clean.documentRequirements = Documents.parseDocumentRequirements(input.documentRequirements);
+  if (Object.hasOwn(input, 'translations')) clean.translations = Editorial.parseTranslations(input.translations);
   return clean;
 }
 function isOpen(job, now = Date.now()) {
@@ -75,8 +81,9 @@ function isOpen(job, now = Date.now()) {
 }
 function publicVacancy(job) {
   const { internalNotes, createdBy, updatedBy, ...rest } = job;
-  const allowed = ['id','title','department','location','contract','summary','responsibilities','requirements','desired','openings','publishFrom','publishUntil','cvRequired','photoRequired','status','questions','version'];
-  return Object.fromEntries(allowed.filter(k => rest[k] !== undefined).map(k => [k,rest[k]]));
+  const allowed = ['documentRequirements','id','title','department','location','contract','summary','responsibilities','requirements','desired','openings','publishFrom','publishUntil','cvRequired','photoRequired','status','questions','version'];
+  return { ...Object.fromEntries(allowed.filter(k => rest[k] !== undefined).map(k => [k,rest[k]])),
+    editorialVersion: job.editorialVersion || 1, availableLocales: Editorial.availableLocales(job), translations: Editorial.publicTranslations(job) };
 }
 function profile(input, job, settings) {
   requireValue(input && typeof input === 'object' && !Array.isArray(input), 'Application details are required.');
@@ -94,6 +101,7 @@ function settings(input) {
   requireValue(input && typeof input === 'object' && !Array.isArray(input), 'Settings are required.');
   const clean={intakeEnabled:boolean(input.intakeEnabled,'intake'),privacyText:text(input.privacyText,'privacy notice',12000),privacyVersion:id(input.privacyVersion),retentionDays:integer(input.retentionDays,'retention days',1,730),talentRetentionDays:integer(input.talentRetentionDays ?? input.retentionDays,'talent retention days',1,730),from:email(input.from),replyTo:email(input.replyTo),senderName:text(input.senderName || 'DEMAC Recruitment','sender name',120)};
   requireValue(!/[\r\n]/.test(clean.senderName),'Invalid sender name.');
+  Object.assign(clean,Privacy.parsePrivacyFields(input));
   return clean;
 }
 function verifySecret(raw, expected) { if(typeof raw!=='string' || !/^[a-f0-9]{64}$/.test(raw) || typeof expected!=='string' || !/^[a-f0-9]{64}$/.test(expected)) return false; return crypto.timingSafeEqual(Buffer.from(digest(raw),'hex'), Buffer.from(expected,'hex')); }

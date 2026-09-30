@@ -6,6 +6,7 @@ import { procedureLabel } from '../../lib/field-procedure-ui-model';
 import type { ProcedureMediaKind, ProcedureMediaSource, ProcedureStep } from '../../lib/field-procedure-workspace';
 import type { ProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
+import { ProcedureEvidenceViewer } from './procedure-evidence-viewer';
 
 const stageLabel: Record<string,string> = {
   local:'Guardado solo en este dispositivo',
@@ -20,7 +21,7 @@ function accept(kind: ProcedureMediaKind) {
 }
 function sourceFor(kind:ProcedureMediaKind,camera:boolean):ProcedureMediaSource {
   if(kind==='photo') return camera ? 'camera' : 'gallery';
-  if(kind==='audio') return 'recorder';
+  if(kind==='audio') return 'attachment';
   return camera ? 'camera' : 'attachment';
 }
 
@@ -34,6 +35,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
   const evidence=session.workspace?.evidence.filter(e=>e.part===part && e.procedureId===step.id) ?? [];
   const local=session.captures.filter(c=>c.part===part && c.stepId===step.id && c.stage!=='confirmed');
   const safetyRevision=session.workspace?.safety?.revision ?? null;
+  const photoViews=step.measurement && !step.views.includes('instrument') ? [...step.views,'instrument'] : step.views;
 
   async function receive(view:string,kind:ProcedureMediaKind,camera:boolean,file:File|null) {
     if(!file || safetyRevision===null)return;
@@ -65,7 +67,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
     {!session.persisted?<div className={styles.warning}>Este navegador no confirmó almacenamiento persistente. Mantén la app abierta hasta que los originales pendientes queden vinculados.</div>:null}
     {error?<div className={styles.error} role="alert">{error}</div>:null}
     <div className={styles.media}>
-      {step.views.map(view=>{
+      {photoViews.map(view=>{
         const remote=evidence.filter(e=>e.view===view);
         const pending=local.filter(e=>e.view===view);
         const cameraKey=view+':photo:camera';
@@ -108,6 +110,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
           {remote.map(e=><div className={styles.receipt} key={e.id}>
             <strong>Vínculo confirmado</strong>
             <dl><dt>Autor</dt><dd>{e.createdBy}</dd><dt>Recibido</dt><dd>{new Date(e.receivedAt).toLocaleString()}</dd><dt>Huella</dt><dd>{e.sha256.slice(0,14)}…</dd></dl>
+            <ProcedureEvidenceViewer target={session.target} evidence={e} onDenied={session.denyAccess}/>
           </div>)}
         </div>;
       })}
@@ -123,6 +126,15 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,kind,false,file);e.currentTarget.value='';}}/>
             </label>;
           })}
+          {local.filter(c=>c.view==='supplemental').map(c=><div key={c.id} className={styles.receipt}>
+            <strong>{stageLabel[c.stage]}</strong><small>{c.contentType} · {Math.round(c.sizeBytes/1024)} KB</small>
+            {c.stage==='local'&&!c.prepare?<button type="button" disabled={session.busy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
+          </div>)}
+          {evidence.filter(e=>e.view==='supplemental').map(e=><div key={e.id} className={styles.receipt}>
+            <strong>{e.kind==='audio'?'Audio':'Video'} · vínculo confirmado</strong>
+            <small>Autor: {e.createdBy} · {new Date(e.receivedAt).toLocaleString()}</small>
+            <ProcedureEvidenceViewer target={session.target} evidence={e} onDenied={session.denyAccess}/>
+          </div>)}
         </div>
       </details>
     </div>

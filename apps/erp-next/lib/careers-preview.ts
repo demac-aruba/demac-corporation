@@ -1,12 +1,18 @@
+import { requirementsFor, missingDocumentCategories, parseDocumentRequirements, type DocumentRequirement, type SupportingCategory } from '../../../functions/careers/document-contract.js';
+import type { CandidateMessage } from '../../../functions/careers/mail-contract';
+import type { SubmissionSnapshot } from '../../../functions/careers/submission-contract';
+import type { EditorialTranslation } from '../../../functions/careers/editorial-contract';
 import { COUNTRY_CODES, validateDetails, validateExperience, visibleQuestions as visibleFormQuestions, type FormQuestion } from '../../../functions/careers/form-contract.js';
 /** UI draft types and shared validation. Preview fixtures are never persisted. */
 export type QuestionKind = FormQuestion['kind'];
 export interface Question {
-  id: string; label: string; kind: QuestionKind; required: boolean;
+  id: string; label: string; help?: string; kind: QuestionKind; required: boolean;
   options?: string[];
   when?: { questionId: string; value: string };
 }
 export interface Vacancy {
+  documentRequirements?: DocumentRequirement[];
+  editorialVersion?: number; translations?: { es?: EditorialTranslation }; availableLocales?: ('en' | 'es')[];
   id: string; title: string; department: string; location: string;
   contract: string; summary: string; responsibilities: string[];
   requirements: string[]; status: 'Open' | 'Draft' | 'Paused' | 'Closed' | 'Archived';
@@ -14,6 +20,7 @@ export interface Vacancy {
 }
 export interface ProfilePhoto { dataUrl: string; name: string; size: number }
 export interface ApplicationDraft {
+  documentAssignments?: {file: File; category: SupportingCategory}[];
   givenName: string; familyName: string; email: string; dialCode: string; phone: string;
   whatsapp: boolean; nationality: string; applyingFrom: string; residence: string;
   sameResidence: boolean; city: string; totalExperience: string; relevantExperience: string;
@@ -24,6 +31,8 @@ export interface ApplicationDraft {
 export const stages = ['New', 'In review', 'Shortlisted', 'Interview', 'Technical test', 'Offer', 'Hired', 'Not selected', 'Withdrawn'] as const;
 export type Stage = typeof stages[number];
 export interface PreviewApplication {
+  candidateMessage?: CandidateMessage;
+  submissionSnapshot?: SubmissionSnapshot;
   id: string; vacancy: Vacancy; draft: ApplicationDraft; stage: Stage; createdAt: string;
   notes: { text: string; at: string }[]; timeline: { text: string; at: string }[];
 }
@@ -50,7 +59,7 @@ export function exampleVacancies(): Vacancy[] {
     { id: 'project-manager', title: 'Project Manager', department: 'Project Management', summary: 'Coordinate project scope, people, progress and client communication.', questions: [question('team-size', 'Largest team you have coordinated', 'number'), question('tools', 'Which planning tools have you used?', 'text'), question('project', 'Describe a project challenge and how you handled it.', 'textarea')] },
     { id: 'supervisor', title: 'Supervisor', department: 'Field Operations', summary: 'Guide field teams and support consistent quality and safe working practices.', questions: [question('team-size', 'Largest team you have supervised', 'number'), question('specialty', 'Your main technical specialty', 'text'), question('quality', 'How do you check the quality of completed work?', 'textarea')] },
   ];
-  return roles.map(role => ({ ...role, location: 'Aruba', contract: 'Full-time', status: 'Open', cvRequired: !role.helper, version: 1,
+  return roles.map(role => ({ ...role, documentRequirements: role.id==='hvac-technician'?(['document','diploma','certificate'] as const).map(category=>({category,required:false,helpEn:'',helpEs:'',reviewedSource:''})):undefined, location: 'Aruba', contract: 'Full-time', status: 'Open', cvRequired: !role.helper, version: 1,
     responsibilities: [role.summary, 'Communicate clearly and keep accurate work records.', 'Follow agreed quality, safety and team procedures.'],
     requirements: role.helper ? ['Willingness to learn and follow instructions.', 'Reliable teamwork and communication.'] : ['Relevant experience in the responsibilities of the role.', 'Clear communication and a practical, organized approach.'],
     questions: role.questions.map(q => ({ ...q, options: q.options ? [...q.options] : undefined })) }));
@@ -68,8 +77,16 @@ export function validateStep(draft: ApplicationDraft, vacancy: Vacancy, step: nu
   if (step === 2) {
     if (!draft.photo) errors.photo = 'Add a recent photo for your profile.';
     if (!draft.cv && (vacancy.cvRequired || !draft.noCv)) errors.cv = vacancy.cvRequired ? 'Select your CV to continue.' : 'Select a CV or choose “I do not have a CV”.';
+    if (missingDocumentCategories(vacancy,documentSelections(draft)).length || documentSelections(draft).some(f=>!requirementsFor(vacancy).some(r=>r.category===f.category))) errors.documents='Complete the required document categories.';
     if (review && !draft.privacy) errors.privacy = 'Read the preview privacy information and acknowledge it.';
   }
+  return errors;
+}
+/** Complete existing validation, also used to guard question-level navigation.
+ * The backend independently validates again when a candidate submits. */
+export function validateApplication(draft: ApplicationDraft, vacancy: Vacancy, review = false): Errors {
+  const errors = { ...validateStep(draft, vacancy, 0), ...validateStep(draft, vacancy, 1), ...validateStep(draft, vacancy, 2, review) };
+  if (totalFileBytes(draft) > 30 * 1024 * 1024) errors.cv = 'The combined files must be smaller than 30 MB.';
   return errors;
 }
 export function fileError(file: Pick<File, 'name' | 'size'>, kind: 'cv' | 'document' | 'photo'): string | null {
@@ -88,6 +105,7 @@ export function copyForSubmission(draft: ApplicationDraft, vacancy?: Vacancy): A
     answers: Object.fromEntries(Object.entries(draft.answers).filter(([id]) => !visible || visible.has(id)).map(([id, value]) => [id, Array.isArray(value) ? [...value] : value])), languages: [...draft.languages], documents: [...draft.documents] };
 }
 export function validateVacancy(vacancy: Vacancy): string | null {
+  try { requirementsFor(vacancy); } catch(error) { return error instanceof Error ? error.message : 'Check document requirements.'; }
   if (!vacancy.title.trim() || !vacancy.department.trim() || !vacancy.summary.trim()) return 'Enter the title, department and summary.';
   if (!vacancy.questions.length) return 'Add at least one role question.';
   const ids = new Set<string>();
@@ -98,4 +116,9 @@ export function validateVacancy(vacancy: Vacancy): string | null {
     ids.add(q.id);
   }
   return null;
+}
+
+/** File identity stays in documents. Assignments only label those exact File objects. */
+export function documentSelections(draft: ApplicationDraft): {file:File;kind:'document';category:SupportingCategory}[] {
+  return draft.documents.map(file=>({file,kind:'document',category:draft.documentAssignments?.find(entry=>entry.file===file)?.category || 'document'}));
 }

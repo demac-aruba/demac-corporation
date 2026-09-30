@@ -1,5 +1,6 @@
 'use strict';
 const C=require('./core');
+const {candidateMessage}=require('./mail-contract');
 const {privateScannerAddress,scan}=require('./files');
 function createInfrastructure(env,createTransport) {
   const scannerAddress=privateScannerAddress(env);
@@ -13,17 +14,26 @@ function createInfrastructure(env,createTransport) {
     if(!s.from || !env.CAREERS_VERIFIED_FROM || s.from.toLowerCase()!==env.CAREERS_VERIFIED_FROM.toLowerCase())b.push('Use the verified Careers sender selected by DEMAC.');
     return b;
   }
-  function signature(s) {return C.digest(C.stable({from:s.from||'',replyTo:s.replyTo||'',privacyVersion:s.privacyVersion||'',privacyText:s.privacyText||'',host:env.CAREERS_SMTP_HOST||'',port:env.CAREERS_SMTP_PORT||'',user:env.CAREERS_SMTP_USER||'',credentialHash:C.digest(env.CAREERS_SMTP_PASSWORD||''),scanner:scannerAddress,verifiedFrom:env.CAREERS_VERIFIED_FROM||'',approved:env.CAREERS_RELEASE_APPROVED||''}));}
+  function signature(s) {return C.digest(C.stable({from:s.from||'',replyTo:s.replyTo||'',privacyVersion:s.privacyVersion||'',privacyText:s.privacyText||'',...(s.privacyLocale||s.privacyTranslation?{privacyLocale:s.privacyLocale||null,privacyTranslation:s.privacyTranslation||null}:{}),host:env.CAREERS_SMTP_HOST||'',port:env.CAREERS_SMTP_PORT||'',user:env.CAREERS_SMTP_USER||'',credentialHash:C.digest(env.CAREERS_SMTP_PASSWORD||''),scanner:scannerAddress,verifiedFrom:env.CAREERS_VERIFIED_FROM||'',approved:env.CAREERS_RELEASE_APPROVED||''}));}
   async function verify(s) {
     C.requireValue(blockers(s).length===0,blockers(s).join(' '),'setup-required',409);
     await scan(Buffer.from('DEMAC Careers scanner connectivity check.'),scannerAddress);
     const transport=createTransport(smtpOptions());try{await transport.verify();}finally{transport.close();}
   }
-  async function send(application,s) {
+  async function send(application,s,prepared) {
     C.requireValue(blockers(s).length===0,'Email settings are unavailable.','setup-required',409);
+    const message=prepared || candidateMessage(application);
+    C.requireValue(message?.schemaVersion===1 && message.kind==='candidate-confirmation' &&
+      message.to===application.profile.email && ['en','es'].includes(message.locale) &&
+      typeof message.text==='string' && typeof message.html==='string' &&
+      typeof message.subject==='string' && !/[\r\n]/.test(message.subject),
+      'The saved email content is unavailable.','mail-content-invalid',409);
     const transport=createTransport(smtpOptions());
-    try{return await transport.sendMail({from:{name:s.senderName,address:s.from},replyTo:s.replyTo,to:application.profile.email,subject:`Application received — ${application.jobSnapshot.title}`,text:`Hello ${application.profile.givenName},\n\nThank you for your interest in DEMAC Professional Cooling Solutions. We received your application for ${application.jobSnapshot.title}.\n\nReference: ${application.reference}\n\nOur recruitment team will review your information and contact you if your application advances to the next stage.\n\nDEMAC Recruitment Team`,messageId:`<careers.${application.id}@${s.from.split('@')[1]}>`,disableFileAccess:true,disableUrlAccess:true});}finally{transport.close();}
+    try{return await transport.sendMail({from:{name:s.senderName,address:s.from},replyTo:s.replyTo,
+      to:message.to,subject:message.subject,text:message.text,html:message.html,
+      messageId:`<careers.${application.id}@${s.from.split('@')[1]}>`,
+      disableFileAccess:true,disableUrlAccess:true});}finally{transport.close();}
   }
-  return {blockers,signature,verify,send,scanner:bytes=>scan(bytes,scannerAddress)};
+  return {blockers,signature,verify,send,idDocumentsAllowed:()=>env.CAREERS_ID_POLICY_APPROVED==='true',scanner:bytes=>scan(bytes,scannerAddress)};
 }
 module.exports={createInfrastructure};

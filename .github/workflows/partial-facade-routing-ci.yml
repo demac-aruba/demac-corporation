@@ -7,6 +7,8 @@ on:
       - 'functions/officeBookingAuthorityPartialWrapper.js'
       - 'functions/bookingPartialCompletion.js'
       - 'functions/officeBookingAuthorityFacadePartial.test.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
+      - 'functions/projectBookingLinks.js'
       - '.github/workflows/partial-facade-routing-ci.yml'
   push:
     branches:
@@ -16,6 +18,8 @@ on:
       - 'functions/officeBookingAuthorityPartialWrapper.js'
       - 'functions/bookingPartialCompletion.js'
       - 'functions/officeBookingAuthorityFacadePartial.test.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
+      - 'functions/projectBookingLinks.js'
       - '.github/workflows/partial-facade-routing-ci.yml'
 
 permissions:
@@ -39,5 +43,5 @@ jobs:
           node --check functions/officeBookingAuthorityFacade.js
           node --check functions/officeBookingAuthorityPartialWrapper.js
           node --check functions/bookingPartialCompletion.js
-      - name: Production facade partial-completion regression
-        run: node --test functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js
+      - name: Production facade Project and partial-completion regression
+        run: node --test functions/officeBookingAuthorityFacadeProject.test.js functions/projectOperatorBooking.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js

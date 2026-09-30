@@ -1,6 +1,8 @@
 'use strict';
 // Actual client adapter + component + backend commands over loopback HTTP.
 // Deterministic DB/auth fixture, not Firebase Emulator, hosted preview or physical-device proof.
+const {Readable}=require('node:stream');
+const {createProcedureMediaStore}=require('../../../functions/fieldOperationsProcedureMedia');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const tools=process.env.FIELD_PORTAL_TEST_TOOLS;
 if(!tools)throw Error('Expected isolated FIELD_PORTAL_TEST_TOOLS.');
@@ -23,9 +25,15 @@ const cjs=esbuild.buildSync({entryPoints:[path.join(app,'lib/field-procedure-con
 const mod={exports:{}};new Function('module','exports','require',cjs)(mod,mod.exports,require);
 const {parseFieldProcedureSummary}=mod.exports;
 let state,api,calls=[],fault=null;
-function reset(){state=fixture();for(const who of [lead,helper,office,outsider])state.store.put('users',{id:who.uid,active:true,role:who.role,staffId:who.staffId,name:who.name});api=createFieldOperationsApi({db:state.store.db,verifyIdToken:async t=>({uid:t}),procedureCommands:state.commands});calls=[];fault=null;}
+function makeBucket(){const objects=new Map(),writes=[];return {objects,writes,file:(key,options={})=>({
+ async getMetadata(){const object=objects.get(key);if(!object||options.generation&&options.generation!==object.generation)throw Object.assign(Error('Absent synthetic object'),{code:404});return[{size:String(object.bytes.length),generation:object.generation,contentType:object.contentType}];},
+ createReadStream(){const object=objects.get(key);if(!object||options.generation!==object.generation)throw Error('Wrong synthetic generation');return Readable.from([object.bytes]);},
+ async save(bytes,options){assert.equal(options.preconditionOpts.ifGenerationMatch,0);if(objects.has(key))throw Object.assign(Error('Already created'),{code:412});writes.push(key);objects.set(key,{bytes:Buffer.from(bytes),contentType:options.metadata.contentType,generation:'7'});},
+})};}
+
+function reset(){const media=createProcedureMediaStore(makeBucket());state=fixture({verifyStoredMedia:media.verify});for(const who of [lead,helper,office,outsider])state.store.put('users',{id:who.uid,active:true,role:who.role,staffId:who.staffId,name:who.name});api=createFieldOperationsApi({db:state.store.db,verifyIdToken:async t=>({uid:t}),procedureCommands:state.commands,procedureMediaStore:media});calls=[];fault=null;}
 const html='<!doctype html><html lang="es"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"><style>body{margin:0;background:#f3f8ff;font-family:Arial,sans-serif}button,textarea{font:inherit}[role=note]{padding:12px;font-size:12px;color:#38465a}</style></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>';
-function send(res,status,body,type='application/json'){if(res.destroyed)return;res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store'});res.end(type==='application/json'?JSON.stringify(body):body);}
+function send(res,status,body,type='application/json',headers={}){if(res.destroyed)return;res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store',...headers});res.end(Buffer.isBuffer(body)?body:type==='application/json'?JSON.stringify(body):body);}
 const server=http.createServer(async(req,res)=>{
  try {
   const url=new URL(req.url,'http://localhost');
@@ -35,15 +43,15 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/images/field/tropical-reference.webp')return send(res,200,fs.readFileSync(path.join(app,'public',url.pathname)),'image/webp');
   if(url.pathname==='/favicon.ico')return send(res,204,'','text/plain');
   if(url.pathname!=='/__preview/firebase/us-central1-demo-demac-dwellings.cloudfunctions.net/fieldOperationsAuthority')return send(res,404,{error:'Unexpected test route'});
-  let raw='';for await(const b of req)raw+=b;const body=JSON.parse(raw),uid=String(req.headers.authorization||'').replace('Bearer ','');
-  calls.push({uid,action:body.action,data:body.data});
-  let injected=null;if(fault&&(!fault.uid||fault.uid===uid)&&(!fault.action||fault.action===body.action)){injected=fault;fault=null;}
+  const chunks=[];for await(const b of req)chunks.push(b);const raw=Buffer.concat(chunks);const body=url.searchParams.has('procedureMedia')?undefined:JSON.parse(raw.toString()),uid=String(req.headers.authorization||'').replace('Bearer ','');
+  calls.push({uid,action:body?.action||url.searchParams.get('procedureMedia'),data:body?.data});
+  let injected=null;if(fault&&(!fault.uid||fault.uid===uid)&&(!fault.action||fault.action===(body?.action||url.searchParams.get('procedureMedia')))){injected=fault;fault=null;}
   if(injected?.status&&!injected.afterCommit)return send(res,injected.status,{error:{code:'injected_test_failure',message:'Fallo sintético de prueba'}});
-  const r=await api.handle({method:req.method,headers:req.headers,body});
+  const r=await api.handle({method:req.method,headers:req.headers,body,rawBody:raw,query:Object.fromEntries(url.searchParams)});
   if(injected?.hold)await injected.hold;
   if(injected?.status)return send(res,injected.status,{error:{code:'injected_lost_response',message:'Respuesta perdida de prueba'}});
   if(injected?.corrupt)injected.corrupt(r.body);
-  return send(res,r.status,r.body);
+  return send(res,r.status,r.body,r.headers?.['Content-Type']||'application/json',r.headers);
  }catch(e){send(res,500,{error:{code:'fixture_failure',message:String(e.message)}});}
 });
 const writes=()=>calls.filter(c=>c.action==='record_procedure_action');
@@ -109,6 +117,28 @@ async function choose(page,part='indoor'){await page.getByRole('button',{name:pa
      await winner.getByRole('heading',{name:'Evidencia por procedimiento',exact:true}).waitFor();
      assert.equal(await winner.getByRole('button',{name:'Reportar anomalía',exact:true}).count(),0,'anomaly entry is not repeated in step detail');
      assert.equal(await winner.getByLabel('Tomar Foto: ANTES').count(),1,'required photo control is tied to the procedure view');
+     // Exercise actual visible capture -> binary upload -> private read -> result save.
+     const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6XzQAAAAASUVORK5CYII=','base64');
+     await winner.getByLabel('Seleccionar Foto: ANTES').setInputFiles({name:'synthetic-before.png',mimeType:'image/png',buffer:image});
+     await winner.getByText('Vínculo confirmado',{exact:true}).waitFor();
+     await winner.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
+     await winner.getByAltText('Evidencia privada del procedimiento').waitFor();
+     assert.equal(await winner.getByAltText('Evidencia privada del procedimiento').getAttribute('src').then(s=>s.startsWith('blob:')),true);
+     await winner.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
+     await winner.getByLabel('Observación técnica').fill('I01: nota persistida de vista inicial');
+     await winner.getByRole('button',{name:'Guardar procedimiento',exact:true}).click();
+     await winner.getByText('Procedimiento documentado y confirmado.',{exact:true}).waitFor();
+     assert.equal(state.store.get('workInterventions','WI-1').procedureWorkflow.parts.indoor.steps.I01.note,'I01: nota persistida de vista inicial');
+     await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
+     await winner.getByRole('button',{name:/Verificar flapper/}).click();
+     await winner.getByLabel('Observación técnica').fill('I02: borrador exclusivo del flapper');
+     await winner.getByLabel('Resultado observado').selectOption('funciona');
+     await winner.getByRole('button',{name:'Guardar procedimiento',exact:true}).click();
+     await winner.getByText('Procedimiento documentado y confirmado.',{exact:true}).waitFor();
+     assert.equal(state.store.get('workInterventions','WI-1').procedureWorkflow.parts.indoor.steps.I02.note,'I02: borrador exclusivo del flapper');
+     await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
+     await winner.getByRole('button',{name:/Verificar enfriamiento inicial/}).click();
+     assert.equal(await winner.getByLabel('Seleccionar Foto: Instrumento legible').count(),1,'measured indoor temperature has an instrument photo control');
      await winner.getByRole('button',{name:'Volver a procedimientos',exact:true}).click();
      await winner.getByRole('button',{name:'Volver a seleccionar parte',exact:true}).click();
      await winner.getByText('Tu parte está identificada.',{exact:true}).waitFor();

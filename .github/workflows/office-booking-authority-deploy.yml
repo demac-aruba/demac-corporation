@@ -6,6 +6,8 @@ on:
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -26,8 +28,12 @@ on:
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/customerContactDirectory.js'
       - 'functions/customerContactDirectory.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
+      - 'functions/bookingRegularHistoricalCapacity.js'
+      - 'functions/bookingRegularHistoricalCapacity.test.js'
       - 'functions/bookingAuthorityCore.js'
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/bookingAuthorityWorkOrders.js'
@@ -55,6 +61,8 @@ on:
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthorityFacadeProject.test.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -75,8 +83,12 @@ on:
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/customerContactDirectory.js'
       - 'functions/customerContactDirectory.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
+      - 'functions/bookingRegularHistoricalCapacity.js'
+      - 'functions/bookingRegularHistoricalCapacity.test.js'
       - 'functions/bookingAuthorityCore.js'
       - 'functions/bookingAuthorityFirestore.js'
       - 'functions/bookingAuthorityWorkOrders.js'
@@ -130,6 +142,7 @@ jobs:
           node --check functions/bootstrap.js
           node --check functions/officeBookingAuthority.js
           node --check functions/officeBookingAuthorityFacade.js
+          node --check functions/officeBookingAuthorityPartialWrapper.js
           node --check functions/appointmentCommunicationAuthority.js
           node --check functions/appointmentCommunicationRenderer.js
           node --check functions/vanScheduleCommunicationAuthority.js
@@ -138,7 +151,9 @@ jobs:
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/customerContactDirectory.js
+          node --check functions/bookingAdhocSupport.js
           node --check functions/bookingOperationalMove.js
+          node --check functions/bookingRegularHistoricalCapacity.js
           node --check functions/bookingAuthorityCore.js
           node --check functions/bookingAuthorityFirestore.js
           node --check functions/bookingAuthorityWorkOrders.js
@@ -157,7 +172,9 @@ jobs:
           node --test functions/appointmentCommunicationAuthority.test.js
           node --test functions/customerContactDirectory.test.js
           node --test functions/bookingAuthorityWorkOrders.test.js
+          node --test functions/bookingAdhocSupport.test.js
           node --test functions/bookingOperationalMove.test.js
+          node --test functions/bookingRegularHistoricalCapacity.test.js
           node --test functions/bookingCapacityAvailability.test.js
           node --test functions/bookingAuthorityAppointmentLifecycle.test.js
           node --test functions/serviceCatalog.test.js
@@ -165,6 +182,8 @@ jobs:
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
+          node --test functions/projectOperatorBooking.test.js
+          node --test functions/officeBookingAuthorityFacadeProject.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js
           node --test functions/officeBookingAuthorityCommunication.test.js
           node --test functions/officeBookingAuthorityCatalog.test.js
           node --test functions/officeBookingAuthorityMasterData.test.js

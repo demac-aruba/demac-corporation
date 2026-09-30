@@ -1,7 +1,7 @@
 export const QUESTION_KINDS: readonly ['select', 'multiselect', 'yesno', 'text', 'textarea', 'number', 'date', 'url'];
 export type QuestionKind = typeof QUESTION_KINDS[number];
 export interface FormQuestion {
-  id: string; label: string; kind: QuestionKind; required: boolean;
+  id: string; label: string; help?: string; kind: QuestionKind; required: boolean;
   options?: string[]; when?: { questionId: string; value: string };
 }
 export const COUNTRY_CODES: readonly string[];

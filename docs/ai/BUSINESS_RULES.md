@@ -19,8 +19,18 @@ engineering index; it does not replace that registry.
 - `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
   optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
+- `OPS-SCHED-SUPPORT-001`: one-slot coworker support may be added to current/future confirmed
+  appointments and, with explicit historical acknowledgement, past confirmed/completed work.
+  Preserve the primary assignment/status, transactional capacity/crew controls and audit.
+  Historical support is non-billable, suppresses automatic messages and does not alter payroll/Field actuals.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
   canonical conflict validation, audit markers and silent automatic communications.
+- `OPS-PROJ-SCHED-001`: an active, provisioned Office Operator may schedule or place a
+  Temporary Hold for an existing published Project, using its canonical Customer and
+  Property and Booking Authority's atomic Appointment/Work Order/capacity/Project link.
+  The operator may read only the scheduling projection needed for this work; creating,
+  editing or completing Project planning and correcting historical Project capacity
+  remain manager-only. Browser-local unpublished Projects cannot be booked by operators.
 - `OPS-TASK-*`: internal operational tasks are independent of Scheduling, use canonical staff
   identity, governed lifecycle/version checks, private evidence and the existing WhatsApp authority.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware
@@ -167,6 +177,16 @@ Production activation remains separately owner-approved through the server-side 
 
 ## Current payroll-attendance ownership
 
+- `OPS-STAFF-BONUS-MANUAL`: authorized payroll users enter approved employee bonuses
+  manually by employee, date and 27–26 payroll period, with category, positive Afl. amount
+  (at most two decimals), concept/reason and actor/time audit. Categories describe the
+  input; they do not award automatic attendance bonuses or calculate sales commission rates.
+  Existing `employeePayrollSettings.payrollAdjustments` entries remain authoritative,
+  including Legacy records; active bonuses are included in Employees and Finance PDF/CSV
+  exports. Cancellations retain the original entry and a reason, and exclude its amount
+  from totals. Bonuses never change attendance hours or offset salary advances automatically.
+  Ambiguous identity/history blocks exports instead of silently reporting a zero amount.
+
 - Payroll attendance periods are canonical 27th-through-26th ranges. The selected day is a
   child selection inside that range; selecting July 27 in the July 27–August 26 period does
   not change the payroll period to July.
@@ -174,14 +194,72 @@ Production activation remains separately owner-approved through the server-side 
   Explicit `employeeTimesheets` records are created only for payroll-relevant exceptions.
 - For a worked day, overtime is derived deterministically from the resolved schedule and
   actual Clock In, Clock Out, and Break Minutes. Early start, late finish, and unused
-  scheduled break add independently; overtime is not a manual payroll input.
+  scheduled break add independently after applying unused break to early departure as
+  described below; overtime is not a manual payroll input.
 - Late arrival, early departure, and break time beyond the scheduled break are independent
   missing-scheduled-time segments. Each segment must be explicitly classified as Paid or
   No Work No Pay and carry a reason before it can be saved.
-- Overtime and missing scheduled time never offset each other. Payroll retains both facts.
+- `OPS-STAFF-ATTENDANCE-BREAK-END`: after completing the scheduled regular worked
+  minutes, unused scheduled break first covers an early departure. Only the remaining
+  unused break becomes overtime and only the uncovered departure requires Paid/No Work
+  No Pay classification. For 08:00–17:00 / 480 scheduled minutes, break 0 and departure at
+  16:00 / 16:30 / 17:00 produce 0 / 30 / 60 overtime minutes and 480 regular minutes.
+  This does not offset late arrival or missing time using early-start/late-finish overtime.
+  Shifted breaks remain explicit attendance records even when payroll totals match normal
+  attendance; retain actual Clock In/Out and Break Minutes, never a fictitious break.
+- `OPS-STAFF-ATTENDANCE-PARTIAL-NO-WORK`: when fewer than the scheduled regular
+  worked minutes were actually worked and the recorded break is shorter than the normal
+  allowance, no unused lunch allowance is earned or applied to early departure. Calculate
+  no-work minutes as scheduled worked minutes minus actual regular worked minutes; store
+  one `partial_day` classification with no invented clock interval. Outside-shift overtime
+  remains independent. This rule applies to every employee, using their resolved schedule.
+  For 08:00–17:00 / 480 scheduled minutes, 13:00–16:00 with break 0 is 180 worked,
+  300 no-work, zero unused break and zero overtime. Require an explicit Paid or No Work
+  No Pay decision and reason. Paid permission contributes to paid-free hours (3 worked +
+  5 paid no-work = 8 payable); unpaid contributes to NWNP (3 payable + 5 NWNP).
+  Clock-deviation diagnostics are not the partial-day payroll absence total.
+- All other overtime and missing scheduled time remain independent. Payroll retains both facts.
 - Paid partial missing time contributes to paid-free time; unpaid partial missing time
   contributes to No Work No Pay. A partially affected employee can remain `Present`.
 - New or edited explicit attendance records preserve an additive snapshot of the resolved
   scheduled start, end, break allowance, and scheduled paid-free minutes. Existing records
   without snapshot fields remain valid; no historical backfill is required.
 - `CRM-LOCATION-001` (isolated preview): independent dwellings require explicit selection; stable Property-contained IDs and server membership checks preserve owner, contacts, equipment and visit scope. No apartment-count rule implies equipment count or automatic historical classification. See `decisions/ADR-20260921-property-dwellings.md`.
+
+## Planned emergency and weekly-rest work
+
+- `OPS-SCHED-PLANNED-OT-001` — Owner request 2026-09-29, effective with the approved release:
+  an authenticated office scheduler may create an after-hours emergency for today or a future
+  canonical open business date, starting at or after 17:00. Past dates remain rejected. The
+  dated Van/crew and open-ended emergency guard remain authoritative.
+- `OPS-SCHED-PLANNED-OT-002` — The same office scheduler may explicitly book a fixed workload
+  in a Van's recurring weekly rest window. Preparation is read-only; confirmation binds the
+  operator, request, dated crew/schedule, complete work selection and estimated finish. Three,
+  four or more required slots are preserved through the same-date end, including a bounded
+  extension after ordinary closing. All assigned crew must remain available; company closure,
+  protected lunch, overlapping Van/staff work, midnight and stale consent still block commit.
+  Only explicit office entry gets this exception; automated/ordinary availability is unchanged.
+  Appointment/Work Order and canonical locks commit atomically and exact retries do not duplicate.
+- Accepted weekly-rest work carries `scheduledOvertime` planning/audit metadata. It never writes
+  actual attendance, payroll amounts or a different weekly schedule. Actual payable overtime
+  continues to derive from real worked times against the employee's canonical schedule.
+  Ordinary reschedule/move clears current planning metadata and keeps the original audit event.
+- Owner: DEMAC Operations / Booking Authority. Source: Christian's Scheduling & Dispatch request
+  2026-09-29. Migration: none; existing appointments, CRM and calendar records are not rewritten.
+
+## New regular booking beyond afternoon capacity
+
+- `OPS-SCHED-CREATE-OT-001` — Owner request 2026-09-29: an authenticated office operator may
+  explicitly accept possible overtime when creating a fixed-workload Regular Booking in a Van's
+  remaining ordinary afternoon tail. This extends the prior transfer-only exception to creation.
+  Read-only preparation states required slots, available ordinary slots and estimated finish;
+  confirmation binds actor, work, dated crew/schedule and exact request. Four services at 13:30
+  preserve four slots through 17:30, with three ordinary slots. Three at 14:30 preserve three
+  slots through 17:30, with two ordinary slots. Fitting work uses the ordinary booking route.
+- Only the end of ordinary capacity may be exceeded. Existing reservations/holds, crew absence,
+  unavailable Vans, company closure, weekly rest, protected lunch and midnight remain enforced.
+  Canonical Appointment/Work Order/locks are atomic, replay is exact, and canceled consent writes
+  no appointment. Explicit single-Van overtime never silently replaces a selected support booking.
+- Persist `scheduledOvertime.kind = capacity_overflow_overtime` as accepted planning evidence,
+  displayed as possible overtime. Ordinary/automated availability and actual payroll remain
+  unchanged; elapsed real attendance determines payable overtime. No existing data migration.

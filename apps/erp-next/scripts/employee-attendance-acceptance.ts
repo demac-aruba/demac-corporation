@@ -6,8 +6,9 @@ import {
   scheduledBreakMinutes,
   type AttendanceScheduleForCalculation,
 } from '../lib/employee-attendance-calculation';
-import { payrollPeriodForDate } from '../lib/employee-attendance';
-import { payrollPeriodFromDates, shiftPayrollPeriod } from '../lib/employee-payroll';
+import { hasAttendanceTimeChange, payrollPeriodForDate, saveAttendanceDay, type AttendanceDayDraft, type AttendanceSchedule, type EmployeeTimesheetEntry } from '../lib/employee-attendance';
+import { calculatePayrollDay, payrollPeriodFromDates, shiftPayrollPeriod } from '../lib/employee-payroll';
+import type { CanonicalOperationsState, CanonicalStaffProfile } from '../lib/canonical-operations';
 
 const nineToSix: AttendanceScheduleForCalculation = {
   startTime: '09:00',
@@ -41,6 +42,7 @@ assert.deepEqual(
     earlyStartMinutes: 0,
     lateFinishMinutes: 0,
     unusedBreakMinutes: 0,
+    breakAppliedToEarlyDepartureMinutes: 0,
     overtimeMinutes: 0,
     lateArrivalMinutes: 0,
     earlyDepartureMinutes: 0,
@@ -151,3 +153,97 @@ assert.equal(
 );
 
 console.log('Employee attendance acceptance passed: payroll navigation, schedule-derived overtime, bounded edge cases, exact partial-day compatibility, independent partial exceptions, classification and 27–26 membership.');
+
+async function verifyShiftedBreakSaveAndPayroll() {
+  // Stub only persistence: exercise the production save calculation and payroll consumer
+  // without credentials or any network/production write.
+  const storage = require('../lib/firebase/firestore-rest') as typeof import('../lib/firebase/firestore-rest');
+  const originalSave = storage.saveFirestoreDocument;
+  const writes: EmployeeTimesheetEntry[] = [];
+  storage.saveFirestoreDocument = async (collection, document) => {
+    assert.equal(collection, 'employeeTimesheets');
+    writes.push(document as unknown as EmployeeTimesheetEntry);
+    return document;
+  };
+  const employee: CanonicalStaffProfile = { id: 'staff-break-test', name: 'Attendance Fixture', active: true };
+  const schedule: AttendanceSchedule = { startTime: '08:00', endTime: '17:00', scheduledMinutes: 480, paidFreeMinutes: 0, label: 'Test shift' };
+  const draft: AttendanceDayDraft = { status: 'Present', clockInTime: '08:00', clockOutTime: '16:00', breakMinutes: 0, overtimeMinutes: 999, notes: '' };
+  const operations = { staffProfiles: [employee], vans: [], vanHalfDaySchedules: [], staffAbsences: [] } as unknown as CanonicalOperationsState;
+  const input = { employee, date: '2026-09-22', schedule, draft, updatedByUserId: 'test-operator', updatedByName: 'Test Operator' };
+  try {
+    assert.equal(hasAttendanceTimeChange(schedule, { ...draft, clockOutTime: '17:00', breakMinutes: 60 }), false);
+    for (const [clockOutTime, overtimeMinutes] of [['16:00', 0], ['16:30', 30], ['17:00', 60]] as const) {
+      const changedDraft = { ...draft, clockOutTime };
+      assert.equal(hasAttendanceTimeChange(schedule, changedDraft), true, 'A shifted break must remain saveable even with no notes or overtime.');
+      const entry = await saveAttendanceDay({ ...input, draft: changedDraft });
+      assert.equal(entry.clockOutTime, clockOutTime);
+      assert.equal(entry.breakMinutes, 0);
+      assert.equal(entry.regularHours, 8);
+      assert.equal(entry.overtimeMinutes, overtimeMinutes);
+      assert.equal(entry.paidFreeHours, 0);
+      assert.equal(entry.noWorkNoPayHours, 0);
+      assert.equal(entry.scheduledBreakMinutes, 60);
+      assert.equal(entry.updatedByUserId, 'test-operator');
+      assert.deepEqual(entry.attendanceExceptions, []);
+      const payroll = calculatePayrollDay({ employee, date: input.date, operations, attendance: { payrollSettings: [], timesheets: [entry], advances: [] } });
+      assert.equal(payroll.regularHours, 8);
+      assert.equal(payroll.overtimeHours, overtimeMinutes / 60);
+      assert.equal(payroll.noWorkNoPayHours, 0);
+      const repeat = await saveAttendanceDay({ ...input, draft: changedDraft, existingEntry: entry });
+      assert.equal(repeat.id, entry.id, 'Retry must use the same employee/date document.');
+      assert.equal(repeat.createdAt, entry.createdAt);
+      assert.equal(repeat.overtimeMinutes, entry.overtimeMinutes, 'Retry must not accumulate overtime.');
+    }
+    const count = writes.length;
+    await assert.rejects(saveAttendanceDay({ ...input, draft: { ...draft, clockOutTime: '15:30' } }), /Choose Paid or No Work No Pay for no work/);
+    await assert.rejects(saveAttendanceDay({ ...input, draft: { ...draft, clockOutTime: '07:30' } }), /Clock Out must be later/);
+    assert.equal(writes.length, count, 'Invalid or unclassified inputs must not write.');
+    const partial = await saveAttendanceDay({ ...input, draft: { ...draft, clockOutTime: '15:30', attendanceExceptionClassifications: [{ kind: 'partial_day', treatment: 'no_work_no_pay', reason: 'Test reason' }] } });
+    assert.equal(partial.regularHours, 7.5);
+    assert.equal(partial.noWorkNoPayHours, 0.5);
+    assert.equal(partial.overtimeMinutes, 0);
+    const corrected = await saveAttendanceDay({ ...input, existingEntry: partial });
+    assert.equal(corrected.regularHours, 8);
+    assert.equal(corrected.noWorkNoPayHours, 0);
+    assert.deepEqual(corrected.attendanceExceptions, [], 'Editing to a covered departure removes stale classifications.');
+    for (const employeeId of ['staff-partial-one', 'staff-partial-two']) {
+      const partialEmployee = { ...employee, id: employeeId };
+      const partialInput = { ...input, employee: partialEmployee, date: '2026-09-14', draft: { ...draft, clockInTime: '13:00', clockOutTime: '16:00' } };
+      const before = writes.length;
+      await assert.rejects(saveAttendanceDay(partialInput), /Choose Paid or No Work No Pay for no work/);
+      await assert.rejects(saveAttendanceDay({ ...partialInput, draft: { ...partialInput.draft, attendanceExceptionClassifications: [{ kind: 'late_arrival', treatment: 'paid', reason: 'Old classification' }] } }), /Choose Paid or No Work No Pay for no work/, 'An old arrival classification must not silently approve the new aggregate.');
+      assert.equal(writes.length, before);
+      for (const treatment of ['paid', 'no_work_no_pay'] as const) {
+        const classifiedDraft = { ...partialInput.draft, attendanceExceptionClassifications: [{ kind: 'partial_day' as const, treatment, reason: 'Test absence decision' }] };
+        const entry = await saveAttendanceDay({ ...partialInput, draft: classifiedDraft });
+        assert.equal(entry.workedMinutes, 180);
+        assert.equal(entry.regularHours, 3);
+        assert.equal(entry.overtimeMinutes, 0);
+        assert.equal(entry.breakMinutes, 0);
+        assert.equal(entry.paidFreeHours, treatment === 'paid' ? 5 : 0);
+        assert.equal(entry.noWorkNoPayHours, treatment === 'paid' ? 0 : 5);
+        assert.deepEqual(entry.attendanceExceptions, [{ kind: 'partial_day', minutes: 300, treatment, reason: 'Test absence decision' }]);
+        const payroll = calculatePayrollDay({ employee: partialEmployee, date: partialInput.date, operations, attendance: { payrollSettings: [], timesheets: [entry], advances: [] } });
+        assert.equal(payroll.regularHours, 3, 'Paid permission must not turn no-work time into worked time.');
+        assert.equal(payroll.regularHours + payroll.paidFreeHours, treatment === 'paid' ? 8 : 3);
+        assert.equal(payroll.noWorkNoPayHours, treatment === 'paid' ? 0 : 5);
+        const repeated = await saveAttendanceDay({ ...partialInput, draft: classifiedDraft, existingEntry: entry });
+        assert.equal(repeated.id, entry.id);
+        assert.equal(repeated.paidFreeHours, entry.paidFreeHours);
+        assert.equal(repeated.noWorkNoPayHours, entry.noWorkNoPayHours);
+        const changedTreatment = treatment === 'paid' ? 'no_work_no_pay' : 'paid';
+        const changed = await saveAttendanceDay({ ...partialInput, existingEntry: entry, draft: { ...classifiedDraft, attendanceExceptionClassifications: [{ kind: 'partial_day', treatment: changedTreatment, reason: 'Corrected decision' }] } });
+        assert.equal(changed.regularHours, 3);
+        assert.equal(changed.paidFreeHours, changedTreatment === 'paid' ? 5 : 0);
+        assert.equal(changed.noWorkNoPayHours, changedTreatment === 'paid' ? 0 : 5);
+      }
+    }
+    storage.saveFirestoreDocument = async () => { throw new Error('Permission denied'); };
+    await assert.rejects(saveAttendanceDay(input), /Permission denied/, 'Save must surface a denied/failed write instead of reporting success.');
+  } finally {
+    storage.saveFirestoreDocument = originalSave;
+  }
+  console.log('Attendance acceptance passed: full-day shifted breaks, partial days for multiple employees, paid/unpaid no-work, save/retry, payroll and failed-write propagation.');
+}
+
+void verifyShiftedBreakSaveAndPayroll().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -1,0 +1,12 @@
+.launch {margin-top:24px;border-top:1px solid var(--border);padding-top:20px}
+.launch p {color:var(--muted);line-height:1.5}
+.controls {display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.dialog {width:calc(100% - 32px);max-width:1120px;max-height:calc(100dvh - 32px);padding:0;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);overflow:auto}
+.dialog::backdrop {background:rgba(8,20,40,.65)}
+.toolbar {padding:16px 20px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:14px;background:var(--surface);border-bottom:1px solid var(--border)}
+.toolbar h2 {font-size:1.1rem;margin:0 0 6px}.toolbar p {margin:0;font-size:.9rem;line-height:1.5;max-width:680px;color:var(--muted)}
+.toolbar button {min-height:44px;border:1px solid var(--border);border-radius:9px;padding:9px 14px;font:inherit;color:var(--text);background:var(--surface);cursor:pointer}
+.toolbar button[aria-pressed=true] {background:var(--brand);color:white}.toolbar button:disabled{opacity:.5;cursor:not-allowed}
+.toolbar button:focus-visible {outline:3px solid var(--brand);outline-offset:3px}
+.dialog .surface {min-height:0}.notice {padding:14px 20px;margin:0;background:var(--career-soft);color:var(--career-text);font-size:14px;line-height:1.5}
+@media(max-width:500px){.dialog {width:100%;max-width:100%;max-height:100dvh;height:100dvh;margin:0;border-radius:0}.toolbar {padding:12px 16px}.toolbar .controls {width:100%}.toolbar .controls button {flex:1}.notice {padding:12px 16px}}

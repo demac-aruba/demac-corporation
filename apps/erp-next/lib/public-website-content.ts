@@ -19,6 +19,61 @@ export type WebsiteHeroSlide = {
   mobilePosition: string;
 };
 
+export const CAREERS_COPY_KEYS = ['eyebrow','title','subtitle','description'] as const;
+export type CareersCopyKey = typeof CAREERS_COPY_KEYS[number];
+export type CareersSpanishCopy = Record<CareersCopyKey,string> & {status:'Draft'|'Approved';source:string};
+export function careersCopySignature(content: Record<CareersCopyKey,string>): string {
+  return JSON.stringify(CAREERS_COPY_KEYS.map(key=>content[key].trim()));
+}
+export type WebsiteCareersContent = {
+  spanish?: CareersSpanishCopy;
+  eyebrow: string; title: string; subtitle: string; description: string;
+  imageUrl: string; roleImageUrl: string;
+};
+
+/** Existing bundled artwork, not a photograph of DEMAC's premises or staff. */
+export const defaultCareersContent: WebsiteCareersContent = {
+  eyebrow: 'BUILD A COOLER TOMORROW', title: 'Careers', subtitle: 'Join the DEMAC team.',
+  description: 'Great people. Real impact. A cooler Aruba.',
+  imageUrl: '/website/hero/hero-residential.webp',
+  roleImageUrl: '/website/hero/hero-residential.webp',
+  spanish: {status:'Approved',source:JSON.stringify(['BUILD A COOLER TOMORROW','Careers','Join the DEMAC team.','Great people. Real impact. A cooler Aruba.']),
+    eyebrow:'CONSTRUYAMOS UN FUTURO MÁS FRESCO',title:'Trabaja con nosotros',subtitle:'Únete al equipo DEMAC.',description:'Grandes personas. Impacto real. Una Aruba más fresca.'},
+};
+
+export function normalizeCareersContent(value: unknown): WebsiteCareersContent {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const result = { ...defaultCareersContent };
+  for (const key of [...CAREERS_COPY_KEYS,'imageUrl','roleImageUrl'] as const) {
+    const raw = source[key];
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const text = raw.trim();
+    if (key === 'imageUrl' || key === 'roleImageUrl') {
+      // Accept public HTTPS or site-local artwork, not script/data URLs or credentials.
+      try {
+        const url = new URL(text, 'https://website.invalid');
+        if (url.protocol !== 'https:' || url.username || url.password || text.startsWith('//') || /[\\\s]/.test(text)) continue;
+        if (!text.startsWith('/') && !text.startsWith('https://')) continue;
+        result[key] = text.slice(0, 2048);
+      } catch { /* Preserve the bundled, offline-safe image. */ }
+    } else result[key] = text.slice(0, 500);
+  }
+  if(Object.hasOwn(source,'spanish')) {
+    const candidate=source.spanish && typeof source.spanish==='object'?source.spanish as Record<string,unknown>:{};
+    if(['Draft','Approved'].includes(String(candidate.status))&&typeof candidate.source==='string'&&candidate.source.length<=2200&&CAREERS_COPY_KEYS.every(key=>typeof candidate[key]==='string'&&(candidate[key] as string).length<=500)) {
+      result.spanish={status:candidate.status as 'Draft'|'Approved',source:candidate.source,...Object.fromEntries(CAREERS_COPY_KEYS.map(key=>[key,(candidate[key] as string).trim()]))} as CareersSpanishCopy;
+    } else delete result.spanish;
+  }
+  return result;
+}
+
+export function careersContentFor(content:WebsiteCareersContent,locale:'en'|'es'): {content:WebsiteCareersContent;contentLocale:'en'|'es'} {
+  const es=content.spanish;
+  if(locale==='es'&&es?.status==='Approved'&&es.source===careersCopySignature(content)&&CAREERS_COPY_KEYS.every(key=>!!es[key].trim()))
+    return {content:{...content,...Object.fromEntries(CAREERS_COPY_KEYS.map(key=>[key,es[key]]))},contentLocale:'es'};
+  return {content,contentLocale:'en'};
+}
+
 export type PublicWebsiteContent = {
   id: string;
   version: number;
@@ -27,6 +82,7 @@ export type PublicWebsiteContent = {
     transitionMs: number;
     slides: WebsiteHeroSlide[];
   };
+  careers?: WebsiteCareersContent;
   contact: {
     officeAddress: string;
     weekdayHours: string;
@@ -108,7 +164,7 @@ export const defaultPublicWebsiteContent: PublicWebsiteContent = {
         accent: 'Aruba.',
         description: 'Professional cooling solutions for restaurants, hospitality, commercial properties and demanding operating environments.',
         primaryCta: { label: 'Discuss a Project', href: '/contact?request=estimate' },
-        secondaryCta: { label: 'Commercial Services', href: '/services' },
+        secondaryCta: { label: 'Commercial Services', href: '/services/commercial' },
         desktopPosition: 'center right',
         mobilePosition: '68% center',
       },
@@ -187,6 +243,7 @@ export function normalizePublicWebsiteContent(value: unknown, id = WEBSITE_PUBLI
       transitionMs: numberValue(hero.transitionMs, fallback.hero.transitionMs, 250, 1800),
       slides,
     },
+    careers: normalizeCareersContent(source.careers),
     contact: {
       officeAddress: stringValue(contact.officeAddress, fallback.contact.officeAddress),
       weekdayHours: stringValue(contact.weekdayHours, fallback.contact.weekdayHours),

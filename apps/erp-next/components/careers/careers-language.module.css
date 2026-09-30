@@ -1,0 +1,8 @@
+/* Careers-only language utility; official typography and colors are inherited. */
+.row{display:flex;justify-content:flex-end;max-width:1160px;margin:0 auto;padding:0 20px;box-sizing:border-box;background:#fff}
+.selector{display:flex;align-items:center;gap:4px;padding:2px 0}
+.selector button{font:inherit;font-size:13px;font-weight:600;min-height:44px;min-width:72px;padding:8px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--public-navy);cursor:pointer}
+.selector button[aria-pressed=true]{background:var(--public-navy);color:#fff}
+.selector button:focus-visible{outline:2px solid var(--public-navy);outline-offset:2px}
+.selector button:disabled{opacity:.6;cursor:wait}
+@media(prefers-reduced-motion:reduce){.selector button{transition:none}}

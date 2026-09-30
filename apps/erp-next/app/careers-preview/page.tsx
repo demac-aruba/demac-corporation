@@ -1,6 +1,17 @@
 import { CareersPreview } from '@/components/careers/careers-preview';
-export const metadata = { title: 'Careers design preview · DEMAC', robots: { index: false, follow: false } };
+
+export const metadata = {
+  title: 'Careers live review · DEMAC',
+  description: 'Synthetic-data Careers review route for DEMAC owner acceptance.',
+  robots: { index: false, follow: false },
+};
+
+/**
+ * Owner live-review route.
+ * Intentionally isolated from CareersPublic: it uses synthetic in-tab data only,
+ * makes no Careers authority calls and sends no email. It is not linked from the
+ * public navigation and can remain available while real intake stays disabled.
+ */
 export default function PreviewPage() {
-  const allowed = process.env.VERCEL_ENV === 'preview' || process.env.NODE_ENV === 'development' || (process.env.CAREERS_PREVIEW_BUILD === '1' && process.env.VERCEL_ENV !== 'production');
-  return allowed ? <CareersPreview /> : <main><h1>Preview unavailable</h1></main>;
+  return <CareersPreview />;
 }

@@ -4,21 +4,26 @@ const COLLECTION = 'projectRecords';
 const GENERAL_PHASE = 'GENERAL-PROJECT-WORK';
 const MANAGERS = new Set(['owner', 'admin', 'superadmin', 'super_admin', 'operation', 'operations', 'manager', 'supervisor', 'project_manager', 'projects']);
 const READERS = new Set([...MANAGERS, 'finance', 'accounting']);
+const SCHEDULERS = new Set([...MANAGERS, 'office', 'operator', 'office_operator']);
 const MAX_ASSIGNMENTS = 150;
 function fail(message, code = 'invalid_request') { throw new BookingAuthorityError(code, message); }
 function identifier(value) {
   if (typeof value !== 'string' || !/^[\w.-]{1,180}$/.test(value)) fail('A valid record identifier is required.');
   return value;
 }
-function roleAllows(role, write) {
-  return (write ? MANAGERS : READERS).has(String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_'));
+function roleAllows(role, access) {
+  const allowed = access === 'schedule' ? SCHEDULERS : access ? MANAGERS : READERS;
+  return allowed.has(String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_'));
 }
-async function authorize(db, uid, write = false, transaction) {
+async function authorize(db, uid, access = false, transaction) {
   identifier(uid);
   const ref = db.collection('users').doc(uid);
   const snapshot = await (transaction ? transaction.get(ref) : ref.get());
   const profile = snapshot.exists && snapshot.data();
-  if (!profile || profile.active === false || !roleAllows(profile.role, write)) fail('Projects permission is required.', 'permission_denied');
+  const unprovisionedScheduler = access === 'schedule' && !roleAllows(profile?.role, true) && profile?.active !== true;
+  if (!profile || profile.active === false || unprovisionedScheduler || !roleAllows(profile.role, access)) {
+    fail('Projects permission is required.', 'permission_denied');
+  }
   return { id: uid, name: String(profile.name || profile.displayName || '').slice(0, 180), source: 'project-authority' };
 }
 function phaseExists(project, phaseId) {
@@ -37,10 +42,33 @@ function normalizePlanningInput(input) {
   if (project.assignedVans.length > 100 || project.assignedVans.some(id => typeof id !== 'string' || id.length > 180)) fail('Invalid assigned Vans.');
   return project;
 }
+function hasOperationalActivity(project) {
+  return Number(project.completedUnits || 0) > 0
+    || Number(project.actualLaborHours || 0) > 0
+    || Number(project.scheduledFutureHours || 0) > 0
+    || Number(project.materialActual || 0) > 0
+    || (project.assignments || []).length > 0
+    || (project.assignedVans || []).length > 0
+    || (project.materials || []).length > 0
+    || (project.expenses || []).length > 0
+    || (project.costEntries || []).length > 0
+    || (project.phases || []).some(phase => Number(phase.actualLaborHours || 0) > 0
+      || Number(phase.actualMaterialCost || 0) > 0
+      || Number(phase.unitsCompleted || 0) > 0
+      || Number(phase.progress || 0) > 0
+      || (phase.fieldReports || []).length > 0
+      || (phase.status && phase.status !== 'Planned')
+      || (phase.workflowStatus && !['Draft', 'Ready to Schedule'].includes(phase.workflowStatus)));
+}
 function assertBounded(project) {
   if (Buffer.byteLength(JSON.stringify(project)) > 600_000) fail('Project is too large to save.');
   if (!Array.isArray(project.phases) || project.phases.length > 100 || !Array.isArray(project.assignments) || project.assignments.length > MAX_ASSIGNMENTS) fail('Project exceeds the phase or booking-link limit.');
-  identifier(project.id); identifier(project.customerId); identifier(project.siteId);
+  identifier(project.id); identifier(project.customerId);
+  if (typeof project.siteId !== 'string') fail('Invalid Project property identifier.');
+  if (project.siteId) identifier(project.siteId);
+  else if (project.status !== 'Draft' || hasOperationalActivity(project)) {
+    fail('A Project without a Service Property must remain an unexecuted Draft.');
+  }
   if (!String(project.name || '').trim() || !String(project.projectNumber || '').trim()) fail('Project name and number are required.');
   const phaseIds = new Set();
   for (const phase of project.phases) {
@@ -137,6 +165,49 @@ function createProjectRecords({ db, clock = () => new Date() }) {
     if (snapshot.size > 200) fail('Project portfolio limit reached; pagination is required.');
     return { success: true, projects: snapshot.docs.map(doc => doc.data()) };
   }
+  async function scheduleList(uid) {
+    await authorize(db, uid, 'schedule');
+    const snapshot = await db.collection(COLLECTION).orderBy('id').limit(201).get();
+    if (snapshot.size > 200) fail('Project portfolio limit reached; pagination is required.');
+    return { success: true, projects: snapshot.docs.map(doc => {
+      const project = doc.data();
+      return {
+        serverVersion: project.serverVersion,
+        id: project.id,
+        projectNumber: project.projectNumber,
+        name: project.name,
+        customerId: project.customerId,
+        customerName: project.customerName,
+        siteId: project.siteId,
+        location: project.location,
+        type: project.type,
+        status: project.status,
+        technicianInstructions: project.technicianInstructions || '',
+        slotsPerWorkDay: project.slotsPerWorkDay,
+        slotDurationMinutes: project.slotDurationMinutes,
+        estimatedSlots: project.estimatedSlots,
+        estimatedLaborHours: project.estimatedLaborHours,
+        scheduledFutureHours: project.scheduledFutureHours,
+        actualLaborHours: project.actualLaborHours,
+        phases: (project.phases || []).map(phase => ({
+          id: phase.id,
+          name: phase.name,
+          status: phase.status,
+          workflowStatus: phase.workflowStatus,
+          estimatedLaborHours: phase.estimatedLaborHours,
+          actualLaborHours: phase.actualLaborHours,
+        })),
+        assignments: (project.assignments || []).map(assignment => ({
+          projectId: assignment.projectId,
+          phaseId: assignment.phaseId,
+          appointmentId: assignment.appointmentId,
+          workOrderId: assignment.workOrderId,
+          scheduledHours: assignment.scheduledHours,
+          postedAt: assignment.postedAt,
+        })),
+      };
+    }) };
+  }
   async function save({ project: input, expectedVersion, requestId, dryRun = false }, uid) {
     await authorize(db, uid, true);
     identifier(requestId);
@@ -148,9 +219,10 @@ function createProjectRecords({ db, clock = () => new Date() }) {
     const auditRef = db.collection('projectPlanningAudit').doc(hashKey(`${uid}:${requestId}`, 64));
     return db.runTransaction(async transaction => {
       const actor = await authorize(db, uid, true, transaction);
+      const propertyRef = project.siteId ? db.collection('properties').doc(project.siteId) : null;
       const [snapshot, numberSnap, auditSnap, customerSnap, propertySnap] = await Promise.all([
         transaction.get(ref), transaction.get(numberRef), transaction.get(auditRef),
-        transaction.get(db.collection('clients').doc(project.customerId)), transaction.get(db.collection('properties').doc(project.siteId)),
+        transaction.get(db.collection('clients').doc(project.customerId)), propertyRef ? transaction.get(propertyRef) : Promise.resolve(null),
       ]);
       if (auditSnap.exists) {
         if (auditSnap.data().fingerprint !== fingerprint) fail('Request identifier was already used with different data.', 'conflict');
@@ -158,8 +230,27 @@ function createProjectRecords({ db, clock = () => new Date() }) {
       }
       const previous = snapshot.exists ? snapshot.data() : null;
       if (Number(expectedVersion) !== Number(previous?.serverVersion || 0)) fail('Project changed in another session. Reload before saving.', 'conflict');
-      if (previous && (previous.customerId !== project.customerId || previous.siteId !== project.siteId || previous.projectNumber !== project.projectNumber)) fail('Published Project identity cannot be changed through planning.');
-      if (!customerSnap.exists || customerSnap.data().active === false || !propertySnap.exists || propertySnap.data().clientId !== project.customerId || propertySnap.data().active === false) fail('Select an active canonical CRM customer and property.');
+      const attachingDraftProperty = previous?.siteId === '' && previous.status === 'Draft'
+        && project.siteId && project.status === 'Draft'
+        && !hasOperationalActivity(previous) && !hasOperationalActivity(project);
+      if (previous && (previous.customerId !== project.customerId || previous.projectNumber !== project.projectNumber
+        || (previous.siteId !== project.siteId && !attachingDraftProperty))) {
+        fail('Published Project identity cannot be changed through planning.');
+      }
+      if (previous && (hasOperationalActivity(previous) || hasOperationalActivity(project))
+        && (previous.type !== project.type || previous.location !== project.location || previous.status !== project.status)) {
+        fail('Project type, location and status cannot change through planning after operational activity.');
+      }
+      if (previous && (previous.status === 'Completed') !== (project.status === 'Completed')) {
+        fail('Completed Project status requires a dedicated completion workflow.');
+      }
+      if (previous && project.estimatedSlots < previous.estimatedSlots) {
+        fail('Reducing a shared Project slot budget requires canonical Scheduling verification.');
+      }
+      if (!customerSnap.exists || customerSnap.data().active === false) fail('Select an active canonical CRM customer.');
+      if (project.siteId && (!propertySnap.exists || propertySnap.data().clientId !== project.customerId || propertySnap.data().active === false)) {
+        fail('Select an active Service Property belonging to this customer.');
+      }
       if (numberSnap.exists && numberSnap.data().projectId !== project.id) fail('Project number already exists.', 'conflict');
       assertNoActuals(project, previous);
       const claims = await validateLinks(db, transaction, project, previous);
@@ -175,6 +266,6 @@ function createProjectRecords({ db, clock = () => new Date() }) {
       return { success: true, dryRun, project: next };
     });
   }
-  return { list, save };
+  return { list, scheduleList, save };
 }
 module.exports = { COLLECTION, GENERAL_PHASE, MAX_ASSIGNMENTS, fail, identifier, authorize, phaseExists, createProjectRecords };

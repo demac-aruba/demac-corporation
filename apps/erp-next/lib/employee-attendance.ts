@@ -1,5 +1,6 @@
 import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
+import type { PayrollAdjustment } from './employee-bonuses';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
 import {
   attendanceExceptionTotals,
@@ -28,6 +29,7 @@ export type HalfDayOffPeriod = 'morning' | 'afternoon';
 
 export type EmployeePayrollSettings = {
   id: string;
+  payrollAdjustments?: PayrollAdjustment[];
   sourceStaffId?: string;
   name?: string;
   role?: string;
@@ -368,6 +370,12 @@ export async function saveSalaryAdvance(input: {
   // employeePayrollSettings collection so existing payroll-only Firestore permissions apply.
   await saveFirestoreDocument('employeePayrollSettings', advance);
   return advance;
+}
+
+export function hasAttendanceTimeChange(schedule: AttendanceSchedule, draft: Pick<AttendanceDayDraft, 'clockInTime' | 'clockOutTime' | 'breakMinutes'>) {
+  return draft.clockInTime !== schedule.startTime
+    || draft.clockOutTime !== schedule.endTime
+    || draft.breakMinutes !== scheduledBreakMinutes(schedule);
 }
 
 export async function saveAttendanceDay(input: {
