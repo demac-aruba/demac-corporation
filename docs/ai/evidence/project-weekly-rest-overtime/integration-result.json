@@ -1,0 +1,28 @@
+{
+  "status": "PASS",
+  "date": "2026-10-02",
+  "scenarios": [
+    "future emergency",
+    "rest warning cancel",
+    "four services",
+    "final cancel",
+    "lost response exact retry",
+    "Escape preserves recovery",
+    "reload overtime slots",
+    "unavailable Van",
+    "ordinary three-slot booking unchanged",
+    "new four-service afternoon booking",
+    "scope change retires warning",
+    "capacity confirmation cancel writes nothing",
+    "capacity lost-response exact retry",
+    "capacity reload label and four locks",
+    "Project source in weekly rest",
+    "Project phase and slots",
+    "budget cancel writes nothing",
+    "Project overtime cancel writes nothing",
+    "Project response recovery preserves exact payload",
+    "atomic Project links survive reload"
+  ],
+  "pageErrors": [],
+  "externalRequests": []
+}

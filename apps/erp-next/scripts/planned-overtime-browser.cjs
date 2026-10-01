@@ -19,6 +19,7 @@ const { initializeApp, deleteApp } = functionsRequire('firebase-admin/app');
 const { getFirestore } = functionsRequire('firebase-admin/firestore');
 const { PROJECT, assertIsolated, resetSynthetic } = require(path.join(ROOT, 'functions/test-support/manualMoveSynthetic.cjs'));
 const { arubaDateParts, addDays } = require(path.join(ROOT, 'functions/bookingSchedulingPrimitives'));
+const { createProjectApi } = require(path.join(ROOT, 'functions/projectAuthority'));
 const { createOfficeBookingAuthorityFacade } = require(path.join(ROOT, 'functions/officeBookingAuthorityFacade'));
 assertIsolated();
 fs.mkdirSync(output, { recursive: true });
@@ -28,14 +29,18 @@ const facade = createOfficeBookingAuthorityFacade({ db, verifyIdToken: async tok
   if (token !== 'synthetic-overtime-token') throw Error('Synthetic token required');
   return { uid: 'demo-office' };
 } });
+const projectApi = createProjectApi({ db, verifyIdToken: async token => {
+  if (token !== 'synthetic-overtime-token') throw Error('Synthetic token required');
+  return { uid: 'demo-office' };
+} });
 const today = arubaDateParts(new Date()).date;
 let date = addDays(today, 1);
 if (new Date(`${date}T12:00:00Z`).getUTCDay() === 0) date = addDays(date, 1);
 const dateLabel = new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const stubs = {
-  'auth-provider': `const principal={userId:'demo-office',displayName:'Synthetic office operator',active:true,capabilities:new Set(['scheduling.view','scheduling.manage'])};const refreshPrincipal=async()=>{};export function useAuth(){return {principal,refreshPrincipal};}`,
+  'auth-provider': `const principal={userId:'demo-office',displayName:'Synthetic office operator',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.schedule'])};const refreshPrincipal=async()=>{};export function useAuth(){return {principal,refreshPrincipal};}`,
   'session': `export async function requireFirebaseWebSession(){return {uid:'demo-office',idToken:'synthetic-overtime-token'};}`,
-  'isolated-preview': `export function firebaseTransportUrl(url){const u=new URL(url);if(u.hostname==='firestore.googleapis.com')return '/firestore'+u.pathname+u.search;if(u.hostname==='us-central1-demo-demac-overtime.cloudfunctions.net'&&u.pathname==='/officeBookingAuthority')return '/authority';throw Error('Non-synthetic destination rejected: '+u.hostname);}`,
+  'isolated-preview': `export function firebaseTransportUrl(url){const u=new URL(url);if(u.hostname==='firestore.googleapis.com')return '/firestore'+u.pathname+u.search;if(u.hostname==='us-central1-demo-demac-overtime.cloudfunctions.net'&&u.pathname==='/officeBookingAuthority')return '/authority';if(u.hostname==='us-central1-demo-demac-overtime.cloudfunctions.net'&&u.pathname==='/projectAuthority')return '/projects';throw Error('Non-synthetic destination rejected: '+u.hostname);}`,
 };
 const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {LiveSchedulingOverview} from './components/scheduling/live-scheduling-overview';import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';createRoot(document.getElementById('app')).render(<div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div>);`;
 const actions = [];
@@ -57,10 +62,10 @@ async function main() {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const body = Buffer.concat(chunks);
-      if (req.url === '/authority') {
+      if (req.url === '/authority' || req.url === '/projects') {
         const requestBody = JSON.parse(body.toString());
         actions.push(requestBody);
-        const result = await facade.handle({ method: req.method, headers: req.headers, body: requestBody });
+        const result = await (req.url === '/projects' ? projectApi : facade).handle({ method: req.method, headers: req.headers, body: requestBody });
         if (loseCreateResponse && ['create_rest_day_overtime', 'create_capacity_overtime'].includes(requestBody.action) && result.status === 200) { loseCreateResponse = false; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
         res.writeHead(result.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body)); return;
       }
@@ -75,7 +80,7 @@ async function main() {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ headless: true, executablePath: browserPath, args: ['--no-sandbox'] });
+  const browser = await chromium.launch({ headless: true, executablePath: browserPath, args: ['--no-sandbox', '--disable-dev-shm-usage', '--no-zygote', '--single-process'] });
   const context = await browser.newContext({ viewport: { width: 1500, height: 1060 }, serviceWorkers: 'block' });
   const errors = [], external = [];
   await context.route('**/*', route => { if (route.request().url().startsWith(origin + '/')) return route.continue(); external.push(route.request().url()); return route.abort(); });
@@ -187,6 +192,55 @@ async function main() {
     assert.equal(await van4.getByText('descanso semanal', { exact: false }).count(), 0);
     assert.equal(await van4.getByText('Outside canonical operating capacity', { exact: false }).count(), 0);
     await page.screenshot({ path: path.join(output, 'capacity-overtime-saved.png'), fullPage: true });
+    // The reported Project flow: any Van's recurring rest slots, with canonical Project links.
+    await resetSynthetic(db, date);
+    await db.doc('vanHalfDaySchedules/REST-VAN-4').set({ vanId: 'VAN-4', weekday: new Date(`${date}T12:00:00Z`).getUTCDay(), active: true, workdayStart: '08:00', workdayEnd: '13:00' });
+    await db.doc('projectRecords/DEMO-PROJECT').set({ id: 'DEMO-PROJECT', name: 'Synthetic overtime project', projectNumber: 'PRJ-OT-001',
+      customerId: 'DEMO-CUSTOMER', customerName: 'Synthetic Project customer', siteId: 'DEMO-PROPERTY', location: 'Synthetic property',
+      type: 'Renovation Service', status: 'Planned', serverVersion: 1, phases: [{ id: 'PHASE-1', name: 'Installation', status: 'Planned', estimatedLaborHours: 2, actualLaborHours: 0 }],
+      assignments: [], assignedVans: [], scheduledFutureHours: 0, actualLaborHours: 0, estimatedSlots: 2, estimatedLaborHours: 2, slotDurationMinutes: 60, slotsPerWorkDay: 6 });
+    await page.reload();
+    await page.locator('[data-schedule-day]').filter({ hasText: dateLabel }).click();
+    await van4.getByRole('button', { name: 'BOOK OVERTIME', exact: true }).first().click();
+    await drawer.getByRole('button', { name: /^Project Find/ }).click();
+    await drawer.getByPlaceholder('Project name, number, customer or location…').fill('PRJ-OT-001');
+    await drawer.getByRole('button', { name: /PRJ-OT-001 · Synthetic overtime project/ }).click();
+    await drawer.getByLabel('Planned Project slots *').fill('2');
+    await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
+    assert.match(await drawer.innerText(), /Customer cannot be changed while this Project is selected/);
+    assert.equal(await drawer.getByRole('button', { name: 'Temporary hold', exact: true }).count(), 0);
+    await page.screenshot({ path: path.join(output, 'project-overtime-picker.png'), fullPage: true });
+    // Over-budget confirmation remains separate, and cancelling it performs no write.
+    await drawer.getByLabel('Planned Project slots *').fill('3');
+    await drawer.getByRole('button', { name: 'Review and confirm overtime', exact: true }).click();
+    const budget = page.getByRole('dialog', { name: 'La reserva supera el presupuesto estimado' });
+    await budget.getByRole('button', { name: 'Cancelar', exact: true }).click();
+    assert.equal((await db.doc('projectRecords/DEMO-PROJECT').get()).data().assignments.length, 0);
+    // Overtime confirmation cancellation is also read-only.
+    await drawer.getByRole('button', { name: 'Review and confirm overtime', exact: true }).click();
+    acceptDialog = false;
+    await budget.getByRole('button', { name: 'Sí, estoy consciente; continuar', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Review and confirm overtime' && !button.disabled));
+    assert.equal((await db.doc('projectRecords/DEMO-PROJECT').get()).data().assignments.length, 0);
+    // A lost create response recovers the exact original Project payload once.
+    acceptDialog = true; loseCreateResponse = true;
+    await drawer.getByRole('button', { name: 'Review and confirm overtime', exact: true }).click();
+    await budget.getByRole('button', { name: 'Sí, estoy consciente; continuar', exact: true }).click();
+    await drawer.getByRole('button', { name: 'Recuperar reserva original' }).waitFor();
+    await drawer.getByRole('button', { name: 'Recuperar reserva original' }).click();
+    await drawer.waitFor({ state: 'detached' });
+    const projectCreates = actions.filter(item => item.action === 'create_rest_day_overtime' && item.data.project);
+    assert.equal(projectCreates.length, 2); assert.deepEqual(projectCreates[0].data, projectCreates[1].data);
+    assert.deepEqual(projectCreates[0].data.project, { id: 'DEMO-PROJECT', phaseId: 'PHASE-1', version: 1 });
+    const savedProject = (await db.doc('projectRecords/DEMO-PROJECT').get()).data();
+    assert.equal(savedProject.assignments.length, 1); assert.equal(savedProject.scheduledFutureHours, 3);
+    const projectAppointment = (await db.doc('appointments/' + savedProject.assignments[0].appointmentId).get()).data();
+    assert.equal(projectAppointment.projectId, savedProject.id); assert.equal(projectAppointment.capacityLockIds.length, 3);
+    assert.equal(projectAppointment.scheduledOvertime.accepted, true);
+    await page.reload();
+    await page.locator('[data-schedule-day]').filter({ hasText: dateLabel }).click();
+    await van4.getByText('Project · Synthetic overtime project', { exact: false }).waitFor();
+    await page.screenshot({ path: path.join(output, 'project-overtime-saved.png'), fullPage: true });
     // Mobile review of actual persisted agenda.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Next van', exact: true }).click();
@@ -194,7 +248,7 @@ async function main() {
     assert.deepEqual(errors, []); assert.deepEqual(external, []);
     assert.equal((await db.collection('employeeTimesheets').get()).size, 0);
     assert.equal((await db.collection('whatsappOutboundQueue').get()).size, 0);
-    fs.writeFileSync(path.join(output, 'integration-result.json'), JSON.stringify({ status: 'PASS', date, scenarios: ['future emergency', 'rest warning cancel', 'four services', 'final cancel', 'lost response exact retry', 'Escape preserves recovery', 'reload overtime slots', 'unavailable Van', 'ordinary three-slot booking unchanged', 'new four-service afternoon booking', 'scope change retires warning', 'capacity confirmation cancel writes nothing', 'capacity lost-response exact retry', 'capacity reload label and four locks'], pageErrors: errors, externalRequests: external }, null, 2));
+    fs.writeFileSync(path.join(output, 'integration-result.json'), JSON.stringify({ status: 'PASS', date, scenarios: ['future emergency', 'rest warning cancel', 'four services', 'final cancel', 'lost response exact retry', 'Escape preserves recovery', 'reload overtime slots', 'unavailable Van', 'ordinary three-slot booking unchanged', 'new four-service afternoon booking', 'scope change retires warning', 'capacity confirmation cancel writes nothing', 'capacity lost-response exact retry', 'capacity reload label and four locks', 'Project source in weekly rest', 'Project phase and slots', 'budget cancel writes nothing', 'Project overtime cancel writes nothing', 'Project response recovery preserves exact payload', 'atomic Project links survive reload'], pageErrors: errors, externalRequests: external }, null, 2));
     console.log('PASS integrated browser assertions; checking agent-browser CLI smoke separately.');
     // Keep CLI smoke failure visible; never turn a failed tool check into PASS.
     const cli = path.join(testTools, 'node_modules/.bin/agent-browser');
