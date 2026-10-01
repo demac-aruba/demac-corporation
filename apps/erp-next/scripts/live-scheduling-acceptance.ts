@@ -18,7 +18,7 @@ import {
   optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
 import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
-import { afterHoursTargetForVan, canPlanAfterHours, canPlanCoworkerSupport, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
+import { afterHoursTargetForVan, consecutiveSupportOptions, canPlanAfterHours, canPlanCoworkerSupport, weeklyRestSlotEligible, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -539,3 +539,15 @@ requireCondition(canPlanCoworkerSupport('2026-09-30'), 'Tomorrow support is avai
 requireCondition(canPlanCoworkerSupport('2026-09-28'), 'Past support is available for acknowledged historical corrections.');
 
 requireCondition(!canPlanCoworkerSupport('2026-09-31'), 'Invalid calendar dates remain blocked for support.');
+
+const supportSlots = ['08:30', '09:30', '10:30', '13:30', '14:30', '15:30'].map(start => ({
+  start, end: `${String(Number(start.slice(0, 2)) + 1).padStart(2, '0')}:30`, operational: true, occupied: false,
+}));
+requireCondition(consecutiveSupportOptions(supportSlots, '08:30').length === 3, 'Support offers three open morning slots and stops at lunch.');
+requireCondition(consecutiveSupportOptions(supportSlots, '09:30')[1]?.end === '11:30', 'Later support start retains the correct end.');
+requireCondition(consecutiveSupportOptions(supportSlots, '13:30').length === 3, 'Support offers all consecutive afternoon slots.');
+requireCondition(consecutiveSupportOptions(supportSlots.map(slot => ({ ...slot, occupied: slot.start === '09:30' })), '08:30').length === 1, 'Support cannot jump an occupied slot.');
+requireCondition(consecutiveSupportOptions(supportSlots.map(slot => ({ ...slot, operational: slot.start !== '10:30' })), '08:30').length === 2, 'Support stops at unavailable capacity.');
+requireCondition(consecutiveSupportOptions(supportSlots, '15:30').length === 1, 'Last slot does not extend beyond end of day.');
+requireCondition(consecutiveSupportOptions(supportSlots, '12:30').length === 0, 'Unsupported start fails closed.');
+requireCondition(consecutiveSupportOptions(supportSlots.map(slot => ({ ...slot, occupied: true })), '08:30').length === 0, 'Occupied start offers no support duration.');

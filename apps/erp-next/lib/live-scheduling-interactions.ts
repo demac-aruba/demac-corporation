@@ -16,6 +16,22 @@ export function availableSlotAction(intent: AvailableSlotIntent): 'book' | 'supp
   return intent === 'support' ? 'support' : 'book';
 }
 
+/** Stop at the first occupied/off slot or clock gap (including lunch). */
+export function consecutiveSupportOptions(slots: Array<{
+  start: string; end: string; operational: boolean; occupied: boolean;
+}>, start: string) {
+  const options: Array<{ slots: number; end: string }> = [];
+  const index = slots.findIndex(slot => slot.start === start);
+  if (index < 0) return options;
+  let nextStart = start;
+  for (const slot of slots.slice(index)) {
+    if (slot.start !== nextStart || !slot.operational || slot.occupied) break;
+    options.push({ slots: options.length + 1, end: slot.end });
+    nextStart = slot.end;
+  }
+  return options;
+}
+
 export type LiveSchedulingInteractionState = {
   selectedAppointmentId?: string;
   bookingTarget?: unknown;

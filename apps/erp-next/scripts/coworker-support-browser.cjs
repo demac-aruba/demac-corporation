@@ -40,7 +40,8 @@ const stubs = {
 };
 const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {LiveSchedulingOverview} from './components/scheduling/live-scheduling-overview';import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';createRoot(document.getElementById('app')).render(<div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div>);`;
 const actions = [];
-async function reset(date, historical) {
+let dropNextSavedSupport = false;
+async function reset(date, historical, openMorning = false) {
   const response = await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/${PROJECT}/databases/(default)/documents`, { method: 'DELETE' });
   assert(response.ok);
   const seed = seedRecords(date);
@@ -51,16 +52,17 @@ async function reset(date, historical) {
   seed['workOrders/VAN-3-NEXT'] = { ...seed['workOrders/DEMO-WO'], appointmentId: 'NEXT-APT',
     vanId: 'VAN-3', time: '09:30', appointmentEndTime: '10:30', scheduledSlots: 1,
     appointmentDurationMinutes: 60, airConditionerCount: 1, appointmentWorkLabel: 'Next scheduled service' };
+  if (openMorning) delete seed['workOrders/VAN-3-NEXT'];
   if (historical) { seed['workOrders/DEMO-WO'].status = 'Completada'; seed['appointments/DEMO-APT'].status = 'completed'; }
   const batch = db.batch();
   for (const [key, value] of Object.entries(seed)) batch.set(db.doc(key), value);
   await batch.commit();
   actions.length = 0;
 }
-async function runCase(browser, origin, label, viewport, historical = false) {
+async function runCase(browser, origin, label, viewport, historical = false, requestedSlots = 1) {
   const date = historical ? pastDate : futureDate;
   const dateLabel = new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-  await reset(date, historical);
+  await reset(date, historical, requestedSlots > 1);
   const context = await browser.newContext({ viewport, serviceWorkers: 'block' });
   const errors = [], external = [];
   await context.route('**/*', route => {
@@ -86,6 +88,9 @@ async function runCase(browser, origin, label, viewport, historical = false) {
     const support = page.getByRole('dialog', { name: 'Send van support', exact: true });
     await support.waitFor();
     assert.match(await support.innerText(), /8:30 AM–9:30 AM/);
+    const duration = support.getByRole('combobox', { name: /Support duration/ });
+    assert.equal(await duration.locator('option').count(), requestedSlots > 1 ? 3 : 1);
+    assert.equal(await duration.inputValue(), '1');
     await support.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal(actions.filter(item => item.action === 'add_adhoc_support').length, 0);
     // The full open-card entry must expose support as well as normal booking.
@@ -98,7 +103,9 @@ async function runCase(browser, origin, label, viewport, historical = false) {
     assert.equal(await page.getByRole('dialog').count(), 1);
     assert.equal(await support.getByRole('button').filter({ hasText: 'Next scheduled service' }).count(), 0);
     await support.getByRole('button').filter({ hasText: 'Synthetic installation customer · Van 1' }).click();
-    await support.getByRole('combobox').selectOption('Heavy lifting / installation support');
+    await duration.selectOption(String(requestedSlots));
+    assert.match(await support.innerText(), new RegExp(`8:30 AM–${requestedSlots === 1 ? '9:30' : requestedSlots === 2 ? '10:30' : '11:30'} AM`));
+    await support.getByRole('combobox', { name: 'Reason', exact: true }).selectOption('Heavy lifting / installation support');
     await support.getByRole('textbox').fill('Help with the first installation before the next job.');
     const saveSupport = support.getByRole('button', { name: historical ? 'Save historical support' : 'Send support', exact: true });
     if (historical) {
@@ -111,24 +118,34 @@ async function runCase(browser, origin, label, viewport, historical = false) {
     const beforePrimary = (await db.doc('workOrders/DEMO-WO').get()).data();
     const beforeNext = (await db.doc('workOrders/VAN-3-NEXT').get()).data();
     const beforeAppointment = (await db.doc('appointments/DEMO-APT').get()).data();
+    dropNextSavedSupport = requestedSlots === 2;
     await saveSupport.click();
+    if (requestedSlots === 2) {
+      await support.getByText('Synthetic lost response after commit', { exact: true }).waitFor();
+      await saveSupport.click();
+    }
     await support.waitFor({ state: 'detached' });
     const requests = actions.filter(item => item.action === 'add_adhoc_support');
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, requestedSlots === 2 ? 2 : 1);
+    if (requests.length === 2) assert.deepEqual(requests[0], requests[1]);
+    assert.equal(requests[0].data.requestedSlots, requestedSlots);
     assert.equal(requests[0].data.requestedDate, date);
     assert.equal(requests[0].data.requestedTime, '08:30');
     assert.equal(requests[0].data.requiredVanId, 'VAN-3');
     const appointment = (await db.doc('appointments/DEMO-APT').get()).data();
     const assignment = appointment.assignments.find(item => item.role === 'support');
     assert.equal(assignment.vanId, 'VAN-3');
-    assert.equal(assignment.slots, 1);
-    assert.equal(assignment.endTime, '09:30');
+    assert.equal(assignment.slots, requestedSlots);
+    assert.equal(assignment.endTime, requestedSlots === 1 ? '09:30' : requestedSlots === 2 ? '10:30' : '11:30');
+    assert.equal(appointment.capacityLockIds.length, beforeAppointment.capacityLockIds.length + requestedSlots);
     assert.deepEqual(appointment.assignments[0], beforeAppointment.assignments[0]);
     assert.deepEqual((await db.doc('workOrders/DEMO-WO').get()).data(), beforePrimary);
     assert.deepEqual((await db.doc('workOrders/VAN-3-NEXT').get()).data(), beforeNext);
     assert.equal((await db.collection('appointments').get()).size, 1);
     const order = (await db.doc(`workOrders/${assignment.id}`).get()).data();
     assert.equal(order.supportNonBillable, true);
+    assert.equal(order.scheduledSlots, requestedSlots);
+    assert.equal(order.appointmentDurationMinutes, requestedSlots * 60);
     if (historical) {
       assert.equal(requests[0].data.bookingMode, 'backdated');
       assert.equal(requests[0].data.backdatingAcknowledged, true);
@@ -150,11 +167,39 @@ async function runCase(browser, origin, label, viewport, historical = false) {
     await page.locator('[data-schedule-day]').filter({ hasText: dateLabel }).click();
     if (viewport.width < 760) await page.getByRole('button', { name: 'Show Van 3', exact: true }).click();
     await van3.locator('[data-schedule-job]').filter({ hasText: 'Support assignment' }).waitFor();
-    assert.equal(await van3.locator('[data-schedule-job]').count(), 2);
+    assert.equal(await van3.locator('[data-schedule-job]').count(), requestedSlots === 1 ? 2 : 1);
+    const savedCard = van3.locator('[data-schedule-job]').filter({ hasText: 'Support assignment' });
+    assert.match(await savedCard.innerText(), new RegExp(`${requestedSlots} slot`));
     await page.screenshot({ path: path.join(output, `${label}-support-saved.png`), fullPage: true });
     assert.deepEqual(errors, []); assert.deepEqual(external, []);
     return { label, date, result: 'PASS', externalRequests: external.length, writes: requests.length };
   } catch (error) { await page.screenshot({ path: path.join(output, `${label}-failure.png`), fullPage: true }); throw error; } finally { await context.close(); }
+}
+async function concurrencyCase() {
+  await reset(futureDate, false, true);
+  const second = { ...seedRecords(futureDate)['appointments/DEMO-APT'], appointmentId: 'SECOND-APT', primaryVanId: 'VAN-2', assignments: [{ vanId: 'VAN-2', role: 'primary', time: '08:30', endTime: '11:30', slots: 3, quantity: 3 }], workOrderIds: ['SECOND-WO'], capacityLockIds: [] };
+  await db.doc('appointments/SECOND-APT').set(second);
+  await db.doc('workOrders/SECOND-WO').set({ ...seedRecords(futureDate)['workOrders/DEMO-WO'], appointmentId: 'SECOND-APT', vanId: 'VAN-2' });
+  const request = (appointmentId, requestedTime, requestId) => ({ method: 'POST', headers: { authorization: 'Bearer synthetic-support-token' }, body: { action: 'add_adhoc_support', data: { appointmentId, requestedTime, requestedDate: futureDate, requiredVanId: 'VAN-3', requestedSlots: 2, requestId, reason: 'Synthetic concurrent support' } } });
+  const outcomes = await Promise.all([
+    facade.handle(request('DEMO-APT', '08:30', 'concurrent-support-one')),
+    facade.handle(request('SECOND-APT', '09:30', 'concurrent-support-two')),
+  ]);
+  assert.equal(outcomes.filter(result => result.status === 200).length, 1);
+  assert.equal(outcomes.filter(result => result.status === 409).length, 1);
+  const orders = await db.collection('workOrders').get();
+  assert.equal(orders.docs.filter(doc => doc.data().supportAssignmentKind === 'adhoc_rescue').length, 1);
+  const locks = await db.collection('bookingCapacityLocks').where('vanId', '==', 'VAN-3').get();
+  assert.equal(locks.size, 2);
+  assert.equal(new Set(locks.docs.map(doc => doc.data().appointmentId)).size, 1);
+  // Same request concurrently: one write and one replay, both report the same support.
+  await reset(futureDate, false, true);
+  const same = request('DEMO-APT', '08:30', 'concurrent-identical-support');
+  const retries = await Promise.all([facade.handle(same), facade.handle(same)]);
+  assert(retries.every(result => result.status === 200));
+  assert.equal(retries.filter(result => result.body.replayed).length, 1);
+  assert.equal(retries[0].body.supportWorkOrderId, retries[1].body.supportWorkOrderId);
+  return { label: 'overlap-contention-and-identical-retry', result: 'PASS' };
 }
 async function main() {
   fs.mkdirSync(output, { recursive: true });
@@ -171,6 +216,11 @@ async function main() {
       if (req.url === '/authority') {
         const requestBody = JSON.parse(body.toString()); actions.push(requestBody);
         const result = await facade.handle({ method: req.method, headers: req.headers, body: requestBody });
+        if (dropNextSavedSupport && requestBody.action === 'add_adhoc_support' && result.status === 200) {
+          dropNextSavedSupport = false;
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Synthetic lost response after commit' } })); return;
+        }
         res.writeHead(result.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body)); return;
       }
       if (req.url.startsWith(`/firestore/v1/projects/${PROJECT}/`)) {
@@ -191,6 +241,12 @@ async function main() {
         results.push(await runCase(browser, origin, `${historical ? 'historical' : 'future'}-${label}`, viewport, historical));
       }
     }
+    for (const requestedSlots of [2, 3]) {
+      for (const [label, viewport] of [['desktop', { width: 1500, height: 1060 }], ['mobile', { width: 390, height: 844 }]]) {
+        results.push(await runCase(browser, origin, `multi-${requestedSlots}-${label}`, viewport, requestedSlots === 3, requestedSlots));
+      }
+    }
+    results.push(await concurrencyCase());
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2)); console.log(JSON.stringify(results));
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); await deleteApp(firebase); }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   addOfficeAdhocSupport,
@@ -16,6 +16,7 @@ export type AdhocSupportTarget = {
   vanName: string;
   start: string;
   end: string;
+  durationOptions: Array<{ slots: number; end: string }>;
 };
 
 type Props = {
@@ -76,6 +77,9 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [requestedSlots, setRequestedSlots] = useState(1);
+  const requestRef = useRef<{ signature: string; id: string } | null>(null);
+  const duration = target.durationOptions.find(option => option.slots === requestedSlots);
 
   const candidates = useMemo(() => appointments
     .filter((appointment) => appointment.dateKey === target.dateKey && appointment.status === 'confirmed')
@@ -96,6 +100,10 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
     : [reason, text(note)].filter(Boolean).join(' · ');
 
   const submit = async () => {
+    if (!duration) {
+      setError('Select an available support duration.');
+      return;
+    }
     if (!selected) {
       setError('Select the primary appointment that needs help.');
       return;
@@ -115,15 +123,20 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
     setBusy(true);
     setError('');
     try {
-      const result = await addOfficeAdhocSupport({
+      const input = {
         appointmentId: selected.id,
-        requestId: createOfficeLifecycleRequestId('adhoc-support'),
         requestedDate: target.dateKey,
         requestedTime: target.start,
         requiredVanId: target.vanId,
+        requestedSlots,
         reason: composedReason,
         ...(historical ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
-      });
+      };
+      const signature = JSON.stringify(input);
+      if (requestRef.current?.signature !== signature) {
+        requestRef.current = { signature, id: createOfficeLifecycleRequestId('adhoc-support') };
+      }
+      const result = await addOfficeAdhocSupport({ ...input, requestId: requestRef.current.id });
       await onCreated(result, selected);
       onClose();
     } catch (cause) {
@@ -139,7 +152,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         <div>
           <span>Operational support · Booking Authority</span>
           <h2>{historical ? 'Record past van support' : 'Send support to a coworker'}</h2>
-          <p>{target.vanName} · {formatDate(target.dateKey)} · {formatTime(target.start)}–{formatTime(target.end)}</p>
+          <p>{target.vanName} · {formatDate(target.dateKey)} · {formatTime(target.start)}–{formatTime(duration?.end)}</p>
         </div>
         <button type="button" disabled={busy} onClick={onClose}>×</button>
       </header>
@@ -153,10 +166,16 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
           </label>
         </section> : null}
         <section className={styles.formSection}>
-          <header><strong>Support capacity</strong><span>This open slot will become a linked SUPPORT assignment. The primary appointment does not move.</span></header>
+          <header><strong>Support capacity</strong><span>Choose consecutive open slots for this support assignment. The primary appointment does not move.</span></header>
           <div className={styles.formGrid}>
             <div><span>SUPPORT VAN</span><strong>{target.vanName}</strong></div>
-            <div><span>SUPPORT TIME</span><strong>{formatTime(target.start)}–{formatTime(target.end)}</strong></div>
+            <div><span>SUPPORT TIME</span><strong>{formatTime(target.start)}–{formatTime(duration?.end)}</strong></div>
+            <label className={styles.wide}><span>Support duration</span>
+              <select value={requestedSlots} disabled={busy} onChange={event => { setRequestedSlots(Number(event.target.value)); setError(''); }}>
+                {target.durationOptions.map(option => <option key={option.slots} value={option.slots}>{option.slots} {option.slots === 1 ? 'slot' : 'slots'} · {option.slots} {option.slots === 1 ? 'hour' : 'hours'} · {formatTime(target.start)}–{formatTime(option.end)}</option>)}
+              </select>
+              <small>{target.durationOptions.length === 1 ? 'Only one consecutive slot is available.' : `Up to ${target.durationOptions.length} consecutive slots available.`} Stops before the next booking, break or unavailable time.</small>
+            </label>
             <div className={styles.wide}><span>CUSTOMER COMMUNICATION</span><strong>None · the primary appointment remains the only customer communication owner.</strong></div>
           </div>
         </section>
@@ -199,7 +218,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         <div><span>CANONICAL WRITE</span><strong>Existing appointment → linked SUPPORT Work Order + capacity lock</strong></div>
         <div>
           <button type="button" className={styles.secondary} disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="button" className={styles.primary} disabled={busy || !selected || !reason || (reason === 'Other' && !text(note)) || (historical && !backdatingAcknowledged)} onClick={() => void submit()}>{busy ? 'Saving support…' : historical ? 'Save historical support' : 'Send support'}</button>
+          <button type="button" className={styles.primary} disabled={busy || !duration || !selected || !reason || (reason === 'Other' && !text(note)) || (historical && !backdatingAcknowledged)} onClick={() => void submit()}>{busy ? 'Saving support…' : historical ? 'Save historical support' : 'Send support'}</button>
         </div>
       </footer>
     </aside>
