@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { FieldExecutionJobDetail, FieldTechnicianScopeChangeOrigin } from '@/lib/field-authority';
-import styles from './technician-field-home.module.css';
+import { FieldAirContext, FieldChoiceCards, FieldServiceCards, fieldAirChoices, fieldServiceStyles as styles } from './field-service-picker';
 
 type Draft = {
   serviceCatalogItemId: string;
@@ -21,7 +21,7 @@ function isTechnicianScopeOrigin(value: string): value is FieldTechnicianScopeCh
   return value === 'client_requested_additional_work' || value === 'technician_discovered_additional_need';
 }
 
-export function AdditionalInterventionControls({
+function AdditionalInterventionContent({
   job,
   mutationBusy,
   creatingVisitAssetId,
@@ -34,9 +34,9 @@ export function AdditionalInterventionControls({
   error: string | null;
   onCreate: (input: CreateInput) => void;
 }) {
+  const [selectedAir, setSelectedAir] = useState('');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
-  const equipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
   const serviceById = new Map(job.availableFieldServices.map((service) => [service.id, service]));
 
   const setDraft = (visitAssetId: string, changes: Partial<Draft>) => {
@@ -51,90 +51,45 @@ export function AdditionalInterventionControls({
     }));
   };
 
-  return (
-    <div className={styles.interventionGroup}>
-      <div className={styles.plannedTitle}>ALCANCE ADICIONAL</div>
-      <p className={styles.helper}>Solicitar trabajo adicional no lo aprueba. Field Authority lo registra como pendiente de autorización hasta que exista una aprobación gobernada del cliente.</p>
+  return <section className={styles.panel} aria-label="Proponer servicio adicional">
+    <h3 className={styles.heading}>Trabajo adicional</h3>
+    <p className={styles.help}>Fuera del plan original. La propuesta queda pendiente de autorización; no significa que el cliente aceptó ni que el trabajo fue realizado.</p>
+    <FieldChoiceCards title="Aire para el adicional"
+      choices={fieldAirChoices(job, job.canAddAdditionalIntervention ? job.additionalInterventionVisitAssetIds : [])}
+      value={selectedAir} disabled={mutationBusy} onChange={setSelectedAir} />
+    {job.canAddAdditionalIntervention && job.additionalInterventionVisitAssetIds.filter((id) => id === selectedAir).map((visitAssetId) => {
+      if (!visitAssetById.has(visitAssetId)) return null;
+      const rawDraft = drafts[visitAssetId] ?? { serviceCatalogItemId: '', origin: '', reason: '' };
+      const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId) ? rawDraft.serviceCatalogItemId : '';
+      const origin = isTechnicianScopeOrigin(rawDraft.origin) ? rawDraft.origin : '';
+      const reason = rawDraft.reason;
+      const canSubmit = Boolean(serviceCatalogItemId && origin && reason.trim().length >= 3) && !mutationBusy;
+      return <div className={styles.choiceList} key={visitAssetId}>
+        <FieldAirContext job={job} visitAssetId={visitAssetId} />
+        <FieldServiceCards services={job.availableFieldServices} value={serviceCatalogItemId} disabled={mutationBusy}
+          onChange={(id) => setDraft(visitAssetId, { serviceCatalogItemId: id })} />
+        <FieldChoiceCards title="¿Cómo surgió este trabajo?" value={origin} disabled={mutationBusy}
+          choices={[{ id: 'client_requested_additional_work', label: 'Solicitado por el cliente' }, { id: 'technician_discovered_additional_need', label: 'Necesidad observada en campo' }]}
+          onChange={(id) => setDraft(visitAssetId, { origin: isTechnicianScopeOrigin(id) ? id : '' })} />
+        <label className={styles.noteField}>
+          <span>Razón / necesidad observada</span>
+          <textarea disabled={mutationBusy} rows={3} value={reason}
+            onChange={(event) => setDraft(visitAssetId, { reason: event.target.value })}
+            placeholder="Describe por qué este trabajo no estaba en el alcance original." />
+        </label>
+        {rawDraft.serviceCatalogItemId && !serviceCatalogItemId ? <p className={styles.error} role="status">El servicio seleccionado ya no está disponible. Revisa el catálogo antes de proponer.</p> : null}
+        <p className={styles.notice}>El precio y la autorización se revisan mediante el flujo existente. No se modifica la cita ni se descuenta inventario al proponer.</p>
+        <button className={styles.primary} disabled={!canSubmit} type="button" onClick={() => {
+          if (!canSubmit || !origin) return;
+          onCreate({ visitAssetId, serviceCatalogItemId, origin, reason });
+        }}>{creatingVisitAssetId === visitAssetId ? 'Registrando propuesta…' : 'Proponer trabajo adicional'}</button>
+      </div>;
+    })}
+    {!job.canAddAdditionalIntervention || !job.additionalInterventionVisitAssetIds.length ? <p className={styles.notice} role="status">No hay adicionales habilitados para los aires, la visita o tu asignación actual.</p> : null}
+    {error ? <p className={styles.error} role="alert">{error}</p> : null}
+  </section>;
+}
 
-      {job.additionalInterventionVisitAssetIds.map((visitAssetId) => {
-        const visitAsset = visitAssetById.get(visitAssetId);
-        if (!visitAsset) return null;
-        const equipment = equipmentById.get(visitAsset.assetId);
-        const rawDraft = drafts[visitAssetId] ?? { serviceCatalogItemId: '', origin: '', reason: '' };
-        const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId)
-          ? rawDraft.serviceCatalogItemId
-          : '';
-        const origin = isTechnicianScopeOrigin(rawDraft.origin) ? rawDraft.origin : '';
-        const reason = rawDraft.reason;
-        const canSubmit = Boolean(serviceCatalogItemId && origin && reason.trim().length >= 3) && !mutationBusy;
-
-        return (
-          <div className={styles.interventionForm} key={visitAssetId}>
-            <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
-            <label>
-              <span>Servicio adicional</span>
-              <select
-                className={styles.select}
-                disabled={mutationBusy}
-                value={serviceCatalogItemId}
-                onChange={(event) => setDraft(visitAssetId, { serviceCatalogItemId: event.target.value })}
-              >
-                <option value="">Selecciona el servicio canónico</option>
-                {job.availableFieldServices.map((service) => (
-                  <option key={service.id} value={service.id}>{service.label}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Cómo surgió</span>
-              <select
-                className={styles.select}
-                disabled={mutationBusy}
-                value={origin}
-                onChange={(event) => setDraft(visitAssetId, {
-                  origin: isTechnicianScopeOrigin(event.target.value) ? event.target.value : '',
-                })}
-              >
-                <option value="">Selecciona el origen</option>
-                <option value="client_requested_additional_work">Solicitado por el cliente</option>
-                <option value="technician_discovered_additional_need">Detectado por el técnico</option>
-              </select>
-            </label>
-            <label style={{ gridColumn: '1 / -1' }}>
-              <span>Razón / necesidad observada</span>
-              <textarea
-                className={styles.select}
-                disabled={mutationBusy}
-                rows={3}
-                value={reason}
-                onChange={(event) => setDraft(visitAssetId, { reason: event.target.value })}
-                placeholder="Describe brevemente por qué este trabajo no estaba en el alcance original."
-              />
-            </label>
-            <button
-              className={`${styles.action} ${styles.primary}`}
-              disabled={!canSubmit}
-              type="button"
-              onClick={() => {
-                if (!origin) return;
-                onCreate({
-                  visitAssetId,
-                  serviceCatalogItemId,
-                  origin,
-                  reason,
-                });
-              }}
-            >
-              {creatingVisitAssetId === visitAssetId ? 'Registrando…' : 'Proponer trabajo adicional'}
-            </button>
-          </div>
-        );
-      })}
-
-      {!job.canAddAdditionalIntervention && job.fieldVisit ? (
-        <p className={styles.helper}>Field Authority no proyecta una opción de alcance adicional para el estado, A/C o asignación actual.</p>
-      ) : null}
-      {error ? <div className={styles.mutationError}>{error}</div> : null}
-    </div>
-  );
+export function AdditionalInterventionControls(props: Parameters<typeof AdditionalInterventionContent>[0]) {
+  return <AdditionalInterventionContent key={JSON.stringify([props.job.workOrderId, props.job.customerId, props.job.propertyId, props.job.fieldVisit?.id])} {...props} />;
 }

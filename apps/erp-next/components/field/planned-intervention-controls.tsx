@@ -6,6 +6,7 @@ import type {
   FieldPlannedWorkDispositionReason,
   FieldWorkInterventionStatus,
 } from '@/lib/field-authority';
+import { FieldAirContext, FieldChoiceCards, FieldServiceCards, fieldAirChoices, fieldServiceStyles as picker } from './field-service-picker';
 import { presentedFieldPriceLabel } from './field-price-display';
 import styles from './technician-field-home.module.css';
 
@@ -56,7 +57,7 @@ function interventionStatusLabel(status: FieldWorkInterventionStatus) {
   return 'Completada';
 }
 
-export function PlannedInterventionControls({
+function PlannedInterventionContent({
   job,
   mutationBusy,
   creatingVisitAssetId,
@@ -69,6 +70,7 @@ export function PlannedInterventionControls({
   error: string | null;
   onCreate: (input: PlannedWorkMutationInput) => void;
 }) {
+  const [selectedAir, setSelectedAir] = useState('');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [dispositionDrafts, setDispositionDrafts] = useState<Record<string, DispositionDraft>>({});
   const plannedWorkById = new Map(job.plannedWork.map((line) => [line.id, line]));
@@ -140,45 +142,48 @@ export function PlannedInterventionControls({
         </div>
       ) : null}
 
-      {job.plannedInterventionOptions.map((option) => {
-        const visitAsset = visitAssetById.get(option.visitAssetId);
-        if (!visitAsset) return null;
-        const equipment = equipmentById.get(visitAsset.assetId);
-        const rawDraft = drafts[option.visitAssetId] ?? { plannedWorkLineId: '', serviceCatalogItemId: '' };
-        const plannedWorkLineId = option.plannedWorkLineIds.includes(rawDraft.plannedWorkLineId)
-          ? rawDraft.plannedWorkLineId
-          : '';
-        const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId)
-          ? rawDraft.serviceCatalogItemId
-          : '';
-        const canSubmit = Boolean(plannedWorkLineId && serviceCatalogItemId) && !mutationBusy;
-        return (
-          <div className={styles.interventionForm} key={option.visitAssetId}>
-            <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
-            <label>
-              <span>Línea programada</span>
-              <select className={styles.select} disabled={mutationBusy} value={plannedWorkLineId} onChange={(event) => setDraft(option.visitAssetId, { plannedWorkLineId: event.target.value })}>
-                <option value="">Selecciona el trabajo programado</option>
-                {option.plannedWorkLineIds.map((lineId) => (
-                  <option key={lineId} value={lineId}>{plannedWorkById.get(lineId)?.label || lineId}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Servicio real realizado / a realizar</span>
-              <select className={styles.select} disabled={mutationBusy} value={serviceCatalogItemId} onChange={(event) => setDraft(option.visitAssetId, { serviceCatalogItemId: event.target.value })}>
-                <option value="">Selecciona el servicio canónico</option>
-                {job.availableFieldServices.map((service) => (
-                  <option key={service.id} value={service.id}>{service.label}</option>
-                ))}
-              </select>
-            </label>
-            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={() => onCreate({ kind: 'intervention', visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId })}>
-              {creatingVisitAssetId === option.visitAssetId ? 'Vinculando…' : 'Vincular trabajo planificado'}
-            </button>
-          </div>
-        );
-      })}
+      <section className={picker.panel} aria-label="Seleccionar servicio planificado">
+        <h3 className={picker.heading}>Seleccionar servicio</h3>
+        <p className={picker.help}>Vincula el trabajo programado al aire correcto. Seleccionar una tarjeta no inicia ni completa el servicio.</p>
+        <FieldChoiceCards title="¿En qué aire trabajarás?"
+          choices={fieldAirChoices(job, job.canAddPlannedIntervention ? job.plannedInterventionOptions.map((option) => option.visitAssetId) : [])}
+          value={selectedAir} disabled={mutationBusy} onChange={setSelectedAir} />
+        {!job.canAddPlannedIntervention || !job.plannedInterventionOptions.length ? <p className={picker.notice} role="status">
+          No hay trabajo planificado disponible para vincular en este momento. Revisa los servicios registrados, los aires incluidos y el estado de la visita.
+        </p> : null}
+        {job.canAddPlannedIntervention && job.plannedInterventionOptions.filter((option) => option.visitAssetId === selectedAir).map((option) => {
+          if (!visitAssetById.has(option.visitAssetId)) return null;
+          const rawDraft = drafts[option.visitAssetId] ?? { plannedWorkLineId: '', serviceCatalogItemId: '' };
+          const plannedWorkLineId = option.plannedWorkLineIds.includes(rawDraft.plannedWorkLineId) && plannedWorkById.has(rawDraft.plannedWorkLineId) ? rawDraft.plannedWorkLineId : '';
+          const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId) ? rawDraft.serviceCatalogItemId : '';
+          const canSubmit = Boolean(plannedWorkLineId && serviceCatalogItemId) && !mutationBusy;
+          const selectionChanged = Boolean((rawDraft.plannedWorkLineId && !plannedWorkLineId) || (rawDraft.serviceCatalogItemId && !serviceCatalogItemId));
+          return <div className={picker.choiceList} key={option.visitAssetId}>
+            <FieldAirContext job={job} visitAssetId={option.visitAssetId} />
+            <FieldChoiceCards title="Trabajo programado por oficina"
+              choices={option.plannedWorkLineIds.flatMap((id) => {
+                const line = plannedWorkById.get(id);
+                return line ? [{ id, label: line.label, detail: 'Plan original · no se modifica la cita' }] : [];
+              })} value={plannedWorkLineId} disabled={mutationBusy}
+              onChange={(id) => setDraft(option.visitAssetId, { plannedWorkLineId: id })} />
+            <FieldServiceCards services={job.availableFieldServices} value={serviceCatalogItemId} disabled={mutationBusy}
+              onChange={(id) => setDraft(option.visitAssetId, { serviceCatalogItemId: id })} />
+            {selectionChanged ? <p className={picker.error} role="status">Las opciones disponibles cambiaron. Revisa la selección antes de guardar.</p> : null}
+            {plannedWorkLineId && serviceCatalogItemId ? <div className={picker.review} aria-label="Resumen de selección">
+              <span>Programado: <strong>{plannedWorkById.get(plannedWorkLineId)?.label}</strong></span>
+              <span>Servicio elegido: <strong>{serviceById.get(serviceCatalogItemId)?.label}</strong></span>
+              <span>Guardar registra la selección; no marca el servicio realizado ni crea una factura.</span>
+            </div> : null}
+            <div className={picker.actions}>
+              <button className={picker.secondary} disabled={mutationBusy} type="button" onClick={() => setDraft(option.visitAssetId, { plannedWorkLineId: '', serviceCatalogItemId: '' })}>Limpiar selección</button>
+              <button className={picker.primary} disabled={!canSubmit} type="button" onClick={() => {
+                if (!canSubmit) return;
+                onCreate({ kind: 'intervention', visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId });
+              }}>{creatingVisitAssetId === option.visitAssetId ? 'Guardando servicio…' : 'Guardar servicio para este aire'}</button>
+            </div>
+          </div>;
+        })}
+      </section>
 
       {job.plannedWorkDispositionOptions.map((option) => {
         const draft = dispositionDrafts[option.plannedWorkLineId] ?? { quantity: 1, reasonCode: '', note: '' };
@@ -220,4 +225,9 @@ export function PlannedInterventionControls({
       {error ? <div className={styles.mutationError}>{error}</div> : null}
     </div>
   );
+}
+
+/** Existing controller retains mutation locks, request IDs, refresh, and server errors. */
+export function PlannedInterventionControls(props: Parameters<typeof PlannedInterventionContent>[0]) {
+  return <PlannedInterventionContent key={JSON.stringify([props.job.workOrderId, props.job.customerId, props.job.propertyId, props.job.fieldVisit?.id])} {...props} />;
 }

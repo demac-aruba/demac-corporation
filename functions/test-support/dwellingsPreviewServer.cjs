@@ -100,7 +100,7 @@ const chunks = fs.readdirSync(path.join(output, '_next/static'), { recursive: tr
 const bundle = chunks.map((name) => fs.readFileSync(path.join(output, '_next/static', name), 'utf8')).join('\n');
 if (!bundle.includes(PROJECT) || !bundle.includes('/__preview/firebase/') || bundle.includes('AIza')) throw new Error('Refusing frontend without isolated Firebase configuration.');
 app.get('/', (_req, res) => res.redirect('/login'));
-app.get('/__preview/notice.js', (_req, res) => res.type('text/javascript').send("document.documentElement.dataset.preview='synthetic';const n=document.createElement('div');n.textContent='DEMO · isolated synthetic data · external delivery disabled';n.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#122e38;color:white;text-align:center;padding:6px;font:12px system-ui;z-index:2147483647;pointer-events:none';document.body.appendChild(n);"));
+app.get('/__preview/notice.js', (_req, res) => res.type('text/javascript').send("document.documentElement.dataset.preview='synthetic';const n=document.createElement('div');n.textContent='DEMO · isolated synthetic data · external delivery disabled';n.dataset.previewNotice='true';document.body.style.paddingTop='32px';n.style.cssText='position:fixed;top:0;left:0;right:0;height:32px;box-sizing:border-box;display:grid;place-items:center;background:#122e38;color:white;text-align:center;padding:2px 6px;font:11px/14px system-ui;z-index:2147483647;pointer-events:none';document.body.appendChild(n);"));
 app.use((req, res, next) => {
   if (req.method !== 'GET' || path.extname(req.path)) return next();
   const target = path.resolve(output, '.' + req.path, 'index.html');

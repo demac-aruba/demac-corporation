@@ -109,7 +109,7 @@ function validateJobRelations(job: FieldSaleJobDetail) {
       || (approval && approval.id !== line.customerApprovalId))) return false;
   }
   const lineById = new Map(job.fieldSaleLines.map((line) => [line.id, line]));
-  const eligible = Boolean(job.fieldVisit && ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status) && job.allowedActions.includes('execute'));
+  const eligible = Boolean(job.fieldVisit && ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status) && (job.allowedActions.includes('execute') || job.allowedActions.includes('sale.propose')));
   const expectedDecisionIds = eligible ? job.fieldSaleLines.filter((line) => !line.nonCatalog && line.status === 'proposed').map((line) => line.id) : [];
   if (new Set(job.fieldSaleDecisionLineIds).size !== job.fieldSaleDecisionLineIds.length
     || job.fieldSaleDecisionLineIds.length !== expectedDecisionIds.length

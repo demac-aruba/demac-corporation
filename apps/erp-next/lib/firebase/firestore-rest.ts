@@ -1,4 +1,5 @@
 import { firebaseTransportUrl } from './isolated-preview';
+import { fetchFirebaseResponse, firebaseResponseError, readFirebaseJson } from './request-error';
 import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
 import { requireFirebaseWebSession } from './session';
 
@@ -92,7 +93,7 @@ export function decodeFirestoreFields(fields: Record<string, FirestoreValue>) {
 
 async function authenticatedFetch(url: string, init?: RequestInit) {
   const session = await requireFirebaseWebSession();
-  const response = await fetch(firebaseTransportUrl(url), {
+  const response = await fetchFirebaseResponse(firebaseTransportUrl(url), {
     ...init,
     headers: {
       Authorization: `Bearer ${session.idToken}`,
@@ -116,8 +117,8 @@ async function readError(response: Response, fallback: string) {
 export async function getFirestoreDocument<T extends { id: string }>(collectionPath: string, id: string): Promise<T | null> {
   const response = await authenticatedFetch(`${baseUrl()}/${collectionPath}/${encodeURIComponent(id)}`);
   if (response.status === 404) return null;
-  if (!response.ok) throw new Error(await readError(response, `Unable to load ${collectionPath}/${id}.`));
-  const document = await response.json() as FirestoreDocument;
+  if (!response.ok) throw await firebaseResponseError(response, 'Unable to load the requested document.');
+  const document = await readFirebaseJson<FirestoreDocument>(response);
   return { ...decodeFirestoreFields(document.fields ?? {}), id } as T;
 }
 

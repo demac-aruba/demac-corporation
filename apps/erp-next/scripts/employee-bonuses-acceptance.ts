@@ -4,6 +4,9 @@ import type { AuthPrincipal } from '../lib/security';
 import type { EmployeePayrollSettings } from '../lib/employee-attendance';
 import type { PayrollAdjustment, BonusDraft } from '../lib/employee-bonuses';
 
+// This fixture intercepts every fetch and owns its synthetic REST destination.
+// Do not inherit the app's loopback preview routing from an enclosing build.
+process.env.NEXT_PUBLIC_ISOLATED_PREVIEW = 'false';
 process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = 'demo-demac-bonuses';
 process.env.NEXT_PUBLIC_FIREBASE_API_KEY = 'synthetic';
 process.env.NEXT_PUBLIC_FIREBASE_APP_ID = 'synthetic';

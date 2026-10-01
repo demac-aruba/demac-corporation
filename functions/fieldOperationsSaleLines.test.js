@@ -63,6 +63,27 @@ function fixture(options = {}) {
 
 const createInput = { identity, visitId: 'visit-WO-1', catalogItemId: 'product-switch', quantity: 2, requestId: 'field-sale-create-001' };
 
+test('assigned writable helper records catalog decision and add-on execution without global execute authority', async () => {
+  const helperAssignment = { assigned:true, responsibility:'helper', source:'crew', readOnly:false };
+  const {allowedActionsForAssignment}=require('./fieldOperationsAuthorityCore');
+  const actions=allowedActionsForAssignment(identity,helperAssignment);
+  assert.ok(actions.includes('sale.propose'));
+  for(const action of ['execute','intervention.complete','visit.complete','office.review','price.override'])assert.ok(!actions.includes(action));
+  const current=fixture({resolveAssignment:async()=>helperAssignment});
+  const created=await current.create(createInput);
+  assert.equal((await current.create(createInput)).replayed,true);
+  await assert.rejects(()=>current.transition({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,to:'installed',expectedVersion:1,requestId:'helper-premature-install'}),e=>e.code==='field_sale_transition_not_allowed');
+  const approved=await current.decide({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,decision:'approved',receiverName:'Synthetic authorized customer',expectedVersion:1,requestId:'helper-sale-approve'});
+  const installed=await current.transition({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,to:'installed',expectedVersion:approved.fieldSaleLine.version,requestId:'helper-sale-install'});
+  const sold=await current.transition({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,to:'sold',expectedVersion:installed.fieldSaleLine.version,requestId:'helper-sale-sold'});
+  assert.equal(sold.fieldSaleLine.status,'sold');assert.equal(sold.fieldSaleLine.priceSnapshot.lineTotal,150);
+  const job=await attachFieldSaleLinesToJob(current.store.db,{workOrderId:'WO-1',customerId:'CLIENT-1',propertyId:'PROPERTY-1',allowedActions:actions,fieldVisit:{id:createInput.visitId,status:'in_progress'}});
+  assert.equal(job.canAddFieldSaleLine,true);
+  for(const collection of ['invoices','inventoryMovements','whatsappOutboundQueue'])assert.equal(current.store.all(collection).length,0);
+  const readOnly=fixture({resolveAssignment:async()=>({...helperAssignment,readOnly:true}),lines:[sold.fieldSaleLine]});
+  await assert.rejects(()=>readOnly.decide({identity,visitId:createInput.visitId,saleLineId:sold.fieldSaleLine.id,decision:'approved',receiverName:'Synthetic customer',expectedVersion:sold.fieldSaleLine.version,requestId:'helper-revoked'}),e=>e.code==='permission_denied');
+});
+
 test('read model exposes only active priced Products and server-owned sale capabilities', async () => {
   const { store } = fixture();
   const job = await attachFieldSaleLinesToJob(store.db, { workOrderId: 'WO-1', customerId: 'CLIENT-1', propertyId: 'PROPERTY-1', allowedActions: ['read', 'execute'], fieldVisit: { id: 'visit-WO-1', status: 'in_progress' } }, () => '2026-08-27T10:20:00.000Z');
@@ -70,6 +91,18 @@ test('read model exposes only active priced Products and server-owned sale capab
   assert.equal(job.fieldSaleCatalogOptions[0].priceSnapshot.unitPrice, 75);
   assert.equal(job.canAddFieldSaleLine, true);
   assert.equal(job.canAddNonCatalogFieldSaleLine, true);
+});
+
+test('customer approval cannot bypass a same-equipment high risk on add-on installation', async () => {
+  const {initialWorkflow,protocolForService}=require('./fieldOperationsServiceProtocol');
+  const {service}=require('./test-support/fieldProcedureFixture.cjs');
+  const workflow=initialWorkflow(protocolForService(service()));
+  workflow.risks.synthetic={id:'synthetic',parts:['indoor','outdoor'],status:'open',reason:'Synthetic unsafe supply',author:{userId:identity.uid,staffId:identity.staffId,name:'Synthetic technician'},receivedAt:'2026-08-27T10:00:00.000Z',resolution:null};
+  const current=fixture({interventions:[{id:'WI-RISK',visitId:createInput.visitId,assetId:'AC-1',procedureWorkflow:workflow}]});
+  const created=await current.create(createInput);
+  const approved=await current.decide({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,decision:'approved',receiverName:'Synthetic customer',expectedVersion:1,requestId:'risk-sale-approve'});
+  await assert.rejects(()=>current.transition({identity,visitId:createInput.visitId,saleLineId:created.fieldSaleLine.id,to:'installed',expectedVersion:approved.fieldSaleLine.version,requestId:'risk-sale-install'}),e=>e.code==='field_sale_asset_risk_open');
+  assert.equal(current.store.get('fieldSaleLines',created.fieldSaleLine.id).status,'customer_approved');
 });
 
 test('Switch, Armaflex and arbitrary active catalog Products remain searchable governed sale options', async () => {

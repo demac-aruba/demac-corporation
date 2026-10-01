@@ -9,6 +9,8 @@ import {
   type FieldOfficeReviewQueueItem,
 } from '@/lib/field-authority';
 import { BrowserOfficeReviewQueue } from './browser-office-review-queue';
+import { ProcedureExceptionOfficeQueue } from './procedure-exception-office-queue';
+import { FrozenProcedureContent } from './frozen-procedure-content';
 import styles from './browser-office-review-queue.module.css';
 
 function requestId(reviewId: string, decision: FieldOfficeReviewDecision) {
@@ -114,7 +116,7 @@ function FrozenReportContent({ review }: { review: FieldOfficeReviewQueueItem })
   );
 }
 
-function CanonicalOfficeReviewQueue() {
+function CanonicalOfficeReviewQueue({userId}:{userId:string}) {
   const [reviews, setReviews] = useState<FieldOfficeReviewQueueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -247,6 +249,7 @@ function CanonicalOfficeReviewQueue() {
               </section>
             </div>
             <FrozenReportContent review={selected} />
+            <FrozenProcedureContent key={selected.currentRevision.id+':'+userId} review={selected} userId={userId}/>
             {selected.currentRevision.technicianCorrectionNote ? (
               <div className={styles.returnedNote}>
                 <span>CORRECCIÓN INMUTABLE · REV. {selected.currentRevision.revisionNumber}</span>
@@ -278,7 +281,10 @@ export function OfficeReviewSurface() {
   const { mode, principal, status } = useAuth();
   if (status === 'loading') return null;
   if (mode === 'firebase') {
-    return principal.capabilities.has('field.review') ? <CanonicalOfficeReviewQueue /> : null;
+    return principal.capabilities.has('field.review') ? <>
+      <ProcedureExceptionOfficeQueue userId={principal.userId} />
+      <CanonicalOfficeReviewQueue key={principal.userId} userId={principal.userId}/>
+    </> : null;
   }
   return <BrowserOfficeReviewQueue />;
 }

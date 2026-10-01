@@ -13,8 +13,13 @@ const { roleCapabilities } = require('../lib/security') as typeof import('../lib
 const principal = { userId: 'SYNTHETIC', displayName: 'Synthetic', role: 'super_admin' as const, active: true, capabilities: roleCapabilities.super_admin };
 const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
-const syntheticSession = JSON.stringify({ uid: principal.userId, idToken: 'synthetic-test-token', expiresAt: Date.now() + 3600000 });
-globalThis.window = { sessionStorage: { getItem: () => syntheticSession } } as unknown as Window & typeof globalThis;
+const syntheticSession = JSON.stringify({ uid: principal.userId, email: 'synthetic@demac-preview.invalid', idToken: 'synthetic-test-token', refreshToken: 'synthetic-refresh-never-used', expiresAt: Date.now() + 3600000 } satisfies import('../lib/firebase/session').FirebaseWebSession);
+const sessionData = new Map([['demac.erp-next.firebase.session.v1', syntheticSession]]);
+globalThis.window = { sessionStorage: {
+  getItem: (key: string) => sessionData.get(key) ?? null,
+  setItem: (key: string, value: string) => { sessionData.set(key, value); },
+  removeItem: (key: string) => { sessionData.delete(key); },
+} } as unknown as Window & typeof globalThis;
 const prefix = 'projects/demo-demac-slot-load/databases/(default)/documents/workOrders/';
 const url = 'https://firestore.googleapis.com/v1/projects/demo-demac-slot-load/databases/(default)/documents:batchGet';
 let mode = 'ok', requests = 0, active = 0, maximum = 0, latency = 0, changedSlots = 6;
