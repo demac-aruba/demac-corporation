@@ -246,6 +246,14 @@ Production activation remains separately owner-approved through the server-side 
   actual attendance, payroll amounts or a different weekly schedule. Actual payable overtime
   continues to derive from real worked times against the employee's canonical schedule.
   Ordinary reschedule/move clears current planning metadata and keeps the original audit event.
+- `OPS-SCHED-PLANNED-OT-PROJECT` — Owner request 2026-10-01: weekly-rest Book Overtime
+  also supports existing published Projects for every eligible Van/date. The operator selects
+  the Project, its phase when applicable and whole Van slots, acknowledges an exceeded Project
+  budget when applicable, then explicitly confirms overtime. Booking Authority reuses the
+  canonical Project permission/version/CRM checks and atomically commits its Project link with
+  the Appointment, Work Order and locks. Project identity/version is bound to consent and exact
+  replay never duplicates the link. Open-ended emergency and ordinary overflow Project entry
+  are outside this change. Existing calendar, crew, lunch, overlap and midnight guards apply.
 - Owner: DEMAC Operations / Booking Authority. Source: Christian's Scheduling & Dispatch request
   2026-09-29. Migration: none; existing appointments, CRM and calendar records are not rewritten.
 
