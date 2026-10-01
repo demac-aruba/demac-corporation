@@ -460,9 +460,10 @@ test("office historical support forwards the operator acknowledgement to the sup
   let captured;
   const api = createOfficeBookingApi({ db: createDb(), verifyIdToken,
     bookingAuthority: createAuthority(), adhocSupportAuthority: { addSupport: async input => { captured = input; return { success: true }; } } });
-  const input = { appointmentId: "APT-1", requestId: "historical-support-123", requestedDate: "2026-08-20", requestedTime: "08:30", requiredVanId: "VAN-3", reason: "Support actually provided", bookingMode: "backdated", backdatingAcknowledged: true };
+  const input = { appointmentId: "APT-1", requestId: "historical-support-123", requestedSlots: 3, requestedDate: "2026-08-20", requestedTime: "08:30", requiredVanId: "VAN-3", reason: "Support actually provided", bookingMode: "backdated", backdatingAcknowledged: true };
   const result = await api.handle(request({ action: "add_adhoc_support", data: input }));
   assert.equal(result.status, 200);
+  assert.equal(captured.requestedSlots, 3);
   assert.equal(captured.bookingMode, "backdated");
   assert.equal(captured.backdatingAcknowledged, true);
   assert.equal(captured.targetVanId, "VAN-3");
@@ -470,4 +471,18 @@ test("office historical support forwards the operator acknowledgement to the sup
   const incomplete = await api.handle(request({ action: "add_adhoc_support", data: { ...input, backdatingAcknowledged: false } }));
   assert.equal(incomplete.status, 409);
   assert.equal(incomplete.body.error.details.reason, "backdating-confirmation-required");
+});
+
+test("multi-slot support cannot bypass Office authentication and role checks", async () => {
+  let calls = 0;
+  for (const [role, token, expected] of [["office", "", 401], ["technician", "test-token", 403]]) {
+    const api = createOfficeBookingApi({ db: createDb({ role }), verifyIdToken,
+      bookingAuthority: createAuthority(), adhocSupportAuthority: { addSupport: async () => { calls += 1; } } });
+    const response = await api.handle(request({ action: "add_adhoc_support", data: {
+      appointmentId: "APT-1", requestId: "denied-multiple-support", requestedDate: "2026-10-02",
+      requestedTime: "08:30", requiredVanId: "VAN-3", requestedSlots: 3,
+    } }, token));
+    assert.equal(response.status, expected);
+  }
+  assert.equal(calls, 0);
 });
