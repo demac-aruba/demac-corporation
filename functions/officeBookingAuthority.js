@@ -1344,6 +1344,7 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.ADD_ADHOC_SUPPORT) {
       const requestId = officeRequestId(data.requestId);
       return getAdhocSupport().addSupport({
+        requestedSlots: data.requestedSlots,
         appointmentId: data.appointmentId,
         requestId,
         requestedDate: data.requestedDate,

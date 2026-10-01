@@ -19,8 +19,10 @@ engineering index; it does not replace that registry.
 - `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
   optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
-- `OPS-SCHED-SUPPORT-001`: one-slot coworker support may be added to current/future confirmed
+- `OPS-SCHED-SUPPORT-001`: coworker support with one or more consecutive available slots may be added to current/future confirmed
   appointments and, with explicit historical acknowledgement, past confirmed/completed work.
+  Default to one slot; stop at occupied capacity, a clock gap/lunch or the shift end.
+  Revalidate and atomically lock every selected slot; never override another reservation.
   Preserve the primary assignment/status, transactional capacity/crew controls and audit.
   Historical support is non-billable, suppresses automatic messages and does not alter payroll/Field actuals.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,

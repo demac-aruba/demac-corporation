@@ -39,6 +39,7 @@ import {
   afterHoursTargetForVan,
   canPlanAfterHours,
   canPlanCoworkerSupport,
+  consecutiveSupportOptions,
   weeklyRestSlotEligible,
   availableSlotAction,
   liveSchedulingInteractionActive,
@@ -551,7 +552,17 @@ function LiveSchedulingSession() {
     setSelectedAppointmentId('');
     setMoveNotice('');
     setBookingTarget(null);
-    setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+    const vanJobs = activeJobs.filter(job => job.vanId === vanId);
+    const durationOptions = consecutiveSupportOptions(
+      displaySlotsForVan(activeDay, vanId, capacityState, activeJobs).map(slot => ({
+        ...slot, occupied: activeJobsForSlot(vanJobs, slot).length > 0,
+      })), start,
+    );
+    if (!durationOptions.length) {
+      setMoveNotice('This support slot is no longer available. Refresh the agenda.');
+      return;
+    }
+    setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end, durationOptions });
   };
 
   const openAfterHours = (van: DisplayVan) => {
