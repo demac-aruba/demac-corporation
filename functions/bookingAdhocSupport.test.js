@@ -257,6 +257,86 @@ test("retrying the same support request is idempotent and does not append anothe
   assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
 });
 
+test("two and three consecutive support slots own the full interval without changing primary work", async () => {
+  for (const requestedSlots of [2, 3]) {
+    const { db, authority } = fixture();
+    const before = structuredClone(db.read("workOrders/WO-APT-SUPPORT-1-1"));
+    const result = await authority.addSupport(addInput({ requestedTime: "08:30", requestedSlots }));
+    const order = result.supportWorkOrder;
+    assert.equal(order.scheduledSlots, requestedSlots);
+    assert.equal(order.appointmentDurationMinutes, requestedSlots * 60);
+    assert.equal(order.appointmentEndTime, requestedSlots === 2 ? "10:30" : "11:30");
+    assert.equal(order.airConditionerCount, 1);
+    assert.equal(order.supportNonBillable, true);
+    const appointment = db.read("appointments/APT-SUPPORT-1");
+    assert.equal(appointment.assignments[1].slots, requestedSlots);
+    assert.equal(appointment.capacityLockIds.length, 2 + requestedSlots);
+    for (const slot of ["08:30", "09:30", "10:30"].slice(0, requestedSlots)) {
+      assert.equal(db.read(`bookingCapacityLocks/${supportCapacityLock(DATE, "VAN-2", slot).id}`).active, true);
+    }
+    assert.deepEqual(db.read("workOrders/WO-APT-SUPPORT-1-1"), before);
+  }
+});
+
+test("support never crosses lunch or the end of day", async () => {
+  for (const [requestedTime, requestedSlots] of [["08:30", 4], ["10:30", 2], ["14:30", 3], ["15:30", 2]]) {
+    const { db, authority } = fixture();
+    const before = structuredClone([...db.store]);
+    await assert.rejects(authority.addSupport(addInput({ requestedTime, requestedSlots })),
+      error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test("later occupied slots and foreign or same-appointment locks reject the whole support interval", async () => {
+  for (const blocked of ["order", "foreign-lock", "own-lock"]) {
+    const laterLock = supportCapacityLock(DATE, "VAN-2", "10:30");
+    const extra = blocked === "order" ? {
+      "workOrders/BUSY": { ...baseSeed()["workOrders/WO-APT-SUPPORT-1-1"], id: "BUSY", appointmentId: "BUSY-APT", vanId: "VAN-2", time: "10:30", scheduledSlots: 1, appointmentDurationMinutes: 60, appointmentEndTime: "11:30" },
+    } : { [`bookingCapacityLocks/${laterLock.id}`]: { ...laterLock, active: true, appointmentId: blocked === "own-lock" ? "APT-SUPPORT-1" : "BUSY-APT" } };
+    const { db, authority } = fixture(extra);
+    const before = structuredClone([...db.store]);
+    await assert.rejects(authority.addSupport(addInput({ requestedTime: "08:30", requestedSlots: 3 })),
+      error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+    assert.deepEqual([...db.store], before);
+    if (blocked === "order") {
+      assert.equal((await authority.addSupport(addInput({ requestedTime: "08:30", requestedSlots: 2 }))).success, true);
+    }
+  }
+});
+
+test("support duration validates whole-number bounds", async () => {
+  for (const requestedSlots of [0, -1, 1.5, 7, "2", null, NaN]) {
+    const { authority } = fixture();
+    await assert.rejects(authority.addSupport(addInput({ requestedSlots })),
+      error => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST);
+  }
+});
+
+test("multi-slot support respects the supporting Van half-day boundary", async () => {
+  const extra = { "vanHalfDaySchedules/support-rest": { vanId: "VAN-2", weekday: 4, active: true } };
+  const { authority } = fixture(extra);
+  const result = await authority.addSupport(addInput({ requestedTime: "10:30", requestedSlots: 2 }));
+  assert.equal(result.supportWorkOrder.appointmentEndTime, "12:30");
+  const unavailable = fixture(extra).authority;
+  await assert.rejects(unavailable.addSupport(addInput({ requestedTime: "10:30", requestedSlots: 3 })),
+    error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+  await assert.rejects(unavailable.addSupport(addInput({ requestedTime: "13:30", requestedSlots: 2 })),
+    error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+});
+
+test("multi-slot retries preserve duration and reject changed request details", async () => {
+  const { db, authority } = fixture();
+  const input = addInput({ requestedTime: "08:30", requestedSlots: 2 });
+  const first = await authority.addSupport(input);
+  assert.equal((await authority.addSupport(input)).supportWorkOrderId, first.supportWorkOrderId);
+  for (const changes of [{ requestedSlots: 3 }, { requestedTime: "13:30" }, { reason: "Changed" }]) {
+    await assert.rejects(authority.addSupport({ ...input, ...changes }), error => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
+  }
+  await assert.rejects(authority.addSupport({ ...input, requestId: "another-support-request", requestedSlots: 3 }), error => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT);
+  assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
+});
+
 test("historical support requires explicit acknowledgement", async () => {
   const { authority } = fixture({}, "2026-08-28T14:00:00.000Z");
   await assert.rejects(
