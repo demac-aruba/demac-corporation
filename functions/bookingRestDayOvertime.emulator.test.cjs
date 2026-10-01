@@ -155,3 +155,45 @@ test('new overtime endpoints enforce office authentication and bind current crew
   assert.equal(success.status, 200, JSON.stringify(success));
   assert.equal(success.body.workOrder.scheduledOvertime.kind, 'capacity_overflow_overtime');
 });
+
+async function projectRequest(extra = {}) {
+  await db.doc('projectRecords/DEMO-PROJECT').set({ id: 'DEMO-PROJECT', name: 'Synthetic Project', projectNumber: 'PRJ-DEMO',
+    customerId: 'DEMO-CUSTOMER', siteId: 'DEMO-PROPERTY', serverVersion: 1, status: 'Planned',
+    assignments: [], phases: [], assignedVans: [], scheduledFutureHours: 0 });
+  return input({ project: { id: 'DEMO-PROJECT', phaseId: 'GENERAL-PROJECT-WORK', version: 1 },
+    workLines: [{ presetId: 'other', quantity: 1, manualDurationMinutes: 120 }], ...extra });
+}
+
+test('concurrent Project confirmations persist one atomic link; replay survives the version increment', async () => {
+  const request = await prepared(await projectRequest());
+  const results = await Promise.all([authority.createRestDayOvertime(request), authority.createRestDayOvertime(request)]);
+  assert.equal(results.filter(result => !result.replayed).length, 1);
+  const project = (await db.doc('projectRecords/DEMO-PROJECT').get()).data();
+  assert.equal(project.serverVersion, 2);
+  assert.equal(project.assignments.length, 1);
+  assert.equal(project.scheduledFutureHours, 2);
+  assert.equal(project.assignments[0].appointmentId, results[0].appointmentId);
+  assert.equal(results[0].workOrder.projectId, project.id);
+  assert.equal((await db.collection('projectBookingClaims').get()).size, 1);
+});
+
+test('two distinct Project bookings racing for the same slots have one winner and no orphan link', async () => {
+  const request = await projectRequest();
+  const a = await prepared(request);
+  const b = await prepared({ ...request, requestId: 'synthetic-project-rest-race-002' });
+  const results = await Promise.allSettled([authority.createRestDayOvertime(a), authority.createRestDayOvertime(b)]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal((await db.doc('projectRecords/DEMO-PROJECT').get()).data().assignments.length, 1);
+  assert.equal((await db.collection('projectBookingClaims').get()).size, 1);
+  assert.equal((await db.collection('appointments').where('primaryVanId', '==', 'VAN-2').get()).size, 1);
+});
+
+test('Project changes after preparation fail atomically with no booking or locks', async () => {
+  const request = await prepared(await projectRequest());
+  await db.doc('projectRecords/DEMO-PROJECT').update({ serverVersion: 2, name: 'Changed in another session' });
+  const before = await snapshot();
+  await assert.rejects(() => authority.createRestDayOvertime(request), /Project changed/);
+  assert.deepEqual(await snapshot(), before);
+  assert.equal((await db.doc('projectRecords/DEMO-PROJECT').get()).data().assignments.length, 0);
+  assert.equal((await db.collection('projectBookingClaims').get()).size, 0);
+});

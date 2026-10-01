@@ -245,3 +245,109 @@ test("production facade continues to book regular work without a Project link", 
   assert.equal(f.db.read("projectRecords/PROJECT-1").serverVersion, 1);
   assert.equal(f.db.read("projectRecords/PROJECT-1").assignments.length, 0);
 });
+
+function restProjectFixture(role = 'office_operator', active = true) {
+  const f = fixture(role, active);
+  f.db.store.delete('workOrders/WO-EXISTING');
+  f.db.store.set('vanHalfDaySchedules/REST', { vanId: 'VAN-1', weekday: new Date(`${DATE}T12:00:00Z`).getUTCDay(), active: true, workdayStart: '08:00', workdayEnd: '13:00' });
+  f.data.requestId = 'project-rest-overtime-create';
+  f.data.requestedTime = '13:30';
+  return f;
+}
+async function prepareProjectOvertime(f) {
+  const before = structuredClone([...f.db.store.entries()]);
+  const response = await f.call('prepare_rest_day_overtime', f.data);
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual([...f.db.store.entries()], before, 'Preparation must write nothing');
+  return { ...f.data, overtimeConsent: { accepted: true, confirmationToken: response.body.proposal.confirmationToken } };
+}
+
+test('weekly-rest Project booking atomically links Project, phase, appointment, work order and all slots; exact replay is unique', async () => {
+  for (const slots of [1, 2, 3, 4]) {
+    const f = restProjectFixture();
+    f.db.store.get('projectRecords/PROJECT-1').phases = [{ id: 'PHASE-1', name: 'Installation', status: 'Planned' }];
+    f.data.project.phaseId = 'PHASE-1';
+    f.data.workLines[0].manualDurationMinutes = slots * 60;
+    const input = await prepareProjectOvertime(f);
+    const response = await f.call('create_rest_day_overtime', input);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const { appointmentId, workOrderIds, appointment, workOrder } = response.body;
+    assert.equal(appointment.projectId, 'PROJECT-1');
+    assert.equal(workOrder.projectPhaseId, 'PHASE-1');
+    assert.equal(appointment.scheduledOvertime.accepted, true);
+    assert.equal(appointment.scheduledOvertime.kind, 'weekly_rest_overtime');
+    assert.equal(appointment.capacityLockIds.length, slots);
+    const project = f.db.read('projectRecords/PROJECT-1');
+    assert.equal(project.assignments.length, 1);
+    assert.equal(project.assignments[0].workOrderId, workOrderIds[0]);
+    assert.equal(project.assignments[0].scheduledHours, slots);
+    assert.equal(project.assignments[0].scheduledEnd, `${13 + slots}:30`);
+    assert.equal(project.scheduledFutureHours, slots);
+    assert.equal(f.db.read(`projectBookingClaims/${appointmentId}`).projectId, project.id);
+    const retry = await f.call('create_rest_day_overtime', input);
+    assert.equal(retry.status, 200, JSON.stringify(retry.body));
+    assert.equal(retry.body.replayed, true);
+    assert.equal(f.db.read('projectRecords/PROJECT-1').serverVersion, 2);
+    assert.equal(f.db.read('projectRecords/PROJECT-1').assignments.length, 1);
+    assert.equal([...f.db.store.keys()].some(key => /employeeTimesheets|whatsappOutboundQueue/.test(key)), false);
+  }
+});
+
+test('weekly-rest Project rejects missing consent and changed scope/Project on consent or replay', async () => {
+  const f = restProjectFixture();
+  const input = await prepareProjectOvertime(f);
+  assert.notEqual((await f.call('create_rest_day_overtime', f.data)).status, 200);
+  for (const changed of [
+    { project: { ...input.project, phaseId: 'GENERAL-PROJECT-WORK-CHANGED' } },
+    { project: { ...input.project, version: 2 } },
+    { workLines: [{ ...input.workLines[0], manualDurationMinutes: 180 }] },
+  ]) {
+    assert.notEqual((await f.call('create_rest_day_overtime', { ...input, ...changed })).status, 200);
+    assertNoBooking(f.db);
+  }
+  assert.equal((await f.call('create_rest_day_overtime', input)).status, 200);
+  assert.notEqual((await f.call('create_rest_day_overtime', { ...input, project: undefined })).status, 200);
+  assert.equal(f.db.read('projectRecords/PROJECT-1').assignments.length, 1);
+});
+
+test('weekly-rest Project revalidates authority, version, identity, phase, status and link limits without partial writes', async () => {
+  const changes = [
+    f => f.db.store.get('users/office-1').active = false,
+    f => f.db.store.get('users/office-1').role = 'technician',
+    f => f.db.store.get('projectRecords/PROJECT-1').serverVersion++,
+    f => f.db.store.get('projectRecords/PROJECT-1').customerId = 'OTHER',
+    f => f.db.store.get('projectRecords/PROJECT-1').siteId = 'OTHER',
+    f => f.db.store.get('projectRecords/PROJECT-1').status = 'Completed',
+    f => f.db.store.get('projectRecords/PROJECT-1').assignments = Array.from({ length: 150 }, () => ({})),
+    f => f.db.store.delete('projectRecords/PROJECT-1'),
+    f => f.db.store.set('workOrders/CONFLICT', { clientId: 'client-1', propertyId: 'property-1', date: DATE, time: '14:30', vanId: 'VAN-1', status: 'Confirmada', technicianIds: ['driver-1'], appointmentDurationMinutes: 60, scheduledSlots: 1 }),
+  ];
+  for (const change of changes) {
+    const f = restProjectFixture();
+    const input = await prepareProjectOvertime(f);
+    change(f);
+    const before = structuredClone([...f.db.store.entries()]);
+    assert.notEqual((await f.call('create_rest_day_overtime', input)).status, 200);
+    assert.deepEqual([...f.db.store.entries()], before);
+  }
+});
+
+test('weekly-rest Project preparation denies unprovisioned scheduler; retry rechecks Project permission', async () => {
+  const denied = restProjectFixture('office_operator', undefined);
+  delete denied.db.store.get('users/office-1').active;
+  assert.notEqual((await denied.call('prepare_rest_day_overtime', denied.data)).status, 200);
+  assertNoBooking(denied.db);
+  const f = restProjectFixture();
+  const input = await prepareProjectOvertime(f);
+  assert.equal((await f.call('create_rest_day_overtime', input)).status, 200);
+  delete f.db.store.get('users/office-1').active;
+  assert.notEqual((await f.call('create_rest_day_overtime', input)).status, 200);
+});
+
+test('unsupported special modes reject Project metadata instead of silently creating an unlinked booking', async () => {
+  for (const action of ['create_after_hours_emergency', 'prepare_capacity_overtime', 'create_capacity_overtime']) {
+    const f = restProjectFixture();
+    assert.notEqual((await f.call(action, f.data)).status, 200);
+    assertNoBooking(f.db);
+  }
+});
