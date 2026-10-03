@@ -10,6 +10,7 @@ const {
 const {
   capacitySlotsForOwnership,
   hashId,
+  isHalfDay,
   orderSlotCount,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
@@ -211,7 +212,7 @@ function existingLinkedWorkOrderIds(appointment, currentOrders) {
     .filter(Boolean);
 }
 
-function operationalConflict({ orders, appointmentId, vanId, targetStart, targetSlots, durationMinutes }) {
+function operationalConflict({ orders, appointmentId, vanId, targetStart, targetSlots, durationMinutes, halfDaySchedules }) {
   const targetStartMinutes = timeToMinutes(targetStart);
   if (targetStartMinutes === null) return null;
   const targetEndMinutes = targetStartMinutes + durationMinutes;
@@ -224,7 +225,7 @@ function operationalConflict({ orders, appointmentId, vanId, targetStart, target
     const existingStart = timeToMinutes(normalizeOrderTime(order.time));
     if (existingStart === null) return false;
     const existingSlotCount = orderSlotCount(order, []);
-    const existingSlots = manualOccupiedSlots(cleanText(order.date, 20), normalizeOrderTime(order.time), existingSlotCount);
+    const existingSlots = capacitySlotsForOwnership(normalizeOrderTime(order.time), existingSlotCount, isHalfDay(vanId, cleanText(order.date, 20), halfDaySchedules));
     const capacityConflict = existingSlots.some((slot) => targetSlotSet.has(slot));
     const existingEnd = Math.max(
       existingStart + workOrderDurationMinutes(order, []),
@@ -373,6 +374,7 @@ function createOperationalMoveAuthority({
         targetStart: targetTime,
         targetSlots: requestedSlots,
         durationMinutes,
+        halfDaySchedules: canonical.vanHalfDaySchedules,
       });
       if (conflict) {
         throw new BookingAuthorityError(

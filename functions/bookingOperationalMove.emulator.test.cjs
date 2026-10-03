@@ -123,3 +123,44 @@ test('a normal Booking Authority creation racing the transfer cannot double-book
   assert.ok(results.some((result) => result.status === 'rejected' && [BOOKING_ERROR_CODES.SLOT_CONFLICT, BOOKING_ERROR_CODES.AVAILABILITY_CHANGED].includes(result.reason.code)), JSON.stringify(results));
   assert.equal((await db.collection('appointments').where('primaryVanId', '==', 'VAN-2').get()).size, 1);
 });
+
+
+async function seedRestMove(vanId = 'VAN-1') {
+  await db.doc(`vanHalfDaySchedules/REST-${vanId}`).set({ active: true, vanId, weekday: new Date(`${date}T12:00:00Z`).getUTCDay(), workdayStart: '08:00', workdayEnd: '13:00' });
+  const appointment = await get('appointments/DEMO-APT');
+  await db.doc('appointments/DEMO-APT').update({ assignments: [{ ...appointment.assignments[0], slots: 4, quantity: 4, endTime: '12:30' }], endTime: '12:30' });
+  await db.doc('workOrders/DEMO-WO').update({ scheduledSlots: 4, appointmentDurationMinutes: 240, appointmentEndTime: '12:30', airConditionerCount: 4 });
+  return { ...input('rest-move-001'), targetVanId: vanId, requestedTime: '13:30' };
+}
+
+test('same-Van weekly-rest confirmation atomically swaps four slots and simultaneous retries commit once', async () => {
+  const request = await seedRestMove();
+  const before = await snapshot();
+  const accepted = await prepared(request);
+  assert.deepEqual(await snapshot(), before);
+  const results = await Promise.all([authority.moveAppointment(accepted), authority.moveAppointment(accepted)]);
+  assert.equal(results.filter(result => !result.replayed).length, 1);
+  const appointment = await get('appointments/DEMO-APT');
+  assert.equal(appointment.primaryVanId, 'VAN-1');
+  assert.equal(appointment.endTime, '17:30');
+  assert.equal(appointment.capacityLockIds.length, 4);
+  assert.equal(appointment.lifecycleHistory.length, 1);
+  assert.equal(appointment.operationalMoveOvertime.kind, 'weekly_rest_overtime');
+  assert.equal((await get('workOrders/DEMO-WO')).appointmentDurationMinutes, 240);
+  assert.equal((await db.collection('employeeTimesheets').get()).size, 0);
+  assert.equal((await db.collection('whatsappOutboundQueue').get()).size, 0);
+});
+
+test('a weekly-rest same-Van move racing a transfer has one winner and leaves the loser unchanged', async () => {
+  const request = await seedRestMove();
+  const original = await get('appointments/DEMO-APT');
+  await db.doc('appointments/REST-OTHER').set({ ...original, appointmentId: 'REST-OTHER', primaryVanId: 'VAN-3', workOrderIds: ['REST-OTHER-WO'], capacityLockIds: [], assignments: [{ ...original.assignments[0], vanId: 'VAN-3' }] });
+  await db.doc('workOrders/REST-OTHER-WO').set({ ...await get('workOrders/DEMO-WO'), appointmentId: 'REST-OTHER', vanId: 'VAN-3', technicianIds: ['DRIVER-3', 'HELPER-3'] });
+  const a = await prepared(request);
+  const b = await prepared({ ...request, appointmentId: 'REST-OTHER', requestId: 'rest-move-002' });
+  const results = await Promise.allSettled([authority.moveAppointment(a), authority.moveAppointment(b)]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  const loser = results[0].status === 'rejected' ? 'DEMO-APT' : 'REST-OTHER';
+  assert.equal((await get(`appointments/${loser}`)).startTime, '08:30');
+  assert.equal((await get(`appointments/${loser}`)).lifecycleHistory.length, 0);
+});
