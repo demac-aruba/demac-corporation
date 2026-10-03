@@ -15,6 +15,18 @@ const facade = createOfficeBookingAuthorityFacade({ db, verifyIdToken: async (to
 } });
 const root = path.resolve(__dirname, '../../apps/erp-next/out');
 const allowedActions = new Set(['prepare_appointment_move', 'move_appointment', 'get_appointment', 'list_appointment_attribution', 'list_presets']);
+async function resetPreview() {
+  await resetSynthetic(db);
+  if (process.env.WEEKLY_REST_MOVE_PREVIEW !== 'true') return;
+  const appointment = (await db.doc('appointments/DEMO-APT').get()).data();
+  const weekday = new Date(`${appointment.date}T12:00:00Z`).getUTCDay();
+  const batch = db.batch();
+  for (let i = 1; i <= 4; i++) batch.set(db.doc(`vanHalfDaySchedules/REST-${i}`), { active: true, vanId: `VAN-${i}`, weekday, workdayStart: '08:00', workdayEnd: '13:00', extraMorningSlot: '11:30' });
+  batch.update(db.doc('clients/DEMO-CUSTOMER'), { name: 'Cliente sintético · 4 cupos' });
+  batch.update(db.doc('appointments/DEMO-APT'), { endTime: '12:30', assignments: [{ ...appointment.assignments[0], slots: 4, quantity: 4, endTime: '12:30' }] });
+  batch.update(db.doc('workOrders/DEMO-WO'), { appointmentEndTime: '12:30', scheduledSlots: 4, appointmentDurationMinutes: 240, airConditionerCount: 4 });
+  await batch.commit();
+}
 const bootstrap = `<script>
 sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify({uid:'demo-office',email:'operator@example.invalid',idToken:'demo-office',refreshToken:'demo-only',expiresAt:Date.now()+86400000,displayName:'Operador de prueba'}));
 localStorage.setItem('demac-theme','light');
@@ -29,7 +41,7 @@ const server = http.createServer(async (req, res) => {
     if (!['127.0.0.1', 'localhost'].some((host) => req.headers.host === `${host}:4315`)) return json(res, 403, { error: 'Loopback only' });
     if (req.headers.origin && !['http://127.0.0.1:4315', 'http://localhost:4315'].includes(req.headers.origin)) return json(res, 403, { error: 'Same-origin preview only' });
     const url = new URL(req.url, 'http://127.0.0.1:4315');
-    if (url.pathname === '/_demo/reset' && req.method === 'POST') { await resetSynthetic(db); return json(res, 200, { success: true }); }
+    if (url.pathname === '/_demo/reset' && req.method === 'POST') { await resetPreview(); return json(res, 200, { success: true }); }
     if (url.pathname === '/_demo/booking' && req.method === 'POST') {
       const payload = JSON.parse(await body(req));
       if (!allowedActions.has(payload.action)) return json(res, 403, { error: { message: 'Preview limitado al traslado; no se envían comunicaciones.' } });
@@ -54,4 +66,4 @@ const server = http.createServer(async (req, res) => {
     fs.createReadStream(file).pipe(res);
   } catch (error) { json(res, 500, { error: { message: error.message } }); }
 });
-resetSynthetic(db).then(() => server.listen(4315, '127.0.0.1', () => console.log('Synthetic ERP preview: http://127.0.0.1:4315/scheduling/')));
+resetPreview().then(() => server.listen(4315, '127.0.0.1', () => console.log('Synthetic ERP preview: http://127.0.0.1:4315/scheduling/')));

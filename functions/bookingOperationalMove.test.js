@@ -191,7 +191,7 @@ test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in on
   }
 });
 
-test("half-day and maintenance metadata do not hide an otherwise free manual drag destination", async () => {
+test("weekly-rest moves reject an unavailable Van even when its destination is empty", async () => {
   const { db, authority } = fixture({
     "vanHalfDaySchedules/TUE-V2": { id: "TUE-V2", active: true, vanId: "VAN-2", weekday: 2 },
     "dailyVanAssignments/2026-08-18-V2": {
@@ -203,10 +203,9 @@ test("half-day and maintenance metadata do not hide an otherwise free manual dra
       helperStaffId: "tech-4",
     },
   });
-  const result = await authority.moveAppointment(moveInput());
-  assert.equal(result.success, true);
-  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
-  assert.equal(db.read("appointments/APT-1").startTime, "13:30");
+  await assert.rejects(() => authority.moveAppointment(moveInput()), (error) => error.details.reason === 'overtime-crew-unavailable');
+  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-1");
+  assert.equal(db.read("appointments/APT-1").startTime, "08:30");
 });
 
 test("hidden cancelled work order does not reject a visually open LIVE target", async () => {
@@ -485,4 +484,101 @@ test('moving planned weekly-rest work to ordinary capacity clears current marker
   assert.equal(db.read('workOrders/WO-1').scheduledOvertime, null);
   assert.equal(db.read('workOrders/WO-1').appointmentCapacityEndTime, '16:30');
   assert.deepEqual(db.read('appointments/APT-1').lifecycleHistory[0].scheduledOvertime, accepted);
+});
+
+
+function weeklyRestMoveFixture(vanId = 'VAN-1', slots = 4) {
+  const seed = baseSeed();
+  seed['appointments/APT-1'].assignments[0].slots = slots;
+  seed['workOrders/WO-1'].scheduledSlots = slots;
+  seed['workOrders/WO-1'].appointmentDurationMinutes = slots * 60;
+  return overtimeFixture({ ...seed, [`vanHalfDaySchedules/REST-${vanId}`]: { active: true, vanId, weekday: 2, workdayStart: '08:00', workdayEnd: '13:00' } });
+}
+
+test('weekly-rest transfer works in the same Van and any destination Van with complete four-slot work', async () => {
+  for (const targetVanId of ['VAN-1', 'VAN-2']) {
+    const { db, authority } = weeklyRestMoveFixture(targetVanId);
+    const before = structuredClone([...db.store]);
+    const { input, proposal } = await prepareOvertime(authority, { targetVanId, requestedTime: '13:30' });
+    assert.equal(proposal.kind, 'weekly_rest_overtime');
+    assert.equal(proposal.requiredSlots, 4);
+    assert.equal(proposal.ordinarySlots, 0);
+    assert.equal(proposal.estimatedEnd, '17:30');
+    assert.deepEqual([...db.store], before);
+    await authority.moveAppointment(input);
+    const appointment = db.read('appointments/APT-1');
+    const order = db.read('workOrders/WO-1');
+    assert.equal(appointment.primaryVanId, targetVanId);
+    assert.equal(appointment.endTime, '17:30');
+    assert.equal(order.appointmentId, 'APT-1');
+    assert.equal(order.appointmentDurationMinutes, 240);
+    assert.equal(order.scheduledSlots, 4);
+    assert.equal(order.operationalMoveOvertime.kind, 'weekly_rest_overtime');
+    assert.equal(appointment.lifecycleHistory[0].possibleOvertime.acceptedBy, 'owner-1');
+    assert.deepEqual(appointment.capacityLockIds.map(id => db.read(`bookingCapacityLocks/${id}`).slot), ['13:30', '14:30', '15:30', '16:30']);
+    assert.equal(db.read('bookingCapacityLocks/OLD-1').active, false);
+    assert.equal((await authority.moveAppointment(input)).replayed, true);
+    assert.equal(db.read('appointments/APT-1').lifecycleHistory.length, 1);
+  }
+});
+
+test('weekly-rest moves require explicit current consent even when work fits visible slots', async () => {
+  for (const change of ['missing', 'false', 'token', 'schedule', 'crew', 'source']) {
+    const { db, authority } = weeklyRestMoveFixture('VAN-1', 1);
+    const { input } = await prepareOvertime(authority, { targetVanId: 'VAN-1', requestedTime: '13:30' });
+    if (change === 'missing') delete input.overtimeConsent;
+    if (change === 'false') input.overtimeConsent.accepted = false;
+    if (change === 'token') input.overtimeConsent.confirmationToken = 'forged';
+    if (change === 'schedule') db.store.set('vanHalfDaySchedules/REST-VAN-1', { ...db.read('vanHalfDaySchedules/REST-VAN-1'), workdayStart: '09:00' });
+    if (change === 'crew') db.store.set('dailyVanAssignments/CHANGED', { vanId: 'VAN-1', date: '2026-08-18', driverStaffId: 'tech-2', helperStaffId: 'tech-1' });
+    if (change === 'source') db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), appointmentDurationMinutes: 90 });
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => authority.moveAppointment(input), { code: BOOKING_ERROR_CODES.AVAILABILITY_CHANGED });
+    assert.deepEqual([...db.store], before);
+  }
+});
+
+test('weekly-rest moves preserve the source on conflicts, unavailability, execution and protected boundaries', async () => {
+  for (const scenario of ['work', 'staff-work', 'hold', 'absence', 'closed', 'maintenance', 'executed', 'office', 'midnight', 'lunch', 'regular-shift', 'historical']) {
+    const { db, authority } = weeklyRestMoveFixture('VAN-1', scenario === 'midnight' ? 11 : 4);
+    const overrides = { targetVanId: 'VAN-1', requestedTime: '13:30' };
+    if (scenario === 'work' || scenario === 'staff-work') db.store.set('workOrders/OTHER', { appointmentId: 'OTHER', date: '2026-08-18', time: '16:45', vanId: scenario === 'work' ? 'VAN-1' : 'VAN-9', technicianIds: ['tech-1'], status: 'Confirmada', appointmentDurationMinutes: 60 });
+    if (scenario === 'hold') { const { hashId } = require('./bookingSchedulingPrimitives'); db.store.set(`bookingCapacityLocks/BAL-${hashId('2026-08-18|VAN-1|14:30', 32).toUpperCase()}`, { active: true, appointmentId: 'HOLD' }); }
+    if (scenario === 'absence') db.store.set('staffAbsences/ABS', { staffId: 'tech-2', fromDate: '2026-08-18', toDate: '2026-08-18', active: true });
+    if (scenario === 'closed') db.store.set('calendarClosures/CLOSED', { date: '2026-08-18', active: true });
+    if (scenario === 'maintenance') db.store.set('vans/VAN-1', { ...db.read('vans/VAN-1'), status: 'Mantenimiento' });
+    if (scenario === 'executed') db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), actualStartedAt: '2026-08-18T12:30:00Z' });
+    if (scenario === 'office') overrides.actor = { id: 'owner-1', source: 'automated' };
+    if (scenario === 'lunch' || scenario === 'regular-shift') {
+      db.store.set('vanHalfDaySchedules/REST-VAN-1', { active: true, vanId: 'VAN-1', weekday: 2, workdayStart: scenario === 'lunch' ? '13:00' : '10:00', workdayEnd: '17:00' });
+      overrides.requestedTime = '09:30';
+    }
+    if (scenario === 'historical') {
+      overrides.requestedDate = '2026-08-11';
+      db.store.set('appointments/APT-1', { ...db.read('appointments/APT-1'), date: overrides.requestedDate });
+      db.store.set('workOrders/WO-1', { ...db.read('workOrders/WO-1'), date: overrides.requestedDate });
+    }
+    const before = structuredClone([...db.store]);
+    await assert.rejects(() => prepareOvertime(authority, overrides), undefined, scenario);
+    assert.deepEqual([...db.store], before, scenario);
+  }
+});
+
+test('weekly-rest acceptance can be moved back to ordinary work without losing the original audit', async () => {
+  const { db, authority } = weeklyRestMoveFixture();
+  const { input } = await prepareOvertime(authority, { targetVanId: 'VAN-1', requestedTime: '13:30' });
+  await authority.moveAppointment(input);
+  await authority.moveAppointment(moveInput({ requestId: 'move-back-to-morning', targetVanId: 'VAN-1', requestedTime: '08:30' }));
+  assert.equal(db.read('workOrders/WO-1').operationalMoveOvertime, null);
+  assert.equal(db.read('appointments/APT-1').lifecycleHistory[0].possibleOvertime.kind, 'weekly_rest_overtime');
+});
+
+
+test('four morning slots on a half-day Van do not create a phantom afternoon conflict', async () => {
+  const { db, authority } = weeklyRestMoveFixture('VAN-2');
+  db.store.set('workOrders/MORNING', { id: 'MORNING', appointmentId: 'OTHER', date: '2026-08-18', time: '08:30', vanId: 'VAN-2', scheduledSlots: 4, appointmentDurationMinutes: 240, appointmentEndTime: '12:30', status: 'Confirmada' });
+  const { input } = await prepareOvertime(authority, { targetVanId: 'VAN-2', requestedTime: '13:30' });
+  await authority.moveAppointment(input);
+  assert.equal(db.read('appointments/APT-1').startTime, '13:30');
+  assert.equal(db.read('workOrders/MORNING').time, '08:30');
 });

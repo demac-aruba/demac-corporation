@@ -44,7 +44,7 @@ type LiveWorkOrder = {
   dwellingId?: string;
   locationSnapshot?: { locationLabel?: string; accessInstructions?: string };
   scheduledOvertime?: { kind?: string; accepted?: boolean; capacityEnd?: string; slotStarts?: string[] } | null;
-  operationalMoveOvertime?: { accepted?: boolean; capacityEnd?: string } | null;
+  operationalMoveOvertime?: { accepted?: boolean; capacityEnd?: string; kind?: string } | null;
   id: string;
   appointmentId?: string;
   appointmentType?: string;
@@ -349,6 +349,9 @@ function assignmentCapacitySlotStarts(
   const count = numericSlotCount(order.scheduledSlots)
     || normalizedSlots(order.scheduledSlots).length
     || Math.ceil(positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60) / 60);
+  if (order.operationalMoveOvertime?.accepted && order.operationalMoveOvertime.kind === 'weekly_rest_overtime') {
+    return Array.from({ length: count }, (_, index) => minutesToTime(timeToMinutes(start) + index * 60));
+  }
   const index = schedule.indexOf(start);
   if (order.operationalMoveOvertime?.accepted && index >= 0) {
     const owned = schedule.slice(index, index + count);
@@ -458,8 +461,8 @@ function workOrderAssignment(
     vanId: resolvedVanId,
     capacitySlotStarts,
     possibleOvertime: order.operationalMoveOvertime?.accepted === true || order.scheduledOvertime?.accepted === true,
-    scheduledOvertime: order.scheduledOvertime?.accepted === true,
-    scheduledOvertimeKind: order.scheduledOvertime?.kind,
+    scheduledOvertime: order.scheduledOvertime?.accepted === true || order.operationalMoveOvertime?.accepted === true && order.operationalMoveOvertime.kind === 'weekly_rest_overtime',
+    scheduledOvertimeKind: order.scheduledOvertime?.kind || order.operationalMoveOvertime?.kind,
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),

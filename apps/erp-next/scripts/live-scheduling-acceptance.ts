@@ -551,3 +551,23 @@ requireCondition(consecutiveSupportOptions(supportSlots.map(slot => ({ ...slot, 
 requireCondition(consecutiveSupportOptions(supportSlots, '15:30').length === 1, 'Last slot does not extend beyond end of day.');
 requireCondition(consecutiveSupportOptions(supportSlots, '12:30').length === 0, 'Unsupported start fails closed.');
 requireCondition(consecutiveSupportOptions(supportSlots.map(slot => ({ ...slot, occupied: true })), '08:30').length === 0, 'Occupied start offers no support duration.');
+
+
+// Future date makes weekly-rest move eligibility independent of the test runner's day.
+const restMoveDate = '2099-10-05';
+const restMoveDay = buildOperationalWeek(restMoveDate).find(day => day.dateKey === restMoveDate)!;
+const restMoveWeekday = new Date(`${restMoveDate}T12:00:00Z`).getUTCDay();
+for (const vanId of ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']) {
+  const state: LiveOperationalCapacityState = { ...baseCapacity, halfDaySchedules: [{ id: `REST-${vanId}`, vanId, weekday: restMoveWeekday, active: true, workdayStart: '08:00', workdayEnd: '13:00' }] };
+  const source = { ...overtimeExample, dateKey: restMoveDate, scheduledSlotCount: 4, scheduledDurationMinutes: 240, assignments: overtimeExample.assignments.map(job => ({ ...job, dateKey: restMoveDate, end: '12:30' })) };
+  const targets = liveDragMoveCandidates(restMoveDay, source, source.assignments, state);
+  const target = targets.find(slot => slot.vanId === vanId && slot.start === '13:30');
+  requireCondition(target?.possibleOvertime?.kind === 'weekly_rest_overtime' && target.possibleOvertime.ordinarySlots === 0 && target.possibleOvertime.requiredSlots === 4 && target.end === '17:30', `${vanId} must expose the complete weekly-rest move, including the same Van.`);
+  const blocker = { ...source.assignments[0], id: 'OTHER', vanId, start: '16:30', end: '17:30', capacitySlotStarts: ['16:30'] };
+  requireCondition(!liveDragMoveCandidates(restMoveDay, source, [...source.assignments, blocker], state).some(slot => slot.vanId === vanId && slot.start === '13:30'), 'A late occupied slot must block the complete rest move.');
+  requireCondition(!liveDragMoveCandidates(restMoveDay, source, source.assignments, { ...state, calendarClosures: [{ id: 'CLOSED', date: restMoveDate, active: true }] }).length, 'Canonical company closure cannot become overtime availability.');
+  const refreshed = projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], date: restMoveDate, time: '13:30', vanId, appointmentDurationMinutes: 240, scheduledSlots: 4, appointmentEndTime: '17:30', appointmentCapacityEndTime: '17:30', operationalMoveOvertime: { accepted: true, kind: 'weekly_rest_overtime', capacityEnd: '17:30' } }], clients, properties, [], [], state)[0];
+  requireCondition(refreshed.assignments[0].scheduledOvertimeKind === 'weekly_rest_overtime' && refreshed.assignments[0].scheduledOvertime === true, 'Reload must explain the weekly-rest overtime reason.');
+  requireCondition(refreshed.assignments[0].capacitySlotStarts?.join('|') === '13:30|14:30|15:30|16:30', 'Reload must retain all four weekly-rest capacity slots.');
+}
+console.log('Weekly-rest move acceptance passed: every Van, same-Van move, four slots, occupied tail, canonical closure and refreshed capacity.');

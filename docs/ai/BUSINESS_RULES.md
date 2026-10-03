@@ -177,6 +177,20 @@ Production activation remains separately owner-approved through the server-side 
   ordinary availability to automated booking or Maya. Multi-Van/support bookings retain
   their existing coordinated reschedule boundary.
 
+- `OPS-SCHED-MOVE-REST-001` — Owner request 2026-10-03, effective on approved
+  release: an authenticated office operator may move an unexecuted confirmed,
+  fixed-duration, single-Van appointment into a recurring weekly-rest window on
+  the same nonhistorical date, including within its current Van. All eligible
+  Vans use the same rule. An explicit rest/overtime confirmation binds the actor,
+  source, dated crew/schedule and complete destination estimate. Preparation or
+  cancellation writes nothing. Booking Authority atomically preserves identity,
+  workload, links and full capacity, swaps locks and records acceptance in the
+  existing move audit. Company closure, staff absence, work/hold overlap, lunch,
+  morning rest crossing the regular shift, midnight and stale consent still block.
+  Four slots moved to 13:30 remain four slots until 17:30. Ordinary availability,
+  recurring schedules and actual payroll remain unchanged; no migration required.
+  Existing ordinary overflow transfers retain OPS-SCHED-MOVE-OT-001.
+
 ## Current payroll-attendance ownership
 
 - `OPS-STAFF-BONUS-MANUAL`: authorized payroll users enter approved employee bonuses
