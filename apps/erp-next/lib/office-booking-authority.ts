@@ -722,6 +722,8 @@ export async function rescheduleOfficeAppointment(input: {
  * server request so the browser does not pay two sequential network round trips.
  */
 export type OfficeMoveOvertimeProposal = {
+  kind?: 'weekly_rest_overtime';
+  regularStart?: string; regularEnd?: string;
   vanId: string; vanName: string; start: string;
   requiredSlots: number; ordinarySlots: number;
   estimatedEnd: string; ordinaryEnd: string; capacityEnd: string;

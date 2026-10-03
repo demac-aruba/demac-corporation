@@ -762,7 +762,7 @@ function LiveSchedulingSession() {
         dateKey: appointment.dateKey,
         actor,
       });
-      if (pending.overtime) projected.record.assignments = projected.record.assignments.map((job) => ({ ...job, possibleOvertime: true, capacityEnd: pending.overtime!.capacityEnd }));
+      if (pending.overtime) projected.record.assignments = projected.record.assignments.map((job) => ({ ...job, possibleOvertime: true, capacityEnd: pending.overtime!.capacityEnd, scheduledOvertime: pending.overtime!.kind === 'weekly_rest_overtime', scheduledOvertimeKind: pending.overtime!.kind }));
 
       refreshSequenceRef.current += 1;
       setAppointments((items) => items.map((item) => item.id === appointment.id ? projected.record : item));
@@ -1019,7 +1019,10 @@ function VanScheduleSlots({
     if (firstAfternoon) rows.push(<div className={styles.lunchRow} data-schedule-lunch key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
     const active = activeJobsForSlot(jobs, slot);
-    if (!active.length && !slot.operational) {
+    const weeklyRestMoveTarget = Boolean(moveArmedJobId) && !moveBusy && !slot.operational
+      && validDropTargets.has(liveMoveTargetKey(vanId, slot.start))
+      && overtimeDropTargets.has(liveMoveTargetKey(vanId, slot.start));
+    if (!active.length && !slot.operational && !weeklyRestMoveTarget) {
       const canBookOvertime = slot.restDayOvertime && canCreate && !moveArmedJobId && !moveBusy;
       rows.push(<div
         className={styles.openSlot}
@@ -1038,7 +1041,7 @@ function VanScheduleSlots({
     if (!active.length) {
       const dropEnabled = Boolean(moveArmedJobId)
         && !moveBusy
-        && slot.operational
+        && (slot.operational || weeklyRestMoveTarget)
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
       const overtimeTarget = dropEnabled && overtimeDropTargets.has(liveMoveTargetKey(vanId, slot.start));
@@ -1064,7 +1067,7 @@ function VanScheduleSlots({
           : undefined}
       >
         <div className={`${styles.slotTime} ${createEnabled ? laneStyles.slotContent : ''}`}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div className={createEnabled ? laneStyles.slotContent : undefined}><strong>{overtimeTarget ? 'Posible overtime' : dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{overtimeTarget ? 'Requiere confirmación · conserva todos los cupos' : dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
+        <div className={createEnabled ? laneStyles.slotContent : undefined}><strong>{weeklyRestMoveTarget ? 'Día libre · overtime' : overtimeTarget ? 'Posible overtime' : dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{overtimeTarget ? 'Requiere confirmación · conserva todos los cupos' : dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
         {dropEnabled ? <button type="button" className={styles.secondary} onClick={() => onDropMove(vanId, slot.start)}>{overtimeTarget ? 'REVISAR' : 'MOVE'}</button> : createEnabled || supportEnabled ? <div className={createEnabled ? laneStyles.slotActions : undefined} style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('book'); }}>BOOK</button> : null}
           {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('support'); }}>SUPPORT</button> : null}
