@@ -624,9 +624,15 @@ exports.wacliBookingReferenceMedia = onRequest(
           || !safeSecretEqual(claimToken, record.claimToken)) throw httpError(403, 'Unavailable reference.');
       const media = currentBundlePart(record)?.media;
       if (!media || !/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(media.storagePath || '')) throw httpError(404, 'Unavailable reference.');
-      const [bytes] = await storage.bucket().file(media.storagePath).download();
+      // Office can create ordinary queue records under the existing rules. A queue
+      // payload must never elevate access to another operator's unclaimed draft.
+      const upload = await db.collection('bookingReferenceUploads').doc(media.storagePath.split('/').pop()).get();
+      const file = upload.exists ? upload.data() : null;
+      if (!file || file.status !== 'linked' || !record.appointmentId || file.appointmentId !== record.appointmentId
+          || file.storagePath !== media.storagePath) throw httpError(403, 'Unavailable reference.');
+      const [bytes] = await storage.bucket().file(file.storagePath).download();
       if (bytes.length > MAX_MEDIA_BYTES) throw httpError(413, 'Reference exceeds media limit.');
-      response.set('Content-Type', media.mimeType || 'application/octet-stream');
+      response.set('Content-Type', file.mimeType || 'application/octet-stream');
       response.set('Content-Disposition', 'attachment');
       response.status(200).send(bytes);
     } catch (error) { response.status(error.statusCode || 500).json({ error: 'Reference media is unavailable.' }); }

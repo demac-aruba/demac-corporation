@@ -28,6 +28,7 @@ self-review passes. This is not an independent review or human release approval.
 | Medium | Recipient coordination | An already claimed ordinary text could overlap the start of a bundle under multiple pollers | All new wacli claims reserve the recipient; ordinary success/failure releases it, bundles retain until final success; regression passes |
 | Medium | Recovery | A failed ordinary schedule text in the dependency chain would block later bundles while bundle-only retry ignored it | Office retry includes failed canonical schedule texts, preserves sent state, and honors enabled/current group configuration |
 | Medium | Media lease | Three minutes can expire during download, voice conversion, provider send and durable ACK | Bundle lease is ten minutes; plain-text lease unchanged; asserted in gateway test |
+| High | Private media / existing queue-create rules | Existing office rules allow creation of ordinary queue records; a crafted media path must not read another operator's unclaimed upload | Retrieval checks the server-owned linked manifest and exact Appointment/path, and uses canonical MIME; unclaimed/foreign-booking tests pass without changing rules |
 | Low | Initial read failure | Failed initial load could look like an empty editable reference section | Reader/editor show load failure and retry only until successful load; browser recovery test passes |
 
 No unresolved correctness or authorization finding was found in the final corrective diff.
@@ -56,7 +57,7 @@ No unresolved correctness or authorization finding was found in the final correc
 
 Security: active account/office roles, denied technician writes, ownership, cross-booking
 reuse, private draft reads, current-day assigned reads, untrusted paths/types/sizes,
-wrong/expired-after-ACK delivery tokens and orphan cleanup. Service fixtures assert
+wrong/expired-after-ACK delivery tokens, forged draft/foreign-booking media claims and orphan cleanup. Service fixtures assert
 that Firestore transactions do not read after writes.
 
 Business: ordinary/special atomic reference claims, immutable booking workload/capacity,

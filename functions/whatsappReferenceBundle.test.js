@@ -31,10 +31,11 @@ function gateway(db) {
 }
 function fixture() {
   const db = new ReferenceDb({
-    'whatsappOutboundQueue/WORK-1': { provider: 'wacli', type: 'booking-reference-bundle', to: '120000000000001@g.us', status: 'queued', createdAt: '2026-10-05T12:00:00Z', messageIndex: 0,
+    'whatsappOutboundQueue/WORK-1': { provider: 'wacli', type: 'booking-reference-bundle', appointmentId: 'APT-1', to: '120000000000001@g.us', status: 'queued', createdAt: '2026-10-05T12:00:00Z', messageIndex: 0,
       messages: [{ text: 'Work 1' }, { text: 'Photo: kitchen', media: { kind: 'image', storagePath: 'booking-references/office/photo-0001', fileName: 'kitchen.jpg', mimeType: 'image/jpeg' } },
         { text: 'Audio explanation' }, { text: '', media: { kind: 'voice', storagePath: 'booking-references/office/audio-0001', fileName: 'voice.opus', mimeType: 'audio/ogg' } }] },
     'whatsappOutboundQueue/WORK-2': { provider: 'wacli', type: 'text', text: 'Work 2', to: '120000000000001@g.us', status: 'queued', createdAt: '2026-10-05T12:00:01Z', dependsOnQueueId: 'WORK-1' },
+    'bookingReferenceUploads/photo-0001': { status: 'linked', appointmentId: 'APT-1', storagePath: 'booking-references/office/photo-0001', mimeType: 'image/jpeg' },
   });
   return { db, ...gateway(db) };
 }
@@ -49,6 +50,12 @@ test('bundle sends work → captioned photo → audio explanation → voice befo
   assert.match(photo.media.url, /wacliBookingReferenceMedia/); assert.equal(photo.media.storagePath, undefined);
   const good = await call('wacliBookingReferenceMedia', {}, { queueId: photo.queueId, claimToken: photo.claimToken });
   assert.equal(good.statusCode, 200); assert.equal(good.body.toString(), 'private-reference');
+  const manifest = db.records.get('bookingReferenceUploads/photo-0001');
+  for (const replacement of [{ ...manifest, status: 'ready', appointmentId: null }, { ...manifest, appointmentId: 'APT-OTHER' }]) {
+    db.records.set('bookingReferenceUploads/photo-0001', replacement);
+    assert.equal((await call('wacliBookingReferenceMedia', {}, { queueId: photo.queueId, claimToken: photo.claimToken })).statusCode, 403);
+  }
+  db.records.set('bookingReferenceUploads/photo-0001', manifest);
   assert.equal((await call('wacliBookingReferenceMedia', {}, { queueId: photo.queueId, claimToken: 'wrong' })).statusCode, 403);
   await ack(photo);
   assert.equal((await call('wacliBookingReferenceMedia', {}, { queueId: photo.queueId, claimToken: photo.claimToken })).statusCode, 403);

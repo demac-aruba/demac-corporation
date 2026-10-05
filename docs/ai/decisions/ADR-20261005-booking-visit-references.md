@@ -41,6 +41,9 @@ opaque capabilities tied to the current queue claim and invalid after acknowledg
 or expiry. A 10-minute bundle lease covers media download, conversion, send and ACK;
 ordinary message leases retain their existing three minutes. No new sender/provider,
 bridge service, secret or signed-URL IAM grant is introduced.
+The retrieval endpoint also requires a server-owned linked upload manifest matching
+the queue's Appointment/path; a client-created queue record cannot retrieve an
+unclaimed draft. MIME is read from that manifest, never trusted from queue input.
 
 Failure keeps the cursor; up to three attempts use 30-second retry delay. Terminal
 failure pauses that recipient's bundle. The existing office schedule communication
@@ -84,6 +87,12 @@ Booking Authority facade, daily/change producers and modified gateway/media endp
 from one reviewed revision, then ERP hosting. Existing bridge source needs no feature
 change, but confirm the deployed bridge supports media/voice before the release smoke.
 Use an approved test group for the first real ordered-media delivery.
+The existing automatic producer deployment alone does not publish the new endpoints.
+Use the repository's `[merge-only]` release convention and coordinate the approved
+release of `bookingVisitReferences`, `cleanupBookingReferenceUploads`,
+`notifyBookingReferenceUpdate`, `wacliBookingReferenceMedia`, `wacliOutboundPoll`,
+`wacliOutboundAck`, `officeBookingAuthority`, `queueAppointmentConfirmation` and
+`sendDailyTechnicianSchedules` before enabling the new ERP UI.
 
 Observe queue status/cursor/error, gateway logs and reference-update warnings.
 Rollback must first drain or explicitly reconcile pending bundles and dispatch locks;
