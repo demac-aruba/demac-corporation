@@ -4,7 +4,10 @@ const { COLLECTION, MAX_ASSIGNMENTS, authorize, identifier, phaseExists, fail } 
 function withProjectBookingLinks({ db, provider }) {
   async function readProject({ request, context, transaction }) {
     if (!request.project) return null;
-    if (context.channel !== 'office' || !context.projectActorId || context.bookingMode === 'backdated') fail('Use the historical correction action for past Project work.');
+    if (context.channel !== 'office' || !context.projectActorId) fail('Project booking requires an authenticated office scheduler.');
+    // Registering previously unscheduled work uses the normal atomic booking path.
+    // Adjusting/replacing an existing historical booking remains manager-only.
+    if (context.bookingMode === 'backdated' && context.backdatingAcknowledged !== true) fail('Confirm the backdated appointment warning before recording past Project work.');
     const actor = await authorize(db, context.projectActorId, 'schedule', transaction);
     const ref = db.collection(COLLECTION).doc(identifier(request.project.id));
     const snapshot = await (transaction ? transaction.get(ref) : ref.get());
