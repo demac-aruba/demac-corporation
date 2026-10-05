@@ -1,3 +1,4 @@
+const { prepareVisitReferencesCommit, referenceFingerprint } = require('./bookingVisitReferences');
 const crypto = require("node:crypto");
 const { resolvePropertyLocation } = require('./propertyLocations');
 const {
@@ -356,7 +357,8 @@ function createBookingAuthority({
         && Number(record.offerVersion) === Number(offerVersion)
         && record.optionId === cleanText(optionId, 180)
         && record.appointmentId === identity.appointmentId
-        && normalizeCreateMode(record.createMode) === normalizedCreateMode;
+        && normalizeCreateMode(record.createMode) === normalizedCreateMode
+        && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences);
       if (!sameRequest) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -423,7 +425,8 @@ function createBookingAuthority({
           && Number(record.offerVersion) === Number(offerVersion)
           && record.optionId === cleanText(optionId, 180)
           && record.appointmentId === identity.appointmentId
-          && normalizeCreateMode(record.createMode) === normalizedCreateMode;
+          && normalizeCreateMode(record.createMode) === normalizedCreateMode
+          && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences);
         if (!sameRequest) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -582,7 +585,9 @@ function createBookingAuthority({
       }
       const workOrderIds = workOrders.map((item) => item.id);
       const actorInfo = actorFields(actor);
+      const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: context.visitReferences, actor, appointmentId: identity.appointmentId, now });
       const appointmentRecord = compactObject({
+        ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
         ...appointment,
         ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { locationSnapshot } : {}),
@@ -608,6 +613,7 @@ function createBookingAuthority({
       });
 
       transaction.set(appointmentRef, appointmentRecord);
+      if (referencesCommit) referencesCommit.write();
       if (projectCommit) projectCommit.write({ workOrders, createMode: normalizedCreateMode });
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
@@ -657,6 +663,7 @@ function createBookingAuthority({
         optionId: cleanText(optionId, 180),
         createMode: normalizedCreateMode,
         operation: temporaryHold ? "createTemporaryHold" : "createAppointment",
+        referencesFingerprint: referenceFingerprint(context.visitReferences),
         ...actorInfo,
         createdAtIso: now.toISOString(),
         createdAt: serverTimestamp(),

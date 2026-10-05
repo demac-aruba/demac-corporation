@@ -1,5 +1,8 @@
 'use client';
 
+import { VisitReferenceEditor } from './booking-visit-references';
+import { emptyVisitReferences, hasVisitReferences, type VisitReferences } from '../../lib/booking-visit-references';
+
 import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-budget-status';
 import { ProjectBudgetConfirmation } from '@/components/projects/project-budget-confirmation';
 import { calculateProjectLaborBudget, projectAllocationHours } from '@/lib/project-labor-budget';
@@ -386,6 +389,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const backdatingPromptedRef = useRef(false);
   const [backdatingAcknowledged, setBackdatingAcknowledged] = useState(false);
   const [technicianInstructions, setTechnicianInstructions] = useState('');
+  const [visitReferences, setVisitReferences] = useState<VisitReferences>(emptyVisitReferences);
+  const [referencesUploading, setReferencesUploading] = useState(false);
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false);
   const [customerDraft, setCustomerDraft] = useState<CustomerDraft>(emptyCustomer);
@@ -1371,7 +1376,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setAuthorityError('Project scheduling permission or a published Project is required to confirm this appointment.');
       return;
     }
-    if (!locationReady || !selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || bookingInFlight.current) return;
+    if (!locationReady || !selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding || referencesUploading || bookingInFlight.current) return;
     if (backdatedTarget && !backdatingAcknowledged) {
       setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
       return;
@@ -1392,6 +1397,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         workLines: workRequestLines(), requestedDate: requestTarget.dateKey, requestedTime: requestTarget.start,
         requiredVanId: requestTarget.vanId, customerFacingDescription: authorizedDescription.trim(),
         technicianInstructions: authorizedTechnicianInstructions.trim(), recipientSelections,
+        ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
       };
       const signature = JSON.stringify({ mode: useCapacityOvertime ? 'capacity_overtime' : mode, data });
       if (specialRequestRef.current.signature !== signature) specialRequestRef.current = {
@@ -1463,6 +1469,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const option = selectedValidatedOption;
     try {
       const result = await confirmOfficeAppointment({
+        ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
         requestId: `schedule-create:${offerId}:${offerVersion}:${option.id}`,
         offerId,
         offerVersion,
@@ -1490,7 +1497,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
-      if (projectBookingRequested && officeBookingOutcomeUnknown(error)) {
+      if (officeBookingOutcomeUnknown(error)) {
         // Keep the original offer, option, acknowledgement and request ID, even if a
         // storage update changes the current forecast while this response is lost.
         setBookingRecovery({ retry: () => confirmBooking(acknowledgedBudget) });
@@ -1512,7 +1519,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setAuthorityError('Project scheduling permission or a published Project is required to hold this appointment.');
       return;
     }
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding || bookingInFlight.current) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding || referencesUploading || bookingInFlight.current) return;
     if (projectBookingRequested && !bookingBudgetPlan) { setAuthorityError(allocationBudget.error); return; }
     if (budgetAcknowledgementRequired && acknowledgedBudget !== budgetSignature) {
       setBudgetConfirmation({ action: 'hold', signature: budgetSignature });
@@ -1526,6 +1533,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const option = selectedValidatedOption;
     try {
       const result = await createOfficeTemporaryHold({
+        ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
         requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
         offerId,
         offerVersion,
@@ -1552,7 +1560,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
-      if (projectBookingRequested && officeBookingOutcomeUnknown(error)) {
+      if (officeBookingOutcomeUnknown(error)) {
         setBookingRecovery({ retry: () => holdBooking(acknowledgedBudget) });
       } else {
         setBookingRecovery(null);
@@ -1565,7 +1573,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     }
   };
 
-  const busy = loading || masterSaving || saving || holding;
+  const busy = loading || masterSaving || saving || holding || referencesUploading;
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
@@ -1812,6 +1820,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               </div>
             </div>
           </section>
+
+          <VisitReferenceEditor value={visitReferences} onChange={setVisitReferences} disabled={loading || masterSaving || saving || holding || Boolean(bookingRecovery)} onBusyChange={setReferencesUploading} />
 
           {isRestDayOvertime ? (
             <section className={styles.authoritySection}>

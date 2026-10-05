@@ -1,3 +1,4 @@
+const { referenceMessageParts } = require('./bookingVisitReferences');
 const { arubaDateParts, resolveAssignment } = require("./bookingSchedulingPrimitives");
 const { resolveCanonicalVanId } = require("./bookingVanIdentity");
 const {
@@ -158,7 +159,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
   const dailySchedules = createTechnicianDailyScheduleService({ db });
   const whatsapp = createWhatsAppTransactionalService({ db });
 
-  async function queueVanGroup({ van, queueId, message, metadata }) {
+  async function queueVanGroup({ van, queueId, message, metadata, messages }) {
     const config = groupConfigForVan(van);
     if (!config.enabled) return { queued: false, created: false, reason: "van-group-delivery-disabled", vanId: van?.id, groupName: config.groupName };
     if (!config.valid) return { queued: false, created: false, reason: "van-whatsapp-group-not-configured", vanId: van?.id, groupName: config.groupName };
@@ -166,6 +167,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       queueId,
       to: config.groupJid,
       text: message,
+      messages,
       languageCode: "es",
       metadata: {
         ...metadata,
@@ -207,6 +209,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       van,
       queueId,
       message,
+      messages: referenceMessageParts({ text: message, appointment, order: currentOrder, client, sequence }),
       metadata: {
         notificationType: "van-same-day-schedule-change",
         workOrderId: currentOrder.id,
@@ -293,6 +296,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       van: supportVan,
       queueId: deterministicSupportScheduleChangeQueueId({ eventId, orderId: currentOrder.id, vanId: supportVanId, recipientRole: "support" }),
       message: supportMessage,
+      messages: referenceMessageParts({ text: supportMessage, appointment, order: currentOrder, client, sequence }),
       metadata: { ...sharedMetadata, supportNotificationRole: "support" },
     });
     const primaryResult = await queueVanGroup({

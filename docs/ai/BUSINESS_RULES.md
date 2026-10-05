@@ -27,6 +27,19 @@ engineering index; it does not replace that registry.
   Historical support is non-billable, suppresses automatic messages and does not alter payroll/Field actuals.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
   canonical conflict validation, audit markers and silent automatic communications.
+- `OPS-SCHED-REFERENCES-001`: owner Christian's 2026-10-05 request, effective upon approved
+  release: any booking may optionally carry office/customer reference photos, videos,
+  voice files, per-file explanations, notes and GPS. Office may add or edit them after
+  creation. Booking Authority retains canonical Appointment ownership; these references
+  are not technician completion evidence, financial authorization or workload changes.
+  The existing 08:00 Aruba WhatsApp schedule sends each Work Order followed by its own
+  ordered files before the next work message. Photos/videos carry their explanation;
+  voice explanations immediately precede the voice message. Same-day edits after 08:00
+  queue a separately identified update to current assigned Vans. Historical writes,
+  future edits and Temporary Holds remain silent until otherwise eligible.
+  Owner: Operations / Booking and Communication Authorities. Migration: none.
+  Regression: bookingVisitReferences, bookingVisitReferencesHttp, whatsappReferenceBundle,
+  technicianDailyScheduleService and vanScheduleCommunicationAuthority tests.
 - `OPS-PROJ-SCHED-001`: an active, provisioned Office Operator may schedule or place a
   Temporary Hold for an existing published Project, using its canonical Customer and
   Property and Booking Authority's atomic Appointment/Work Order/capacity/Project link.

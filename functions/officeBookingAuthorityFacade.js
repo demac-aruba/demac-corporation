@@ -91,6 +91,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
           customerFacingDescription: data.customerFacingDescription,
           technicianInstructions: data.technicianInstructions,
           recipientSelections: data.recipientSelections,
+          visitReferences: data.visitReferences,
           actor: officeActor(identity),
         });
       } else {

@@ -1,3 +1,4 @@
+import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type {
   AppointmentRecipientSelection,
@@ -522,6 +523,7 @@ export async function checkOfficeCreateAvailability(input: {
 }
 
 export async function confirmOfficeAppointment(input: {
+  visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
   offerVersion: number;
@@ -537,6 +539,7 @@ export async function confirmOfficeAppointment(input: {
 }
 
 export async function createOfficeTemporaryHold(input: {
+  visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
   offerVersion: number;
@@ -761,4 +764,8 @@ export async function addOfficeAdhocSupport(input: {
   reason?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAdhocSupportResult>('add_adhoc_support', input, 12_000);
+}
+
+export function retryVanScheduleDelivery(input: { dateKey: string; vanId?: string }) {
+  return callOfficeBookingAuthority<{ success: true; resumed: number }>('retry_van_schedule_delivery', input, 30_000);
 }

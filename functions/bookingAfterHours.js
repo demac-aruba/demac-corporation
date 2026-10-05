@@ -1,3 +1,4 @@
+const { prepareVisitReferencesCommit, referenceInput } = require('./bookingVisitReferences');
 const {
   BOOKING_ERROR_CODES,
   BookingAuthorityError,
@@ -112,6 +113,7 @@ function createAfterHoursAuthority({
     customerFacingDescription = "",
     technicianInstructions = "",
     recipientSelections = [],
+    visitReferences,
     actor = {},
     overtimeConsent,
   } = {}, { restDay = false, capacityOvertime = false, prepareOnly = false } = {}) {
@@ -156,6 +158,7 @@ function createAfterHoursAuthority({
     }
     const requestFingerprint = hashId(JSON.stringify({ restDay, ...(capacityOvertime ? { capacityOvertime: true } : {}), clientId, siteId, dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '',
       ...(projectRequest ? { project: projectRequest.project } : {}),
+      ...(visitReferences !== undefined ? { visitReferences: referenceInput(visitReferences) } : {}),
       requestedWorkLines, dateKey, startTime, rawVanId, customerFacingDescription, technicianInstructions, recipientSelections, actorId: actor.id || actor.userId || '' }), 64);
     const appointmentId = boundedOvertime ? `APT-${capacityOvertime ? 'CO' : 'OT'}-${hashId(stableRequestId, 20).toUpperCase()}` : afterHoursAppointmentId(stableRequestId);
     const workOrderId = afterHoursWorkOrderId(appointmentId);
@@ -379,7 +382,9 @@ function createAfterHoursAuthority({
           endTime: overtime.proposal.estimatedEnd, capacityEndTime: overtime.proposal.capacityEnd }
           : { afterHoursOpenEnded: true, afterHoursKind: AFTER_HOURS_KIND }),
       });
+      const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: visitReferences, actor, appointmentId, now });
       const appointment = compactObject({
+        ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
         ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
         id: appointmentId,
@@ -450,6 +455,7 @@ function createAfterHoursAuthority({
 
       if (projectCommit) projectCommit.write({ workOrders: [workOrder], createMode: 'confirmed' });
       transaction.set(appointmentRef, appointment);
+      if (referencesCommit) referencesCommit.write();
       transaction.set(workOrderRef, workOrder);
       if (overtime) {
         for (const { lock, ref } of lockSnapshots) transaction.set(ref, { ...lock, appointmentId, workOrderId, active: true, createdAtIso: timestamp, updatedAtIso: timestamp });

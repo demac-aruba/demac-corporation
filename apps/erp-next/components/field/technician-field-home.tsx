@@ -1,5 +1,7 @@
 'use client';
 
+import { SavedVisitReferences } from '../scheduling/booking-visit-references';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
@@ -1077,6 +1079,7 @@ function DetailView({
               )) : <p className={styles.helper}>{job.customerFacingDescription || 'Trabajo programado'}</p>}
             </div>
             {job.technicianInstructions ? <div className={styles.siteNote}><strong>Nota de oficina</strong><span>{job.technicianInstructions}</span></div> : null}
+            <SavedVisitReferences key={job.workOrderId} workOrderId={job.workOrderId} />
           </section>
 
           <details className={styles.moreOptions}>

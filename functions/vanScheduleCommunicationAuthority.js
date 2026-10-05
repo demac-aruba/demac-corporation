@@ -2,12 +2,13 @@ const { BOOKING_ERROR_CODES, BookingAuthorityError, cleanText } = require("./boo
 const { canonicalizeVanCatalog, canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { createOperatingCalendarService, dateKeyInTimeZone } = require("./operatingCalendarService");
 const { DEFAULT_VAN_GROUP_NAMES, createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
-const { validWacliRecipient } = require("./whatsappTransactionalService");
+const { validWacliRecipient, createWhatsAppTransactionalService } = require("./whatsappTransactionalService");
 
 const VAN_SCHEDULE_ACTIONS = new Set([
   "get_van_schedule_groups",
   "save_van_schedule_groups",
   "send_van_schedules_now",
+  "retry_van_schedule_delivery",
 ]);
 
 function groupJid(value) {
@@ -117,7 +118,32 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
     };
   }
 
+  async function retryFailed(data = {}, identity = {}) {
+    const dateKey = cleanText(data.dateKey, 20) || dateKeyInTimeZone();
+    const target = data.vanId ? canonicalVanIdFromValue(data.vanId) : '';
+    if (data.vanId && !target) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'A canonical Van is required.');
+    await createWhatsAppTransactionalService({ db }).getTransportSettings();
+    const catalog = await loadVanCatalog();
+    const groups = new Map(catalog.vans.filter(van => van.scheduleDeliveryEnabled !== false).map(van => [van.id, groupJid(van.whatsappScheduleGroupJid)]));
+    const snapshot = await db.collection('whatsappOutboundQueue').where('scheduleDate', '==', dateKey).get();
+    let resumed = 0;
+    for (const item of snapshot.docs) {
+      resumed += await db.runTransaction(async transaction => {
+        const fresh = await transaction.get(item.ref);
+        const current = fresh.exists ? fresh.data() : {};
+        const scheduleMessage = current.type === 'booking-reference-bundle' || ['van-daily-work-order', 'van-daily-lunch-break', 'van-daily-pending-period'].includes(current.notificationType);
+        if (!scheduleMessage || current.provider !== 'wacli' || current.status !== 'failed'
+            || (target && current.vanId !== target) || groups.get(current.vanId) !== current.to) return 0;
+        transaction.set(item.ref, { status: 'queued', partAttempts: 0, retryAfterIso: null, errorMessage: null,
+          resumedAtIso: new Date().toISOString(), resumedBy: cleanText(identity.uid, 160) }, { merge: true });
+        return 1;
+      });
+    }
+    return { success: true, version: apiVersion, resumed };
+  }
+
   async function execute({ action, data = {}, identity = {} } = {}) {
+    if (action === "retry_van_schedule_delivery") return retryFailed(data, identity);
     if (action === "get_van_schedule_groups") return getConfiguration();
     if (action === "save_van_schedule_groups") return saveConfiguration(data, identity);
     if (action === "send_van_schedules_now") return sendNow(data, identity);

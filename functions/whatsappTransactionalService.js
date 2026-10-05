@@ -246,6 +246,18 @@ function createWhatsAppTransactionalService({ db } = {}) {
     return { queued: true, created: result.created, existing: !result.created, provider: "wacli", queueId: id, to: normalizedTo };
   }
 
+  async function queueWacliReferenceBundle({ queueId, to, messages, metadata = {} }) {
+    const normalizedTo = normalizeWacliRecipient(to);
+    if (!validWacliRecipient(normalizedTo)) return { queued: false, created: false, reason: 'invalid-whatsapp-recipient' };
+    if (!Array.isArray(messages) || messages.length < 1 || messages.length > 41) throw new Error('Invalid reference bundle.');
+    const id = safeDocumentId(queueId);
+    const result = await createQueueItem(id, { ...metadata, provider: 'wacli', type: 'booking-reference-bundle',
+      to: normalizedTo, text: messages[0].text, messages, messageIndex: 0, status: 'queued',
+      createdByUserId: 'demac-transactional-notifications', createdByName: 'DEMAC',
+      createdAt: FieldValue.serverTimestamp(), createdAtIso: new Date().toISOString() });
+    return { queued: true, created: result.created, existing: !result.created, provider: 'wacli', queueId: id, to: normalizedTo };
+  }
+
   async function queueMetaTemplate({
     queueId,
     to,
@@ -289,6 +301,7 @@ function createWhatsAppTransactionalService({ db } = {}) {
   }
 
   async function queueTransactionalMessage({
+    messages,
     queueId,
     to,
     text,
@@ -299,8 +312,10 @@ function createWhatsAppTransactionalService({ db } = {}) {
   } = {}) {
     const settings = await getTransportSettings();
     if (settings.transactionalProvider === "meta") {
+      if (messages?.length > 1) throw new Error("Booking reference bundles require the configured wacli group transport.");
       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
     }
+    if (messages?.length > 1) return queueWacliReferenceBundle({ queueId, to, messages, metadata });
     const explicitText = String(text || "").trim();
     const fallbackText = explicitText ? "" : renderTransactionalText({ templateName, bodyParameters, languageCode });
     return queueWacliText({ queueId, to, text: explicitText || fallbackText, metadata });
