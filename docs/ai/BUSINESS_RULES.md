@@ -33,6 +33,16 @@ engineering index; it does not replace that registry.
   The operator may read only the scheduling projection needed for this work; creating,
   editing or completing Project planning and correcting historical Project capacity
   remain manager-only. Browser-local unpublished Projects cannot be booked by operators.
+- `OPS-SCHED-PROJECT-BACKDATE-001`: owner request 2026-10-05, effective on approved
+  release: existing Project schedulers may register previously unscheduled work for
+  a published, schedulable Project at an elapsed time today or on a previous date,
+  on any eligible Van. Booking Authority requires explicit historical acknowledgement,
+  revalidates canonical capacity/crew/calendar, Project version and CRM/phase links,
+  and commits Appointment/Work Order/locks/Project link atomically with actor/time audit.
+  Automatic messages and historical Temporary Holds remain disabled. This registration
+  does not confer Project planning permissions or the manager-only adjustment/recovery
+  of an existing historical booking, and writes no Field/payroll/financial actuals.
+  Owner: Operations / Booking Authority. Migration: none.
 - `OPS-TASK-*`: internal operational tasks are independent of Scheduling, use canonical staff
   identity, governed lifecycle/version checks, private evidence and the existing WhatsApp authority.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware

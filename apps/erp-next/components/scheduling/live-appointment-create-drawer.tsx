@@ -655,7 +655,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const authorizedTechnicianInstructions = projectAccessRevoked ? '' : technicianInstructions;
   const availableProjects: ProjectSchedulingSnapshot[] = canManageProjects ? projectsState.projects : schedulingProjects;
   const selectedProject = projectMode ? availableProjects.find((project) => project.id === projectId) : undefined;
-  const projectWriteBlocked = projectSourceSelected && (!canScheduleProjects || Boolean(selectedProject && !selectedProject.serverVersion && (isRestDayOvertime || !canManageProjects)));
+  const projectWriteBlocked = projectSourceSelected && (!canScheduleProjects || Boolean(selectedProject && !selectedProject.serverVersion && (isRestDayOvertime || backdatedTarget || !canManageProjects)));
   const selectedProjectRecordId = selectedProject?.id ?? '';
   const selectedProjectCustomerId = selectedProject?.customerId ?? '';
   const selectedProjectSiteId = selectedProject?.siteId ?? '';
@@ -910,6 +910,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const projectLinkIssue = (project: ProjectSchedulingSnapshot) => {
     if (!projectAccessRef.current.canSchedule) return 'Project scheduling permission is required.';
     if (isRestDayOvertime && !project.serverVersion) return 'Publish this Project before reserving overtime.';
+    if (backdatedTarget && !project.serverVersion) return 'Publish this Project before recording past work.';
     if (!projectIsSchedulable(project)) return 'This Project is not open for scheduling.';
     const projectCustomer = references.clients.find((customer) => customer.id === project.customerId && customer.active !== false);
     if (!projectCustomer) return 'Needs a canonical CRM Customer link.';
@@ -925,7 +926,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setAuthorityError('Your account does not have permission to schedule Projects.');
       return;
     }
-    if (source === 'project' && backdatedTarget) return;
     if (source === appointmentSource) return;
     setAppointmentSource(source);
     setProjectQuery('');
@@ -1367,7 +1367,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const useCapacityOvertime = Boolean(activeCapacityOvertime && (requestCapacityOvertime || !selectedValidatedOption));
     const projectBookingRequested = projectSourceSelected;
     if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
-      || (selectedProject && !selectedProject.serverVersion && (isRestDayOvertime || !projectAccessRef.current.canManage)))) {
+      || (selectedProject && !selectedProject.serverVersion && (isRestDayOvertime || backdatedTarget || !projectAccessRef.current.canManage)))) {
       setAuthorityError('Project scheduling permission or a published Project is required to confirm this appointment.');
       return;
     }
@@ -1613,7 +1613,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
                     <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
                   </button>
-                  {canScheduleProjects ? <button type="button" disabled={backdatedTarget} className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
+                  {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
                     <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
                   </button> : null}
                 </div>
@@ -1646,7 +1646,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         <button type="button" onClick={() => { setProjectId(''); setProjectPhaseId(''); setProjectSlots(''); setCustomerId(''); setPropertyId(''); setRecipientSelections([]); technicianInstructionsTouchedRef.current = false; lastSyncedProjectSiteRef.current = ''; pendingProjectSiteRefreshRef.current = ''; setTechnicianInstructions(''); resetCapacityValidation(); }}>Change</button>
                       </div>
                     ) : null}
-                    <div className={styles.previewBoundary} role="note"><strong>{selectedProject?.serverVersion ? 'Shared Project booking:' : 'Preview bridge:'}</strong> The Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. {isRestDayOvertime ? 'Review the planned slots and estimated finish, then confirm overtime.' : 'A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.'}</div>
+                    <div className={styles.previewBoundary} role="note"><strong>{selectedProject?.serverVersion ? 'Shared Project booking:' : 'Preview bridge:'}</strong> The Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. {backdatedTarget ? 'Record the slots worked on this date. No automatic confirmation or reminder will be sent.' : isRestDayOvertime ? 'Review the planned slots and estimated finish, then confirm overtime.' : 'A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.'}</div>
                   </div>
                 ) : null}
               </div>
@@ -1937,7 +1937,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     })}
                   </div>
                 ) : supportSlotCandidates.length ? <div className={styles.authorityIdle} style={{ marginTop: 8 }}>Validating the exact selected support spots before this allocation can be confirmed…</div> : null}
-                <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
+                {!backdatedTarget ? <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div> : null}
               </div>
             ) : activeCapacityOvertime ? null : (
               <div className={styles.authorityIdle}>{supportSlotCandidates.length
