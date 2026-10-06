@@ -1,5 +1,9 @@
 # Review: Booking references with each WhatsApp work message
 
+Follow-up: [6 October live-workflow audit](20261006-booking-references-live-workflow-audit.md)
+supersedes the terminal-failure blocking behavior and adds live-source compatibility,
+real transaction-concurrency evidence and guarded retry checks. Its release status is current.
+
 ## Review mode
 
 - [ ] Independent Review

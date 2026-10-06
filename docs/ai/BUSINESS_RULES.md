@@ -34,7 +34,9 @@ engineering index; it does not replace that registry.
   are not technician completion evidence, financial authorization or workload changes.
   The existing 08:00 Aruba WhatsApp schedule sends each Work Order followed by its own
   ordered files before the next work message. Photos/videos carry their explanation;
-  voice explanations immediately precede the voice message. Same-day edits after 08:00
+  voice explanations immediately precede the voice message. Transient retries retain
+  that ordering; a terminal failed file remains pending for explicit office retry
+  without blocking later jobs or future schedules. Same-day edits after 08:00
   queue a separately identified update to current assigned Vans. Historical writes,
   future edits and Temporary Holds remain silent until otherwise eligible.
   Owner: Operations / Booking and Communication Authorities. Migration: none.

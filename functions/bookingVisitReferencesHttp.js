@@ -109,7 +109,7 @@ function createReferenceHttpHandler({ db, bucket, verifyIdToken, clock = () => n
   };
 }
 let handler;
-exports.bookingVisitReferences = onRequest({ region: 'us-central1', memory: '512MiB', timeoutSeconds: 120 }, (request, response) => {
+exports.bookingVisitReferences = onRequest({ region: 'us-central1', memory: '512MiB', timeoutSeconds: 120, concurrency: 4 }, (request, response) => {
   if (!handler) handler = createReferenceHttpHandler({ db: getFirestore(), bucket: getStorage().bucket(), verifyIdToken: token => getAuth().verifyIdToken(token, true) });
   return handler(request, response);
 });

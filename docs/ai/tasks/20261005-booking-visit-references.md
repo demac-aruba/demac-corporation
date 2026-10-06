@@ -20,7 +20,8 @@ change. No production migration or security-rule change.
 - Current office roles may edit; assigned technicians/helpers may read today's work.
 - Private media is authenticated; the existing WhatsApp bridge receives opaque, claim-bound
   retrieval URLs valid only during the active dispatch lease, with no permanent download token.
-- Each work message precedes its own files and explanations; next work waits for completion.
+- Each work message precedes its own files and explanations; next work waits during delivery/retry.
+  A terminal file failure remains visible/retryable and releases later work, never blocking a Van indefinitely.
 - Acknowledged segments survive retries; conflicting edits and upload reuse fail closed.
 - Updates after 08:00 notify the current assigned Van; historical writes remain silent.
 - Existing bookings with no references retain their behavior.
@@ -36,9 +37,11 @@ staged unclaimed uploads expire and are removed by a bounded cleanup job.
   Booking Authority and single WhatsApp authority constraints apply.
 - Canonical 08:00 cron and 08:05/08:10 deterministic recovery windows are unchanged.
 - Private types are limited to supported photos/video/audio, 20 files and 25 MB/file.
-- Three failed attempts stop a bundle at its current segment and block later jobs
-  for that recipient. The office retry action resumes failed schedule deliveries
-  without resetting confirmed segments; other Van groups remain available.
-- Approval scope is implementation. Merge/production deployment remain pending.
+- Three failed attempts stop a bundle at its current segment, preserving the failed
+  record and cursor while releasing later work. The office retry action resumes current,
+  eligible failed deliveries without resetting confirmed segments; stale/cancelled/moved
+  jobs and superseded reference versions are not revived.
+- On 2026-10-06 Christian authorized merge/deploy conditional on an additional audit
+  protecting existing live data and workflows. Live test-group delivery is still pending.
 - Architecture and separate review: [decision](../decisions/ADR-20261005-booking-visit-references.md)
   and [review](../reviews/20261005-booking-visit-references.md).

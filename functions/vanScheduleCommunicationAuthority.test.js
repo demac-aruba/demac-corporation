@@ -103,10 +103,13 @@ test("manual schedule send refuses closed business dates", async () => {
 
 test('reference delivery recovery preserves sent cursor and ignores sent, other Van and stale group records', async () => {
   const { ReferenceDb } = require('./test-support/referenceDb.cjs');
-  const base = { provider: 'wacli', type: 'booking-reference-bundle', status: 'failed', scheduleDate: '2026-10-05', vanId: 'VAN-1', to: groups[0].groupJid, messageIndex: 2, sentMessageIds: ['one','two'], partAttempts: 3 };
+  const base = { provider: 'wacli', type: 'booking-reference-bundle', status: 'failed', scheduleDate: '2026-10-05', vanId: 'VAN-1', to: groups[0].groupJid, messageIndex: 2, sentMessageIds: ['one','two'], partAttempts: 3,
+    workOrderId: 'WO-1', appointmentId: 'APT-1', referencesVersion: 2 };
   const db = new ReferenceDb({
     'vans/VAN-1': { active: true, whatsappScheduleGroupJid: groups[0].groupJid },
     'vans/VAN-2': { active: true, whatsappScheduleGroupJid: groups[1].groupJid },
+    'workOrders/WO-1': { appointmentId: 'APT-1', vanId: 'VAN-1', date: '2026-10-05', status: 'Confirmada' },
+    'appointments/APT-1': { status: 'confirmed', visitReferences: { version: 2 } },
     'whatsappOutboundQueue/retry': base,
     'whatsappOutboundQueue/plain': { ...base, type: 'text', notificationType: 'van-daily-work-order', messageIndex: undefined },
     'whatsappOutboundQueue/sent': { ...base, status: 'sent' },
@@ -121,4 +124,16 @@ test('reference delivery recovery preserves sent cursor and ignores sent, other 
   assert.equal((await authority.execute(command)).resumed, 0);
   db.records.set('businessSettings/whatsapp', { transactionalOutboundEnabled: false });
   await assert.rejects(() => authority.execute(command), /disabled/);
+  db.records.set('businessSettings/whatsapp', { transactionalProvider: 'meta' });
+  await assert.rejects(() => authority.execute(command), /active wacli/);
+  db.records.delete('businessSettings/whatsapp');
+  for (const patch of [{ vanId: 'VAN-2' }, { status: 'Cancelada' }, { date: '2026-10-06' }]) {
+    db.records.set('whatsappOutboundQueue/retry', { ...base });
+    db.records.set('workOrders/WO-1', { appointmentId: 'APT-1', vanId: 'VAN-1', date: '2026-10-05', status: 'Confirmada', ...patch });
+    assert.equal((await authority.execute(command)).resumed, 0);
+    assert.equal(db.records.get('whatsappOutboundQueue/retry').status, 'failed');
+  }
+  db.records.set('workOrders/WO-1', { appointmentId: 'APT-1', vanId: 'VAN-1', date: '2026-10-05', status: 'Confirmada' });
+  db.records.set('appointments/APT-1', { status: 'confirmed', visitReferences: { version: 3 } });
+  assert.equal((await authority.execute(command)).resumed, 0);
 });

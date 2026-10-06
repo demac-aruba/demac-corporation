@@ -46,9 +46,12 @@ the queue's Appointment/path; a client-created queue record cannot retrieve an
 unclaimed draft. MIME is read from that manifest, never trusted from queue input.
 
 Failure keeps the cursor; up to three attempts use 30-second retry delay. Terminal
-failure pauses that recipient's bundle. The existing office schedule communication
-authority can retry failed schedule messages and files, honoring enabled outbound
-settings and the current Van/group mapping, without resetting sent segments.
+failure preserves the failed bundle but releases its recipient reservation and later
+schedule dependencies. An invalid command is quarantined without failing the poll
+for healthy jobs; reservations of terminal/missing queue records are recoverable.
+The existing office schedule communication authority can retry failed schedule messages
+and files, honoring enabled outbound settings, active transport, current Van/group,
+Work Order/date/status and reference version, without resetting sent segments.
 Same-day edits after 08:00 queue a version-keyed update. Holds, history and future
 edits do not cause immediate reference-update messages.
 
@@ -67,8 +70,8 @@ edits do not cause immediate reference-update messages.
 - Additive schema; no existing-data migration or access-rule change.
 - Linked bytes are retained even after office removes a file, because an existing queue
   snapshot may still need it. A later retention policy must reconcile queue/audit needs.
-- A bad file pauses the remainder for that recipient after three failed attempts;
-  office recovery is explicit. Other groups can proceed. Many large files increase
+- A bad file stops its bundle after three failed attempts; later jobs and other groups
+  can proceed. Office recovery is explicit. Many large files increase
   delivery duration after the batch begins at 08:00.
 - Per-claim tokens reduce exposure but do not provide recipient revocation after a file
   has been delivered through WhatsApp.
@@ -76,6 +79,9 @@ edits do not cause immediate reference-update messages.
   and before durable ACK can still duplicate a segment. Do not promise exactly-once delivery.
 - Poll scanning is linear in blocked backlog. Monitor queue age/read load if backlog grows;
   deployment does not introduce a new index or a competing scheduler.
+- New media upload/read endpoints limit instance concurrency to four with 512 MiB;
+  they never load all files in a booking into one request. Existing transport endpoints'
+  memory/concurrency settings are preserved.
 
 ## Verification and rollout
 

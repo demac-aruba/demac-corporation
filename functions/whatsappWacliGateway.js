@@ -627,7 +627,7 @@ async function claimOutboundCommand(bridgeId) {
 // Opaque, short-lived retrieval capability bound to one actively claimed queue part.
 // No permanent Firebase download token or URL is stored in appointment metadata.
 exports.wacliBookingReferenceMedia = onRequest(
-  { region: 'us-central1', memory: '512MiB', timeoutSeconds: 90 },
+  { region: 'us-central1', memory: '512MiB', timeoutSeconds: 90, concurrency: 4 },
   async (request, response) => {
     response.set('Cache-Control', 'private, no-store');
     response.set('X-Content-Type-Options', 'nosniff');
