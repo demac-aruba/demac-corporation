@@ -31,7 +31,9 @@ async function dependencyReady({ transaction, db, record }) {
   if (!record.dependsOnQueueId) return true;
   if (typeof record.dependsOnQueueId !== 'string' || record.dependsOnQueueId.includes('/')) return false;
   const parent = await transaction.get(db.collection('whatsappOutboundQueue').doc(record.dependsOnQueueId));
-  return parent.exists && parent.data().status === 'sent' && parent.data().to === record.to;
+  // A terminal failure stays visible/retryable, but must not stop later jobs or
+  // tomorrow's schedule. Transient failures retain queued status and ordering.
+  return parent.exists && ['sent', 'failed'].includes(parent.data().status) && parent.data().to === record.to;
 }
 
 module.exports = { currentBundlePart, bundleAcknowledgement, bundleFailure, dependencyReady };

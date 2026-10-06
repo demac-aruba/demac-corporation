@@ -565,8 +565,26 @@ async function claimOutboundCommand(bridgeId) {
         const to = String(current.to || current.phone || current.recipient || "").trim();
         const dispatchRef = db.collection('whatsappOutboundDispatchLocks').doc(crypto.createHash('sha256').update(to).digest('hex'));
         const dispatch = await transaction.get(dispatchRef);
-        if (dispatch.exists && dispatch.data().activeQueueId && dispatch.data().activeQueueId !== candidate.id) return null;
-        const part = currentBundlePart(current);
+        if (dispatch.exists && dispatch.data().activeQueueId && dispatch.data().activeQueueId !== candidate.id) {
+          const ownerId = String(dispatch.data().activeQueueId);
+          if (ownerId.includes('/')) return null;
+          const owner = await transaction.get(db.collection('whatsappOutboundQueue').doc(ownerId));
+          if (owner.exists && ['queued', 'processing'].includes(owner.data().status)) return null;
+          // Completed, failed or removed records cannot hold a recipient forever.
+        }
+        let part;
+        try {
+          part = currentBundlePart(current);
+          if (part?.media && !/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(part.media.storagePath || '')) {
+            throw new Error('Invalid booking reference media path.');
+          }
+        } catch {
+          // Quarantine only the invalid command. Never fail every Van's poll.
+          transaction.set(candidate.ref, { status: 'failed', errorMessage: 'Invalid booking reference command.',
+            failedAt: FieldValue.serverTimestamp(), claimToken: null, leaseUntil: null }, { merge: true });
+          if (dispatch.data()?.activeQueueId === candidate.id) transaction.set(dispatchRef, { activeQueueId: null }, { merge: true });
+          return null;
+        }
         const text = String(part ? part.text || '' : current.text || '');
         let media = part?.media || (current.media && typeof current.media === 'object' ? current.media : null);
         const claimToken = crypto.randomUUID();
@@ -718,8 +736,9 @@ exports.wacliOutboundAck = onRequest(
         const dispatch = await transaction.get(dispatchRef);
         if (bundlePart && dispatch?.data()?.activeQueueId !== queueId) throw httpError(409, 'Reference delivery ownership changed.');
         if (!sent) {
+          const failure = bundleFailure(current);
           transaction.set(queueRef, {
-            ...bundleFailure(current),
+            ...failure,
             lastAcknowledgedClaimToken: claimToken, lastAcknowledgedSent: false,
             errorMessage,
             failedAt: FieldValue.serverTimestamp(),
@@ -727,7 +746,7 @@ exports.wacliOutboundAck = onRequest(
             leaseUntil: null,
             updatedAt: FieldValue.serverTimestamp(),
           }, { merge: true });
-          if (!bundlePart && dispatch.data()?.activeQueueId === queueId) transaction.set(dispatchRef, { activeQueueId: null, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          if (failure.status === 'failed' && dispatch.data()?.activeQueueId === queueId) transaction.set(dispatchRef, { activeQueueId: null, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
           ackResult = { sent: false };
           return;
         }

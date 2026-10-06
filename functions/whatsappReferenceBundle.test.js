@@ -74,7 +74,7 @@ test('another message cannot interrupt an active bundle for the same group, whil
   assert.equal(await poll(), null); await ack(first);
   assert.equal((await poll()).text, 'Photo: kitchen');
 });
-test('failed part retains its cursor, retries are delayed/bounded and a terminal failure blocks later work', async () => {
+test('failed part retains its cursor; transient retries preserve order and terminal failure releases later work', async () => {
   const { db, poll, ack } = fixture();
   const first = await poll(); await ack(first);
   for (let i = 0; i < 3; i++) {
@@ -83,12 +83,47 @@ test('failed part retains its cursor, retries are delayed/bounded and a terminal
     const failed = await ack(photo, false); assert.equal(failed.statusCode, 200);
     assert.equal((await ack(photo, false)).body.alreadyAcknowledged, true);
     assert.equal(row.messageIndex, 1);
-    assert.equal(await poll(), null);
+    if (i < 2) assert.equal(await poll(), null);
   }
   assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'failed');
   assert.equal(db.records.get('whatsappOutboundQueue/WORK-2').status, 'queued');
+  assert.equal((await poll()).text, 'Work 2');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').messageIndex, 1);
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').sentMessageIds.length, 1);
   assert.equal(bundleFailure({ type: 'text' }).status, 'failed');
   assert.throws(() => currentBundlePart({ type: 'booking-reference-bundle', messages: [] }));
+});
+
+test('a terminal failure does not lock tomorrow or unrelated messages for the same Van', async () => {
+  const { db, poll, ack } = fixture();
+  const first = await poll(); await ack(first);
+  const photo = await poll();
+  db.records.get('whatsappOutboundQueue/WORK-1').partAttempts = 3;
+  await ack(photo, false);
+  const next = await poll(); await ack(next);
+  db.records.set('whatsappOutboundQueue/TOMORROW', { provider: 'wacli', type: 'text', to: first.to, text: 'Tomorrow', status: 'queued' });
+  assert.equal((await poll()).text, 'Tomorrow');
+});
+
+test('stale recipient reservations are recovered without changing the original queue record', async () => {
+  for (const state of ['sent', 'failed', 'cancelled', 'missing']) {
+    const { db, poll } = fixture();
+    const first = await poll();
+    if (state === 'missing') db.records.delete('whatsappOutboundQueue/WORK-1');
+    else db.records.get('whatsappOutboundQueue/WORK-1').status = state;
+    db.records.set('whatsappOutboundQueue/NEXT-DAY', { provider: 'wacli', type: 'text', to: first.to, text: 'Next day', status: 'queued', createdAt: '2026-10-05T10:00:00Z' });
+    assert.equal((await poll()).text, 'Next day');
+    assert.equal(db.records.get('whatsappOutboundQueue/WORK-1')?.status, state === 'missing' ? undefined : state);
+  }
+});
+
+test('one malformed media command cannot break the poll for healthy jobs', async () => {
+  for (const messages of [[], [{ media: { storagePath: 'unrelated/private' } }]]) {
+    const { db, poll } = fixture();
+    db.records.get('whatsappOutboundQueue/WORK-1').messages = messages;
+    assert.equal((await poll()).text, 'Work 2');
+    assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'failed');
+  }
 });
 
 test('blocked first page cannot starve the predecessor or another group beyond 50 queue records', async () => {

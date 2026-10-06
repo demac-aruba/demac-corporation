@@ -1,0 +1,48 @@
+name: Booking references production audit
+on:
+  push:
+    branches: [feature/booking-visit-references-20261005]
+permissions:
+  contents: read
+jobs:
+  read-only-runtime-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Compare deployed backend with current main without writing production data
+        env:
+          RUNTIME_AUDIT_OUTPUT: ${{ runner.temp }}/reference-runtime-audit
+        run: node scripts/booking-references-runtime-audit.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-runtime-audit
+          path: ${{ runner.temp }}/reference-runtime-audit
+      - name: Inspect running bridge without restart or message send
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H 159.223.160.239 >> "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 demac-deploy@159.223.160.239 'python3 -' <<'PY'
+          import hashlib,json,pathlib,subprocess,urllib.request
+          source=pathlib.Path('/opt/demac-whatsapp-bridge/server-v2.mjs').read_bytes()
+          code=source.decode()
+          health=json.load(urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=10))
+          result={'bridgeSha256':hashlib.sha256(source).hexdigest(),'nativeMedia':"'send', 'file'" in code,'nativeVoice':"'send', 'voice'" in code,'durableAcknowledgements':'persistOutboundAck(ack)' in code,'ok':health.get('ok'),'mode':health.get('connectorMode'),'pendingOutboundAcks':health.get('pendingOutboundAcks'),'outboundErrorPresent':bool(health.get('lastOutboundError')),'lastOutboundPollAt':health.get('lastOutboundPollAt'),'ffmpegAvailable':subprocess.run(['sh','-c','command -v ffmpeg'],stdout=subprocess.DEVNULL).returncode==0}
+          print(json.dumps(result))
+          assert all(result[k] for k in ['nativeMedia','nativeVoice','durableAcknowledgements','ok','ffmpegAvailable'])
+          assert not result['outboundErrorPresent']
+          PY
