@@ -1,6 +1,7 @@
 // Synthetic projection for real form components; no application route or backend.
 import {useState} from 'react';
 import {createRoot} from 'react-dom/client';
+import {flushSync} from 'react-dom';
 import type {FieldExecutionJobDetail} from '../lib/field-authority';
 import {persistFirebaseWebSession} from '../lib/firebase/session';
 import {FieldSaleControls} from '../components/field/field-sale-controls';
@@ -36,9 +37,9 @@ function App(){
  const [job,setJob]=useState(initial),[uid,setUid]=useState('test-tech');
  const mode=location.hash.slice(1)||'sale';
  const record=async(input:unknown)=>{events.push(input);return false;};
- Object.assign(window,{visitFixture:{events,canExit:requestProcedureExit,account:(next:string)=>{account(next);setUid(next);},otherJob:()=>setJob({...initial,workOrderId:'WO-2'}),serverNote:()=>setJob({...job,interventionReports:job.interventionReports.map(r=>({...r,freeTextResponses:[{sectionId:'text',value:'Texto del otro técnico',version:2}]}))} as FieldExecutionJobDetail),legacy:()=>saveFieldOfflineDraft({ownerUserId:uid,workOrderId:'WO-1',interventionId:'WI-1',sectionId:'text',baseVersion:0,value:'Original anterior de 5000 caracteres: '+ 'x'.repeat(4965)})}});
+ Object.assign(window,{visitFixture:{events,canExit:requestProcedureExit,account:(next:string)=>flushSync(()=>{account(next);setUid(next);}),otherJob:()=>flushSync(()=>setJob({...initial,workOrderId:'WO-2'})),serverNote:()=>flushSync(()=>setJob({...job,interventionReports:job.interventionReports.map(r=>({...r,freeTextResponses:[{sectionId:'text',value:'Texto del otro técnico',version:2}]}))} as FieldExecutionJobDetail)),legacy:()=>saveFieldOfflineDraft({ownerUserId:uid,workOrderId:'WO-1',interventionId:'WI-1',sectionId:'text',baseVersion:0,value:'Original anterior de 5000 caracteres: '+ 'x'.repeat(4965)})}});
  const props={job,mutationBusy:false,error:null};
- return <main key={uid}><p>DEMO · Formularios sintéticos, sin acciones reales.</p>
+ return <main key={uid} data-work-order={job.workOrderId} data-owner={uid}><p>DEMO · Formularios sintéticos, sin acciones reales.</p>
  {mode==='sale'?<FieldSaleControls {...props} busy={false} onCreate={record} onDecide={record} onTransition={record}/>:null}
  {mode==='approval'?<AdditionalApprovalControls {...props} decidingInterventionId={null} onDecide={record}/>:null}
  {mode==='execution'?<InterventionExecutionControls {...props} transitioningInterventionId={null} onTransition={record}/>:null}
