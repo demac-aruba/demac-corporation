@@ -1,0 +1,44 @@
+name: Technician source workspace
+
+# Development-only transfer through the owner's existing GitHub artifact channel.
+# Tracked source + installed tooling, never runner config, credentials, env or Git history.
+# No deployment, external endpoint, production resource or business-data access.
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-source-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Capture the exact tracked source and validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/source-workspace"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/source-workspace/source.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/source-workspace/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/source-workspace/tree.txt"
+          npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+          tar -czf "$RUNNER_TEMP/source-workspace/app-tools.tar.gz" -C apps/erp-next node_modules
+          npm install --prefix functions --ignore-scripts --no-audit --no-fund
+          tar -czf "$RUNNER_TEMP/source-workspace/function-tools.tar.gz" -C functions node_modules
+          cd "$RUNNER_TEMP/source-workspace"
+          sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: technician-source-${{ github.sha }}
+          path: ${{ runner.temp }}/source-workspace/
+          retention-days: 1
+          if-no-files-found: error
