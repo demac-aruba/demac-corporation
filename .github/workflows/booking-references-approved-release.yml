@@ -24,7 +24,7 @@ jobs:
       - name: Validate reviewed source before privileged operations
         run: |
           node --check scripts/booking-references-approved-deploy.cjs
-          node --test scripts/booking-references-approved-deploy.test.cjs
+          node --test scripts/booking-references-approved-deploy.test.cjs scripts/booking-references-release-config.test.cjs
           npm run validate:firebase --prefix functions
           npm run test:booking-authority --prefix functions
           npm run test:transactional-whatsapp --prefix functions

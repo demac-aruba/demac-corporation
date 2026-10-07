@@ -30,8 +30,7 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8'
 const git = args => run('git', args).trim();
 const cloud = args => run('gcloud', args);
 const describe = name => JSON.parse(cloud(['functions', 'describe', name, '--project=' + project, '--region=us-central1', '--gen2', '--format=json']));
-const config = fn => ({ runtime: fn.buildConfig.runtime, entryPoint: fn.buildConfig.entryPoint,
-  service: Object.fromEntries(Object.entries(fn.serviceConfig).filter(([k]) => !['revision', 'uri', 'service'].includes(k))), trigger: fn.eventTrigger || null });
+const { canonicalFunctionConfig: config } = require('./booking-references-release-config.cjs');
 const summary = { reviewed, baseline, sourceSha: process.env.GITHUB_SHA, stage: 'preflight', functions: [] };
 assert.equal(process.env.GITHUB_REPOSITORY, 'demac-aruba/demac-corporation');
 assert.equal(process.env.GITHUB_REF, 'refs/heads/' + branch);
@@ -146,6 +145,8 @@ async function main() {
     for (const name of names) {
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE');
       assert.equal(matchingSource(fn, name, newRoots[name], [reviewed]), reviewed, name + ': deployed source mismatch');
+      assert.equal(fn.serviceConfig.serviceAccountEmail, before.officeBookingAuthority.serviceConfig.serviceAccountEmail, name + ': unexpected runtime identity');
+      assert.equal(JSON.parse(fn.serviceConfig.environmentVariables.FIREBASE_CONFIG).storageBucket, 'demac-corporation.firebasestorage.app', name + ': wrong private bucket');
       if (['bookingVisitReferences', 'wacliBookingReferenceMedia'].includes(name)) {
         assert.equal(fn.serviceConfig.maxInstanceRequestConcurrency, 4); assert.equal(fn.serviceConfig.availableMemory, '512Mi');
         await authGate(name);

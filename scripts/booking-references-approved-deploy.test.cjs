@@ -30,6 +30,7 @@ async function rejectedRelease({ mainChanged = false, to = '2975606772', status 
         if (mainChanged && args[1].startsWith(main + ':')) return 'unreviewed-tree';
         return args[1].split(':').pop() + '-reviewed-tree';
       } };
+      if (name === './booking-references-release-config.cjs') return require('./booking-references-release-config.cjs');
       return require(name);
     } };
   vm.runInNewContext(source, context, { filename: 'booking-references-approved-deploy.cjs' });
