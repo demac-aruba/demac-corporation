@@ -131,9 +131,17 @@ async function main() {
     const missing = names.filter(name => !newBefore[name]);
     if (missing.length) {
       summary.stage = 'create-' + missing.join('-'); record(); console.log(summary.stage);
-      // Only new, named functions; no broad deploy, --force, rules or deletion.
-      run('npx', ['--yes', 'firebase-tools@15.30.0', 'deploy', '--only', missing.map(n => 'functions:' + n).join(','),
-        '--project', project, '--config', firebaseConfig, '--non-interactive'], { cwd: stage });
+      // Only new, named functions. Firebase requires explicit --force consent
+      // for the reviewed retry:true Eventarc policy in noninteractive mode.
+      // Consent is limited to that single new trigger; no broad deploy/rules.
+      const ordinary = missing.filter(name => name !== 'notifyBookingReferenceUpdate');
+      const groups = [...(ordinary.length ? [ordinary] : []), ...(missing.includes('notifyBookingReferenceUpdate') ? [['notifyBookingReferenceUpdate']] : [])];
+      for (const selected of groups) {
+        const args = ['--yes', 'firebase-tools@15.30.0', 'deploy', '--only', selected.map(n => 'functions:' + n).join(','),
+          '--project', project, '--config', firebaseConfig, '--non-interactive'];
+        if (selected.length === 1 && selected[0] === 'notifyBookingReferenceUpdate') args.push('--force');
+        run('npx', args, { cwd: stage });
+      }
     }
     for (const name of names) {
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE');
