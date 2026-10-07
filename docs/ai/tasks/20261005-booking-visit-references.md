@@ -28,8 +28,9 @@ change. No production migration or security-rule change.
 
 ## Verification and recovery
 Focused authority/upload/sequence tests, booking and WhatsApp consumer tests, ERP
-typecheck/build, and a separate Solo Maintainer Adversarial Review. Production
-WhatsApp messages are not sent during tests. Additive fields permit rollback;
+typecheck/build, and a separate Solo Maintainer Adversarial Review. Automated domain
+tests stay isolated; the separate owner-authorized transport smoke uses only the
+owner's personal number and synthetic media. Additive fields permit rollback;
 staged unclaimed uploads expire and are removed by a bounded cleanup job.
 
 ## Authorities, risks and delivery
@@ -42,6 +43,9 @@ staged unclaimed uploads expire and are removed by a bounded cleanup job.
   eligible failed deliveries without resetting confirmed segments; stale/cancelled/moved
   jobs and superseded reference versions are not revived.
 - On 2026-10-06 Christian authorized merge/deploy conditional on an additional audit
-  protecting existing live data and workflows. Live test-group delivery is still pending.
+  protecting existing live data and workflows. On 7 October he selected his own
+  number for synthetic media tests; all six parts were acknowledged on their first
+  attempt. PR #557 merged and the bounded backend and ERP production releases
+  completed. See the [release record](../reviews/20261007-booking-references-release.md).
 - Architecture and separate review: [decision](../decisions/ADR-20261005-booking-visit-references.md)
   and [review](../reviews/20261005-booking-visit-references.md).
