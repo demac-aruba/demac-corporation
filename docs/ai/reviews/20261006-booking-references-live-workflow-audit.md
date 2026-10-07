@@ -58,6 +58,14 @@ PR #557, including `e9fa0916`, corrective `da406a2a` and concurrency verificatio
 
 ## Release decision
 
+### Final release outcome, 7 October
+
+The pending states recorded below are historical. PR #557 merged as `f295b309`;
+bounded backend run `37660955346` succeeded, and production ERP deployment
+`dpl_FVYdCZGEhEk9hg2CeQPnk6dCcsLF` is READY and serves the normal live aliases.
+The [release record](20261007-booking-references-release.md) contains final evidence,
+deployment-tool corrections, preserved scheduler/runtime checks and scope limits.
+
 ### Owner-authorized real media smoke, 7 October
 
 Christian explicitly selected his personal Aruba number ending 6772 for synthetic

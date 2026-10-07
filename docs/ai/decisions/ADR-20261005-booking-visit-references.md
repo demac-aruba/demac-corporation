@@ -1,6 +1,6 @@
 # ADR-20261005: Booking-owned references and ordered WhatsApp work delivery
 
-- Status: Proposed (implementation authorized; production release pending)
+- Status: Accepted and released to production on 2026-10-07
 - Date: 2026-10-05
 - Owners: Operations / Booking Authority / Communication Authority
 - Related rule: `OPS-SCHED-REFERENCES-001`
@@ -85,8 +85,9 @@ edits do not cause immediate reference-update messages.
 
 ## Verification and rollout
 
-Evidence is recorded in the linked task and review. Tests use synthetic accounts,
-records and bridge calls; no production WhatsApp messages are sent.
+Evidence is recorded in the linked task and review. Automated domain tests use
+synthetic accounts and records. The separately owner-authorized live transport
+smoke below sent only synthetic media to the owner's selected personal number.
 
 After human release approval, deploy the new reference HTTP/cleanup/update functions,
 Booking Authority facade, daily/change producers and modified gateway/media endpoint
@@ -97,7 +98,8 @@ On 7 October Christian authorized his own Aruba number ending 6772; run
 `37655187654` delivered the six synthetic text/photo/video/voice parts with one
 acknowledged attempt each through the existing production transport. New bundle
 state/concurrency and private media guards remain separately covered by isolated
-tests. See the 6 October audit's 7 October addendum for scope and release state.
+tests. The [7 October release record](../reviews/20261007-booking-references-release.md)
+records the successful bounded backend release and production ERP publication.
 The existing automatic producer deployment alone does not publish the new endpoints.
 Use the repository's `[merge-only]` release convention and coordinate the approved
 release of `bookingVisitReferences`, `cleanupBookingReferenceUploads`,

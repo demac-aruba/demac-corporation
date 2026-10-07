@@ -30,8 +30,7 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8'
 const git = args => run('git', args).trim();
 const cloud = args => run('gcloud', args);
 const describe = name => JSON.parse(cloud(['functions', 'describe', name, '--project=' + project, '--region=us-central1', '--gen2', '--format=json']));
-const config = fn => ({ runtime: fn.buildConfig.runtime, entryPoint: fn.buildConfig.entryPoint,
-  service: Object.fromEntries(Object.entries(fn.serviceConfig).filter(([k]) => !['revision', 'uri', 'service'].includes(k))), trigger: fn.eventTrigger || null });
+const { canonicalFunctionConfig: config } = require('./booking-references-release-config.cjs');
 const summary = { reviewed, baseline, sourceSha: process.env.GITHUB_SHA, stage: 'preflight', functions: [] };
 assert.equal(process.env.GITHUB_REPOSITORY, 'demac-aruba/demac-corporation');
 assert.equal(process.env.GITHUB_REF, 'refs/heads/' + branch);
@@ -124,20 +123,30 @@ async function main() {
   const archive = path.join(process.env.RUNNER_TEMP, 'booking-reference-source.tar');
   run('git', ['archive', '--format=tar', '--output=' + archive, 'HEAD:functions']); run('tar', ['-xf', archive, '-C', stage]);
   const firebaseConfig = path.join(process.env.RUNNER_TEMP, 'booking-reference-firebase.json');
-  fs.writeFileSync(firebaseConfig, JSON.stringify({ functions: { source: stage, codebase: 'default' } }));
+  fs.writeFileSync(firebaseConfig, JSON.stringify({ functions: { source: path.basename(stage), codebase: 'default' } }));
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage });
   async function createSelected(names) {
     sourceGate();
     const missing = names.filter(name => !newBefore[name]);
     if (missing.length) {
-      summary.stage = 'create-' + missing.join('-'); record();
-      // Only new, named functions; no broad deploy, --force, rules or deletion.
-      run('npx', ['--yes', 'firebase-tools@15.30.0', 'deploy', '--only', missing.map(n => 'functions:' + n).join(','),
-        '--project', project, '--config', firebaseConfig, '--non-interactive'], { cwd: stage });
+      summary.stage = 'create-' + missing.join('-'); record(); console.log(summary.stage);
+      // Only new, named functions. Firebase requires explicit --force consent
+      // for the reviewed retry:true Eventarc policy in noninteractive mode.
+      // Consent is limited to that single new trigger; no broad deploy/rules.
+      const ordinary = missing.filter(name => name !== 'notifyBookingReferenceUpdate');
+      const groups = [...(ordinary.length ? [ordinary] : []), ...(missing.includes('notifyBookingReferenceUpdate') ? [['notifyBookingReferenceUpdate']] : [])];
+      for (const selected of groups) {
+        const args = ['--yes', 'firebase-tools@15.30.0', 'deploy', '--only', selected.map(n => 'functions:' + n).join(','),
+          '--project', project, '--config', firebaseConfig, '--non-interactive'];
+        if (selected.length === 1 && selected[0] === 'notifyBookingReferenceUpdate') args.push('--force');
+        run('npx', args, { cwd: stage });
+      }
     }
     for (const name of names) {
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE');
       assert.equal(matchingSource(fn, name, newRoots[name], [reviewed]), reviewed, name + ': deployed source mismatch');
+      assert.equal(fn.serviceConfig.serviceAccountEmail, before.officeBookingAuthority.serviceConfig.serviceAccountEmail, name + ': unexpected runtime identity');
+      assert.equal(JSON.parse(fn.serviceConfig.environmentVariables.FIREBASE_CONFIG).storageBucket, 'demac-corporation.firebasestorage.app', name + ': wrong private bucket');
       if (['bookingVisitReferences', 'wacliBookingReferenceMedia'].includes(name)) {
         assert.equal(fn.serviceConfig.maxInstanceRequestConcurrency, 4); assert.equal(fn.serviceConfig.availableMemory, '512Mi');
         await authGate(name);
@@ -150,7 +159,7 @@ async function main() {
   // authorities/producers can interpret the additive reference field.
   await createSelected(['wacliBookingReferenceMedia', 'cleanupBookingReferenceUploads', 'notifyBookingReferenceUpdate']);
   for (const [name, entries] of Object.entries(roots)) {
-    sourceGate(); sameRuntime(name, before[name]); summary.stage = 'deploy-' + name; record();
+    sourceGate(); sameRuntime(name, before[name]); summary.stage = 'deploy-' + name; record(); console.log(summary.stage);
     if (prior[name] !== reviewed) cloud(['functions', 'deploy', name, '--project=' + project, '--region=us-central1', '--gen2',
       '--source=' + stage, '--entry-point=' + name, '--runtime=nodejs22', '--run-service-account=' + before[name].serviceConfig.serviceAccountEmail,
       '--quiet', '--format=value(state)']);
@@ -172,8 +181,12 @@ async function main() {
   console.log('PASS: nine bounded functions verified; current daily scheduler preserved; no customer/booking writes or migrations.');
 }
 main().catch(error => { summary.error = error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : 'Release stopped at ' + summary.stage;
+  // Firebase reports errors on stdout, sometimes with ANSI color. Retain only
+  // error lines, never descriptions, environment values, debug logs or tokens.
+  const details = [error.stdout, error.stderr].map(value => String(value || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')).join('\n')
+    .split('\n').filter(line => /^(ERROR:|Error:)/.test(line));
+  summary.cliErrors = details.map(line => line.replace(/https:\/\/\S+/g, '[URL omitted]').slice(0, 600));
+  summary.exitStatus = error.status || error.code || null;
   record(); console.error(summary.error);
-  // CLI error lines only; never dump runtime descriptions, environment or tokens.
-  const details = String(error.stderr || '').split('\n').filter(line => /^(ERROR:|Error:)/.test(line));
-  for (const line of details) console.error(line.replace(/https:\/\/\S+/g, '[URL omitted]').slice(0, 600));
+  summary.cliErrors.forEach(line => console.error(line));
   process.exitCode = 1; });
