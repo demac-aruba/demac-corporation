@@ -4,5 +4,5 @@ import { loadFirebaseWebSession } from '../../lib/firebase/session';
 
 export function fieldVisitFormTarget(job:FieldExecutionJobDetail):FieldVisitFormTarget|null {
   const ownerUserId=loadFirebaseWebSession()?.uid;
-  return ownerUserId&&job.fieldVisit?{ownerUserId,workOrderId:job.workOrderId,visitId:job.fieldVisit.id}:null;
+  return ownerUserId?{ownerUserId,workOrderId:job.workOrderId,...(job.fieldVisit?{visitId:job.fieldVisit.id}:{})}:null;
 }

@@ -34,8 +34,8 @@ const initial={workOrderId:'WO-1',fieldVisit:{id:'VISIT-1'},visitAssets:[{id:'VA
 } as unknown as FieldExecutionJobDetail;
 const events:unknown[]=[];
 function App(){
- const [job,setJob]=useState(initial),[uid,setUid]=useState('test-tech');
- const mode=location.hash.slice(1)||'sale';
+ const [job,setJob]=useState(()=>location.hash.includes('previsit-')?{...initial,fieldVisit:null}:initial),[uid,setUid]=useState('test-tech');
+ const mode=(location.hash.slice(1)||'sale').replace('previsit-','');
  const record=async(input:unknown)=>{events.push(input);return false;};
  Object.assign(window,{visitFixture:{events,canExit:requestProcedureExit,account:(next:string)=>flushSync(()=>{account(next);setUid(next);}),otherJob:()=>flushSync(()=>setJob({...initial,workOrderId:'WO-2'})),serverNote:()=>flushSync(()=>setJob({...job,interventionReports:job.interventionReports.map(r=>({...r,freeTextResponses:[{sectionId:'text',value:'Texto del otro técnico',version:2}]}))} as FieldExecutionJobDetail)),legacy:()=>saveFieldOfflineDraft({ownerUserId:uid,workOrderId:'WO-1',interventionId:'WI-1',sectionId:'text',baseVersion:0,value:'Original anterior'.padEnd(5000,'x')})}});
  const props={job,mutationBusy:false,error:null};

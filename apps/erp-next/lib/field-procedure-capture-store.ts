@@ -5,9 +5,9 @@ import { PROCEDURE_MEDIA_TYPES, type PrepareProcedureMedia, type ProcedureMediaK
 // Browser-only recovery storage, never another business database or authorization source.
 // Keep the existing text outbox schema unchanged. Tokens and public URLs never enter this database.
 const DB = 'demac-field-procedure-captures-v1';
-// Visit-wide authored forms have real Work Order/Visit IDs; never fabricate an Asset
-// or Intervention just to save a local draft. Capture/command stores stay procedure-only.
-export type FieldVisitFormTarget = {ownerUserId:string;workOrderId:string;visitId:string};
+// Authored forms use real Work Order and, once prepared, Visit IDs. Pre-arrival
+// no-access/cancellation drafts must not invent a Visit. Captures stay procedure-only.
+export type FieldVisitFormTarget = {ownerUserId:string;workOrderId:string;visitId?:string};
 export type FieldFormTarget = FieldProcedureTarget | FieldVisitFormTarget;
 export type ProcedureCapture = {
   id: string; target: FieldProcedureTarget; part: FieldProcedurePart; stepId: string; view: string;
@@ -272,10 +272,10 @@ export function shelveProcedureOperation(target: FieldProcedureTarget, requestId
 export type ProcedureFormDraft = { id: string; target: FieldFormTarget; scope: string; value: string; revision: number; updatedAt: string };
 function formContextKey(target:FieldFormTarget){
   if('interventionId' in target)return procedureContextKey(target);
-  for(const value of [target.ownerUserId,target.workOrderId,target.visitId]){
+  for(const value of [target.ownerUserId,target.workOrderId,...(target.visitId===undefined?[]:[target.visitId])]){
     if(typeof value!=='string'||!/^[-A-Za-z0-9_.:]{1,180}$/.test(value)||value.includes('..'))throw new Error('Contexto de borrador inválido.');
   }
-  return JSON.stringify(['visit-form',target.ownerUserId,target.workOrderId,target.visitId]);
+  return target.visitId===undefined?JSON.stringify(['work-order-form',target.ownerUserId,target.workOrderId]):JSON.stringify(['visit-form',target.ownerUserId,target.workOrderId,target.visitId]);
 }
 function formKey(target: FieldFormTarget, scope: string) {
   if(!/^[-A-Za-z0-9_.:]{1,600}$/.test(scope) || scope.includes('..')) throw new Error('Contexto de formulario inválido.');

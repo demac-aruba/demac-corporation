@@ -2551,6 +2551,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   const routeJobs = useMemo(() => fieldRouteWithoutNextJob(todayJobs, nextJob), [nextJob, todayJobs]);
 
   const openJob = (workOrderId: string) => {
+    if(!requestProcedureExit())return;
     setPortalTab('jobs');
     setShowDetail(true);
     selectedWorkOrderRef.current = workOrderId;
@@ -2649,7 +2650,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         onSubmitOfficeReview={(note) => void runSubmitOfficeReview(note)}
         onSyncOutbox={() => void syncOutbox()}
         onDiscardOutboxConflict={(id) => void discardOutboxConflict(id)}
-        onBack={() => { setShowDetail(false); setPortalTab('home'); }}
+        onBack={() => { if(!requestProcedureExit())return;setShowDetail(false); setPortalTab('home'); }}
       />
       </div> : null}
       <FieldPortalNavigation active={showDetail ? 'jobs' : portalTab} onNavigate={navigate} />
