@@ -90,3 +90,12 @@ backend rollback, drain or explicitly reconcile pending bundles/dispatch locks;
 never feed a partial bundle to an old text-only gateway. Revert producers/UI only
 with that compatibility check, and never delete customer records, linked files,
 manifests or queue snapshots as rollback.
+
+
+## Subsequent correction
+
+PR #559 later corrected the stale-retry defects and completed publication on the actual
+business domains after renewed owner authorization and all required checks. The first
+release's wrong-domain completion claim remains corrected above. See
+[the corrective audit and executed release](20261007-booking-references-production-reaudit.md)
+for exact CI, function revisions, actual ERP deployment and verification limits.
