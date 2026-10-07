@@ -1,0 +1,42 @@
+name: Booking references approved bounded release
+on:
+  push:
+    branches: [release/booking-references-20261007]
+permissions:
+  contents: read
+concurrency:
+  group: booking-references-approved-release
+  cancel-in-progress: false
+jobs:
+  approved-backend-release:
+    if: github.repository == 'demac-aruba/demac-corporation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - name: Validate reviewed source before privileged operations
+        run: |
+          node --check scripts/booking-references-approved-deploy.cjs
+          node --test scripts/booking-references-approved-deploy.test.cjs
+          npm run validate:firebase --prefix functions
+          npm run test:booking-authority --prefix functions
+          npm run test:transactional-whatsapp --prefix functions
+          node --test functions/whatsappWacliGateway.test.js functions/wacliOutboundMediaUpload.test.js functions/officeBookingAuthorityCommunication.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityFacadeProject.test.js
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Release only the nine reviewed reference functions
+        run: node scripts/booking-references-approved-deploy.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: booking-references-bounded-release
+          path: ${{ runner.temp }}/booking-reference-release/summary.json

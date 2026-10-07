@@ -1,5 +1,7 @@
 'use client';
 
+import { SavedVisitReferences } from './booking-visit-references';
+
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import { canOfferRegularHistoricalCapacityCorrection } from '../../lib/regular-historical-capacity';
@@ -279,6 +281,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             <Field wide label="APPOINTMENT ID" value={appointment.id} />
           </div>
         </section>
+
+        <SavedVisitReferences key={appointment.id} appointmentId={appointment.id} canEdit={canManage && appointment.status !== 'cancelled'} />
 
         {temporaryHold ? <section className={styles.formSection}>
           <header><strong>Customer communication</strong><span>Paused while temporary hold</span></header>

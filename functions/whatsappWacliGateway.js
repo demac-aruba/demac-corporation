@@ -1,3 +1,4 @@
+const { currentBundlePart, bundleAcknowledgement, bundleFailure, dependencyReady } = require('./whatsappReferenceBundle');
 const crypto = require("node:crypto");
 const { FieldValue, Timestamp, getFirestore } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
@@ -531,57 +532,130 @@ exports.wacliMediaIngest = onRequest(
 
 async function claimOutboundCommand(bridgeId) {
   const now = Date.now();
-  const snapshot = await db.collection("whatsappOutboundQueue")
-    .where("status", "in", ["queued", "processing"])
-    .limit(50)
-    .get();
-  const candidates = snapshot.docs
-    .filter((doc) => String(doc.data()?.provider || "") === "wacli")
-    .filter((doc) => {
-      const data = doc.data() || {};
-      return data.status === "queued" || timestampMillis(data.leaseUntil) <= now;
-    })
-    .sort((left, right) => {
-      const delta = timestampMillis(left.data()?.createdAt) - timestampMillis(right.data()?.createdAt);
-      return delta || left.id.localeCompare(right.id);
-    });
+  const query = db.collection("whatsappOutboundQueue")
+    .where("status", "in", ["queued", "processing"]).limit(50);
+  let cursor = null;
+  // A page can contain only jobs waiting for a predecessor in a later page.
+  // Scan past blocked pages so ordering dependencies cannot starve their own root.
+  while (true) {
+    const snapshot = await (cursor ? query.startAfter(cursor) : query).get();
+    if (!snapshot.docs.length) return null;
+    const candidates = snapshot.docs
+      .filter((doc) => String(doc.data()?.provider || "") === "wacli")
+      .filter((doc) => {
+        const data = doc.data() || {};
+        return data.status === "queued" || timestampMillis(data.leaseUntil) <= now;
+      })
+      .sort((left, right) => {
+        const delta = timestampMillis(left.data()?.createdAt) - timestampMillis(right.data()?.createdAt);
+        return delta || left.id.localeCompare(right.id);
+      });
 
-  for (const candidate of candidates) {
-    const command = await db.runTransaction(async (transaction) => {
-      const currentSnapshot = await transaction.get(candidate.ref);
-      if (!currentSnapshot.exists) return null;
-      const current = currentSnapshot.data() || {};
-      if (current.provider !== "wacli") return null;
-      if (!["queued", "processing"].includes(current.status || "queued")) return null;
-      if (current.status === "processing" && timestampMillis(current.leaseUntil) > Date.now()) return null;
+    for (const candidate of candidates) {
+      const command = await db.runTransaction(async (transaction) => {
+        const currentSnapshot = await transaction.get(candidate.ref);
+        if (!currentSnapshot.exists) return null;
+        const current = currentSnapshot.data() || {};
+        if (current.provider !== "wacli") return null;
+        if (!["queued", "processing"].includes(current.status || "queued")) return null;
+        if (current.status === "processing" && timestampMillis(current.leaseUntil) > Date.now()) return null;
 
-      const to = String(current.to || current.phone || current.recipient || "").trim();
-      const text = String(current.text || "");
-      const media = current.media && typeof current.media === "object" ? current.media : null;
-      const claimToken = crypto.randomUUID();
-      const leaseUntil = Timestamp.fromMillis(Date.now() + 3 * 60 * 1000);
-      transaction.set(candidate.ref, {
-        status: "processing",
-        claimToken,
-        claimedBy: bridgeId || "demac-wacli-bridge",
-        claimedAt: FieldValue.serverTimestamp(),
-        processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
-        leaseUntil,
-        attempts: FieldValue.increment(1),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return {
-        queueId: candidate.id,
-        claimToken,
-        to,
-        text,
-        media,
-      };
-    });
-    if (command) return command;
+        if (Date.parse(current.retryAfterIso || '') > Date.now()) return null;
+        if (!await dependencyReady({ transaction, db, record: current })) return null;
+        const to = String(current.to || current.phone || current.recipient || "").trim();
+        const dispatchRef = db.collection('whatsappOutboundDispatchLocks').doc(crypto.createHash('sha256').update(to).digest('hex'));
+        const dispatch = await transaction.get(dispatchRef);
+        if (dispatch.exists && dispatch.data().activeQueueId && dispatch.data().activeQueueId !== candidate.id) {
+          const ownerId = String(dispatch.data().activeQueueId);
+          if (ownerId.includes('/')) return null;
+          const owner = await transaction.get(db.collection('whatsappOutboundQueue').doc(ownerId));
+          if (owner.exists && ['queued', 'processing'].includes(owner.data().status)) return null;
+          // Completed, failed or removed records cannot hold a recipient forever.
+        }
+        let part;
+        try {
+          part = currentBundlePart(current);
+          if (part?.media && !/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(part.media.storagePath || '')) {
+            throw new Error('Invalid booking reference media path.');
+          }
+        } catch {
+          // Quarantine only the invalid command. Never fail every Van's poll.
+          transaction.set(candidate.ref, { status: 'failed', errorMessage: 'Invalid booking reference command.',
+            failedAt: FieldValue.serverTimestamp(), claimToken: null, leaseUntil: null }, { merge: true });
+          if (dispatch.data()?.activeQueueId === candidate.id) transaction.set(dispatchRef, { activeQueueId: null }, { merge: true });
+          return null;
+        }
+        const text = String(part ? part.text || '' : current.text || '');
+        let media = part?.media || (current.media && typeof current.media === 'object' ? current.media : null);
+        const claimToken = crypto.randomUUID();
+        if (part && media?.storagePath) {
+          if (!/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(media.storagePath)) throw new Error('Invalid booking reference media path.');
+          const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+          if (!projectId) throw new Error('Firebase project identity is required for private reference delivery.');
+          media = { kind: media.kind, fileName: media.fileName, mimeType: media.mimeType,
+            url: `https://us-central1-${projectId}.cloudfunctions.net/wacliBookingReferenceMedia?queueId=${encodeURIComponent(candidate.id)}&claimToken=${encodeURIComponent(claimToken)}` };
+        }
+        transaction.set(dispatchRef, { activeQueueId: candidate.id, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        // Media may require download, voice conversion, send and a durable ACK.
+        const leaseUntil = Timestamp.fromMillis(Date.now() + (part ? 10 : 3) * 60 * 1000);
+        transaction.set(candidate.ref, {
+          status: "processing",
+          claimToken,
+          claimedBy: bridgeId || "demac-wacli-bridge",
+          claimedAt: FieldValue.serverTimestamp(),
+          processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
+          leaseUntil,
+          attempts: FieldValue.increment(1),
+          ...(part ? { partAttempts: Number(current.partAttempts || 0) + 1 } : {}),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return {
+          queueId: candidate.id,
+          claimToken,
+          to,
+          text,
+          media,
+        };
+      });
+      if (command) return command;
+    }
+    if (snapshot.docs.length < 50) return null;
+    cursor = snapshot.docs[snapshot.docs.length - 1];
   }
-  return null;
 }
+
+// Opaque, short-lived retrieval capability bound to one actively claimed queue part.
+// No permanent Firebase download token or URL is stored in appointment metadata.
+exports.wacliBookingReferenceMedia = onRequest(
+  { region: 'us-central1', memory: '512MiB', timeoutSeconds: 90, concurrency: 4 },
+  async (request, response) => {
+    response.set('Cache-Control', 'private, no-store');
+    response.set('X-Content-Type-Options', 'nosniff');
+    try {
+      if (request.method !== 'GET') throw httpError(405, 'GET required.');
+      const queueId = String(request.query.queueId || '');
+      const claimToken = String(request.query.claimToken || '');
+      if (!queueId || queueId.includes('/') || !claimToken) throw httpError(403, 'Unavailable reference.');
+      const snapshot = await db.collection('whatsappOutboundQueue').doc(queueId).get();
+      const record = snapshot.exists ? snapshot.data() : null;
+      if (!record || record.provider !== 'wacli' || record.status !== 'processing' || timestampMillis(record.leaseUntil) <= Date.now()
+          || !safeSecretEqual(claimToken, record.claimToken)) throw httpError(403, 'Unavailable reference.');
+      const media = currentBundlePart(record)?.media;
+      if (!media || !/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(media.storagePath || '')) throw httpError(404, 'Unavailable reference.');
+      // Office can create ordinary queue records under the existing rules. A queue
+      // payload must never elevate access to another operator's unclaimed draft.
+      const upload = await db.collection('bookingReferenceUploads').doc(media.storagePath.split('/').pop()).get();
+      const file = upload.exists ? upload.data() : null;
+      if (!file || file.status !== 'linked' || !record.appointmentId || file.appointmentId !== record.appointmentId
+          || file.storagePath !== media.storagePath) throw httpError(403, 'Unavailable reference.');
+      const [bytes] = await storage.bucket().file(file.storagePath).download();
+      if (bytes.length > MAX_MEDIA_BYTES) throw httpError(413, 'Reference exceeds media limit.');
+      response.set('Content-Type', file.mimeType || 'application/octet-stream');
+      response.set('Content-Disposition', 'attachment');
+      response.status(200).send(bytes);
+    } catch (error) { response.status(error.statusCode || 500).json({ error: 'Reference media is unavailable.' }); }
+  },
+);
 
 exports.wacliOutboundPoll = onRequest(
   {
@@ -645,6 +719,9 @@ exports.wacliOutboundAck = onRequest(
         if (!queueSnapshot.exists) throw httpError(404, "Outbound queue item not found.");
         const current = queueSnapshot.data() || {};
 
+        if (current.lastAcknowledgedClaimToken === claimToken && current.lastAcknowledgedSent === sent) {
+          ackResult = { alreadyAcknowledged: true, sent, messageId: current.messageId || null }; return;
+        }
         if (current.status === "sent" && sent) {
           ackResult = { alreadyAcknowledged: true, messageId: current.messageId || reportedMessageId || queueId };
           return;
@@ -653,22 +730,31 @@ exports.wacliOutboundAck = onRequest(
           throw httpError(409, "Outbound queue claim is no longer active.");
         }
 
+        const bundlePart = currentBundlePart(current);
+        const recipient = String(current.to || current.phone || current.recipient || '').trim();
+        const dispatchRef = db.collection('whatsappOutboundDispatchLocks').doc(crypto.createHash('sha256').update(recipient).digest('hex'));
+        const dispatch = await transaction.get(dispatchRef);
+        if (bundlePart && dispatch?.data()?.activeQueueId !== queueId) throw httpError(409, 'Reference delivery ownership changed.');
         if (!sent) {
+          const failure = bundleFailure(current);
           transaction.set(queueRef, {
-            status: "failed",
+            ...failure,
+            lastAcknowledgedClaimToken: claimToken, lastAcknowledgedSent: false,
             errorMessage,
             failedAt: FieldValue.serverTimestamp(),
             claimToken: null,
             leaseUntil: null,
             updatedAt: FieldValue.serverTimestamp(),
           }, { merge: true });
+          if (failure.status === 'failed' && dispatch.data()?.activeQueueId === queueId) transaction.set(dispatchRef, { activeQueueId: null, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
           ackResult = { sent: false };
           return;
         }
 
-        const messageId = reportedMessageId || queueId;
-        const media = current.media && typeof current.media === "object" ? current.media : null;
-        const text = String(current.text || "");
+        const messageId = reportedMessageId || (bundlePart ? `${queueId}-${bundlePart.index}` : queueId);
+        const media = bundlePart?.media || (current.media && typeof current.media === 'object' ? current.media : null);
+        const text = String(bundlePart ? bundlePart.text || '' : current.text || '');
+        const bundlePatch = bundleAcknowledgement(current, messageId);
         const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
         let conversationRef = null;
         let conversationCurrent = null;
@@ -695,6 +781,8 @@ exports.wacliOutboundAck = onRequest(
         }, { merge: true });
         transaction.set(queueRef, {
           status: "sent",
+          ...(bundlePatch || {}),
+          lastAcknowledgedClaimToken: claimToken, lastAcknowledgedSent: true,
           messageId,
           bridgeResponse: { sent: true, messageId, storeWarning },
           completedAt: FieldValue.serverTimestamp(),
@@ -704,6 +792,7 @@ exports.wacliOutboundAck = onRequest(
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
 
+        if ((!bundlePart || bundlePatch?.status === 'sent') && dispatch.data()?.activeQueueId === queueId) transaction.set(dispatchRef, { activeQueueId: null, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
         if (conversationRef) {
           const recentMessages = mergeRecentMessages(conversationCurrent?.recentMessages, {
             id: messageId,

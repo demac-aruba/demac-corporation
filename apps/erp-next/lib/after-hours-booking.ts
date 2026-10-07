@@ -1,3 +1,4 @@
+import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type { AppointmentRecipientSelection } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
@@ -19,6 +20,7 @@ function endpoint() {
 }
 
 export type SpecialBookingInput = {
+  visitReferences?: VisitReferences;
   project?: { id: string; phaseId: string; version: number };
   dwellingId?: string; requesterId?: string; accessContactId?: string;
   requestId: string;

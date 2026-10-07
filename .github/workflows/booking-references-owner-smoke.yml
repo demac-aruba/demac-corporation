@@ -1,0 +1,45 @@
+name: Booking references owner-authorized WhatsApp smoke
+on:
+  push:
+    branches: [test/booking-references-owner-smoke-20261007]
+permissions:
+  contents: read
+concurrency:
+  group: booking-references-owner-smoke-20261007
+  cancel-in-progress: false
+jobs:
+  approved-synthetic-media:
+    if: github.repository == 'demac-aruba/demac-corporation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - name: Install synthetic fixture tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg espeak-ng fonts-dejavu-core
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Recheck live backend source before test
+        env:
+          RUNTIME_AUDIT_OUTPUT: ${{ runner.temp }}/reference-runtime-audit
+        run: node scripts/booking-references-runtime-audit.cjs
+      - name: Send six synthetic parts only to Christian, serially with durable ACK
+        run: node scripts/booking-references-owner-smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owner-authorized-reference-smoke
+          path: |
+            ${{ runner.temp }}/pr557-owner-smoke-20261007/summary.json
+            ${{ runner.temp }}/pr557-owner-smoke-20261007/*.jpg
+            ${{ runner.temp }}/pr557-owner-smoke-20261007/*.mp4
+            ${{ runner.temp }}/pr557-owner-smoke-20261007/*.mp3
+            ${{ runner.temp }}/reference-runtime-audit/summary.json

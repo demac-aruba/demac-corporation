@@ -1,0 +1,28 @@
+.panel { border:1px solid var(--border); border-radius:12px; background:var(--surface, #fff); padding:16px; display:grid; gap:12px; min-width:0; }
+.heading { display:flex; justify-content:space-between; gap:12px; align-items:center; }
+.heading h3 { margin:0; font-size:15px; }
+.hint { color:var(--muted); font-size:12px; margin:0; }
+.optional { color:var(--muted); font-size:11px; border:1px solid var(--border); padding:3px 7px; border-radius:16px; }
+.panel label { font-size:12px; font-weight:600; display:grid; gap:5px; }
+.panel textarea,.panel input[type=text] { width:100%; min-width:0; background:var(--surface,#fff); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:9px; font:inherit; }
+.panel textarea { resize:vertical; }
+.actions { display:flex; gap:7px; flex-wrap:wrap; }
+.button { border:1px solid var(--border); border-radius:7px; background:var(--surface,#fff); color:var(--text); padding:8px 11px; font-size:12px; font-weight:600; cursor:pointer; }
+.button:disabled { opacity:.5; cursor:default; }
+.primary { background:var(--brand,#1767e8); color:#fff; border-color:var(--brand,#1767e8); }
+.files { display:grid; gap:9px; }
+.file { border:1px solid var(--border); padding:10px; border-radius:9px; display:grid; gap:8px; min-width:0; }
+.fileTitle { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; }
+.name { overflow-wrap:anywhere; font-size:12px; text-align:left; }
+.tools { display:flex; gap:5px; }
+.note { white-space:pre-wrap; margin:0; font-size:13px; }
+.error { color:var(--danger,#a61e29); font-size:13px; margin:0; }
+.notice { color:var(--muted); font-size:12px; border-top:1px solid var(--border); padding-top:10px; margin:0; }
+.location { overflow-wrap:anywhere; font-size:13px; }
+.preview { display:grid; gap:8px; padding:10px; border:1px solid var(--border); border-radius:8px; }
+.preview img,.preview video { max-width:100%; width:auto; height:auto; max-height:320px; object-fit:contain; }
+.preview audio { width:100%; }
+.busy { font-size:12px; margin:0; }
+@media(max-width:520px) { .panel { padding:12px; } .panel textarea,.panel input[type=text] { font-size:16px; } .button { min-height:44px; } }
+
+.panel > .panel { border:0; padding:0; }

@@ -11,6 +11,7 @@ const taskReminders = require("./taskReminders");
 const taskTrackerApi = require("./taskTrackerApi");
 const taskCheckpointApi = require("./taskCheckpointApi");
 const taskTrackerAttachments = require("./taskTrackerAttachments");
+const { bookingVisitReferences, cleanupBookingReferenceUploads, notifyBookingReferenceUpdate } = require("./bookingVisitReferencesHttp");
 const technicianDailySchedules = require("./technicianDailySchedules");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
@@ -52,6 +53,7 @@ module.exports = {
   taskTrackerApi: taskTrackerApi.taskTrackerApi,
   taskCheckpointApi: taskCheckpointApi.taskCheckpointApi,
   ...taskTrackerAttachments,
+  bookingVisitReferences, cleanupBookingReferenceUploads, notifyBookingReferenceUpdate,
   ...technicianDailySchedules,
   ...userManagement,
   ...require("./careers"),

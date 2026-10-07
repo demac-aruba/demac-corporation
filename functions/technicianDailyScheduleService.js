@@ -1,3 +1,4 @@
+const { referenceMessageParts } = require('./bookingVisitReferences');
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
 const { endTimeFromOccupiedSlots } = require("./bookingCapacityAvailability");
 const { AFTERNOON_SLOTS, isHalfDay, occupiedSlots } = require("./bookingSchedulingPrimitives");
@@ -363,6 +364,9 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const descriptionBlock = description ? [`*Descripción:* ${description}`] : [];
   const blocks = [header, customerBlock, locationBlock, descriptionBlock];
   if (instructions) blocks.push([`*Instrucciones técnico:* ${instructions}`]);
+  if (appointment?.visitReferences?.notes) blocks.push([`*Referencias para la visita:* ${appointment.visitReferences.notes}`]);
+  if (appointment?.visitReferences?.location?.url) blocks.push([`*GPS · ${appointment.visitReferences.location.label}:* ${appointment.visitReferences.location.url}`]);
+  if (appointment?.visitReferences?.files?.length) blocks.push([`*Archivos de referencia:* ${appointment.visitReferences.files.length} (a continuación, en orden).`]);
   return blocks.map((block) => block.filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
 }
 
@@ -517,7 +521,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     };
   }
 
-  async function queueWorkOrder({ dateKey, van, order, day, sequence, deliveryKey, reason }) {
+  async function queueWorkOrder({ dateKey, van, order, day, sequence, deliveryKey, reason, dependsOnQueueId = null }) {
     const config = groupConfigForVan(van);
     if (!config.enabled) return { queued: false, created: false, reason: "van-group-delivery-disabled", vanId: van.id, groupName: config.groupName, workOrderId: order.id };
     if (!config.valid) return { queued: false, created: false, reason: "van-whatsapp-group-not-configured", vanId: van.id, groupName: config.groupName, workOrderId: order.id };
@@ -525,14 +529,18 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     const property = day.propertiesById.get(String(order.propertyId || ""));
     const appointment = day.appointmentsById.get(String(order.appointmentId || ""));
     const queueId = deterministicQueueId({ dateKey, vanId: van.id, order, deliveryKey });
-    const text = renderVanWorkOrderText({ van, order, client, property, appointment, staffById: day.staffById, halfDaySchedules: day.halfDaySchedules, sequence });
+    const detail = renderVanWorkOrderText({ van, order, client, property, appointment, staffById: day.staffById, halfDaySchedules: day.halfDaySchedules, sequence });
+    const text = reason === 'visit-references-updated' ? `*REFERENCIAS ACTUALIZADAS*\n${detail}` : detail;
     const result = await whatsapp.queueTransactionalMessage({
       queueId,
       to: config.groupJid,
       text,
+      messages: referenceMessageParts({ text, appointment, order, client, sequence }),
       languageCode: VAN_DAILY_LANGUAGE,
       metadata: {
         notificationType: "van-daily-work-order",
+        dependsOnQueueId,
+        referencesVersion: appointment?.visitReferences?.version || 0,
         recipientType: "whatsapp-group",
         vanId: van.id,
         groupName: config.groupName,
@@ -548,7 +556,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     return { ...result, vanId: van.id, groupName: config.groupName, groupJid: config.groupJid, workOrderId: order.id, appointmentId: order.appointmentId || null, sequence };
   }
 
-  async function queueLunchBreak({ dateKey, van, orders, day, lunch, deliveryKey, reason }) {
+  async function queueLunchBreak({ dateKey, van, orders, day, lunch, deliveryKey, reason, dependsOnQueueId = null }) {
     const config = groupConfigForVan(van);
     if (!config.enabled) return { queued: false, created: false, reason: "van-group-delivery-disabled", vanId: van.id, groupName: config.groupName, lunchBreak: true };
     if (!config.valid) return { queued: false, created: false, reason: "van-whatsapp-group-not-configured", vanId: van.id, groupName: config.groupName, lunchBreak: true };
@@ -561,6 +569,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
       languageCode: VAN_DAILY_LANGUAGE,
       metadata: {
         notificationType: "van-daily-lunch-break",
+        dependsOnQueueId,
         recipientType: "whatsapp-group",
         vanId: van.id,
         groupName: config.groupName,
@@ -577,7 +586,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     return { ...result, vanId: van.id, groupName: config.groupName, groupJid: config.groupJid, lunchBreak: true, lunch };
   }
 
-  async function queuePendingSlot({ dateKey, van, slot, deliveryKey, reason }) {
+  async function queuePendingSlot({ dateKey, van, slot, deliveryKey, reason, dependsOnQueueId = null }) {
     const config = groupConfigForVan(van);
     if (!config.enabled) return { queued: false, created: false, reason: "van-group-delivery-disabled", vanId: van.id, groupName: config.groupName, pendingSlot: slot };
     if (!config.valid) return { queued: false, created: false, reason: "van-whatsapp-group-not-configured", vanId: van.id, groupName: config.groupName, pendingSlot: slot };
@@ -590,6 +599,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
       languageCode: VAN_DAILY_LANGUAGE,
       metadata: {
         notificationType: "van-daily-pending-period",
+        dependsOnQueueId,
         recipientType: "whatsapp-group",
         vanId: van.id,
         groupName: config.groupName,
@@ -639,6 +649,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
         ...(lunch ? [{ type: "lunch", time: minutesToTime(lunch.startMinutes), lunch }] : []),
       ].sort((a, b) => normalizedText(a.time).localeCompare(normalizedText(b.time)) || a.type.localeCompare(b.type));
 
+      let previousQueueId = null;
       for (const item of timeline) {
         if (item.type === "work") {
           results.push(await queueWorkOrder({
@@ -647,14 +658,17 @@ function createTechnicianDailyScheduleService({ db } = {}) {
             order: item.order,
             day,
             sequence: workSequence.get(item.order.id) || 1,
+            dependsOnQueueId: previousQueueId,
             deliveryKey,
             reason,
           }));
         } else if (item.type === "pending") {
-          results.push(await queuePendingSlot({ dateKey, van, slot: item.slot, deliveryKey, reason }));
+          results.push(await queuePendingSlot({ dateKey, van, slot: item.slot, deliveryKey, reason, dependsOnQueueId: previousQueueId }));
         } else if (item.type === "lunch") {
-          results.push(await queueLunchBreak({ dateKey, van, orders, day, lunch: item.lunch, deliveryKey, reason }));
+          results.push(await queueLunchBreak({ dateKey, van, orders, day, lunch: item.lunch, deliveryKey, reason, dependsOnQueueId: previousQueueId }));
         }
+        const latest = results[results.length - 1];
+        if (latest?.queued && latest.queueId) previousQueueId = latest.queueId;
       }
     }
     return {
