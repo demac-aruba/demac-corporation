@@ -69,6 +69,31 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
     await page.keyboard.press('Escape');await enlarged.waitFor({state:'hidden'});
     assert.equal(await thumbnail.evaluate(element=>element===document.activeElement),true,'closing enlargement restores keyboard focus');
     await page.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
+    await page.getByText('Audio o video opcional',{exact:true}).click();
+    const samples=require('./field-procedure-media-samples.cjs');
+    for(const [kind,label,mime,extension]of[['audio','Audio','audio/wav','wav'],['video','Video','video/mp4','mp4']]){
+      const linked=page.waitForResponse(r=>r.request().method()==='POST'&&r.request().postData()?.startsWith('{')&&r.request().postDataJSON()?.data?.command?.action==='commit_media');
+      await page.getByLabel('Agregar '+kind,{exact:true}).setInputFiles({name:'synthetic.'+extension,mimeType:mime,buffer:samples[kind]});
+      const pending=page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='Reintentar archivos pendientes'&&!b.disabled)).then(()=>true);
+      if(await Promise.race([linked.then(()=>false),pending]))await page.getByRole('button',{name:'Reintentar archivos pendientes',exact:true}).click();
+      assert.equal((await linked).status(),200);
+      const receipt=page.getByText(label+' · vínculo confirmado',{exact:true}).locator('..');
+      await receipt.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
+      const media=page.getByLabel(label+' del procedimiento',{exact:true});await media.waitFor();
+      const played=await media.evaluate(el=>new Promise((resolve,reject)=>{
+        const timeout=setTimeout(()=>reject(Error('Private media did not decode/play')),10000);
+        el.onerror=()=>{clearTimeout(timeout);reject(Error('Private media decode error '+el.error?.code));};
+        el.ontimeupdate=()=>{if(el.currentTime>0){el.pause();clearTimeout(timeout);resolve({duration:el.duration,time:el.currentTime,width:el.videoWidth||0});}};
+        el.play().catch(error=>{clearTimeout(timeout);reject(error);});
+      }));
+      assert.ok(played.duration>0&&played.time>0,'hash-verified original actually plays '+kind);
+      if(kind==='video')assert.equal(played.width,96);
+      assert.match(await media.getAttribute('src'),/^blob:/);
+      await receipt.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
+    }
+    const combined=state.store.all('fieldEvidence').filter(e=>e.procedureId==='I01');
+    assert.deepEqual([...new Set(combined.map(e=>e.kind))].sort(),['audio','photo','video'],'three media kinds remain on the same procedure');
+    await page.getByText('Audio o video opcional',{exact:true}).click();
    }
    await page.getByLabel('Observación técnica').fill('Observación sintética exclusiva de '+d.id);
    if(d.options.length)await page.getByLabel('Resultado observado').selectOption(d.options.includes('buen_estado')?'buen_estado':d.options[0]);
@@ -128,13 +153,13 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
   await office.getByRole('heading',{name:'Procedimientos · revisión 1',exact:true}).waitFor();
   assert.match(await office.locator('section[aria-label="Procedimientos de la revisión inmutable"]').innerText(),/Prueba final: No enfría/);
   await office.getByText('I01 · Vista amplia inicial · Documentado',{exact:true}).click();
-  await office.getByRole('group',{name:'Archivo privado del procedimiento',exact:true}).scrollIntoViewIfNeeded();
+  await office.getByRole('group',{name:'Archivo privado del procedimiento',exact:true}).first().scrollIntoViewIfNeeded();
   await office.getByAltText('Evidencia privada del procedimiento').waitFor();
   assert.equal(JSON.stringify(state.store.all('fieldOfficeReviewRevisions')),frozen,'viewing frozen private evidence creates no revision write');
   assert.equal(Object.keys(completed.workflow.pendingCaptures).length,0);assert.equal(state.store.all('workInterventions').length,1);assert.equal(state.store.all('workVisits').length,1);
   for(const c of ['invoices','inventoryMovements','whatsappOutboundQueue'])assert.equal(state.store.all(c).length,0);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   console.log('PASS complete visible 14/9 workflow, private capture/view, office exception and coordinated final test '+browserName);
-  return{browser:browserName,passed:true,checks:['all 14 indoor/9 outdoor controls','unique per-step text and original photo bytes','indoor measurement instrument photo','private hash-verified PNG decoding','Office queue exception approval with disposition','both part completions','coordinated final failure preserved','no invoice/inventory/message effects']};
+  return{browser:browserName,passed:true,checks:['all 14 indoor/9 outdoor controls','unique per-step text and original photo bytes','indoor measurement instrument photo','private hash-verified PNG decoding','combined photo/audio/video with actual WAV/MP4 playback','Office queue exception approval with disposition','both part completions','coordinated final failure preserved','no invoice/inventory/message effects']};
  }finally{await Promise.all(contexts.map(c=>c.close()));await officeBrowser?.close();}
 };

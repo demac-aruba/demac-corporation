@@ -1,5 +1,6 @@
 import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
+import {flushSync} from 'react-dom';
 import {useProcedureForm} from '../components/field/use-procedure-form';
 import {ProcedureFormStatus} from '../components/field/procedure-form-status';
 import {persistFirebaseWebSession} from '../lib/firebase/session';
@@ -21,7 +22,7 @@ function Form({uid,scope}:{uid:string;scope:string}) {
 }
 function App(){
   const [uid,setUid]=useState('test-tech'),[scope,setScope]=useState('coordination');
-  Object.assign(window,{formFixture:{scope:setScope,account:(next:string)=>{account(next);setUid(next);},canExit:requestProcedureExit,store,target:target(uid)}});
+  Object.assign(window,{formFixture:{scope:(next:string)=>flushSync(()=>setScope(next)),account:(next:string)=>flushSync(()=>{account(next);setUid(next);}),canExit:requestProcedureExit,store,target:target(uid)}});
   return <Form key={uid+':'+scope} uid={uid} scope={scope}/>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);

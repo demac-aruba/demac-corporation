@@ -37,7 +37,7 @@ function App(){
  const [job,setJob]=useState(initial),[uid,setUid]=useState('test-tech');
  const mode=location.hash.slice(1)||'sale';
  const record=async(input:unknown)=>{events.push(input);return false;};
- Object.assign(window,{visitFixture:{events,canExit:requestProcedureExit,account:(next:string)=>flushSync(()=>{account(next);setUid(next);}),otherJob:()=>flushSync(()=>setJob({...initial,workOrderId:'WO-2'})),serverNote:()=>flushSync(()=>setJob({...job,interventionReports:job.interventionReports.map(r=>({...r,freeTextResponses:[{sectionId:'text',value:'Texto del otro técnico',version:2}]}))} as FieldExecutionJobDetail)),legacy:()=>saveFieldOfflineDraft({ownerUserId:uid,workOrderId:'WO-1',interventionId:'WI-1',sectionId:'text',baseVersion:0,value:'Original anterior de 5000 caracteres: '+ 'x'.repeat(4965)})}});
+ Object.assign(window,{visitFixture:{events,canExit:requestProcedureExit,account:(next:string)=>flushSync(()=>{account(next);setUid(next);}),otherJob:()=>flushSync(()=>setJob({...initial,workOrderId:'WO-2'})),serverNote:()=>flushSync(()=>setJob({...job,interventionReports:job.interventionReports.map(r=>({...r,freeTextResponses:[{sectionId:'text',value:'Texto del otro técnico',version:2}]}))} as FieldExecutionJobDetail)),legacy:()=>saveFieldOfflineDraft({ownerUserId:uid,workOrderId:'WO-1',interventionId:'WI-1',sectionId:'text',baseVersion:0,value:'Original anterior'.padEnd(5000,'x')})}});
  const props={job,mutationBusy:false,error:null};
  return <main key={uid} data-work-order={job.workOrderId} data-owner={uid}><p>DEMO · Formularios sintéticos, sin acciones reales.</p>
  {mode==='sale'?<FieldSaleControls {...props} busy={false} onCreate={record} onDecide={record} onTransition={record}/>:null}

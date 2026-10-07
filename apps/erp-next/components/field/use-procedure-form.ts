@@ -46,7 +46,9 @@ export function useProcedureForm<T extends Record<string,string>>(target:FieldFo
     if(!loaded.current||!initial.target)return;current.current=next;setValue(next);dirty.current=true;writes.current+=1;setSaving(true);
     const frozen=JSON.stringify(next);
     const owner=initial.target;
-    tail.current=tail.current.then(async()=>{if(failed.current)throw new Error(failed.current);const row=await saveProcedureForm(owner,initial.scope,frozen,revision.current);revision.current=row.revision;})
+    tail.current=tail.current.then(async()=>{if(failed.current)throw new Error(failed.current);
+      if(Object.values(next).some(text=>typeof text!=='string'||text.length>5000))throw new Error('Cada campo admite hasta 5000 caracteres. Acorta el texto y reintenta guardarlo antes de salir.');
+      const row=await saveProcedureForm(owner,initial.scope,frozen,revision.current);revision.current=row.revision;})
       .catch(e=>{failed.current=e instanceof Error?e.message:'El borrador no está protegido todavía.';if(alive.current)setError(failed.current);})
       .finally(()=>{writes.current-=1;if(alive.current)setSaving(writes.current>0);});
   }
