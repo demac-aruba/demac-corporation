@@ -32,24 +32,29 @@ const server=http.createServer((req,res)=>{
    await context.route('**/*',route=>{if(!route.request().url().startsWith(origin+'/')&&!route.request().url().startsWith('blob:'+origin+'/')){outside.push(route.request().url());return route.abort();}return route.continue();});
    await context.addInitScript(()=>{
     const fake={mode:'live',requests:0,streams:[],contexts:[],release:null};window.microphoneFixture=fake;
-    Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async constraints=>{
+    fake.getUserMedia=async constraints=>{
       fake.requests++;if(constraints.video!==false||constraints.audio!==true)throw Error('Unexpected media constraints');
       if(fake.mode==='deny')throw new DOMException('Synthetic denial','NotAllowedError');
       const audio=new AudioContext(),source=audio.createOscillator(),destination=audio.createMediaStreamDestination();
       source.connect(destination);source.start();await audio.resume();fake.contexts.push(audio);fake.streams.push(destination.stream);
       if(fake.mode==='hold')await new Promise(resolve=>fake.release=resolve);return destination.stream;
-    }});
+    };
+    // WebKit may discard an unretained MediaDevices wrapper and its own properties.
+    // Install on the shared prototype so each wrapper uses this synthetic source.
+    // MediaRecorder, Web Audio encoding/decoding and IndexedDB remain native.
+    Object.defineProperty(Object.getPrototypeOf(navigator.mediaDevices),'getUserMedia',{configurable:true,writable:true,value:fake.getUserMedia});
    });
    const page=await context.newPage();page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE_ERROR '+name+' '+e.message);});await page.goto(origin);
    const capabilities=await page.evaluate(()=>({secure:isSecureContext,visibility:document.visibilityState,ownMicrophoneMethod:Object.hasOwn(navigator.mediaDevices,'getUserMedia'),domExceptionIsError:new DOMException('synthetic','NotAllowedError') instanceof Error,recorder:typeof MediaRecorder,probe:typeof MediaRecorder==='undefined'?'absent':typeof MediaRecorder.isTypeSupported,microphone:typeof navigator.mediaDevices?.getUserMedia,formats:Object.fromEntries(['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus','audio/webm'].map(mime=>[mime,typeof MediaRecorder!=='undefined'&&typeof MediaRecorder.isTypeSupported==='function'&&MediaRecorder.isTypeSupported(mime)]))}));
    console.log('CAPABILITIES '+name+' '+JSON.stringify(capabilities));fs.writeFileSync(path.join(out,name+'-capabilities.json'),JSON.stringify(capabilities,null,2));
+   assert.equal(await page.evaluate(()=>navigator.mediaDevices.getUserMedia===microphoneFixture.getUserMedia),true,'synthetic microphone installed in the application realm');
    const start=page.getByRole('button',{name:'Grabar audio',exact:true}),stop=page.getByRole('button',{name:'Detener y guardar audio',exact:true});
    await start.waitFor();assert.equal(await page.evaluate(()=>microphoneFixture.requests),0,'no microphone on render');
    await page.evaluate(()=>microphoneFixture.mode='deny');await start.click();
    await page.waitForTimeout(500);
    const deniedProbe=await page.evaluate(()=>({visibility:document.visibilityState,requests:microphoneFixture.requests,mode:microphoneFixture.mode,text:document.querySelector('main').innerText,receipt:{...document.querySelector('#receipt').dataset},storedUsers:Object.keys(localStorage).map(k=>{try{return JSON.parse(localStorage.getItem(k)).uid||null;}catch{return null;}}).filter(Boolean)}));
    console.log('DENIED_PROBE '+name+' '+JSON.stringify(deniedProbe));fs.writeFileSync(path.join(out,name+'-denial-probe.json'),JSON.stringify(deniedProbe,null,2));
-   await page.getByRole('alert').filter({hasText:/denegado/}).waitFor();assert.equal(await page.locator('#receipt').getAttribute('data-count'),'0');
+   await page.getByRole('alert').filter({hasText:/denegado/}).waitFor();assert.equal(await page.evaluate(()=>microphoneFixture.requests),1,'denial uses the synthetic microphone');assert.equal(await page.locator('#receipt').getAttribute('data-count'),'0');
    await page.evaluate(()=>microphoneFixture.mode='hold');await start.click();await page.waitForFunction(()=>typeof microphoneFixture.release==='function');await page.getByRole('button',{name:'Cancelar solicitud de micrófono'}).click();await page.evaluate(()=>microphoneFixture.release());await page.waitForFunction(()=>microphoneFixture.streams.every(s=>s.getTracks().every(t=>t.readyState==='ended')));assert.equal(await page.locator('#receipt').getAttribute('data-count'),'0');
    await page.evaluate(()=>microphoneFixture.mode='live');await start.click();await stop.waitFor();await page.getByRole('button',{name:'Salir del procedimiento'}).click();assert.equal(await page.evaluate(()=>audioFixture.exits),0,'recording blocks app exit');
    await page.waitForTimeout(1300);await stop.click();await page.waitForFunction(()=>document.querySelector('#receipt').dataset.count==='1'&&document.querySelector('#receipt').dataset.busy==='false');
@@ -57,6 +62,7 @@ const server=http.createServer((req,res)=>{
    await page.waitForFunction(()=>{const a=document.querySelector('audio');return a&&a.readyState>=2&&!a.error;});
    assert.equal(await page.evaluate(()=>microphoneFixture.streams.every(s=>s.getTracks().every(t=>t.readyState==='ended'))),true);
    await page.reload();await page.waitForFunction(()=>document.querySelector('#receipt').dataset.count==='1');assert.equal(await page.locator('#receipt').getAttribute('data-sha'),hash,'reload preserves exact original');
+   assert.equal(await page.evaluate(()=>navigator.mediaDevices.getUserMedia===microphoneFixture.getUserMedia),true,'synthetic microphone reinstalled after reload');
    // One failed IndexedDB write; retry must store exactly the already-recorded bytes.
    await page.evaluate(()=>{const add=IDBObjectStore.prototype.add;IDBObjectStore.prototype.add=function(...args){IDBObjectStore.prototype.add=add;throw new DOMException('Synthetic quota','QuotaExceededError');};});
    await start.click();await stop.waitFor();await page.evaluate(()=>audioFixture.revision(99));await page.waitForTimeout(1300);await stop.click();
