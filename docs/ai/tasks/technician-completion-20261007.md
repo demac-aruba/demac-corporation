@@ -57,3 +57,27 @@ Field backend/auth/emulator gates after integration. Existing gates are retained
 Local browser installation failed to download a valid archive; use the existing
 authorized GitHub CI, never treat that local limitation as a browser pass.
 Results and the separate adversarial review will be appended after verification.
+
+## Verified increment: f1cba8ad (7 October)
+
+- [x] Thumbnail/enlargement and keyboard return: Chromium/WebKit complete visible
+  14/9 workflow. UI run 37701800242, job 113066740581, success.
+- [x] Procedure forms: 11 recovery checks per engine, including quota failure,
+  explicit stale-tab comparison, account isolation and fresh physical confirmations.
+- [x] Private original recovery: 19 checks per engine; exact hash, lost response,
+  assignment revocation, changed coordination and unsent-original retention.
+- [x] Shared parts at 360/390/desktop and coordinated final test, both engines.
+- [x] Native audio unchanged: run 37701505674 success, 19 controller + 12 per engine.
+- [ ] Visit-wide authored forms and Office review notes: implementation added;
+  require the new actual-component browser gate before completion is claimed.
+- [ ] Reconcile current main and final required checks / separate adversarial pass.
+
+Visit-form implementation keeps real user/Work Order/Visit identities in the existing
+IndexedDB `forms` store. Captures and command journals still require the full procedure
+context. Separate forms protect proposals, verbal decisions, execution notes,
+measurements/findings/captions, free text, customer acknowledgement, Office correction,
+Office reviewer notes, visit dispositions and equipment text. Old free-text drafts are
+read and copied without deleting their original. A changed server version requires an
+explicit comparison before sending. Existing non-procedure upload file selectors are
+protected by exit guards, but those legacy selected files are not claimed to survive a
+forced reload; full original recovery above applies to the procedure capture workflow.

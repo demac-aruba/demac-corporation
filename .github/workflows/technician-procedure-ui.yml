@@ -2,9 +2,9 @@ name: Technician procedure UI and drafts
 on:
   push:
     branches: ['feature/technician-app-20260923']
-    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
+    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/components/work-orders/office-review-surface.tsx', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
   pull_request:
-    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
+    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/components/work-orders/office-review-surface.tsx', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
 permissions:
   contents: read
 concurrency:
@@ -36,12 +36,16 @@ jobs:
           FIELD_PART_BROWSERS: chromium,webkit
           FIELD_PART_EVIDENCE: ${{ runner.temp }}/procedure-ui/parts
           FIELD_CAPTURE_EVIDENCE: ${{ runner.temp }}/procedure-ui/captures
+          FIELD_VISIT_FORM_EVIDENCE: ${{ runner.temp }}/procedure-ui/visit-forms
+          FIELD_SERVICE_EVIDENCE: ${{ runner.temp }}/procedure-ui/services
           FIELD_FORM_EVIDENCE: ${{ runner.temp }}/procedure-ui/forms
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/procedure-ui"
           npm run typecheck --prefix apps/erp-next
           node apps/erp-next/scripts/field-procedure-form-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/forms.log"
+          node apps/erp-next/scripts/field-visit-forms-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/visit-forms.log"
+          node apps/erp-next/scripts/field-service-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/services.log"
           node apps/erp-next/scripts/field-part-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/parts.log"
           node apps/erp-next/scripts/field-procedure-capture-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/captures.log"
       - uses: actions/upload-artifact@v4

@@ -5,6 +5,10 @@ import { PROCEDURE_MEDIA_TYPES, type PrepareProcedureMedia, type ProcedureMediaK
 // Browser-only recovery storage, never another business database or authorization source.
 // Keep the existing text outbox schema unchanged. Tokens and public URLs never enter this database.
 const DB = 'demac-field-procedure-captures-v1';
+// Visit-wide authored forms have real Work Order/Visit IDs; never fabricate an Asset
+// or Intervention just to save a local draft. Capture/command stores stay procedure-only.
+export type FieldVisitFormTarget = {ownerUserId:string;workOrderId:string;visitId:string};
+export type FieldFormTarget = FieldProcedureTarget | FieldVisitFormTarget;
 export type ProcedureCapture = {
   id: string; target: FieldProcedureTarget; part: FieldProcedurePart; stepId: string; view: string;
   kind: ProcedureMediaKind; source: ProcedureMediaSource; contentType: string; sizeBytes: number; sha256: string;
@@ -55,15 +59,21 @@ function open(): Promise<IDBDatabase> {
     };
   });
 }
-async function transaction<T>(target: FieldProcedureTarget, storeName: string, mode: IDBTransactionMode,
+async function transaction<T>(target: FieldFormTarget, storeName: string, mode: IDBTransactionMode,
   action: (store: IDBObjectStore, finish: (value: T) => void, fail: (error: Error) => void) => void): Promise<T> {
-  assertProcedureOwner(target);
+  const assertOwner=()=>{
+    if('interventionId' in target)return assertProcedureOwner(target);
+    if(storeName!=='forms')throw new Error('Los originales requieren el contexto completo del procedimiento.');
+    formContextKey(target);
+    if(loadFirebaseWebSession()?.uid!==target.ownerUserId)throw new Error('La sesión cambió. El borrador pertenece a otra cuenta.');
+  };
+  assertOwner();
   const db = await open();
   try {
-    assertProcedureOwner(target);
+    assertOwner();
     return await new Promise<T>((resolve,reject) => {
       const tx = db.transaction(storeName,mode); let value: T; let error: Error | undefined;
-      tx.oncomplete = () => { try { assertProcedureOwner(target); resolve(value); } catch (e) { reject(e); } };
+      tx.oncomplete = () => { try { assertOwner(); resolve(value); } catch (e) { reject(e); } };
       tx.onabort = tx.onerror = () => reject(error || new ProcedureStorageError());
       const fail = (e: Error) => { error = e; tx.abort(); };
       try { action(tx.objectStore(storeName),v => { value = v; },fail); } catch (e) { fail(e instanceof Error && e.name === 'Error' ? e : new ProcedureStorageError()); }
@@ -259,23 +269,30 @@ export function shelveProcedureOperation(target: FieldProcedureTarget, requestId
   });
 }
 
-export type ProcedureFormDraft = { id: string; target: FieldProcedureTarget; scope: string; value: string; revision: number; updatedAt: string };
-function formKey(target: FieldProcedureTarget, scope: string) {
-  if(!/^[-A-Za-z0-9_.:]{1,180}$/.test(scope) || scope.includes('..')) throw new Error('Contexto de formulario inválido.');
-  return JSON.stringify([procedureContextKey(target),scope]);
+export type ProcedureFormDraft = { id: string; target: FieldFormTarget; scope: string; value: string; revision: number; updatedAt: string };
+function formContextKey(target:FieldFormTarget){
+  if('interventionId' in target)return procedureContextKey(target);
+  for(const value of [target.ownerUserId,target.workOrderId,target.visitId]){
+    if(typeof value!=='string'||!/^[-A-Za-z0-9_.:]{1,180}$/.test(value)||value.includes('..'))throw new Error('Contexto de borrador inválido.');
+  }
+  return JSON.stringify(['visit-form',target.ownerUserId,target.workOrderId,target.visitId]);
 }
-export function readProcedureForm(target: FieldProcedureTarget, scope: string): Promise<ProcedureFormDraft | null> {
+function formKey(target: FieldFormTarget, scope: string) {
+  if(!/^[-A-Za-z0-9_.:]{1,600}$/.test(scope) || scope.includes('..')) throw new Error('Contexto de formulario inválido.');
+  return JSON.stringify([formContextKey(target),scope]);
+}
+export function readProcedureForm(target: FieldFormTarget, scope: string): Promise<ProcedureFormDraft | null> {
   const key=formKey(target,scope);
   return transaction(target,'forms','readonly',(store,done,fail)=>{onSuccess(store.get(key),fail,row=>{
-    if(row && (!equalTarget(row.target,target) || row.scope!==scope))return fail(new ProcedureLocalConflict());
+    if(row && (formContextKey(row.target)!==formContextKey(target) || row.scope!==scope))return fail(new ProcedureLocalConflict());
     done(row || null);
   });});
 }
-export function saveProcedureForm(target: FieldProcedureTarget, scope: string, value: string, expectedRevision: number | null): Promise<ProcedureFormDraft> {
+export function saveProcedureForm(target: FieldFormTarget, scope: string, value: string, expectedRevision: number | null): Promise<ProcedureFormDraft> {
   const key=formKey(target,scope);if(typeof value!=='string' || value.length>16000)return Promise.reject(new ProcedureStorageError());
   return transaction(target,'forms','readwrite',(store,done,fail)=>{onSuccess(store.get(key),fail,old=>{
     if((old?.revision ?? null)!==expectedRevision)return fail(new ProcedureLocalConflict());
     const next={id:key,target:{...target},scope,value,revision:(old?.revision ?? -1)+1,updatedAt:new Date().toISOString()};
-    store.put({...next,context:procedureContextKey(target)});done(next);
+    store.put({...next,context:formContextKey(target)});done(next);
   });});
 }

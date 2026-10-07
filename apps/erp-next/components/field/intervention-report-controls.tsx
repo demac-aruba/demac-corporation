@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   FieldChecklistInterventionReport,
   FieldChecklistReportSection,
@@ -9,6 +9,11 @@ import type {
   FieldReportSection,
   FieldReportSectionStatus,
 } from '@/lib/field-authority';
+import type {FieldVisitFormTarget} from '../../lib/field-procedure-capture-store';
+import {registerProcedureExitGuard} from '../../lib/field-procedure-navigation';
+import {useProcedureForm} from './use-procedure-form';
+import {ProcedureFormStatus} from './procedure-form-status';
+import {fieldVisitFormTarget} from './field-form-context';
 import styles from './technician-field-home.module.css';
 
 export type ReportPhotoInput = {
@@ -80,6 +85,7 @@ function findingCount(report: FieldChecklistInterventionReport, sectionId: strin
 
 function PhotoSectionInput({
   report,
+  target,
   section,
   allowed,
   mutationBusy,
@@ -87,6 +93,7 @@ function PhotoSectionInput({
   onAddPhoto,
 }: {
   report: FieldChecklistInterventionReport;
+  target:FieldVisitFormTarget|null;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -94,7 +101,10 @@ function PhotoSectionInput({
   onAddPhoto: (input: ReportPhotoInput) => Promise<boolean>;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [caption, setCaption] = useState('');
+  const draft=useProcedureForm(target,'report:'+report.interventionId+':'+section.id,{caption:''});
+  const blocked=mutationBusy||!draft.ready;
+  const caption=draft.value.caption, setCaption=(text:string)=>draft.field('caption',text);
+  useEffect(()=>{const guard=()=>Boolean(file);const remove=registerProcedureExitGuard(guard);const unload=(event:BeforeUnloadEvent)=>{if(file){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',unload);return()=>{remove();window.removeEventListener('beforeunload',unload);};},[file]);
   const [localError, setLocalError] = useState<string | null>(null);
   const count = evidenceCount(report, section.id);
   const minimum = section.minEvidenceCount ?? 0;
@@ -105,6 +115,7 @@ function PhotoSectionInput({
       return;
     }
     setLocalError(null);
+    if(!await draft.flush())return;
     const success = await onAddPhoto({
       interventionId: report.interventionId,
       sectionId: section.id,
@@ -120,6 +131,7 @@ function PhotoSectionInput({
   return (
     <div className={styles.interventionForm}>
       <strong>{section.title}</strong>
+      {allowed?<ProcedureFormStatus draft={draft}/>:null}
       <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
         {section.required ? 'Requerida' : 'Opcional'} · {count} foto{count === 1 ? '' : 's'} registrada{count === 1 ? '' : 's'}
         {minimum > 0 ? ` · mínimo configurado: ${minimum}` : ''}
@@ -130,7 +142,7 @@ function PhotoSectionInput({
             <span>Foto</span>
             <input
               className={styles.select}
-              disabled={mutationBusy}
+              disabled={blocked}
               type="file"
               accept="image/*"
               capture="environment"
@@ -142,7 +154,7 @@ function PhotoSectionInput({
             <span>Descripción (opcional)</span>
             <input
               className={styles.select}
-              disabled={mutationBusy}
+              disabled={blocked}
               value={caption}
               onChange={(event) => setCaption(event.target.value)}
               placeholder="Ej. Estado antes del servicio"
@@ -150,7 +162,7 @@ function PhotoSectionInput({
           </label>
           <button
             className={`${styles.action} ${styles.primary}`}
-            disabled={mutationBusy}
+            disabled={blocked||draft.saving||Boolean(draft.error)}
             type="button"
             onClick={() => void submit()}
           >
@@ -179,6 +191,7 @@ function parseMeasurementValue(value: string): number | string {
 
 function MeasurementSectionInput({
   report,
+  target,
   section,
   allowed,
   mutationBusy,
@@ -186,16 +199,19 @@ function MeasurementSectionInput({
   onAddMeasurement,
 }: {
   report: FieldChecklistInterventionReport;
+  target:FieldVisitFormTarget|null;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
   saving: boolean;
   onAddMeasurement: (input: ReportMeasurementInput) => Promise<boolean>;
 }) {
-  const [metric, setMetric] = useState('');
-  const [value, setValue] = useState('');
-  const [unit, setUnit] = useState('');
-  const [moment, setMoment] = useState<FieldMeasurementMoment>('general');
+  const draft=useProcedureForm(target,'report:'+report.interventionId+':'+section.id,{metric:'',value:'',unit:'',moment:'general'});
+  const blocked=mutationBusy||!draft.ready;
+  const metric=draft.value.metric, setMetric=(text:string)=>draft.field('metric',text);
+  const value=draft.value.value, setValue=(text:string)=>draft.field('value',text);
+  const unit=draft.value.unit, setUnit=(text:string)=>draft.field('unit',text);
+  const moment=draft.value.moment as FieldMeasurementMoment, setMoment=(text:string)=>draft.field('moment',text);
   const [localError, setLocalError] = useState<string | null>(null);
   const measurements = report.measurements.filter((item) => item.sectionId === section.id);
   const minimum = section.minMeasurementCount ?? 0;
@@ -213,6 +229,7 @@ function MeasurementSectionInput({
       return;
     }
     setLocalError(null);
+    if(!await draft.flush())return;
     const success = await onAddMeasurement({
       interventionId: report.interventionId,
       sectionId: section.id,
@@ -232,6 +249,7 @@ function MeasurementSectionInput({
   return (
     <div className={styles.interventionForm}>
       <strong>{section.title}</strong>
+      {allowed?<ProcedureFormStatus draft={draft}/>:null}
       <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
         {section.required ? 'Requerida' : 'Opcional'} · {measurements.length} medición{measurements.length === 1 ? '' : 'es'} registrada{measurements.length === 1 ? '' : 's'}
         {minimum > 0 ? ` · mínimo configurado: ${minimum}` : ''}
@@ -250,23 +268,23 @@ function MeasurementSectionInput({
         <>
           <label>
             <span>Medición</span>
-            <input className={styles.select} disabled={mutationBusy} value={metric} onChange={(event) => setMetric(event.target.value)} placeholder="Ej. Temperatura de suministro" />
+            <input className={styles.select} disabled={blocked} value={metric} onChange={(event) => setMetric(event.target.value)} placeholder="Ej. Temperatura de suministro" />
           </label>
           <label>
             <span>Valor</span>
-            <input className={styles.select} disabled={mutationBusy} value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ej. 18.5 u OL" />
+            <input className={styles.select} disabled={blocked} value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ej. 18.5 u OL" />
           </label>
           <label>
             <span>Unidad</span>
-            <input className={styles.select} disabled={mutationBusy} value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Ej. °C, psi, A, V" />
+            <input className={styles.select} disabled={blocked} value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Ej. °C, psi, A, V" />
           </label>
           <label>
             <span>Momento</span>
-            <select className={styles.select} disabled={mutationBusy} value={moment} onChange={(event) => setMoment(event.target.value as FieldMeasurementMoment)}>
+            <select className={styles.select} disabled={blocked} value={moment} onChange={(event) => setMoment(event.target.value as FieldMeasurementMoment)}>
               {MEASUREMENT_MOMENTS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
-          <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy} type="button" onClick={() => void submit()}>
+          <button className={`${styles.action} ${styles.primary}`} disabled={blocked||draft.saving||Boolean(draft.error)} type="button" onClick={() => void submit()}>
             {saving ? 'Guardando medición…' : 'Agregar medición'}
           </button>
         </>
@@ -282,6 +300,7 @@ function MeasurementSectionInput({
 
 function FindingSectionInput({
   report,
+  target,
   section,
   allowed,
   mutationBusy,
@@ -289,15 +308,18 @@ function FindingSectionInput({
   onAddFinding,
 }: {
   report: FieldChecklistInterventionReport;
+  target:FieldVisitFormTarget|null;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
   saving: boolean;
   onAddFinding: (input: ReportFindingInput) => Promise<boolean>;
 }) {
-  const [summary, setSummary] = useState('');
-  const [details, setDetails] = useState('');
-  const [recommendation, setRecommendation] = useState('');
+  const draft=useProcedureForm(target,'report:'+report.interventionId+':'+section.id,{summary:'',details:'',recommendation:''});
+  const blocked=mutationBusy||!draft.ready;
+  const summary=draft.value.summary, setSummary=(text:string)=>draft.field('summary',text);
+  const details=draft.value.details, setDetails=(text:string)=>draft.field('details',text);
+  const recommendation=draft.value.recommendation, setRecommendation=(text:string)=>draft.field('recommendation',text);
   const [localError, setLocalError] = useState<string | null>(null);
   const findings = report.findings.filter((item) => item.sectionId === section.id);
 
@@ -314,6 +336,7 @@ function FindingSectionInput({
       return;
     }
     setLocalError(null);
+    if(!await draft.flush())return;
     const success = await onAddFinding({
       interventionId: report.interventionId,
       sectionId: section.id,
@@ -331,6 +354,7 @@ function FindingSectionInput({
   return (
     <div className={styles.interventionForm}>
       <strong>{section.title}</strong>
+      {allowed?<ProcedureFormStatus draft={draft}/>:null}
       <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
         {section.required ? 'Requerida' : 'Opcional'} · {findings.length} hallazgo{findings.length === 1 ? '' : 's'} registrado{findings.length === 1 ? '' : 's'}
       </div>
@@ -349,17 +373,17 @@ function FindingSectionInput({
         <>
           <label>
             <span>Resumen del hallazgo</span>
-            <input className={styles.select} disabled={mutationBusy} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Ej. Drenaje parcialmente obstruido" />
+            <input className={styles.select} disabled={blocked} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Ej. Drenaje parcialmente obstruido" />
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
             <span>Detalle técnico</span>
-            <textarea className={styles.select} disabled={mutationBusy} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe exactamente lo observado en el equipo." rows={3} />
+            <textarea className={styles.select} disabled={blocked} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe exactamente lo observado en el equipo." rows={3} />
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
             <span>Recomendación (opcional)</span>
-            <textarea className={styles.select} disabled={mutationBusy} value={recommendation} onChange={(event) => setRecommendation(event.target.value)} placeholder="Ej. Recomendar limpieza profunda del drenaje." rows={2} />
+            <textarea className={styles.select} disabled={blocked} value={recommendation} onChange={(event) => setRecommendation(event.target.value)} placeholder="Ej. Recomendar limpieza profunda del drenaje." rows={2} />
           </label>
-          <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy} type="button" onClick={() => void submit()}>
+          <button className={`${styles.action} ${styles.primary}`} disabled={blocked||draft.saving||Boolean(draft.error)} type="button" onClick={() => void submit()}>
             {saving ? 'Guardando hallazgo…' : 'Agregar hallazgo'}
           </button>
         </>
@@ -510,7 +534,8 @@ export function InterventionReportControls({
                 const key = `${report.interventionId}:${section.id}`;
                 return (
                   <PhotoSectionInput
-                    key={section.id}
+                    target={fieldVisitFormTarget(job)}
+                    key={JSON.stringify([fieldVisitFormTarget(job),report.interventionId,section.id])}
                     report={report}
                     section={section}
                     allowed={allowedPhotoSections.has(section.id)}
@@ -524,7 +549,8 @@ export function InterventionReportControls({
                 const key = `${report.interventionId}:${section.id}`;
                 return (
                   <MeasurementSectionInput
-                    key={section.id}
+                    target={fieldVisitFormTarget(job)}
+                    key={JSON.stringify([fieldVisitFormTarget(job),report.interventionId,section.id])}
                     report={report}
                     section={section}
                     allowed={allowedMeasurementSections.has(section.id)}
@@ -538,7 +564,8 @@ export function InterventionReportControls({
                 const key = `${report.interventionId}:${section.id}`;
                 return (
                   <FindingSectionInput
-                    key={section.id}
+                    target={fieldVisitFormTarget(job)}
+                    key={JSON.stringify([fieldVisitFormTarget(job),report.interventionId,section.id])}
                     report={report}
                     section={section}
                     allowed={allowedFindingSections.has(section.id)}

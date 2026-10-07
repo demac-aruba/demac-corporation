@@ -5,6 +5,8 @@ import { getFieldProcedureSummary, isFieldProcedureTemporaryFailure, updateField
 import type { FieldPartCommand, FieldProcedurePart, FieldProcedureSummary, FieldProcedureTarget } from '../../lib/field-procedure-contract';
 import { PortalIcon, fieldPortalStyles } from './field-portal-chrome';
 import styles from './field-part-selector.module.css';
+import {ProcedureReasonForm} from './procedure-reason-form';
+import {requestProcedureExit} from '../../lib/field-procedure-navigation';
 import { FieldProcedureWorkspace } from './field-procedure-workspace';
 
 type Pending = { command: FieldPartCommand; requestId: string };
@@ -31,7 +33,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
   const [selected,setSelected] = useState<FieldProcedurePart | null>(null);
   const [openPart,setOpenPart] = useState<FieldProcedurePart | null>(null);
   const [fresh,setFresh] = useState(false),[loading,setLoading] = useState(true),[busy,setBusy] = useState(false);
-  const [error,setError] = useState(''),[notice,setNotice] = useState(''),[reason,setReason] = useState('');
+  const [error,setError] = useState(''),[notice,setNotice] = useState('');
   const [retry,setRetry] = useState<Pending | null>(null);
   const requestVersion = useRef(0), alive = useRef(true), writeLock = useRef(false);
   const currentTarget = useRef(target).current;
@@ -64,7 +66,7 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
     try {
       const next = await updateFieldProcedurePart(currentTarget,pending.command,pending.requestId);
       if (!alive.current) return;
-      setSnapshot(next); setFresh(mutationVersion === requestVersion.current && navigator.onLine && document.visibilityState === 'visible'); setRetry(null); setReason('');
+      setSnapshot(next); setFresh(mutationVersion === requestVersion.current && navigator.onLine && document.visibilityState === 'visible'); setRetry(null);
       setNotice(command.action==='claim_part' ? 'Parte asignada por el servidor. No se inició ni se cerró el servicio.' : command.action==='release_part' ? 'Parte liberada. La contribución anterior permanece en el historial.' : command.action==='recover_part' ? 'Parte recuperada por el técnico responsable con historial conservado. Revisa la coordinación antes de continuar.' : 'Protocolo preparado desde el catálogo autorizado.');
     } catch (e) {
       if (!alive.current) return;
@@ -90,17 +92,17 @@ function PartSelectorSession({ target, equipmentLabel, equipmentDescription, onB
     {notice ? <div role="status" className={styles.info}>{notice}</div> : null}
     {snapshot && snapshot.revision===null ? <div className={styles.info}><p>Esta intervención todavía no tiene un protocolo congelado. Se consultará su configuración autorizada; no se elegirá un protocolo por el nombre del servicio.</p><button className={fieldPortalStyles.secondary} type="button" disabled={!writable} onClick={()=>void mutate({action:'initialize'})}>Consultar protocolo del servicio</button></div> : null}
     <div className={styles.cards}>
-      {snapshot?.parts.map(p=><button key={p.id} type="button" className={styles.card} aria-pressed={selected===p.id} onClick={()=>{setSelected(p.id);setReason('');}} disabled={busy||Boolean(retry)}>
+      {snapshot?.parts.map(p=><button key={p.id} type="button" className={styles.card} aria-pressed={selected===p.id} onClick={()=>{if(requestProcedureExit())setSelected(p.id);}} disabled={busy||Boolean(retry)}>
         <span className={styles.illustration}><UnitIllustration part={p.id} /></span><span className={styles.cardText}><strong>{p.label}</strong><small>{descriptions[p.id]}</small><span className={styles.owner}>{p.ownerUserId ? `${p.ownerUserId===target.ownerUserId?'Tu parte · ':''}${p.ownerName || 'Miembro asignado'}` : 'Disponible para la cuadrilla'}</span><small>{p.documented} de {p.total} procedimientos documentados{p.exceptions ? ` · ${p.exceptions} con excepción` : ''}{p.pendingFiles ? ` · ${p.pendingFiles} archivo(s) pendientes de confirmar` : ''}</small>{p.completedAt ? <small>Documentación de parte finalizada; no implica aprobación de oficina.</small> : null}</span><PortalIcon name="chevron" />
       </button>)}
     </div>
     {retry ? <button type="button" className={fieldPortalStyles.primary} disabled={busy||loading} onClick={()=>void mutate(retry.command,retry)}>Reintentar la misma solicitud</button> : null}
     {part && !mine && !retry && !officeReview ? <button type="button" className={fieldPortalStyles.primary} disabled={!writable||Boolean(part.ownerUserId)||Boolean(part.completedAt)} onClick={()=>void mutate({action:'claim_part',part:part.id,expectedPartVersion:part.version})}>{busy ? 'Confirmando…' : part.ownerUserId ? `Asignada a ${part.ownerName || 'otro miembro'}` : `Tomar ${part.id==='indoor'?'evaporadora':'condensadora'}`}</button> : null}
     {part && officeReview ? <div className={styles.info}><p><strong>Vista de oficina.</strong> Puedes abrir esta parte para revisar excepciones y su evidencia sin asumir la ejecución del técnico.</p><button type="button" className={fieldPortalStyles.primary} disabled={!snapshot?.revision||Boolean(retry)} onClick={()=>setOpenPart(part.id)}>Abrir revisión de procedimientos</button></div> : null}
-    {part && !mine && Boolean(part.ownerUserId) && canRecoverPart && !officeReview && !part.completedAt ? <details className={styles.release}><summary>Recuperar esta parte como técnico responsable</summary><p>Úsalo solo para continuar trabajo abandonado por otro miembro. El historial y la autoría previa permanecen; archivos pendientes del autor anterior deben resolverse primero.</p><label>Motivo de recuperación<textarea rows={2} value={reason} maxLength={1500} onChange={e=>setReason(e.target.value)} disabled={busy||Boolean(retry)} /></label><button type="button" className={fieldPortalStyles.secondary} disabled={!writable||reason.trim().length<3} onClick={()=>void mutate({action:'recover_part',part:part.id,expectedPartVersion:part.version,note:reason.trim()})}>Recuperar sin borrar el historial</button></details> : null}
-    {mine ? <div className={styles.info}><p><strong>Tu parte está identificada.</strong> Abre los procedimientos para documentar cada paso con su evidencia y autoría. El cierre global del servicio continúa separado.</p><button type="button" className={fieldPortalStyles.primary} disabled={!snapshot?.revision||Boolean(retry)} onClick={()=>part&&setOpenPart(part.id)}>Abrir procedimientos</button></div> : null}
-    {mine && !part?.completedAt ? <details className={styles.release}><summary>Liberar mi parte</summary><label>Motivo de la transferencia<textarea rows={2} value={reason} maxLength={1500} onChange={e=>setReason(e.target.value)} disabled={busy||Boolean(retry)} /></label><button type="button" className={fieldPortalStyles.secondary} disabled={!writable||reason.trim().length<3} onClick={()=>part&&void mutate({action:'release_part',part:part.id,expectedPartVersion:part.version,note:reason.trim()})}>Liberar sin borrar el historial</button></details> : null}
+    {part && !mine && Boolean(part.ownerUserId) && canRecoverPart && !officeReview && !part.completedAt ? <details className={styles.release}><summary>Recuperar esta parte como técnico responsable</summary><p>Úsalo solo para continuar trabajo abandonado por otro miembro. El historial y la autoría previa permanecen; archivos pendientes del autor anterior deben resolverse primero.</p><ProcedureReasonForm key={'recover:'+part.id} target={target} scope={'part:recover:'+part.id} label="Motivo de recuperación" action="Recuperar sin borrar el historial" disabled={!writable} onConfirm={note=>mutate({action:'recover_part',part:part.id,expectedPartVersion:part.version,note})}/></details> : null}
+    {mine ? <div className={styles.info}><p><strong>Tu parte está identificada.</strong> Abre los procedimientos para documentar cada paso con su evidencia y autoría. El cierre global del servicio continúa separado.</p><button type="button" className={fieldPortalStyles.primary} disabled={!snapshot?.revision||Boolean(retry)} onClick={()=>{if(part&&requestProcedureExit())setOpenPart(part.id);}}>Abrir procedimientos</button></div> : null}
+    {mine && !part?.completedAt ? <details className={styles.release}><summary>Liberar mi parte</summary><ProcedureReasonForm key={'release:'+part!.id} target={target} scope={'part:release:'+part!.id} label="Motivo de la transferencia" action="Liberar sin borrar el historial" disabled={!writable} onConfirm={note=>part?mutate({action:'release_part',part:part.id,expectedPartVersion:part.version,note}):Promise.resolve()}/></details> : null}
     <div className={styles.info}><p>Ambos miembros pueden abrir el mismo aire desde sus cuentas y escoger una parte. Una persona sola puede trabajar ambas. Son partes del mismo servicio, no dos cargos.</p><p>Las confirmaciones de la aplicación no sustituyen el aislamiento, la comunicación ni el control físico del equipo.</p></div>
-    <button type="button" className={fieldPortalStyles.secondary} onClick={onBack}>Volver al trabajo</button>
+    <button type="button" className={fieldPortalStyles.secondary} onClick={()=>{if(requestProcedureExit())onBack();}}>Volver al trabajo</button>
   </section>;
 }

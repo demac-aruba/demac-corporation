@@ -525,7 +525,7 @@ function LegacyDetailView({
   onDecideFieldSaleLine: (input: FieldSaleDecisionInput) => Promise<boolean>;
   onTransitionFieldSaleLine: (input: FieldSaleTransitionInput) => Promise<boolean>;
   onOfficeReviewCorrectionNoteChange: (value: string) => void;
-  onSubmitOfficeReview: () => void;
+  onSubmitOfficeReview: (note?:string) => void;
   onSyncOutbox: () => void;
   onDiscardOutboxConflict: (id: string) => void;
   onBack: () => void;
@@ -617,28 +617,28 @@ function LegacyDetailView({
           </div>
         ) : <p className={styles.helper}>No hay otra transición activa disponible para esta visita en este slice.</p>}
         {availableTransitions.includes('pending') ? (
-          <VisitPendingControls
+          <VisitPendingControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitPendingInput) => onTransition(input)}
             saving={transitioning === 'pending'}
           />
         ) : null}
         {availableTransitions.includes('no_access') ? (
-          <VisitNoAccessControls
+          <VisitNoAccessControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitNoAccessInput) => onTransition(input)}
             saving={transitioning === 'no_access'}
           />
         ) : null}
         {availableTransitions.includes('cancelled') ? (
-          <VisitCancellationControls
+          <VisitCancellationControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitCancellationInput) => onTransition(input)}
             saving={transitioning === 'cancelled'}
           />
         ) : null}
         {availableTransitions.includes('requires_return_visit') ? (
-          <VisitReturnControls
+          <VisitReturnControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitReturnInput) => onTransition(input)}
             saving={transitioning === 'requires_return_visit'}
@@ -1109,10 +1109,10 @@ function DetailView({
           <details className={styles.moreOptions}>
             <summary>Más opciones de llegada</summary>
             {availableTransitions.includes('no_access') ? (
-              <VisitNoAccessControls disabled={mutationBusy} onSubmit={(input: VisitNoAccessInput) => onTransition(input)} saving={transitioning === 'no_access'} />
+              <VisitNoAccessControls job={job} disabled={mutationBusy} onSubmit={(input: VisitNoAccessInput) => onTransition(input)} saving={transitioning === 'no_access'} />
             ) : null}
             {availableTransitions.includes('cancelled') ? (
-              <VisitCancellationControls disabled={mutationBusy} onSubmit={(input: VisitCancellationInput) => onTransition(input)} saving={transitioning === 'cancelled'} />
+              <VisitCancellationControls job={job} disabled={mutationBusy} onSubmit={(input: VisitCancellationInput) => onTransition(input)} saving={transitioning === 'cancelled'} />
             ) : null}
           </details>
           {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
@@ -1187,8 +1187,8 @@ function DetailView({
 
           <details className={styles.moreOptions}>
             <summary>Pendiente, pieza o segunda visita</summary>
-            {availableTransitions.includes('pending') ? <VisitPendingControls disabled={mutationBusy} onSubmit={(input: VisitPendingInput) => onTransition(input)} saving={transitioning === 'pending'} /> : null}
-            {availableTransitions.includes('requires_return_visit') ? <VisitReturnControls disabled={mutationBusy} onSubmit={(input: VisitReturnInput) => onTransition(input)} saving={transitioning === 'requires_return_visit'} /> : null}
+            {availableTransitions.includes('pending') ? <VisitPendingControls job={job} disabled={mutationBusy} onSubmit={(input: VisitPendingInput) => onTransition(input)} saving={transitioning === 'pending'} /> : null}
+            {availableTransitions.includes('requires_return_visit') ? <VisitReturnControls job={job} disabled={mutationBusy} onSubmit={(input: VisitReturnInput) => onTransition(input)} saving={transitioning === 'requires_return_visit'} /> : null}
             {job.canCreateReturnVisit ? <VisitReturnCreationControls disabled={mutationBusy} onCreate={onCreateReturnVisit} saving={creatingReturnVisit} /> : null}
           </details>
           {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
@@ -2421,7 +2421,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     ));
   }, [runFieldSaleMutation]);
 
-  const runSubmitOfficeReview = useCallback(async () => {
+  const runSubmitOfficeReview = useCallback(async (submittedNote?:string) => {
     if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     const visit = currentDetail?.fieldVisit;
@@ -2432,7 +2432,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     }
 
     const correctionNote = currentDetail.officeReviewSubmission.correctionRequired
-      ? officeReviewCorrectionNote.trim()
+      ? (submittedNote??officeReviewCorrectionNote).trim()
       : '';
     if (currentDetail.officeReviewSubmission.correctionRequired && correctionNote.length < 3) {
       setOfficeReviewError('Describe brevemente qué corregiste antes de reenviar a la oficina.');
@@ -2643,7 +2643,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         onDecideFieldSaleLine={runDecideFieldSaleLine}
         onTransitionFieldSaleLine={runTransitionFieldSaleLine}
         onOfficeReviewCorrectionNoteChange={setOfficeReviewCorrectionNote}
-        onSubmitOfficeReview={() => void runSubmitOfficeReview()}
+        onSubmitOfficeReview={(note) => void runSubmitOfficeReview(note)}
         onSyncOutbox={() => void syncOutbox()}
         onDiscardOutboxConflict={(id) => void discardOutboxConflict(id)}
         onBack={() => { setShowDetail(false); setPortalTab('home'); }}

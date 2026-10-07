@@ -1,3 +1,4 @@
+import {persistFirebaseWebSession} from '../lib/firebase/session';
 // Synthetic component-only fixture. This never mounts in an application route.
 import { useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -56,5 +57,6 @@ function Fixture() {
     {window.serviceTestMode === 'additional' ? <AdditionalInterventionControls {...props} /> : <PlannedInterventionControls {...props} />}
   </main>;
 }
+persistFirebaseWebSession({uid:'test-tech',email:'tech@example.invalid',idToken:'synthetic-unused',refreshToken:'synthetic-unused',expiresAt:Date.now()+3600000});
 window.serviceEvents = [];
 createRoot(document.getElementById('root')!).render(<Fixture />);
