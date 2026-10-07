@@ -19,18 +19,45 @@ engineering index; it does not replace that registry.
 - `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
   optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
-- `OPS-SCHED-SUPPORT-001`: one-slot coworker support may be added to current/future confirmed
+- `OPS-SCHED-SUPPORT-001`: coworker support with one or more consecutive available slots may be added to current/future confirmed
   appointments and, with explicit historical acknowledgement, past confirmed/completed work.
+  Default to one slot; stop at occupied capacity, a clock gap/lunch or the shift end.
+  Revalidate and atomically lock every selected slot; never override another reservation.
   Preserve the primary assignment/status, transactional capacity/crew controls and audit.
   Historical support is non-billable, suppresses automatic messages and does not alter payroll/Field actuals.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
   canonical conflict validation, audit markers and silent automatic communications.
+- `OPS-SCHED-REFERENCES-001`: owner Christian's 2026-10-05 request, effective upon approved
+  release: any booking may optionally carry office/customer reference photos, videos,
+  voice files, per-file explanations, notes and GPS. Office may add or edit them after
+  creation. Booking Authority retains canonical Appointment ownership; these references
+  are not technician completion evidence, financial authorization or workload changes.
+  The existing 08:00 Aruba WhatsApp schedule sends each Work Order followed by its own
+  ordered files before the next work message. Photos/videos carry their explanation;
+  voice explanations immediately precede the voice message. Transient retries retain
+  that ordering; a terminal failed file remains pending for explicit office retry
+  without blocking later jobs or future schedules. Same-day edits after 08:00
+  queue a separately identified update to current assigned Vans. Historical writes,
+  future edits and Temporary Holds remain silent until otherwise eligible.
+  Owner: Operations / Booking and Communication Authorities. Migration: none.
+  Regression: bookingVisitReferences, bookingVisitReferencesHttp, whatsappReferenceBundle,
+  technicianDailyScheduleService and vanScheduleCommunicationAuthority tests.
 - `OPS-PROJ-SCHED-001`: an active, provisioned Office Operator may schedule or place a
   Temporary Hold for an existing published Project, using its canonical Customer and
   Property and Booking Authority's atomic Appointment/Work Order/capacity/Project link.
   The operator may read only the scheduling projection needed for this work; creating,
   editing or completing Project planning and correcting historical Project capacity
   remain manager-only. Browser-local unpublished Projects cannot be booked by operators.
+- `OPS-SCHED-PROJECT-BACKDATE-001`: owner request 2026-10-05, effective on approved
+  release: existing Project schedulers may register previously unscheduled work for
+  a published, schedulable Project at an elapsed time today or on a previous date,
+  on any eligible Van. Booking Authority requires explicit historical acknowledgement,
+  revalidates canonical capacity/crew/calendar, Project version and CRM/phase links,
+  and commits Appointment/Work Order/locks/Project link atomically with actor/time audit.
+  Automatic messages and historical Temporary Holds remain disabled. This registration
+  does not confer Project planning permissions or the manager-only adjustment/recovery
+  of an existing historical booking, and writes no Field/payroll/financial actuals.
+  Owner: Operations / Booking Authority. Migration: none.
 - `OPS-TASK-*`: internal operational tasks are independent of Scheduling, use canonical staff
   identity, governed lifecycle/version checks, private evidence and the existing WhatsApp authority.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware
@@ -175,6 +202,20 @@ Production activation remains separately owner-approved through the server-side 
   ordinary availability to automated booking or Maya. Multi-Van/support bookings retain
   their existing coordinated reschedule boundary.
 
+- `OPS-SCHED-MOVE-REST-001` — Owner request 2026-10-03, effective on approved
+  release: an authenticated office operator may move an unexecuted confirmed,
+  fixed-duration, single-Van appointment into a recurring weekly-rest window on
+  the same nonhistorical date, including within its current Van. All eligible
+  Vans use the same rule. An explicit rest/overtime confirmation binds the actor,
+  source, dated crew/schedule and complete destination estimate. Preparation or
+  cancellation writes nothing. Booking Authority atomically preserves identity,
+  workload, links and full capacity, swaps locks and records acceptance in the
+  existing move audit. Company closure, staff absence, work/hold overlap, lunch,
+  morning rest crossing the regular shift, midnight and stale consent still block.
+  Four slots moved to 13:30 remain four slots until 17:30. Ordinary availability,
+  recurring schedules and actual payroll remain unchanged; no migration required.
+  Existing ordinary overflow transfers retain OPS-SCHED-MOVE-OT-001.
+
 ## Current payroll-attendance ownership
 
 - `OPS-STAFF-BONUS-MANUAL`: authorized payroll users enter approved employee bonuses
@@ -244,6 +285,14 @@ Production activation remains separately owner-approved through the server-side 
   actual attendance, payroll amounts or a different weekly schedule. Actual payable overtime
   continues to derive from real worked times against the employee's canonical schedule.
   Ordinary reschedule/move clears current planning metadata and keeps the original audit event.
+- `OPS-SCHED-PLANNED-OT-PROJECT` — Owner request 2026-10-01: weekly-rest Book Overtime
+  also supports existing published Projects for every eligible Van/date. The operator selects
+  the Project, its phase when applicable and whole Van slots, acknowledges an exceeded Project
+  budget when applicable, then explicitly confirms overtime. Booking Authority reuses the
+  canonical Project permission/version/CRM checks and atomically commits its Project link with
+  the Appointment, Work Order and locks. Project identity/version is bound to consent and exact
+  replay never duplicates the link. Open-ended emergency and ordinary overflow Project entry
+  are outside this change. Existing calendar, crew, lunch, overlap and midnight guards apply.
 - Owner: DEMAC Operations / Booking Authority. Source: Christian's Scheduling & Dispatch request
   2026-09-29. Migration: none; existing appointments, CRM and calendar records are not rewritten.
 

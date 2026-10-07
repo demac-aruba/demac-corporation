@@ -377,3 +377,29 @@ test("getAppointment returns the canonical ERP appointment", async () => {
   assert.equal(fetched.appointmentId, created.appointmentId);
   assert.equal(fetched.status, "confirmed");
 });
+
+test('booking references and upload claims commit with ordinary appointments; exact replay is preserved', async () => {
+  const { db, authority } = authorityFixture({ seed: {
+    'users/office-1': { active: true, role: 'office' },
+    'bookingReferenceUploads/reference-001': { status: 'ready', uploadedBy: 'office-1', expiresAt: '2099-01-01T00:00:00Z', storagePath: 'booking-references/office-1/reference-001', kind: 'image', fileName: 'equipment.jpg', mimeType: 'image/jpeg', size: 10 },
+  } });
+  const availability = await authority.checkAvailability({ request: baseRequest() });
+  const input = { offerId: availability.offer.id, offerVersion: availability.offer.version, optionId: 'opt-1',
+    idempotencyKey: 'office:references:create-appointment', actor: { source: 'office-scheduling', id: 'office-1' },
+    context: { visitReferences: { notes: 'Kitchen unit', files: [{ id: 'reference-001', description: 'Drain leak' }] } } };
+  const first = await authority.createAppointment(input);
+  assert.equal(db.read(`appointments/${first.appointmentId}`).visitReferences.files[0].description, 'Drain leak');
+  assert.equal(db.read('bookingReferenceUploads/reference-001').appointmentId, first.appointmentId);
+  assert.equal((await authority.createAppointment(input)).replayed, true);
+  await assert.rejects(authority.createAppointment({ ...input, context: { visitReferences: { notes: 'Different' } } }), /different booking request/);
+});
+
+test('invalid reference claim rejects appointment and capacity writes together', async () => {
+  const { db, authority } = authorityFixture({ seed: { 'users/office-1': { active: true, role: 'office' } } });
+  const availability = await authority.checkAvailability({ request: baseRequest() });
+  await assert.rejects(authority.createAppointment({ offerId: availability.offer.id, offerVersion: 1, optionId: 'opt-1',
+    idempotencyKey: 'office:invalid-references:create-appointment', actor: { source: 'office-scheduling', id: 'office-1' },
+    context: { visitReferences: { files: [{ id: 'missing-file-001' }] } } }), /missing or incomplete/);
+  assert.equal([...db.store.keys()].some(key => key.startsWith('appointments/')), false);
+  assert.equal([...db.store.keys()].some(key => key.startsWith('bookingCapacityLocks/')), false);
+});

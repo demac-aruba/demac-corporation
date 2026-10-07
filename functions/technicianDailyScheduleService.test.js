@@ -644,3 +644,26 @@ test("missing group configuration fails closed with no technician phone fallback
   assert.equal(result.results[0].reason, "van-whatsapp-group-not-configured");
   assert.equal(db.collections.whatsappOutboundQueue.size, 0);
 });
+
+test('daily schedule bundles references after their own work text, chains the next work and replays without duplicates', async () => {
+  const dateKey = order.date;
+  const firstOrder = { ...order, id: 'ORDER-ONE', appointmentId: 'APT-REF', time: '08:30' };
+  const secondOrder = { ...order, id: 'ORDER-TWO', appointmentId: 'APT-NEXT', time: '14:30' };
+  const db = createScheduleDb({ vans: [groupVan], workOrders: [firstOrder, secondOrder],
+    clients: [{ id: 'client-1', name: 'Synthetic Client' }], appointments: [{ id: 'APT-REF', visitReferences: {
+      version: 1, notes: 'Kitchen access', location: { url: 'https://maps.google.com/?q=12,-70', label: 'Entrance' },
+      files: [{ id: 'photo-001', kind: 'image', fileName: 'kitchen.jpg', mimeType: 'image/jpeg', storagePath: 'booking-references/office/photo-001', description: 'Drain connection' }],
+    } }, { id: 'APT-NEXT' }] });
+  const service = createTechnicianDailyScheduleService({ db });
+  await service.queueDay(dateKey);
+  const queue = [...db.collections.whatsappOutboundQueue.values()];
+  const first = queue.find(item => item.workOrderId === 'ORDER-ONE');
+  assert.equal(first.type, 'booking-reference-bundle');
+  assert.match(first.messages[0].text, /Kitchen access/); assert.match(first.messages[0].text, /maps.google.com/);
+  assert.match(first.messages[1].text, /Drain connection/);
+  const second = queue.find(item => item.workOrderId === 'ORDER-TWO');
+  assert.ok(second.dependsOnQueueId);
+  const count = db.collections.whatsappOutboundQueue.size;
+  await service.queueDay(dateKey);
+  assert.equal(db.collections.whatsappOutboundQueue.size, count);
+});

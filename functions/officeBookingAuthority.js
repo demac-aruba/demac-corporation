@@ -1276,7 +1276,7 @@ function createOfficeBookingApi({
         idempotencyKey: `office:${identity.uid}:${requestId}:${temporaryHold ? "hold" : "create"}:${offerId}:${optionId}`,
         actor,
         createMode: temporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED,
-        context: { channel: "office", projectActorId: identity.uid, officeRequestId: requestId, ...bookingIntent },
+        context: { channel: "office", projectActorId: identity.uid, officeRequestId: requestId, visitReferences: data.visitReferences, ...bookingIntent },
       });
       if (!result?.success || !cleanText(result.appointmentId, 180)) {
         throw new BookingAuthorityError(
@@ -1344,6 +1344,7 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.ADD_ADHOC_SUPPORT) {
       const requestId = officeRequestId(data.requestId);
       return getAdhocSupport().addSupport({
+        requestedSlots: data.requestedSlots,
         appointmentId: data.appointmentId,
         requestId,
         requestedDate: data.requestedDate,

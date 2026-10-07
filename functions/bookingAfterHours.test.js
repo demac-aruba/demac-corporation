@@ -570,3 +570,11 @@ test('capacity overtime cancellation frees all four locks and exact retry stays 
   assert.equal((await authority.createCapacityOvertime(request)).appointment.status, 'cancelled');
   assert.equal((await authority.createCapacityOvertime(await confirmedCapacity(authority, restInput({ requestId: 'capacity-replacement' })))).success, true);
 });
+
+test('after-hours references are included at the initial atomic appointment write', async () => {
+  const { db, authority } = fixture({ 'users/office-1': { active: true, role: 'office' } });
+  const result = await authority.createEmergency(input({ actor: { id: 'office-1', source: 'office-scheduling' },
+    visitReferences: { notes: 'Entrance behind kitchen', files: [], location: { url: '12.5,-70.0', label: 'Entrance' } } }));
+  assert.equal(result.appointment.visitReferences.notes, 'Entrance behind kitchen');
+  assert.match(result.appointment.visitReferences.location.url, /query=12.5,-70/);
+});

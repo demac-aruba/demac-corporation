@@ -73,6 +73,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
           : action === 'prepare_capacity_overtime' ? 'prepareCapacityOvertime'
           : action === 'create_capacity_overtime' ? 'createCapacityOvertime' : 'createEmergency';
         result = await afterHours[method]({
+          project: data.project,
           overtimeConsent: data.overtimeConsent,
           requestId: data.requestId,
           customerId: data.customerId,
@@ -90,6 +91,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
           customerFacingDescription: data.customerFacingDescription,
           technicianInstructions: data.technicianInstructions,
           recipientSelections: data.recipientSelections,
+          visitReferences: data.visitReferences,
           actor: officeActor(identity),
         });
       } else {

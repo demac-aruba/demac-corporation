@@ -66,13 +66,15 @@ export function DragMoveConfirmation({
     }} style={{ width: 'min(500px, calc(100vw - 32px))', maxHeight: 'calc(100dvh - 40px)', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 14, background: 'var(--surface)', boxShadow: '0 24px 70px rgba(10, 24, 44, .28)' }}>
       <header style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border)' }}>
         <span style={{ display: 'block', marginBottom: 5, color: 'var(--brand)', fontSize: 9, fontWeight: 900, letterSpacing: '.08em', textTransform: 'uppercase' }}>Booking Intelligence · final validation</span>
-        <h2 id="drag-confirm-title" style={{ margin: 0, fontSize: 18 }}>{move.overtime ? 'Traslado con posible overtime' : supportOnly ? 'Confirm support reassignment?' : 'Confirm appointment move?'}</h2>
+        <h2 id="drag-confirm-title" style={{ margin: 0, fontSize: 18 }}>{move.overtime?.kind === 'weekly_rest_overtime' ? 'Mover a horario libre con overtime' : move.overtime ? 'Traslado con posible overtime' : supportOnly ? 'Confirm support reassignment?' : 'Confirm appointment move?'}</h2>
         <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 11, lineHeight: 1.5 }}>{move.customer} · {supportOnly ? 'Only the support assignment will move.' : 'The linked appointment schedule will move.'}</p>
       </header>
 
       <div style={{ padding: 20 }}>
         {move.overtime ? <div style={{ marginBottom: 16, padding: 14, borderRadius: 10, border: '1px solid var(--warning)', background: 'color-mix(in srgb,var(--warning) 9%,var(--surface))' }}>
-          <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.6 }}>Esta cita requiere {move.overtime.requiredSlots} cupos y la van dispone de {move.overtime.ordinarySlots} cupos ordinarios. El trabajo podría extenderse fuera de su jornada y requerir overtime. ¿Estás consciente y deseas continuar?</p>
+          <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.6 }}>{move.overtime.kind === 'weekly_rest_overtime'
+            ? `${move.overtime.vanName} tiene libre en este horario. Al mover esta cita, el equipo trabajará overtime durante su descanso. Se conservarán los ${move.overtime.requiredSlots} cupos del trabajo. ¿Estás consciente y de acuerdo en continuar?`
+            : `Esta cita requiere ${move.overtime.requiredSlots} cupos y la van dispone de ${move.overtime.ordinarySlots} cupos ordinarios. El trabajo podría extenderse fuera de su jornada y requerir overtime. ¿Estás consciente y deseas continuar?`}</p>
           <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
             <dt>Van de destino</dt><dd style={{ margin: 0 }}>{move.overtime.vanName}</dd>
             <dt>Inicio</dt><dd style={{ margin: 0 }}>{formatTime(move.overtime.start)}</dd>

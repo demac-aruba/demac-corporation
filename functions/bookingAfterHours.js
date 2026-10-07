@@ -1,8 +1,10 @@
+const { prepareVisitReferencesCommit, referenceInput } = require('./bookingVisitReferences');
 const {
   BOOKING_ERROR_CODES,
   BookingAuthorityError,
   cleanText,
   normalizeWorkLines,
+  normalizeBookingRequest,
 } = require("./bookingAuthorityCore");
 const {
   BOOKING_COLLECTIONS,
@@ -96,6 +98,7 @@ function createAfterHoursAuthority({
   }
 
   async function createSpecialBooking({
+    project,
     dwellingId, requesterId, accessContactId,
     requestId,
     customerId,
@@ -110,6 +113,7 @@ function createAfterHoursAuthority({
     customerFacingDescription = "",
     technicianInstructions = "",
     recipientSelections = [],
+    visitReferences,
     actor = {},
     overtimeConsent,
   } = {}, { restDay = false, capacityOvertime = false, prepareOnly = false } = {}) {
@@ -120,6 +124,14 @@ function createAfterHoursAuthority({
     const requestedWorkLines = normalizeWorkLines(Array.isArray(workLines) && workLines.length
       ? workLines
       : [{ presetId: presetId || serviceId, serviceId, quantity }]);
+    // Reuse the canonical Project contract and atomic link writer. A Project must
+    // never silently degrade to an unlinked service booking on another path.
+    if (project && !restDay) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+      'Project overtime bookings require the weekly rest booking flow.');
+    const projectRequest = project ? normalizeBookingRequest({ project, customerId: clientId,
+      propertyId: siteId, workLines: requestedWorkLines }) : null;
+    const projectLinks = projectRequest ? require('./projectBookingLinks').withProjectBookingLinks({ db, provider: {} }) : null;
+    const projectContext = { channel: actor.source === 'office-scheduling' ? 'office' : '', projectActorId: actor.id };
     const dateKey = cleanText(requestedDate, 20);
     const startTime = cleanText(requestedTime, 20);
     const rawVanId = cleanText(requiredVanId, 120);
@@ -145,6 +157,8 @@ function createAfterHoursAuthority({
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, 'A valid appointment date is required.');
     }
     const requestFingerprint = hashId(JSON.stringify({ restDay, ...(capacityOvertime ? { capacityOvertime: true } : {}), clientId, siteId, dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '',
+      ...(projectRequest ? { project: projectRequest.project } : {}),
+      ...(visitReferences !== undefined ? { visitReferences: referenceInput(visitReferences) } : {}),
       requestedWorkLines, dateKey, startTime, rawVanId, customerFacingDescription, technicianInstructions, recipientSelections, actorId: actor.id || actor.userId || '' }), 64);
     const appointmentId = boundedOvertime ? `APT-${capacityOvertime ? 'CO' : 'OT'}-${hashId(stableRequestId, 20).toUpperCase()}` : afterHoursAppointmentId(stableRequestId);
     const workOrderId = afterHoursWorkOrderId(appointmentId);
@@ -172,6 +186,7 @@ function createAfterHoursAuthority({
           );
         }
         if (prepareOnly) throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT, "This overtime request is already saved. Refresh the schedule.");
+        if (projectLinks) await projectLinks.authorizeProjectReplay({ appointment: replay, actor, transaction });
         const replayOrderSnapshot = await transaction.get(workOrderRef);
         return {
           success: true,
@@ -336,6 +351,10 @@ function createAfterHoursAuthority({
         }
         return { lock, ref };
       })) : [];
+      const projectCommit = projectLinks ? await projectLinks.prepareCommit({ transaction, request: projectRequest,
+        context: projectContext, appointmentId, now, option: { date: dateKey, time: startTime,
+          assignments: [{ vanId, technicianIds: crew.technicianIds, time: startTime,
+            slots: overtime.proposal.requiredSlots, capacityEndTime: overtime.proposal.capacityEnd }] } }) : null;
       if (prepareOnly) return { success: true, proposal: overtime.proposal };
       if (overtime && (overtimeConsent?.accepted !== true || overtimeConsent?.confirmationToken !== overtime.proposal.confirmationToken)) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.AVAILABILITY_CHANGED, 'Confirm the current overtime calculation before saving.', { reason: 'overtime-confirmation-required' });
@@ -363,7 +382,10 @@ function createAfterHoursAuthority({
           endTime: overtime.proposal.estimatedEnd, capacityEndTime: overtime.proposal.capacityEnd }
           : { afterHoursOpenEnded: true, afterHoursKind: AFTER_HOURS_KIND }),
       });
+      const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: visitReferences, actor, appointmentId, now });
       const appointment = compactObject({
+        ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
+        ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
         id: appointmentId,
         appointmentId,
@@ -393,6 +415,7 @@ function createAfterHoursAuthority({
         updatedAt: serverTimestamp(),
       });
       const workOrder = compactObject({
+        ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
         id: workOrderId,
         appointmentId,
@@ -430,7 +453,9 @@ function createAfterHoursAuthority({
         createdByName: cleanText(actor?.name || actor?.displayName, 160),
       });
 
+      if (projectCommit) projectCommit.write({ workOrders: [workOrder], createMode: 'confirmed' });
       transaction.set(appointmentRef, appointment);
+      if (referencesCommit) referencesCommit.write();
       transaction.set(workOrderRef, workOrder);
       if (overtime) {
         for (const { lock, ref } of lockSnapshots) transaction.set(ref, { ...lock, appointmentId, workOrderId, active: true, createdAtIso: timestamp, updatedAtIso: timestamp });

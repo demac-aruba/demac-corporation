@@ -1,3 +1,4 @@
+import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type {
   AppointmentRecipientSelection,
@@ -522,6 +523,7 @@ export async function checkOfficeCreateAvailability(input: {
 }
 
 export async function confirmOfficeAppointment(input: {
+  visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
   offerVersion: number;
@@ -537,6 +539,7 @@ export async function confirmOfficeAppointment(input: {
 }
 
 export async function createOfficeTemporaryHold(input: {
+  visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
   offerVersion: number;
@@ -722,6 +725,8 @@ export async function rescheduleOfficeAppointment(input: {
  * server request so the browser does not pay two sequential network round trips.
  */
 export type OfficeMoveOvertimeProposal = {
+  kind?: 'weekly_rest_overtime';
+  regularStart?: string; regularEnd?: string;
   vanId: string; vanName: string; start: string;
   requiredSlots: number; ordinarySlots: number;
   estimatedEnd: string; ordinaryEnd: string; capacityEnd: string;
@@ -748,6 +753,7 @@ export async function moveOfficeAppointment(input: OfficeMoveInput) {
 }
 
 export async function addOfficeAdhocSupport(input: {
+  requestedSlots?: number;
   bookingMode?: 'backdated';
   backdatingAcknowledged?: boolean;
   appointmentId: string;
@@ -758,4 +764,8 @@ export async function addOfficeAdhocSupport(input: {
   reason?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAdhocSupportResult>('add_adhoc_support', input, 12_000);
+}
+
+export function retryVanScheduleDelivery(input: { dateKey: string; vanId?: string }) {
+  return callOfficeBookingAuthority<{ success: true; resumed: number }>('retry_van_schedule_delivery', input, 30_000);
 }

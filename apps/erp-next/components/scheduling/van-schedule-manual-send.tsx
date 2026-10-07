@@ -1,5 +1,7 @@
 'use client';
 
+import { retryVanScheduleDelivery } from '../../lib/office-booking-authority';
+
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
@@ -63,6 +65,14 @@ export function VanScheduleManualSend() {
     }
   };
 
+  const retryFailed = async () => {
+    if (!window.confirm('¿Reintentar únicamente los mensajes y archivos pendientes del schedule seleccionado? Los mensajes ya confirmados no se repiten.')) return;
+    setBusy(true); setMessage(''); setError('');
+    try { const result = await retryVanScheduleDelivery({ dateKey, ...(vanId ? { vanId } : {}) }); setMessage(`${result.resumed} envíos pendientes reactivados.`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo reintentar el envío.'); }
+    finally { setBusy(false); }
+  };
+
   return (
     <section style={{ padding: '4px 14px 0' }}>
       <div style={{ minHeight: 36, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
@@ -73,6 +83,7 @@ export function VanScheduleManualSend() {
           <option value="">All vans</option>
           {[1, 2, 3, 4].map((number) => <option key={number} value={`VAN-${number}`}>Van {number}</option>)}
         </select>
+        <button type="button" onClick={() => void retryFailed()} disabled={busy} style={{ minHeight: 30, padding: '0 10px' }}>Retry pending messages</button>
         <button type="button" onClick={() => void send()} disabled={busy} style={{ minHeight: 30, height: 30, padding: '0 10px' }}>
           {busy ? 'Sending…' : 'Send Now'}
         </button>

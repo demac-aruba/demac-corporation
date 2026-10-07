@@ -1,7 +1,7 @@
 // A bounded extension of the existing manual-move authority, never an availability
 // provider for automatic bookings. Ordinary booking slots are deliberately unchanged.
 const { BOOKING_ERROR_CODES, BookingAuthorityError, cleanText } = require('./bookingAuthorityCore');
-const { bookingSlots, hashId, isHalfDay, resolveAssignment, resolveCrewMembership, vanCanReceiveAppointments, arubaDateParts } = require('./bookingSchedulingPrimitives');
+const { REGULAR_SLOTS, bookingSlots, hashId, isHalfDay, resolveAssignment, resolveCrewMembership, vanCanReceiveAppointments, arubaDateParts } = require('./bookingSchedulingPrimitives');
 const { normalizeOrderTime, workOrderDurationMinutes, workOrderCapacityInterval } = require('./bookingCapacityAvailability');
 const { activeOpenAfterHours, businessDateOpen, timeMinutes } = require('./bookingAfterHours');
 
@@ -17,7 +17,7 @@ function ordinaryMoveWindow(data, vanId, date) {
   const starts = bookingSlots(halfDay);
   const start = schedule ? timeMinutes(schedule.workdayStart || '08:00') : 8 * 60;
   const end = schedule ? timeMinutes(schedule.workdayEnd || '13:00') : timeMinutes(starts.at(-1)) + 60;
-  return { start, end, starts: starts.filter((value) => timeMinutes(value) >= start && timeMinutes(value) + 60 <= end) };
+  return { start, end, schedule: schedule || null, starts: starts.filter((value) => timeMinutes(value) >= start && timeMinutes(value) + 60 <= end) };
 }
 
 function moveOvertimePlan({ data, appointment, assignment, van, date, time, slotCount, durationMinutes, now, actor, requestId }) {
@@ -26,11 +26,13 @@ function moveOvertimePlan({ data, appointment, assignment, van, date, time, slot
   const remaining = index < 0 ? [] : window.starts.slice(index);
   const start = timeMinutes(time);
   const end = start + durationMinutes;
-  const needed = index >= 0 && (remaining.length < slotCount || end > window.end);
+  const weeklyRest = Boolean(window.schedule && REGULAR_SLOTS.includes(time) && (start < window.start || start >= window.end));
+  const needed = weeklyRest || index >= 0 && (remaining.length < slotCount || end > window.end);
   if (!needed) return null;
+  if (!Number.isFinite(window.start) || !Number.isFinite(window.end) || window.end <= window.start) fail('overtime-invalid-schedule', 'The canonical weekly schedule must have a valid worked window.');
   if (remaining.some((value, i) => i > 0 && timeMinutes(value) - timeMinutes(remaining[i - 1]) !== 60)) fail('overtime-nonconsecutive-tail', 'The exception requires consecutive free ordinary spots through the end of the shift.');
-  if (!remaining.length || start < window.start || start >= window.end || end >= 24 * 60) fail('overtime-outside-tail', 'The move must begin in remaining ordinary capacity and finish on the same date.');
-  if (assignment.vanId === van.id || appointment.date !== date) fail('overtime-cross-van-only', 'Possible overtime is only available for a same-date transfer between Vans.');
+  if ((!weeklyRest && (!remaining.length || start < window.start || start >= window.end)) || end >= 24 * 60) fail('overtime-outside-tail', 'The move must begin in eligible capacity and finish on the same date.');
+  if ((!weeklyRest && assignment.vanId === van.id) || appointment.date !== date) fail('overtime-cross-van-only', 'Ordinary capacity overflow requires a same-date transfer between Vans; weekly-rest moves may use the same Van.');
   if (date < arubaDateParts(now).date) fail('overtime-historical-date', 'Possible overtime cannot change historical appointments.');
   if (appointment.status !== 'confirmed' || appointment.afterHoursOpenEnded || appointment.executionOutcome || appointment.fullDaySingleProperty) fail('overtime-ineligible-appointment', 'Only an unexecuted confirmed fixed-duration appointment can use this exception.');
   if (!actor?.id || actor.source !== 'office-scheduling') fail('overtime-office-only', 'An authenticated office operator is required.', BOOKING_ERROR_CODES.INVALID_REQUEST);
@@ -41,11 +43,13 @@ function moveOvertimePlan({ data, appointment, assignment, van, date, time, slot
   if (new Set(members).size !== members.length || members.some((id) => !crew.technicianIds.includes(id))) fail('overtime-staff-unavailable', 'Every assigned crew member must be available.');
   if (data.vans.some((other) => other.id !== van.id && resolveCrewMembership(other, date, data.dailyVanAssignments).technicianIds.some((id) => crew.technicianIds.includes(id)))) fail('overtime-duplicate-crew', 'The dated crew is also assigned to another Van.');
 
-  const owned = remaining.slice(0, slotCount);
+  const owned = weeklyRest ? [time] : remaining.slice(0, slotCount);
   while (owned.length < slotCount) owned.push(clock(timeMinutes(owned.at(-1)) + 60));
   // Preserve capacity ownership even when elapsed work and service anchors differ at lunch.
   const capacityEnd = Math.max(end, timeMinutes(owned.at(-1)) + 60);
   if (capacityEnd >= 24 * 60) fail('overtime-crosses-midnight', 'All capacity must remain on the appointment date.');
+  if (weeklyRest && start < window.start && capacityEnd > window.start) fail('overtime-crosses-regular-shift', 'Work during morning rest must finish before the regular shift starts.');
+  if (weeklyRest && start < 13 * 60 && capacityEnd > 12 * 60) fail('overtime-protected-lunch', 'The lunch interval remains protected. Select an afternoon start.');
   const sourceOrders = data.workOrders.filter((order) => order.appointmentId === appointment.id && order.appointmentAssignmentRole !== 'support');
   if (!sourceOrders.length || sourceOrders.some((order) => !['Confirmada', 'confirmed', 'Pendiente', 'pending'].includes(order.status) || order.actualStartedAt || order.actualCompletedAt || order.fullDaySingleProperty)) fail('overtime-executed-work', 'Executed or nonstandard work cannot be moved through this exception.');
 
@@ -59,12 +63,13 @@ function moveOvertimePlan({ data, appointment, assignment, van, date, time, slot
     if ((order.vanId === van.id || otherCrew.some((id) => crew.technicianIds.includes(id))) && start < otherEnd && capacityEnd > otherStart) fail('overtime-interval-conflict', 'The complete destination interval conflicts with existing Van or staff work.', BOOKING_ERROR_CODES.SLOT_CONFLICT);
   }
   const proposal = {
+    ...(weeklyRest ? { kind: 'weekly_rest_overtime', regularStart: clock(window.start), regularEnd: clock(window.end) } : {}),
     vanId: van.id, vanName: van.name || van.id, start: time,
     requiredSlots: slotCount, ordinarySlots: Math.min(slotCount, remaining.length),
     estimatedEnd: clock(end), ordinaryEnd: clock(window.end), capacityEnd: clock(capacityEnd),
   };
   // Bind consent to the operator, source revision/scope, destination and displayed calculation.
-  const confirmationToken = hashId(JSON.stringify({ requestId, actorId: actor.id, appointment, sourceOrders, proposal, crew }), 64);
+  const confirmationToken = hashId(JSON.stringify({ requestId, actorId: actor.id, appointment, sourceOrders, proposal, crew, window }), 64);
   return { proposal: { ...proposal, confirmationToken }, owned, crew, sourceOrders };
 }
 

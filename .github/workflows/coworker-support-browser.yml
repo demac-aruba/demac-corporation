@@ -1,0 +1,58 @@
+name: Coworker support browser and contention
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/scheduling/**'
+      - 'apps/erp-next/lib/live-scheduling*.ts'
+      - 'apps/erp-next/lib/office-booking-authority.ts'
+      - 'apps/erp-next/scripts/coworker-support-browser.cjs'
+      - 'functions/bookingAdhocSupport*'
+      - 'functions/bookingCapacityAvailability*'
+      - 'functions/bookingSchedulingPrimitives*'
+      - 'functions/officeBookingAuthority*'
+      - '.github/workflows/coworker-support-browser.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  support-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GCLOUD_PROJECT: demo-demac-support
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8789
+      SUPPORT_TEST_TOOLS: ${{ github.workspace }}/.support-tools
+      SUPPORT_TEST_OUTPUT: ${{ github.workspace }}/.support-evidence
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated verification dependencies
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$SUPPORT_TEST_TOOLS" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9 firebase-tools@14.17.0
+          "$SUPPORT_TEST_TOOLS/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Support contracts, browser save and transaction contention
+        run: |
+          node --test functions/bookingAdhocSupport.test.js functions/officeBookingAuthority.test.js functions/bookingCapacityAvailability.test.js
+          printf '%s\n' '{"emulators":{"firestore":{"port":8789,"host":"127.0.0.1"},"ui":{"enabled":false},"singleProjectMode":true}}' > "$RUNNER_TEMP/support-emulator.json"
+          "$SUPPORT_TEST_TOOLS/node_modules/.bin/firebase" emulators:exec --only firestore --project demo-demac-support --config "$RUNNER_TEMP/support-emulator.json" 'node apps/erp-next/scripts/coworker-support-browser.cjs'
+      - name: Retain synthetic verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coworker-support-browser-evidence
+          path: ${{ env.SUPPORT_TEST_OUTPUT }}/
+          if-no-files-found: warn
+          retention-days: 7

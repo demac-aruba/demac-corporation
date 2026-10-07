@@ -1,3 +1,4 @@
+import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type { AppointmentRecipientSelection } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
@@ -19,6 +20,8 @@ function endpoint() {
 }
 
 export type SpecialBookingInput = {
+  visitReferences?: VisitReferences;
+  project?: { id: string; phaseId: string; version: number };
   dwellingId?: string; requesterId?: string; accessContactId?: string;
   requestId: string;
   customerId: string;
@@ -65,6 +68,11 @@ async function specialBookingRequest<T>(action: string, input: SpecialBookingInp
     }
     if (!payload.success || (!['prepare_rest_day_overtime', 'prepare_capacity_overtime'].includes(action) && (!payload.appointmentId || !payload.workOrderIds?.length))) {
       throw new SpecialBookingError('The booking response could not be verified. Retry the original request.', true);
+    }
+    if (input.project && action === 'create_rest_day_overtime'
+      && (payload.appointment?.projectId !== input.project.id || payload.appointment?.projectPhaseId !== input.project.phaseId
+        || payload.workOrder?.projectId !== input.project.id || payload.workOrder?.projectPhaseId !== input.project.phaseId)) {
+      throw new SpecialBookingError('The Project booking link could not be verified. Retry the original request.', true);
     }
     return payload as T;
   } catch (error) {

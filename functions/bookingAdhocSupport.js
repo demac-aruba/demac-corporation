@@ -9,17 +9,20 @@ const {
 } = require("./bookingAuthorityFirestore");
 const {
   arubaDateParts,
+  capacitySlotsForOwnership,
   hashId,
+  isHalfDay,
   normalizeRouteConfig,
   propertyZone,
   resolveAssignment,
   snapshotItems,
+  timeMinutes,
 } = require("./bookingSchedulingPrimitives");
 const { isOpenBusinessDate } = require("./operatingCalendarService");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const ADHOC_SUPPORT_VERSION = 3;
+const ADHOC_SUPPORT_VERSION = 4;
 const SUPPORT_KIND = "adhoc_rescue";
 const FINISHED_STATUSES = new Set(["completada", "completed", "facturada", "invoiced", "pagada", "paid"]);
 const INACTIVE_STATUSES = new Set([
@@ -127,6 +130,7 @@ function supportOrderSnapshot({
   targetDate,
   targetTime,
   endTime,
+  requestedSlots,
   reason,
   actor,
   now,
@@ -154,7 +158,7 @@ function supportOrderSnapshot({
     appointmentWorkType: "adhoc_support",
     appointmentPresetId: "adhoc_support",
     appointmentWorkLabel: "Apoyo operativo",
-    appointmentDurationMinutes: 60,
+    appointmentDurationMinutes: requestedSlots * 60,
     appointmentDurationMode: "fixed",
     appointmentEndTime: endTime,
     appointmentAssignmentRole: "support",
@@ -166,7 +170,7 @@ function supportOrderSnapshot({
     fullDaySingleProperty: false,
     schedulingMode: "fixed",
     airConditionerCount: 1,
-    scheduledSlots: 1,
+    scheduledSlots: requestedSlots,
     whatsappNotificationsEnabled: false,
     notificationRecipients: [],
     customerCommunicationOwner: false,
@@ -195,6 +199,7 @@ function createAdhocSupportAuthority({
     requestedDate,
     requestedTime,
     targetVanId,
+    requestedSlots = 1,
     reason = "",
     bookingMode = "",
     backdatingAcknowledged = false,
@@ -205,6 +210,11 @@ function createAdhocSupportAuthority({
     const targetDate = cleanText(requestedDate, 20);
     const targetTime = cleanText(requestedTime, 20);
     const requestedVanId = cleanText(targetVanId, 120);
+    if (!Number.isInteger(requestedSlots) || requestedSlots < 1 || requestedSlots > 6) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Support duration must be a whole number of available consecutive slots (1–6).",
+        { reason: "support-slot-count-invalid" });
+    }
     if (!id || stableRequestId.length < 8 || !targetDate || !targetTime || !requestedVanId) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
@@ -279,6 +289,12 @@ function createAdhocSupportAuthority({
             "This support request identity is already attached to another appointment.",
             { supportWorkOrderId: replay.id, appointmentId: replay.appointmentId || "" },
           );
+        }
+        if (replay.vanId !== requestedVanId || replay.date !== targetDate || replay.time !== targetTime
+          || Number(replay.scheduledSlots || 1) !== requestedSlots
+          || cleanText(replay.supportReason, 500) !== cleanText(reason, 500)) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+            "This support request was already saved with different details.", { supportWorkOrderId: replay.id });
         }
         return {
           success: true,
@@ -379,6 +395,11 @@ function createAdhocSupportAuthority({
         && cleanText(order.time, 20) === targetTime
       ));
       if (duplicate) {
+        if (Number(duplicate.scheduledSlots || 1) !== requestedSlots) {
+          throw new BookingAuthorityError(BOOKING_ERROR_CODES.SLOT_CONFLICT,
+            "Support already exists at this time with a different duration. Refresh the agenda.",
+            { reason: "support-duration-conflict", supportWorkOrderId: duplicate.id });
+        }
         return { success: true, replayed: true, appointmentId: id, supportWorkOrderId: duplicate.id, supportWorkOrder: duplicate, appointment };
       }
 
@@ -390,11 +411,19 @@ function createAdhocSupportAuthority({
         canonical.staffAbsences,
       );
       const routeConfig = routeConfigFromSettings(canonical.businessSettings);
+      const slotStarts = capacitySlotsForOwnership(targetTime, requestedSlots,
+        isHalfDay(requestedVanId, targetDate, canonical.vanHalfDaySchedules));
+      if (slotStarts.length !== requestedSlots || slotStarts.some((slot, index) =>
+        timeMinutes(slot) !== timeMinutes(targetTime) + index * 60)) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.SLOT_CONFLICT,
+          "Support must use consecutive operating slots without crossing a break or the end of the shift.",
+          { reason: "support-slots-not-consecutive", targetTime, requestedSlots });
+      }
       const candidateZone = propertyZone(property, property.address || property.addressRaw || "", routeConfig);
       const availability = candidateAvailability({
         date: targetDate,
         time: targetTime,
-        allocation: { quantity: 1, slots: 1, durationMinutes: 60, fullDay: false },
+        allocation: { quantity: 1, slots: requestedSlots, durationMinutes: requestedSlots * 60, fullDay: false },
         van: targetVan,
         assignment: crew,
         data: canonical,
@@ -410,16 +439,17 @@ function createAdhocSupportAuthority({
         );
       }
 
-      const lock = supportCapacityLock(targetDate, requestedVanId, targetTime);
-      const lockRef = db.collection(collections.capacityLocks).doc(lock.id);
-      const lockSnapshot = await transaction.get(lockRef);
-      if (lockSnapshot.exists) {
+      const locks = slotStarts.map(slot => supportCapacityLock(targetDate, requestedVanId, slot));
+      const lockRefs = locks.map(lock => db.collection(collections.capacityLocks).doc(lock.id));
+      const lockSnapshots = await Promise.all(lockRefs.map(ref => transaction.get(ref)));
+      for (const [index, lockSnapshot] of lockSnapshots.entries()) {
+        if (!lockSnapshot.exists) continue;
         const stored = lockSnapshot.data() || {};
-        if (stored.active !== false && cleanText(stored.appointmentId, 180) !== id) {
+        if (stored.active !== false) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.SLOT_CONFLICT,
             "The selected support capacity was occupied concurrently.",
-            { date: targetDate, vanId: requestedVanId, slot: targetTime, appointmentId: stored.appointmentId || "" },
+            { date: targetDate, vanId: requestedVanId, slot: locks[index].slot, appointmentId: stored.appointmentId || "" },
           );
         }
       }
@@ -435,6 +465,7 @@ function createAdhocSupportAuthority({
         targetDate,
         targetTime,
         endTime: availability.endTime,
+        requestedSlots,
         reason,
         actor,
         now,
@@ -448,8 +479,8 @@ function createAdhocSupportAuthority({
         driverStaffId: availability.driverStaffId,
         helperStaffId: availability.helperStaffId,
         quantity: 1,
-        slots: 1,
-        durationMinutes: 60,
+        slots: requestedSlots,
+        durationMinutes: requestedSlots * 60,
         time: targetTime,
         endTime: availability.endTime,
         role: "support",
@@ -474,7 +505,7 @@ function createAdhocSupportAuthority({
       const patch = compactObject({
         assignments: [...existingAssignments, supportAssignment],
         workOrderIds: [...new Set([...existingWorkOrderIds, supportId])],
-        capacityLockIds: [...new Set([...existingLockIds, lock.id])],
+        capacityLockIds: [...new Set([...existingLockIds, ...locks.map(lock => lock.id)])],
         lifecycleHistory: [...(Array.isArray(appointment.lifecycleHistory) ? appointment.lifecycleHistory : []), event],
         lastScheduleChangeKind: "support_added",
         customerNotificationRecommended: false,
@@ -487,15 +518,18 @@ function createAdhocSupportAuthority({
 
       transaction.set(appointmentRef, patch, { merge: true });
       transaction.set(supportRef, supportOrder);
-      transaction.set(lockRef, compactObject({
-        ...lock,
-        appointmentId: id,
-        active: true,
-        createdAtIso: lockSnapshot.exists ? cleanText(lockSnapshot.data()?.createdAtIso, 80) || now.toISOString() : now.toISOString(),
-        updatedAtIso: now.toISOString(),
-        createdAt: lockSnapshot.exists ? undefined : serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }), { merge: true });
+      locks.forEach((lock, index) => {
+        const lockSnapshot = lockSnapshots[index];
+        transaction.set(lockRefs[index], compactObject({
+          ...lock,
+          appointmentId: id,
+          active: true,
+          createdAtIso: lockSnapshot.exists ? cleanText(lockSnapshot.data()?.createdAtIso, 80) || now.toISOString() : now.toISOString(),
+          updatedAtIso: now.toISOString(),
+          createdAt: lockSnapshot.exists ? undefined : serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }), { merge: true });
+      });
 
       return {
         success: true,
