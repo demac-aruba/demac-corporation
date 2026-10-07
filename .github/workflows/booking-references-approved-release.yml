@@ -35,6 +35,28 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Release only the nine reviewed reference functions
         run: node scripts/booking-references-approved-deploy.cjs
+      - name: Verify running bridge after gateway rollout without restart or message send
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H 159.223.160.239 >> "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 demac-deploy@159.223.160.239 'python3 -' <<'PY'
+          import datetime,hashlib,json,pathlib,urllib.request
+          source=pathlib.Path('/opt/demac-whatsapp-bridge/server-v2.mjs').read_bytes()
+          health=json.load(urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=10))
+          at=datetime.datetime.fromisoformat(health['lastOutboundPollAt'].replace('Z','+00:00'))
+          result={'bridgeSha256':hashlib.sha256(source).hexdigest(),'ok':health.get('ok'),'mode':health.get('connectorMode'),'pendingOutboundAcks':health.get('pendingOutboundAcks'),'outboundErrorPresent':bool(health.get('lastOutboundError')),'lastOutboundPollAt':health.get('lastOutboundPollAt'),'pollAgeSeconds':(datetime.datetime.now(datetime.timezone.utc)-at).total_seconds()}
+          print(json.dumps(result))
+          assert result['bridgeSha256']=='19d4f2b53aa942981f8c0bba8ba8f96ef10bc136833496038edc8e0ebe95d1f7'
+          assert result['ok'] and result['mode']=='outbound-only-v1' and not result['outboundErrorPresent']
+          assert 0 <= result['pollAgeSeconds'] < 90
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
