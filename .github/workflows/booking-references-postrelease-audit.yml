@@ -34,9 +34,20 @@ jobs:
           REFERENCE_TEST_TOOLS: ${{ runner.temp }}/reference-tools/node_modules
           REFERENCE_TEST_OUTPUT: ${{ runner.temp }}/reference-browser
         run: |
-          npm install --prefix "$RUNNER_TEMP/reference-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          npm install --prefix "$RUNNER_TEMP/reference-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9 agent-browser@0.38.1
           "$RUNNER_TEMP/reference-tools/node_modules/.bin/playwright" install --with-deps chromium
           node apps/erp-next/scripts/booking-references-browser.cjs
+      - name: Full Scheduling drawer and booking persistence with references and legacy inputs
+        env:
+          GCLOUD_PROJECT: demo-demac-overtime
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8793
+          OVERTIME_TEST_TOOLS: ${{ runner.temp }}/reference-tools
+          OVERTIME_TEST_OUTPUT: ${{ runner.temp }}/reference-browser/full-scheduling
+          CODEX_PRIMARY_RUNTIME_NODE_MODULES: ${{ runner.temp }}/reference-tools/node_modules
+        run: |
+          export OVERTIME_TEST_CHROME="$(node -e 'console.log(require(process.env.OVERTIME_TEST_TOOLS + "/node_modules/playwright").chromium.executablePath())')"
+          printf '%s\n' '{"emulators":{"firestore":{"port":8793,"host":"127.0.0.1"},"ui":{"enabled":false},"singleProjectMode":true}}' > "$RUNNER_TEMP/backdated-emulator.json"
+          npx --yes firebase-tools@15.30.0 emulators:exec --only firestore --project demo-demac-overtime --config "$RUNNER_TEMP/backdated-emulator.json" "node apps/erp-next/scripts/backdated-project-browser.cjs"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

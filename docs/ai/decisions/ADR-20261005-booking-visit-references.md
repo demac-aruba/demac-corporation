@@ -1,6 +1,6 @@
 # ADR-20261005: Booking-owned references and ordered WhatsApp work delivery
 
-- Status: Accepted and released to production on 2026-10-07
+- Status: Accepted design; partial rollout on 2026-10-07, further release on hold pending [corrective audit](../reviews/20261007-booking-references-production-reaudit.md)
 - Date: 2026-10-05
 - Owners: Operations / Booking Authority / Communication Authority
 - Related rule: `OPS-SCHED-REFERENCES-001`

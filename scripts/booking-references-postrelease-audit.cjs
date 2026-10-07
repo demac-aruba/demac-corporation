@@ -63,3 +63,23 @@ assert.deepEqual(scheduler, { schedule: '0,5,10 8 * * *', timeZone: 'America/Aru
 summary.scheduler = scheduler;
 fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 2));
 if (failed) throw Error('Production source differs from reviewed release; investigate without deployment.');
+
+// Anonymous boundary probes only: no valid user token, customer ID or send action.
+(async () => {
+  summary.publicBoundaries = [];
+  for (const name of ['officeBookingAuthority', 'bookingVisitReferences']) {
+    const url = `https://us-central1-${project}.cloudfunctions.net/${name}`;
+    for (const origin of ['https://demac-aruba.com', 'https://www.demac-aruba.com']) {
+      const preflight = await fetch(url, { method: 'OPTIONS', signal: AbortSignal.timeout(20000),
+        headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } });
+      assert.equal(preflight.status, 204);
+      assert.ok([origin, '*'].includes(preflight.headers.get('access-control-allow-origin')));
+      const denied = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(20000),
+        headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(denied.status, 401);
+      const result = { name, origin, cors: preflight.status, anonymous: denied.status };
+      summary.publicBoundaries.push(result); console.log(JSON.stringify(result));
+    }
+  }
+  fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 2));
+})().catch(error => { console.error('Anonymous boundary audit failed:', error.message); process.exitCode = 1; });

@@ -22,6 +22,39 @@ const base = {
   technicianIds: ["tech-1", "tech-2"],
 };
 
+test('same-day and support reference bundles retain their version and cannot retry superseded files', async () => {
+  const { ReferenceDb } = require('./test-support/referenceDb.cjs');
+  const { createTechnicianScheduleChangeService } = require('./technicianScheduleChangeService');
+  const { createVanScheduleCommunicationAuthority } = require('./vanScheduleCommunicationAuthority');
+  for (const support of [false, true]) {
+    const order = { ...base, id: 'WO-AUDIT', appointmentId: 'APT-AUDIT', clientId: 'synthetic-client',
+      ...(support ? { vanId: 'VAN-2', appointmentAssignmentRole: 'support', supportAssignmentKind: 'adhoc_rescue', primaryWorkOrderId: 'WO-PRIMARY', primaryVanId: 'VAN-1' } : {}) };
+    const db = new ReferenceDb({
+      'vans/VAN-1': { active: true, whatsappScheduleGroupJid: '120000000000000001@g.us' },
+      'vans/VAN-2': { active: true, whatsappScheduleGroupJid: '120000000000000002@g.us' },
+      'workOrders/WO-AUDIT': order,
+      'workOrders/WO-PRIMARY': { ...base, id: 'WO-PRIMARY', appointmentId: 'APT-AUDIT', clientId: 'synthetic-client' },
+      'appointments/APT-AUDIT': { status: 'confirmed', visitReferences: { version: 2, files: [
+        { id: 'synthetic-photo', fileName: 'test.jpg', kind: 'image', mimeType: 'image/jpeg', storagePath: 'booking-references/synthetic/synthetic-photo' },
+      ] } },
+      'clients/synthetic-client': { name: 'SYNTHETIC ONLY' },
+    });
+    const service = createTechnicianScheduleChangeService({ db });
+    if (support) await service.queueAdhocSupportChange({ order, eventId: 'synthetic-support-event' });
+    else await service.queueSameDayChange({ order, eventId: 'synthetic-change-event' });
+    const [key, queued] = [...db.records.entries()].find(([path, value]) => path.startsWith('whatsappOutboundQueue/') && value.type === 'booking-reference-bundle');
+    assert.equal(queued.referencesVersion, 2, 'Producer must capture the immutable reference version');
+    db.records.set(key, { ...queued, status: 'failed', messageIndex: 1, sentMessageIds: ['synthetic-sent'], partAttempts: 3 });
+    const retry = () => createVanScheduleCommunicationAuthority({ db }).execute({ action: 'retry_van_schedule_delivery', data: { dateKey: order.date, vanId: order.vanId }, identity: { uid: 'synthetic-office' } });
+    assert.equal((await retry()).resumed, 1, 'Unchanged reference bundle remains retryable');
+    const failed = { ...db.records.get(key), status: 'failed' };
+    db.records.set(key, failed);
+    db.records.set('appointments/APT-AUDIT', { status: 'confirmed', visitReferences: { version: 3, files: [] } });
+    assert.equal((await retry()).resumed, 0, 'Removed/superseded files cannot be revived');
+    assert.deepEqual(db.records.get(key), failed);
+  }
+});
+
 test("a newly confirmed same-day job after the 8 AM schedule dispatch requires an immediate van alert", () => {
   assert.equal(sameDayScheduleChangeRequired(null, base, { date: "2026-08-27", time: "10:15" }), true);
 });

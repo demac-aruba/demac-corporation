@@ -1,5 +1,11 @@
 # Booking references: production release evidence, 7 October 2026
 
+> CORRECTION: this report's completed-ERP claim was incorrect. Only the secondary
+> Vercel project was published; `demac-aruba.com` remains on `36392f4a`. Backend
+> publication did occur. Further deployment is on hold. See the
+> [corrective audit](20261007-booking-references-production-reaudit.md) for verified
+> domains, additional retry defects, evidence limits and prepared fixes.
+
 ## Decision and authority
 
 Released after the owner's conditional merge/deploy approval, requested live-data

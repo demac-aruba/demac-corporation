@@ -135,9 +135,11 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
         const scheduleMessage = current.type === 'booking-reference-bundle' || ['van-daily-work-order', 'van-daily-lunch-break', 'van-daily-pending-period'].includes(current.notificationType);
         if (!scheduleMessage || current.provider !== 'wacli' || current.status !== 'failed'
             || (target && current.vanId !== target) || groups.get(current.vanId) !== current.to) return 0;
-        // A failed media snapshot must not revive a cancelled job or send files
-        // back to the old crew after dispatch moved the booking to another Van.
-        if (current.type === 'booking-reference-bundle') {
+        // Revalidate work text as well as media before resuming a failed snapshot.
+        // An unversioned bundle cannot establish that its files are still current.
+        const bundle = current.type === 'booking-reference-bundle';
+        if (bundle && (!Number.isInteger(current.referencesVersion) || current.referencesVersion < 0)) return 0;
+        if (bundle || current.notificationType === 'van-daily-work-order') {
           if (!current.workOrderId || current.workOrderId.includes('/') || !current.appointmentId || current.appointmentId.includes('/')) return 0;
           const [orderSnapshot, appointmentSnapshot] = await Promise.all([
             transaction.get(db.collection('workOrders').doc(current.workOrderId)),
@@ -146,8 +148,9 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
           const order = orderSnapshot.exists ? orderSnapshot.data() : null;
           const appointment = appointmentSnapshot.exists ? appointmentSnapshot.data() : null;
           if (!activeWorkOrder(order) || order.appointmentId !== current.appointmentId || order.date !== current.scheduleDate
+              || (current.scheduleTime != null && order.time !== current.scheduleTime)
               || resolveCanonicalVanId(order.vanId, catalog.aliases) !== current.vanId || appointment?.status !== 'confirmed'
-              || (current.referencesVersion != null && Number(appointment.visitReferences?.version || 0) !== current.referencesVersion)) return 0;
+              || Number(appointment.visitReferences?.version || 0) !== (current.referencesVersion ?? 0)) return 0;
         }
         transaction.set(item.ref, { status: 'queued', partAttempts: 0, retryAfterIso: null, errorMessage: null,
           resumedAtIso: new Date().toISOString(), resumedBy: cleanText(identity.uid, 160) }, { merge: true });
