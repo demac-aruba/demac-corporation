@@ -41,6 +41,8 @@ const server=http.createServer((req,res)=>{
     }});
    });
    const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(origin);
+   const capabilities=await page.evaluate(()=>({secure:isSecureContext,recorder:typeof MediaRecorder,probe:typeof MediaRecorder==='undefined'?'absent':typeof MediaRecorder.isTypeSupported,microphone:typeof navigator.mediaDevices?.getUserMedia,formats:Object.fromEntries(['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus','audio/webm'].map(mime=>[mime,typeof MediaRecorder!=='undefined'&&typeof MediaRecorder.isTypeSupported==='function'&&MediaRecorder.isTypeSupported(mime)]))}));
+   console.log('CAPABILITIES '+name+' '+JSON.stringify(capabilities));fs.writeFileSync(path.join(out,name+'-capabilities.json'),JSON.stringify(capabilities,null,2));
    const start=page.getByRole('button',{name:'Grabar audio',exact:true}),stop=page.getByRole('button',{name:'Detener y guardar audio',exact:true});
    await start.waitFor();assert.equal(await page.evaluate(()=>microphoneFixture.requests),0,'no microphone on render');
    await page.evaluate(()=>microphoneFixture.mode='deny');await start.click();await page.getByRole('alert').filter({hasText:/denegado/}).waitFor();assert.equal(await page.locator('#receipt').getAttribute('data-count'),'0');
