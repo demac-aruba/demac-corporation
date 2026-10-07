@@ -29,3 +29,27 @@ jobs:
               result={'name':name,'state':fn['state'],'sameRuntimeAsOffice':sc.get('serviceAccountEmail')==office['serviceConfig']['serviceAccountEmail'],'sameRuntimeAsGateway':sc.get('serviceAccountEmail')==gateway['serviceConfig']['serviceAccountEmail'],'expectedPrivateBucket':cfg.get('storageBucket')=='demac-corporation.firebasestorage.app','memory':sc.get('availableMemory'),'concurrency':sc.get('maxInstanceRequestConcurrency'),'revision':sc.get('revision')}
               print(json.dumps(result))
           PY
+      - name: Inspect changed event function configuration without exposing environment values
+        run: |
+          python3 - <<'PY'
+          import json,subprocess
+          def run(args): return json.loads(subprocess.check_output(['gcloud']+args,stderr=subprocess.PIPE))
+          fn=run(['functions','describe','queueAppointmentConfirmation','--project=demac-corporation','--region=us-central1','--gen2','--format=json'])
+          print(json.dumps({'name':'queueAppointmentConfirmation','revision':fn['serviceConfig']['revision'],'eventTrigger':fn.get('eventTrigger')}))
+          def spec(revision):
+              r=run(['run','revisions','describe',revision,'--project=demac-corporation','--region=us-central1','--format=json'])
+              s=r['spec']
+              for c in s.get('containers',[]):
+                  c.pop('image',None); c['env']=sorted(c.get('env',[]),key=lambda e:e['name'])
+              return s
+          before=spec('queueappointmentconfirmation-00043-doh');after=spec(fn['serviceConfig']['revision'])
+          def differences(a,b,p=''):
+              if isinstance(a,dict) and isinstance(b,dict):
+                  return sum((differences(a.get(k),b.get(k),p+'.'+k) for k in sorted(set(a)|set(b))),[])
+              if a!=b: return [p]
+              return []
+          print(json.dumps({'runtimeSpecChangedPaths':differences(before,after)}))
+          query='protoPayload.serviceName="cloudfunctions.googleapis.com" AND protoPayload.resourceName="projects/demac-corporation/locations/us-central1/functions/queueAppointmentConfirmation" AND protoPayload.methodName="google.cloud.functions.v2.FunctionService.UpdateFunction"'
+          logs=run(['logging','read',query,'--project=demac-corporation','--limit=8','--freshness=30d','--format=json(timestamp,protoPayload.request.updateMask,protoPayload.request.function.eventTrigger,protoPayload.response.eventTrigger)'])
+          print(json.dumps({'eventDeploymentAudit':logs}))
+          PY
