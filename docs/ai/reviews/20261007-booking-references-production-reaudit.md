@@ -77,9 +77,31 @@ production operations to function/source/scheduler/bridge reads and anonymous pr
   At 18:36:05 UTC the unchanged bridge was healthy, zero pending ACKs, no outbound
   error, latest poll 18:36:04.379 UTC. The isolated emulator and desktop/mobile
   reference-component flows also passed in this run.
-- Extended actual-origin CORS/auth probes, full Scheduling browser and final branch
-  checks are pending the next corrective audit run. Their results must be recorded
-  before proposing release; passing prior checks does not waive these checks.
+- Extended audit `37669194464` passed on fix source `05262092191b12eb581a2654f4c6252cd7f97ec5`:
+  all nine production sources remained unchanged; both actual business origins passed
+  CORS OPTIONS (204) and rejected anonymous POST (401) for Office and reference APIs.
+  Bridge remained healthy at 18:45:51 UTC with zero pending ACKs and no outbound error.
+  The complete Scheduling drawer → HTTP booking transport → Booking Authority → real
+  loopback Firestore path passed at 18:46:37 UTC: historical Project plus reference
+  notes, exact lost-response retry without duplicate reference commitment, ordinary
+  booking with no reference field, cancel/no-write, reload and mobile controls. Both
+  reference-component desktop/mobile scenarios also passed, with zero external requests.
+- On that exact code SHA, ERP Next CI (including refresh-browser and field-function
+  checks), Office Booking Authority, transactional WhatsApp, Van architecture, both
+  typecheck/build runs and both Vercel previews passed. The additional full Project
+  historical-bookings workflow `37669344021` was still installing browser tools at
+  the final inspection; it remains pending, not waived or counted as passed. The
+  targeted full historical Scheduling browser above already passed in the separate
+  corrective audit. No release is approved while a required check remains unresolved.
+
+## Reviewable handoff
+
+Draft PR #559 contains the fixes and this corrected record. It is deliberately
+unmerged and undeployed. The old report/ADR is marked as partial rollout on this
+branch; merged PR #557/#558 descriptions were corrected to remove the misleading
+completed-ERP claim. The last recheck of `www.demac-aruba.com` still resolved to
+`dpl_9qiHNuFvpvhzFCstMURTFACewikC` / `36392f4a`. Production configuration, domains,
+backend code and customer records were not changed during this corrective audit.
 
 ## Compatibility, efficiency and remaining limits
 
