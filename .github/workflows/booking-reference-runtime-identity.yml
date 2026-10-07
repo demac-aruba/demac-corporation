@@ -50,6 +50,12 @@ jobs:
               return []
           print(json.dumps({'runtimeSpecChangedPaths':differences(before,after)}))
           query='protoPayload.serviceName="cloudfunctions.googleapis.com" AND protoPayload.resourceName="projects/demac-corporation/locations/us-central1/functions/queueAppointmentConfirmation" AND protoPayload.methodName="google.cloud.functions.v2.FunctionService.UpdateFunction"'
-          logs=run(['logging','read',query,'--project=demac-corporation','--limit=8','--freshness=30d','--format=json(timestamp,protoPayload.request.updateMask,protoPayload.request.function.eventTrigger,protoPayload.response.eventTrigger)'])
-          print(json.dumps({'eventDeploymentAudit':logs}))
+          try:
+              raw=run(['logging','read',query,'--project=demac-corporation','--limit=12','--freshness=30d','--format=json'])
+              logs=[{'at':entry.get('timestamp'),'updateMask':entry.get('protoPayload',{}).get('request',{}).get('updateMask'),'requestEventTrigger':entry.get('protoPayload',{}).get('request',{}).get('function',{}).get('eventTrigger'),'responseEventTrigger':entry.get('protoPayload',{}).get('response',{}).get('eventTrigger')} for entry in raw]
+              print(json.dumps({'eventDeploymentAudit':logs}))
+          except subprocess.CalledProcessError as e:
+              print(json.dumps({'loggingReadError':e.stderr.decode()[:1500]}))
+          trigger=run(['eventarc','triggers','describe','queueappointmentconfirmation-968617','--project=demac-corporation','--location=nam5','--format=json'])
+          print(json.dumps({'eventarcCreatedAt':trigger.get('createTime'),'eventarcUpdatedAt':trigger.get('updateTime'),'eventarcFilters':trigger.get('eventFilters'),'eventarcService':trigger.get('destination',{}).get('cloudRun',{}).get('service')}))
           PY
