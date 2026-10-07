@@ -1,0 +1,31 @@
+name: Booking reference runtime identity check
+on:
+  push:
+    branches: [test/booking-reference-runtime-identity-20261007]
+permissions:
+  contents: read
+jobs:
+  read-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Compare runtime identities and private storage configuration only
+        run: |
+          python3 - <<'PY'
+          import json,subprocess
+          def describe(name):
+              return json.loads(subprocess.check_output(['gcloud','functions','describe',name,'--project=demac-corporation','--region=us-central1','--gen2','--format=json'],stderr=subprocess.PIPE))
+          office=describe('officeBookingAuthority')
+          gateway=describe('wacliOutboundPoll')
+          inventory=json.loads(subprocess.check_output(['gcloud','functions','list','--project=demac-corporation','--regions=us-central1','--v2','--format=json(name)'],stderr=subprocess.PIPE))
+          for name in ['wacliBookingReferenceMedia','cleanupBookingReferenceUploads','notifyBookingReferenceUpdate','bookingVisitReferences']:
+              if not any(item['name'].endswith('/'+name) for item in inventory):
+                  print(json.dumps({'name':name,'present':False}));continue
+              fn=describe(name); sc=fn['serviceConfig'];cfg=json.loads(sc.get('environmentVariables',{}).get('FIREBASE_CONFIG','{}'))
+              result={'name':name,'state':fn['state'],'sameRuntimeAsOffice':sc.get('serviceAccountEmail')==office['serviceConfig']['serviceAccountEmail'],'sameRuntimeAsGateway':sc.get('serviceAccountEmail')==gateway['serviceConfig']['serviceAccountEmail'],'expectedPrivateBucket':cfg.get('storageBucket')=='demac-corporation.firebasestorage.app','memory':sc.get('availableMemory'),'concurrency':sc.get('maxInstanceRequestConcurrency'),'revision':sc.get('revision')}
+              print(json.dumps(result))
+          PY
