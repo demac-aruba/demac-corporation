@@ -103,7 +103,9 @@ export function createProcedureAudioRecorder(ports: ProcedureAudioPorts, events:
     } catch (error) {
       if (disposed || version !== generation) return;
       clearResources(); recorder = null; finalize = null; chunks = []; state = 'idle'; started = 0; emit();
-      const name = error instanceof Error ? error.name : '';
+      // DOM exceptions / cross-realm errors need not inherit this realm's Error.
+      // The name only chooses a help message; cleanup and authorization stay unchanged.
+      const name = error !== null && typeof error === 'object' && 'name' in error && typeof error.name === 'string' ? error.name : '';
       events.error(name === 'NotAllowedError' ? 'Permiso de micrófono denegado. Puedes permitirlo en el navegador o adjuntar un audio.'
         : 'No se pudo abrir el micrófono. Comprueba el dispositivo o adjunta un audio.');
     }

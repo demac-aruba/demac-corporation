@@ -14,7 +14,7 @@ module.exports = async ({createProcedureAudioRecorder, PROCEDURE_AUDIO_MAX_SECON
     const ports = {
       now: () => time,
       supports: mime => options.supports ? options.supports(mime) : mime.startsWith('audio/webm'),
-      getMicrophone: () => { requestCount++; return options.reject ? Promise.reject(new DOMException('synthetic', 'NotAllowedError')) : options.defer ? new Promise(r => { resolve = () => r(stream()); }) : Promise.resolve(stream()); },
+      getMicrophone: () => { requestCount++; return options.foreignError ? Promise.reject(Object.freeze({name: 'NotAllowedError', message: 'synthetic cross-realm denial'})) : options.reject ? Promise.reject(new DOMException('synthetic', 'NotAllowedError')) : options.defer ? new Promise(r => { resolve = () => r(stream()); }) : Promise.resolve(stream()); },
       createRecorder: (_stream, mime) => recorder = {
         mimeType: mime, state: 'inactive', stops: 0,
         start() { if (options.startFailure) throw Error('synthetic start failure'); this.state = 'recording'; },
@@ -30,6 +30,7 @@ module.exports = async ({createProcedureAudioRecorder, PROCEDURE_AUDIO_MAX_SECON
   let f = fixture(); f.allow(false); await f.engine.start(3); assert.equal(f.requests, 0); cases++;
   f = fixture({supports: () => false}); await f.engine.start(3); assert.equal(f.requests, 0); assert.equal(f.errors.length, 1); cases++;
   f = fixture({reject: true}); await f.engine.start(3); assert.equal(f.engine.busy(), false); assert.match(f.errors[0], /denegado/); cases++;
+  f = fixture({foreignError: true}); await f.engine.start(3); assert.equal(f.engine.busy(), false); assert.match(f.errors[0], /denegado/); assert.equal(f.outputs.length, 0); cases++;
   f = fixture({defer: true}); const wait = f.engine.start(3); await f.engine.start(3); assert.equal(f.requests, 1); f.engine.stop(); f.release(); await wait; assert.ok(f.tracks.every(t => t.stopped)); assert.equal(f.outputs.length, 0); cases++;
   f = fixture({defer: true}); const disposed = f.engine.start(3); f.engine.dispose(); f.release(); await disposed; assert.ok(f.tracks.every(t => t.stopped)); assert.equal(f.outputs.length, 0); cases++;
   f = fixture({defer: true}); const changedOwner = f.engine.start(3); f.allow(false); f.release(); await changedOwner; assert.ok(f.tracks.every(t => t.stopped)); assert.equal(f.outputs.length, 0); cases++;
