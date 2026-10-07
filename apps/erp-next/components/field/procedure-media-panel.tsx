@@ -7,6 +7,7 @@ import type { ProcedureMediaKind, ProcedureMediaSource, ProcedureStep } from '..
 import type { ProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 import { ProcedureEvidenceViewer } from './procedure-evidence-viewer';
+import { ProcedureAudioRecorder } from './procedure-audio-recorder';
 import { registerProcedureExitGuard } from '../../lib/field-procedure-navigation';
 
 const stageLabel: Record<string,string> = {
@@ -32,6 +33,9 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
   const [error,setError]=useState('');
   const [capturing,setCapturing]=useState('');
   const [unprotected,setUnprotected]=useState(false);
+  const [recordingBusy,setRecordingBusy]=useState(false);
+  const recorderBusyRef=useRef(false);
+  const onRecorderBusy=(busy:boolean)=>{recorderBusyRef.current=busy;setRecordingBusy(busy);};
   const original=useRef<{input:Parameters<ProcedureSession['capture']>[0];key:string}|null>(null);
   const [recoveryReasons,setRecoveryReasons]=useState<Record<string,string>>({});
   const pickedAt=useRef<Record<string,{revision:number;at:string}>>({});
@@ -56,7 +60,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
   }
 
   async function receive(view:string,kind:ProcedureMediaKind,camera:boolean,file:File|null) {
-    if(!file || safetyRevision===null || original.current)return;
+    if(!file || safetyRevision===null || original.current || recorderBusyRef.current)return;
     const key=view+':'+kind+':'+(camera?'camera':'file');
     const selected=pickedAt.current[key] || {revision:safetyRevision,at:new Date().toISOString()};
     delete pickedAt.current[key];
@@ -74,7 +78,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
   return <section className={styles.card} aria-label="Evidencia del procedimiento">
     <div className={styles.toolbar}>
       <div><h3>Evidencia por procedimiento</h3><small>Las fotos requeridas cuentan solo cuando el servidor confirma su vínculo. Audio y video son opcionales.</small></div>
-      {local.length?<button type="button" disabled={!session.fresh||session.busy||Boolean(session.operation)} onClick={()=>void session.sync(local.map(x=>x.id))}>Reintentar archivos pendientes</button>:null}
+      {local.length?<button type="button" disabled={!session.fresh||session.busy||recordingBusy||Boolean(session.operation)} onClick={()=>void session.sync(local.map(x=>x.id))}>Reintentar archivos pendientes</button>:null}
     </div>
     {!session.persisted?<div className={styles.warning}>Este navegador no confirmó almacenamiento persistente. Mantén la app abierta hasta que los originales pendientes queden vinculados.</div>:null}
     {error?<div className={styles.error} role="alert">{error}</div>:null}
@@ -96,20 +100,20 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
             <label data-disabled={!canCapture}>
               <span>{capturing===cameraKey?'Guardando…':'Tomar foto'}</span>
               <input aria-label={'Tomar '+procedureLabel('photo:'+view)} type="file" accept={accept('photo')} capture="environment"
-                disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(cameraKey)}
+                disabled={!canCapture||Boolean(capturing)||unprotected||recordingBusy} onClick={()=>mark(cameraKey)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,'photo',true,file);e.currentTarget.value='';}}/>
             </label>
             <label data-disabled={!canCapture}>
               <span>{capturing===galleryKey?'Guardando…':'Galería'}</span>
               <input aria-label={'Seleccionar '+procedureLabel('photo:'+view)} type="file" accept={accept('photo')}
-                disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(galleryKey)}
+                disabled={!canCapture||Boolean(capturing)||unprotected||recordingBusy} onClick={()=>mark(galleryKey)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,'photo',false,file);e.currentTarget.value='';}}/>
             </label>
           </div>
           {pending.map(c=><div className={styles.receipt} key={c.id}>
             <strong>{stageLabel[c.stage]}</strong>
             <dl><dt>Tipo</dt><dd>{c.contentType}</dd><dt>Tamaño</dt><dd>{Math.round(c.sizeBytes/1024)} KB</dd><dt>Huella</dt><dd>{c.sha256.slice(0,14)}…</dd></dl>
-            {c.stage==='local' && !c.prepare?<button type="button" className={styles.quiet} disabled={session.busy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
+            {c.stage==='local' && !c.prepare?<button type="button" className={styles.quiet} disabled={session.busy||recordingBusy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
             {['reserved','uploaded'].includes(c.stage)?<details className={styles.coordination}>
               <summary>Recuperar vínculo si cambió la coordinación</summary>
               <div>
@@ -117,7 +121,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
                 <label>Motivo de recuperación
                   <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
                 </label>
-                <button type="button" disabled={!session.fresh||session.busy||(recoveryReasons[c.id]||'').trim().length<3}
+                <button type="button" disabled={!session.fresh||session.busy||recordingBusy||(recoveryReasons[c.id]||'').trim().length<3}
                   onClick={async()=>{await session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim());setRecoveryReasons(v=>({...v,[c.id]:''}));}}>
                   Confirmar recuperación documental y reintentar
                 </button>
@@ -134,24 +138,29 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
       <details className={styles.optional}><summary>Audio o video opcional</summary>
         <div className={styles.mediaCard}>
           <p>Úsalos como contexto adicional. No bloquean el procedimiento y nunca sustituyen una foto requerida.</p>
+          {safetyRevision!==null && session.workspace ? <ProcedureAudioRecorder
+            key={JSON.stringify([session.target.ownerUserId,session.target.visitId,session.target.interventionId,session.target.assetId,part,step.id])}
+            target={session.target} part={part} stepId={step.id} safetyRevision={safetyRevision}
+            limitBytes={session.workspace.mediaLimits.audio.bytes} canRecord={canCapture&&!unprotected&&!capturing}
+            onCapture={session.capture} onBusy={onRecorderBusy}/> : null}
           {(['audio','video'] as ProcedureMediaKind[]).map(kind=>{
             const view='supplemental';
             const key=view+':'+kind+':file';
             return <label key={kind} data-disabled={!canCapture}>
               {capturing===key?'Guardando…':'Agregar '+(kind==='audio'?'audio':'video')}
-              <input type="file" accept={accept(kind)} disabled={!canCapture||Boolean(capturing)||unprotected} onClick={()=>mark(key)}
+              <input type="file" accept={accept(kind)} disabled={!canCapture||Boolean(capturing)||unprotected||recordingBusy} onClick={()=>mark(key)}
                 onChange={e=>{const file=e.currentTarget.files?.[0]||null;void receive(view,kind,false,file);e.currentTarget.value='';}}/>
             </label>;
           })}
           {local.filter(c=>c.view==='supplemental').map(c=><div key={c.id} className={styles.receipt}>
             <strong>{stageLabel[c.stage]}</strong><small>{c.contentType} · {Math.round(c.sizeBytes/1024)} KB</small>
-            {c.stage==='local'&&!c.prepare?<button type="button" disabled={session.busy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
+            {c.stage==='local'&&!c.prepare?<button type="button" disabled={session.busy||recordingBusy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
             {['reserved','uploaded'].includes(c.stage)?<details className={styles.coordination}>
               <summary>Recuperar vínculo si cambió la coordinación</summary>
               <label>Motivo de recuperación
                 <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
               </label>
-              <button type="button" disabled={!session.fresh||session.busy||Boolean(session.operation)||(recoveryReasons[c.id]||'').trim().length<3}
+              <button type="button" disabled={!session.fresh||session.busy||recordingBusy||Boolean(session.operation)||(recoveryReasons[c.id]||'').trim().length<3}
                 onClick={()=>void session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim())}>Confirmar recuperación documental y reintentar</button>
             </details>:null}
           </div>)}
