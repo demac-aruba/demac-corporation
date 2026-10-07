@@ -92,7 +92,12 @@ After human release approval, deploy the new reference HTTP/cleanup/update funct
 Booking Authority facade, daily/change producers and modified gateway/media endpoint
 from one reviewed revision, then ERP hosting. Existing bridge source needs no feature
 change, but confirm the deployed bridge supports media/voice before the release smoke.
-Use an approved test group for the first real ordered-media delivery.
+Use an owner-selected test destination for the first real ordered-media delivery.
+On 7 October Christian authorized his own Aruba number ending 6772; run
+`37655187654` delivered the six synthetic text/photo/video/voice parts with one
+acknowledged attempt each through the existing production transport. New bundle
+state/concurrency and private media guards remain separately covered by isolated
+tests. See the 6 October audit's 7 October addendum for scope and release state.
 The existing automatic producer deployment alone does not publish the new endpoints.
 Use the repository's `[merge-only]` release convention and coordinate the approved
 release of `bookingVisitReferences`, `cleanupBookingReferenceUploads`,

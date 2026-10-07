@@ -58,6 +58,44 @@ PR #557, including `e9fa0916`, corrective `da406a2a` and concurrency verificatio
 
 ## Release decision
 
+### Owner-authorized real media smoke, 7 October
+
+Christian explicitly selected his personal Aruba number ending 6772 for synthetic
+photo/video/audio tests. This supersedes the draft ADR's proposed test-group destination.
+GitHub run `37655187654`, commit `ab8c8df41e684df3107fb1d97a5514a3d40f0ac1`,
+first rechecked deployed source against baseline and then sent six parts through the
+existing queue, production poll/ACK and running bridge: introductory test text,
+two labeled synthetic images, a four-second synthetic video, voice explanation,
+and a native voice message converted from a synthetic Spanish MP3.
+All six were acknowledged `sent`, each with a provider message ID and one attempt,
+between 16:51:41 and 16:52:17 UTC. No operational group received a test.
+No Appointment, Work Order, client, Property, capacity record or Van mapping was
+created, read or changed by the smoke sender. Only synthetic private fixture objects,
+six deterministic queue records and the normal transport message/audit records were
+created. Fixture URLs expire after one hour; no credentials or URLs are in artifacts.
+
+This proves candidate message formatting and actual native media transport. It does
+not claim a production office upload or bundle endpoint test: those endpoints have
+not been deployed. Bundle concurrency, media authorization and reference editing
+were validated separately with synthetic/emulated data. Provider acceptance is not
+proof that the recipient viewed every attachment.
+
+All 22 Actions runs and the ERP Vercel preview for implementation head `0f7155ef`
+succeeded. The bounded release is prepared in
+`scripts/booking-references-approved-deploy.cjs` and
+`.github/workflows/booking-references-approved-release.yml`. Three preflight rejection
+tests prove that unreviewed main, a different recipient, or an unacknowledged smoke
+cannot reach any cloud operation. Existing runtime configuration and daily scheduler
+are compared before/after; only the nine listed functions may be deployed. New
+upload/save API comes last, after media transport and existing producers/authorities.
+
+GitHub returned internal errors when updating PR metadata and twice when marking
+PR #557 ready on 7 October (16:58–16:59 UTC). As of this evidence update the PR is
+still draft, unmerged, and no backend/frontend deployment has occurred. The
+release workflow cannot run unless current main contains the reviewed application.
+
+### Original 6 October decision (superseded by the smoke evidence above)
+
 Code/data-compatibility audit passes after the corrections, subject to final CI on
 the exact head. A real ordered photo/video/voice delivery to an explicitly selected
 test group remains the release smoke required by the ADR. Synthetic tests and bridge
