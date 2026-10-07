@@ -55,8 +55,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run typecheck --prefix apps/erp-next
-          FIELD_PORTAL_TEST_TOOLS="$RUNNER_TEMP/audio-tools" FIELD_AUDIO_EVIDENCE="$RUNNER_TEMP/audio-evidence" node apps/erp-next/scripts/field-procedure-audio-browser.cjs
+          mkdir -p "$RUNNER_TEMP/audio-evidence"
+          npm run typecheck --prefix apps/erp-next 2>&1 | tee "$RUNNER_TEMP/audio-evidence/typecheck.log"
+          FIELD_PORTAL_TEST_TOOLS="$RUNNER_TEMP/audio-tools" FIELD_AUDIO_EVIDENCE="$RUNNER_TEMP/audio-evidence" node apps/erp-next/scripts/field-procedure-audio-browser.cjs 2>&1 | tee "$RUNNER_TEMP/audio-evidence/browser.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

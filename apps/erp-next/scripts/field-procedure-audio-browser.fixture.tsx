@@ -8,7 +8,7 @@ import styles from '../components/field/field-procedure-workspace.module.css';
 const fixture = {attempts: [] as string[], exits: 0, switchAccount: (_uid: string) => {}, revision: (_n: number) => {}};
 (window as unknown as {audioFixture: typeof fixture}).audioFixture = fixture;
 function setSession(uid: string) {
-  persistFirebaseWebSession({uid, email: uid + '@example.invalid', emailVerified: true, idToken: uid,
+  persistFirebaseWebSession({uid, email: uid + '@example.invalid', idToken: uid,
     refreshToken: 'synthetic-unused', expiresAt: Date.now() + 3_600_000, displayName: 'Synthetic audio fixture'});
 }
 function Inner({uid}: {uid: string}) {
@@ -18,12 +18,12 @@ function Inner({uid}: {uid: string}) {
   const [capturedRevision, setCapturedRevision] = useState(-1), [source, setSource] = useState('');
   fixture.revision = setRevision;
   async function reload() {
-    const rows = await listProcedureCaptures(target); setCount(rows.length);
-    const latest = rows.at(-1); if (!latest) return;
+    const rows = await listProcedureCaptures(target);
+    const latest = rows.at(-1); if (!latest) { setCount(0); return; }
     const value = await readProcedureCapture(target, latest.id);
     if (!value?.blob) throw new Error('Expected protected original in synthetic fixture');
     setSha(value.sha256); setSource(value.source); setCapturedRevision(value.capturedSafetyRevision);
-    setUrl(URL.createObjectURL(value.blob));
+    setUrl(URL.createObjectURL(value.blob)); setCount(rows.length);
   }
   useEffect(() => { void reload(); }, []); // Fixture only: keyed account lifetime.
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
