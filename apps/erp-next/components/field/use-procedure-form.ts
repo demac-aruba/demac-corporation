@@ -3,11 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import { readProcedureForm, saveProcedureForm } from '../../lib/field-procedure-capture-store';
 import { registerProcedureExitGuard } from '../../lib/field-procedure-navigation';
 import type { FieldProcedureTarget } from '../../lib/field-procedure-contract';
+import { onFirebaseSessionInvalidated } from '../../lib/firebase/session';
 
 /** Small authored form drafts. Immutable command receipts are a separate journal. */
 export function useProcedureForm<T extends Record<string,string>>(target:FieldProcedureTarget,scope:string,defaults:T) {
   const initial=useRef({target,scope,defaults}).current,alive=useRef(true),revision=useRef<number|null>(null),tail=useRef(Promise.resolve());
   const [value,setValue]=useState(defaults),[ready,setReady]=useState(false),[saving,setSaving]=useState(false),[error,setError]=useState('');
+  const [conflict,setConflict]=useState<{value:T;revision:number|null}|null>(null);
   const current=useRef(value),failed=useRef(''),writes=useRef(0),dirty=useRef(false),loaded=useRef(false);
   function parse(raw:string):T {
     const next:unknown=JSON.parse(raw);
@@ -23,7 +25,11 @@ export function useProcedureForm<T extends Record<string,string>>(target:FieldPr
     const blocked=()=>writes.current>0 || Boolean(dirty.current && failed.current);
     const unguard=registerProcedureExitGuard(blocked),unload=(event:BeforeUnloadEvent)=>{if(blocked()){event.preventDefault();event.returnValue='';}};
     window.addEventListener('beforeunload',unload);
-    return()=>{cancelled=true;alive.current=false;unguard();window.removeEventListener('beforeunload',unload);};
+    const unsubscribe=onFirebaseSessionInvalidated(()=>{
+      cancelled=true;loaded.current=false;setReady(false);setValue(initial.defaults);current.current=initial.defaults;
+      setConflict(null);failed.current='La sesión cambió. El borrador protegido permanece en la cuenta de su autor.';setError(failed.current);
+    });
+    return()=>{cancelled=true;alive.current=false;unsubscribe();unguard();window.removeEventListener('beforeunload',unload);};
   // Only initial identity/scope, not changing field values, define this hook's lifecycle.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[initial]);
@@ -38,9 +44,14 @@ export function useProcedureForm<T extends Record<string,string>>(target:FieldPr
   async function flush(){await tail.current;return loaded.current && !failed.current;}
   async function retry(){
     try{const row=await readProcedureForm(initial.target,initial.scope);if(!loaded.current){const next=row?parse(row.value):initial.defaults;revision.current=row?.revision ?? null;current.current=next;setValue(next);loaded.current=true;setReady(true);failed.current='';setError('');return;}
-      if((row?.revision ?? null)!==revision.current)throw new Error('El borrador cambió en otra pestaña. Conserva tu texto y compara al volver a abrir el formulario.');
+      if((row?.revision ?? null)!==revision.current){setConflict({value:row?parse(row.value):initial.defaults,revision:row?.revision ?? null});throw new Error('El borrador cambió en otra pestaña. Compara los textos y elige cuál conservar.');}
       failed.current='';setError('');change({...current.current});await tail.current;
     }catch(e){failed.current=e instanceof Error?e.message:'No se pudo recuperar.';setError(failed.current);}
   }
-  return {value,ready,saving,error,field,change,flush,retry,clear:()=>change({...initial.defaults})};
+  async function resolveConflict(keepLocal:boolean){
+    if(!conflict||writes.current)return;
+    const next=keepLocal?{...current.current}:conflict.value;
+    revision.current=conflict.revision;failed.current='';setError('');setConflict(null);change(next);await tail.current;
+  }
+  return {value,ready,saving,error,conflict,resolveConflict,field,change,flush,retry,clear:()=>change({...initial.defaults})};
 }

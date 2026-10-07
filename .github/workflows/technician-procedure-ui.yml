@@ -1,0 +1,52 @@
+name: Technician procedure UI and drafts
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
+  pull_request:
+    paths: ['apps/erp-next/components/field/**', 'apps/erp-next/lib/field-*', 'apps/erp-next/scripts/field-*', '.github/workflows/technician-procedure-ui.yml']
+permissions:
+  contents: read
+concurrency:
+  group: technician-procedure-ui-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 526)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install existing application and isolated browser tools
+        run: |
+          npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+          npm install --prefix functions --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/ui-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          "$RUNNER_TEMP/ui-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Check forms, private photos, shared workflow and original recovery
+        env:
+          FIELD_PORTAL_TEST_TOOLS: ${{ runner.temp }}/ui-tools
+          FIELD_PART_BROWSERS: chromium,webkit
+          FIELD_PART_EVIDENCE: ${{ runner.temp }}/procedure-ui/parts
+          FIELD_CAPTURE_EVIDENCE: ${{ runner.temp }}/procedure-ui/captures
+          FIELD_FORM_EVIDENCE: ${{ runner.temp }}/procedure-ui/forms
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/procedure-ui"
+          npm run typecheck --prefix apps/erp-next
+          node apps/erp-next/scripts/field-procedure-form-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/forms.log"
+          node apps/erp-next/scripts/field-part-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/parts.log"
+          node apps/erp-next/scripts/field-procedure-capture-browser.cjs 2>&1 | tee "$RUNNER_TEMP/procedure-ui/captures.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technician-ui-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/procedure-ui/
+          retention-days: 7

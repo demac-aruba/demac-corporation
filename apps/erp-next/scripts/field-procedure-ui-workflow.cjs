@@ -55,10 +55,19 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
     assert.equal(state.store.all('fieldEvidence').length,before+1);
    }
    if(d.id==='I01'){
-    await page.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
+    await page.getByRole('group',{name:'Archivo privado del procedimiento',exact:true}).scrollIntoViewIfNeeded();
+    const thumbnail=page.getByRole('button',{name:'Ampliar foto del procedimiento',exact:true});await thumbnail.waitFor();
     const image=page.getByAltText('Evidencia privada del procedimiento');await image.waitFor();
     assert.equal(await image.evaluate(async img=>{await img.decode();return img.naturalWidth===1&&img.naturalHeight===1;}),true,'actual private PNG decodes');
     assert.match(await image.getAttribute('src'),/^blob:/);
+    assert.ok((await thumbnail.boundingBox()).width<=190,'photo stays a compact thumbnail');
+    await thumbnail.click();
+    const enlarged=page.getByRole('dialog',{name:'Foto del procedimiento ampliada'});await enlarged.waitFor();
+    assert.equal(await enlarged.getByAltText('Evidencia privada ampliada').evaluate(async img=>{await img.decode();return img.naturalWidth===1&&img.naturalHeight===1;}),true,'enlargement decodes the same original');
+    assert.equal(await enlarged.getByAltText('Evidencia privada ampliada').getAttribute('src'),await image.getAttribute('src'));
+    assert.ok((await enlarged.boundingBox()).width<=390,'enlargement fits the mobile viewport');
+    await page.keyboard.press('Escape');await enlarged.waitFor({state:'hidden'});
+    assert.equal(await thumbnail.evaluate(element=>element===document.activeElement),true,'closing enlargement restores keyboard focus');
     await page.getByRole('button',{name:'Cerrar archivo',exact:true}).click();
    }
    await page.getByLabel('Observación técnica').fill('Observación sintética exclusiva de '+d.id);
@@ -119,7 +128,7 @@ module.exports=async function({browser,companion,type,launchOptions,origin,reset
   await office.getByRole('heading',{name:'Procedimientos · revisión 1',exact:true}).waitFor();
   assert.match(await office.locator('section[aria-label="Procedimientos de la revisión inmutable"]').innerText(),/Prueba final: No enfría/);
   await office.getByText('I01 · Vista amplia inicial · Documentado',{exact:true}).click();
-  await office.getByRole('button',{name:'Abrir archivo privado',exact:true}).click();
+  await office.getByRole('group',{name:'Archivo privado del procedimiento',exact:true}).scrollIntoViewIfNeeded();
   await office.getByAltText('Evidencia privada del procedimiento').waitFor();
   assert.equal(JSON.stringify(state.store.all('fieldOfficeReviewRevisions')),frozen,'viewing frozen private evidence creates no revision write');
   assert.equal(Object.keys(completed.workflow.pendingCaptures).length,0);assert.equal(state.store.all('workInterventions').length,1);assert.equal(state.store.all('workVisits').length,1);

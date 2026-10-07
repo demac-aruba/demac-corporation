@@ -8,6 +8,7 @@ import type { ProcedureSession } from './use-procedure-session';
 import styles from './field-procedure-workspace.module.css';
 import { ProcedureEvidenceViewer } from './procedure-evidence-viewer';
 import { ProcedureAudioRecorder } from './procedure-audio-recorder';
+import { ProcedureReasonForm } from './procedure-reason-form';
 import { registerProcedureExitGuard } from '../../lib/field-procedure-navigation';
 
 const stageLabel: Record<string,string> = {
@@ -37,7 +38,7 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
   const recorderBusyRef=useRef(false);
   const onRecorderBusy=(busy:boolean)=>{recorderBusyRef.current=busy;setRecordingBusy(busy);};
   const original=useRef<{input:Parameters<ProcedureSession['capture']>[0];key:string}|null>(null);
-  const [recoveryReasons,setRecoveryReasons]=useState<Record<string,string>>({});
+
   const pickedAt=useRef<Record<string,{revision:number;at:string}>>({});
   const evidence=session.workspace?.evidence.filter(e=>e.part===part && e.procedureId===step.id) ?? [];
   const local=session.captures.filter(c=>c.part===part && c.stepId===step.id && c.stage!=='confirmed');
@@ -118,13 +119,10 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
               <summary>Recuperar vínculo si cambió la coordinación</summary>
               <div>
                 <p>Úsalo solo cuando el archivo ya fue reservado/subido y el servidor indique que cambió la coordinación. Esto recupera documentación; no autoriza actividad física ni cambia el momento original de captura.</p>
-                <label>Motivo de recuperación
-                  <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
-                </label>
-                <button type="button" disabled={!session.fresh||session.busy||recordingBusy||(recoveryReasons[c.id]||'').trim().length<3}
-                  onClick={async()=>{await session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim());setRecoveryReasons(v=>({...v,[c.id]:''}));}}>
-                  Confirmar recuperación documental y reintentar
-                </button>
+                <ProcedureReasonForm target={session.target} scope={'recover:'+c.id} label="Motivo de recuperación"
+                  action="Confirmar recuperación documental y reintentar" disabled={!session.fresh||session.busy||recordingBusy||Boolean(session.operation)}
+                  onConfirm={reason=>session.recoverCapture(c.id,reason)}/>
+
               </div>
             </details>:null}
           </div>)}
@@ -157,11 +155,10 @@ export function ProcedureMediaPanel({session,part,step,canCapture}:{
             {c.stage==='local'&&!c.prepare?<button type="button" disabled={session.busy||recordingBusy} onClick={()=>void session.discardLocal(c.id)}>Descartar solo este original no enviado</button>:null}
             {['reserved','uploaded'].includes(c.stage)?<details className={styles.coordination}>
               <summary>Recuperar vínculo si cambió la coordinación</summary>
-              <label>Motivo de recuperación
-                <textarea rows={2} maxLength={1500} value={recoveryReasons[c.id]||''} onChange={e=>setRecoveryReasons(v=>({...v,[c.id]:e.target.value}))}/>
-              </label>
-              <button type="button" disabled={!session.fresh||session.busy||recordingBusy||Boolean(session.operation)||(recoveryReasons[c.id]||'').trim().length<3}
-                onClick={()=>void session.recoverCapture(c.id,(recoveryReasons[c.id]||'').trim())}>Confirmar recuperación documental y reintentar</button>
+              <ProcedureReasonForm target={session.target} scope={'recover:'+c.id} label="Motivo de recuperación"
+                action="Confirmar recuperación documental y reintentar" disabled={!session.fresh||session.busy||recordingBusy||Boolean(session.operation)}
+                onConfirm={reason=>session.recoverCapture(c.id,reason)}/>
+
             </details>:null}
           </div>)}
           {evidence.filter(e=>e.view==='supplemental').map(e=><div key={e.id} className={styles.receipt}>

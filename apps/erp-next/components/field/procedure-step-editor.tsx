@@ -7,6 +7,8 @@ import type { ProcedureStep } from '../../lib/field-procedure-workspace';
 import { ProcedureMediaPanel } from './procedure-media-panel';
 import type { ProcedureSession } from './use-procedure-session';
 import { useProcedureDraft } from './use-procedure-draft';
+import { useProcedureForm } from './use-procedure-form';
+import { ProcedureFormStatus } from './procedure-form-status';
 import styles from './field-procedure-workspace.module.css';
 import { requestProcedureExit } from '../../lib/field-procedure-navigation';
 
@@ -16,10 +18,14 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
   const state=session.workspace!.procedureParts.find(p=>p.id===part)!;
   const safety=session.workspace!.safety!;
   const draft=useProcedureDraft(session.target,part,step,state.version,safety.revision);
-  const [exception,setException]=useState('');
+  const form=useProcedureForm(session.target,'step:'+part+':'+step.id,{exception:'',reviewNote:'',reviewDisposition:'not_documented'});
+  const {exception,reviewNote}=form.value;
+  const reviewDisposition=form.value.reviewDisposition as 'not_documented'|'not_applicable'|'not_performed';
+  const canFormCommand=session.canCommand&&form.ready&&!form.saving&&!form.error;
+  async function command(input:Parameters<typeof session.execute>[0]){if(!await form.flush())return null;return session.execute(input);}
   const [feedback,setFeedback]=useState('');
-  const [reviewNote,setReviewNote]=useState('');
-  const [reviewDisposition,setReviewDisposition]=useState<'not_documented'|'not_applicable'|'not_performed'>('not_documented');
+
+
   const owner=state.ownerUserId===session.target.ownerUserId;
   const blockedRisk=session.workspace!.risks.some(r=>r.status==='open' && r.parts.includes(part));
   const writable=owner
@@ -158,6 +164,7 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
 
     <ProcedureMediaPanel session={session} part={part} step={step} canCapture={writable && session.localReady && !session.busy && !session.operation}/>
 
+    <ProcedureFormStatus draft={form}/>
     {step.exception?<section className={styles.card} aria-label="Excepción del procedimiento">
       <h3>Excepción documentada</h3>
       <p>{step.exception.reason}</p>
@@ -165,25 +172,25 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
       {step.exception.disposition?<small>Disposición: {procedureLabel(step.exception.disposition)}. No representa trabajo que no se realizó.</small>:null}
       {session.workspace!.allowedActions.includes('office.review') && step.exception.reviewStatus==='pending'?<>
         <label>Motivo de la revisión
-          <textarea value={reviewNote} onChange={e=>setReviewNote(e.target.value)} rows={3} maxLength={1500}/>
+          <textarea disabled={!form.ready||session.busy} value={reviewNote} onChange={e=>form.field('reviewNote',e.target.value)} rows={3} maxLength={1500}/>
         </label>
         <label>Disposición al aprobar
-          <select aria-label="Disposición al aprobar" value={reviewDisposition} onChange={e=>setReviewDisposition(e.target.value as typeof reviewDisposition)}>
+          <select disabled={!form.ready||session.busy} aria-label="Disposición al aprobar" value={reviewDisposition} onChange={e=>form.field('reviewDisposition',e.target.value as typeof reviewDisposition)}>
             <option value="not_documented">Trabajo sin documentación suficiente</option>
             <option value="not_applicable">No aplica a este procedimiento</option>
             <option value="not_performed">Trabajo no realizado — continúa pendiente</option>
           </select>
         </label>
         <div className={styles.actions}>
-          <button type="button" disabled={!session.canCommand||reviewNote.trim().length<3}
+          <button type="button" disabled={!canFormCommand||reviewNote.trim().length<3}
             onClick={async()=>{
-              const next=await session.execute({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'approve',reason:reviewNote.trim(),disposition:reviewDisposition});
-              if(next)setReviewNote('');
+              const next=await command({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'approve',reason:reviewNote.trim(),disposition:reviewDisposition});
+              if(next)form.field('reviewNote','');
             }}>Aprobar excepción con disposición</button>
-          <button type="button" disabled={!session.canCommand||reviewNote.trim().length<3}
+          <button type="button" disabled={!canFormCommand||reviewNote.trim().length<3}
             onClick={async()=>{
-              const next=await session.execute({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'reject',reason:reviewNote.trim()});
-              if(next)setReviewNote('');
+              const next=await command({action:'review_exception',part,stepId:step.id,expectedPartVersion:state.version,decision:'reject',reason:reviewNote.trim()});
+              if(next)form.field('reviewNote','');
             }}>Devolver excepción</button>
         </div>
       </>:null}
@@ -193,11 +200,11 @@ export function ProcedureStepEditor({session,part,step,onBack,onOpenAddons}:{
       <details className={styles.coordination}><summary>No pude completar o documentar este procedimiento</summary>
         <section className={styles.card}>
           <p>Registra una excepción real para revisión. No se inventa una foto ANTES ni se declara trabajo realizado por presentar la solicitud.</p>
-          <label>Motivo de la excepción<textarea value={exception} onChange={e=>setException(e.target.value)} maxLength={1500} rows={3}/></label>
-          <button type="button" disabled={!session.canCommand||exception.trim().length<3} onClick={async()=>{
+          <label>Motivo de la excepción<textarea disabled={!form.ready||session.busy} value={exception} onChange={e=>form.field('exception',e.target.value)} maxLength={1500} rows={3}/></label>
+          <button type="button" disabled={!canFormCommand||exception.trim().length<3} onClick={async()=>{
             if(!await draft.flush())return;
-            const result=await session.execute({action:'request_exception',part,stepId:step.id,expectedPartVersion:state.version,expectedSafetyRevision:safety.revision,reason:exception.trim()});
-            if(result)setException('');
+            const result=await command({action:'request_exception',part,stepId:step.id,expectedPartVersion:state.version,expectedSafetyRevision:safety.revision,reason:exception.trim()});
+            if(result)form.field('exception','');
           }}>Solicitar revisión de excepción</button>
         </section>
       </details>:null}
