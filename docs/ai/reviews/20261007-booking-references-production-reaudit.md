@@ -2,10 +2,10 @@
 
 ## Decision
 
-**HOLD further merge/deployment.** The owner reported that the URL previously
+**Initial audit hold (superseded by the conditional authorization below).** The owner reported that the URL previously
 presented was not the operating ERP and that Scheduling showed no change.
 The prior claim of a completed end-to-end production release was incorrect.
-This audit and its proposed code fixes do not authorize another production change.
+At that point this audit and its proposed code fixes did not authorize another production change.
 
 Deep Review / Solo Maintainer Adversarial Review, not independent review.
 Scope: all application changes from live baseline `36392f4a` to PR #557 / merged
@@ -122,7 +122,7 @@ Linked-file retention and at-least-once provider-send/ACK crash semantics remain
 No Google Cloud log scan or forensic customer-data comparison was performed, so the
 audit must not be represented as proof of no possible historic data damage.
 
-## Release prerequisites (proposal only)
+## Initial release proposal (historical; current execution plan below)
 
 1. Finish and review this branch's fixes and exact-head tests. Keep production on hold.
 2. Obtain the owner's decision after this concrete audit; their latest request is to
@@ -138,3 +138,67 @@ audit must not be represented as proof of no possible historic data damage.
 5. No blind backend rollback: pending bundles and locks may already exist through the
    secondary UI. Inspect/reconcile compatibility before any downgrade; never delete
    real records or linked media as a rollback operation.
+
+
+## Renewed owner authorization and final review — 7 October 2026
+
+The owner explicitly renewed conditional authorization: audit and rectify conflicts,
+protect live customers/appointments/workflows, then and only then merge and deploy.
+This is authority to execute the bounded release after the required gates pass; no
+additional generic approval is needed. It does not authorize test bookings, sends,
+migrations, rule changes, secrets or customer-data cleanup in production.
+
+At reviewed head `a54e836ba33b8388b377d911f180783852659152`, all eight Actions runs
+passed: `37670373449` (transactional WhatsApp), `37670373453` (Office),
+`37670373514` (Van architecture), `37670373497` and `37670364031` (types/build),
+`37670373430` (full historical Project suite), `37670373617` (ERP Next), and
+`37670364114` (isolated plus read-only corrective audit). Both Vercel previews passed.
+The earlier pending historical run is superseded by the successful exact-head run;
+its installation cancellation is not counted as a pass. Business domains were again
+confirmed at `36392f4a`; secondary UI remained at `8f5a0cb2`.
+
+Fresh Solo Maintainer Adversarial Review, separate from the earlier fix implementation:
+rechecked the original feature diff, changed retry paths, their producer/caller graph,
+optional booking and overtime input, booking fingerprints/atomic reference claims,
+reference-only optimistic concurrency, provisioned office/assigned-technician access,
+private media capabilities, cleanup exclusion of linked files, bundle ordering,
+ACK cursor recovery, ordinary-message compatibility and the actual Scheduling UI.
+The two reproduced retry defects are corrected. No additional release-blocking
+application finding was identified. This is not an independent review or a claim of
+zero defects; the production latency/provider and authenticated-live limits above remain.
+
+The only changed production modules since the deployed feature are
+`vanScheduleCommunicationAuthority.js` (Office authority) and
+`technicianScheduleChangeService.js` (appointment notification producer). Therefore
+only `officeBookingAuthority` and `queueAppointmentConfirmation` require redeployment.
+No other function is selected. The bounded correction script verifies all nine live
+sources, preserves each selected function's existing dependency lock, runtime identity,
+environment and trigger configuration, and compares the other seven revisions plus
+scheduler target/retry/timezone/state before and after. It fails on source drift.
+Eleven isolated release/configuration guard tests pass; they exercise rejected branch,
+repository, main/source, unknown live source, configuration drift and scheduler drift,
+plus the exact two-function successful scope. Credentials are unavailable to these tests.
+
+Execution gates for the final tooling/documentation head:
+
+1. Retain the unchanged reviewed application trees and require all applicable CI and
+   both project previews to pass at the final PR head. No required test is removed.
+2. Merge PR #559 with `[merge-only]` to prevent automatic broad publication. Create
+   only `release/booking-references-correction-20261007` for the guarded two-function
+   workflow. Stop UI publication if that release or the bridge check fails.
+3. Publish a production build of that exact audited application into the confirmed
+   `demac-corporation-web` project. The installed deployment connector does not expose
+   no-domain staging. Therefore the build will assign its normal project domains on
+   readiness; the reviewed project preview, isolated full-flow tests and bounded backend
+   checks must all pass first. Do not alter DNS, repoint domains to the secondary project,
+   override ignored-build controls or promote a preview with preview environment values.
+4. Verify deployment project, source, production target/readiness, both real domain
+   mappings, HTTP route and Scheduling asset controls/Firebase project identity. An
+   anonymous auth shell alone is insufficient. Reconcile the secondary project's source
+   equivalence. Do not claim an authenticated live customer booking was exercised.
+5. Retain `dpl_9qiHNuFvpvhzFCstMURTFACewikC` as the actual UI rollback artifact. Backend
+   downgrade is not automatic; old pending bundles must remain compatible. Release
+   failure stops subsequent steps and preserves records rather than deleting them.
+
+At this commit publication has not yet occurred. Exact final CI, merge, backend run
+and real-domain deployment results will be recorded in PR #559's release evidence.
