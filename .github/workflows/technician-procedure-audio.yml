@@ -1,6 +1,11 @@
 name: Technician procedure audio
 
 # Internal capture checks only. No public preview, cloud resources or deployment.
+# Linux WebKit in run 37687115856 has no native MediaRecorder (capability artifact).
+# Run BOTH native encoder suites on macOS instead of faking/enabling a recorder.
+# All 18 lifecycle and 12-per-engine assertions remain mandatory and unchanged.
+# Playwright documents platform-dependent WebKit media and recommends macOS for Safari media:
+# https://playwright.dev/docs/browsers#webkit
 on:
   push:
     branches: ['feature/technician-app-20260923']
@@ -23,7 +28,7 @@ concurrency:
 jobs:
   capture:
     if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 526)
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 25
     env:
       NEXT_TELEMETRY_DISABLED: '1'
@@ -56,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/audio-evidence"
+          uname -a > "$RUNNER_TEMP/audio-evidence/platform.txt"
           npm run typecheck --prefix apps/erp-next 2>&1 | tee "$RUNNER_TEMP/audio-evidence/typecheck.log"
           FIELD_PORTAL_TEST_TOOLS="$RUNNER_TEMP/audio-tools" FIELD_AUDIO_EVIDENCE="$RUNNER_TEMP/audio-evidence" node apps/erp-next/scripts/field-procedure-audio-browser.cjs 2>&1 | tee "$RUNNER_TEMP/audio-evidence/browser.log"
       - uses: actions/upload-artifact@v4
