@@ -13,8 +13,8 @@ function Form({uid,scope}:{uid:string;scope:string}) {
   const draft=useProcedureForm(target(uid),scope,{note:'',person:''});
   const [confirmed,setConfirmed]=useState(false);
   return <main><p>DEMO · Borrador sintético, sin servidor ni datos reales.</p><ProcedureFormStatus draft={draft}/>
-    <label>Nota<textarea disabled={!draft.ready} value={draft.value.note} onChange={e=>draft.field('note',e.target.value)}/></label>
-    <label>Persona<input disabled={!draft.ready} value={draft.value.person} onChange={e=>draft.field('person',e.target.value)}/></label>
+    <label>Nota<textarea aria-label="Nota" disabled={!draft.ready} value={draft.value.note} onChange={e=>draft.field('note',e.target.value)}/></label>
+    <label>Persona<input aria-label="Persona" disabled={!draft.ready} value={draft.value.person} onChange={e=>draft.field('person',e.target.value)}/></label>
     <label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>Confirmación física nueva</label>
     <output id="state" data-ready={draft.ready} data-saving={draft.saving} data-error={draft.error}/>
   </main>;
