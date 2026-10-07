@@ -212,6 +212,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       messages: referenceMessageParts({ text: message, appointment, order: currentOrder, client, sequence }),
       metadata: {
         notificationType: "van-same-day-schedule-change",
+        referencesVersion: appointment?.visitReferences?.version || 0,
         workOrderId: currentOrder.id,
         appointmentId: currentOrder.appointmentId || null,
         scheduleDate: currentOrder.date,
@@ -280,6 +281,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
 
     const sharedMetadata = {
       notificationType: "van-adhoc-support-change",
+      referencesVersion: appointment?.visitReferences?.version || 0,
       workOrderId: currentOrder.id,
       primaryWorkOrderId: primaryOrder.id,
       appointmentId: currentOrder.appointmentId || null,

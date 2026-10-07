@@ -137,3 +137,30 @@ test('reference delivery recovery preserves sent cursor and ignores sent, other 
   db.records.set('appointments/APT-1', { status: 'confirmed', visitReferences: { version: 3 } });
   assert.equal((await authority.execute(command)).resumed, 0);
 });
+
+test('recovery rejects unversioned bundles and stale text work messages without rewriting them', async () => {
+  const { ReferenceDb } = require('./test-support/referenceDb.cjs');
+  const order = { appointmentId: 'APT-AUDIT', vanId: 'VAN-1', date: '2026-10-07', time: '13:00', status: 'Confirmada' };
+  const appointment = { status: 'confirmed', visitReferences: { version: 2 } };
+  const failed = { provider: 'wacli', type: 'text', notificationType: 'van-daily-work-order', status: 'failed',
+    workOrderId: 'WO-AUDIT', appointmentId: 'APT-AUDIT', scheduleDate: order.date, scheduleTime: order.time,
+    vanId: 'VAN-1', to: groups[0].groupJid, referencesVersion: 2 };
+  for (const changes of [
+    { queue: { type: 'booking-reference-bundle', referencesVersion: undefined } },
+    { order: { status: 'Cancelada' } }, { order: { vanId: 'VAN-2' } },
+    { order: { date: '2026-10-08' } }, { order: { time: '15:00' } },
+    { appointment: { status: 'cancelled' } }, { appointment: { visitReferences: { version: 3 } } },
+  ]) {
+    const queued = { ...failed, ...changes.queue };
+    const db = new ReferenceDb({
+      'vans/VAN-1': { active: true, whatsappScheduleGroupJid: groups[0].groupJid },
+      'workOrders/WO-AUDIT': { ...order, ...changes.order },
+      'appointments/APT-AUDIT': { ...appointment, ...changes.appointment },
+      'whatsappOutboundQueue/synthetic-failed': queued,
+    });
+    const result = await createVanScheduleCommunicationAuthority({ db }).execute({ action: 'retry_van_schedule_delivery',
+      data: { dateKey: order.date, vanId: 'VAN-1' }, identity: { uid: 'synthetic-office' } });
+    assert.equal(result.resumed, 0, JSON.stringify(changes));
+    assert.deepEqual(db.records.get('whatsappOutboundQueue/synthetic-failed'), queued);
+  }
+});

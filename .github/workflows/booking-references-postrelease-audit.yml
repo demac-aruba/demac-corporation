@@ -1,0 +1,98 @@
+name: Booking references read-only postrelease audit
+on:
+  push:
+    branches: [chore/booking-reference-production-audit-20261007]
+permissions:
+  contents: read
+jobs:
+  isolated-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Verify bounded corrective release guards without credentials
+        run: node --test scripts/booking-references-corrective-deploy.test.cjs scripts/booking-references-release-config.test.cjs
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - run: npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+      - name: Regression and real transaction concurrency in isolated emulator
+        env:
+          GCLOUD_PROJECT: demo-demac-booking-references
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8794
+        run: |
+          npm run test:booking-authority --prefix functions
+          npm run test:transactional-whatsapp --prefix functions
+          printf '%s\n' '{"emulators":{"firestore":{"port":8794,"host":"127.0.0.1"},"ui":{"enabled":false},"singleProjectMode":true}}' > "$RUNNER_TEMP/references-emulator.json"
+          npx --yes firebase-tools@15.30.0 emulators:exec --only firestore --project demo-demac-booking-references --config "$RUNNER_TEMP/references-emulator.json" "node --test functions/bookingVisitReferences.emulator.test.cjs"
+      - name: Desktop and mobile reference flows
+        env:
+          REFERENCE_TEST_TOOLS: ${{ runner.temp }}/reference-tools/node_modules
+          REFERENCE_TEST_OUTPUT: ${{ runner.temp }}/reference-browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/reference-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9 agent-browser@0.38.1
+          "$RUNNER_TEMP/reference-tools/node_modules/.bin/playwright" install --with-deps chromium
+          node apps/erp-next/scripts/booking-references-browser.cjs
+      - name: Full Scheduling drawer and booking persistence with references and legacy inputs
+        env:
+          GCLOUD_PROJECT: demo-demac-overtime
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8793
+          OVERTIME_TEST_TOOLS: ${{ runner.temp }}/reference-tools
+          OVERTIME_TEST_OUTPUT: ${{ runner.temp }}/reference-browser/full-scheduling
+          CODEX_PRIMARY_RUNTIME_NODE_MODULES: ${{ runner.temp }}/reference-tools/node_modules
+        run: |
+          export OVERTIME_TEST_CHROME="$(node -e 'console.log(require(process.env.OVERTIME_TEST_TOOLS + "/node_modules/playwright").chromium.executablePath())')"
+          printf '%s\n' '{"emulators":{"firestore":{"port":8793,"host":"127.0.0.1"},"ui":{"enabled":false},"singleProjectMode":true}}' > "$RUNNER_TEMP/backdated-emulator.json"
+          npx --yes firebase-tools@15.30.0 emulators:exec --only firestore --project demo-demac-overtime --config "$RUNNER_TEMP/backdated-emulator.json" "node apps/erp-next/scripts/backdated-project-browser.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-browser-audit
+          path: ${{ runner.temp }}/reference-browser
+  read-only-runtime-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Compare all nine deployed functions with the reviewed release without production writes
+        env:
+          RUNTIME_AUDIT_OUTPUT: ${{ runner.temp }}/reference-runtime-audit
+        run: node scripts/booking-references-postrelease-audit.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-runtime-audit
+          path: ${{ runner.temp }}/reference-runtime-audit
+      - name: Inspect running bridge without restart or message send
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H 159.223.160.239 >> "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 demac-deploy@159.223.160.239 'python3 -' <<'PY'
+          import hashlib,json,pathlib,subprocess,urllib.request
+          source=pathlib.Path('/opt/demac-whatsapp-bridge/server-v2.mjs').read_bytes()
+          code=source.decode()
+          health=json.load(urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=10))
+          result={'bridgeSha256':hashlib.sha256(source).hexdigest(),'nativeMedia':"'send', 'file'" in code,'nativeVoice':"'send', 'voice'" in code,'durableAcknowledgements':'persistOutboundAck(ack)' in code,'ok':health.get('ok'),'mode':health.get('connectorMode'),'pendingOutboundAcks':health.get('pendingOutboundAcks'),'outboundErrorPresent':bool(health.get('lastOutboundError')),'lastOutboundPollAt':health.get('lastOutboundPollAt'),'ffmpegAvailable':subprocess.run(['sh','-c','command -v ffmpeg'],stdout=subprocess.DEVNULL).returncode==0}
+          print(json.dumps(result))
+          assert all(result[k] for k in ['nativeMedia','nativeVoice','durableAcknowledgements','ok','ffmpegAvailable'])
+          assert not result['outboundErrorPresent']
+          PY

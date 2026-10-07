@@ -113,6 +113,8 @@ async function main() {
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
     assert.equal(await drawer.getByRole('button', { name: 'Temporary hold', exact: true }).count(), 0);
+    await drawer.getByRole('region', { name: 'Información para la visita' }).waitFor();
+    await drawer.getByLabel('Indicaciones para el técnico y ayudante').fill('Referencia sintética de Proyecto histórico');
     await drawer.getByText('BACKDATED APPOINTMENT', { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(output, 'backdated-project-ready.png'), fullPage: true });
     loseCreateResponse = true;
@@ -129,6 +131,10 @@ async function main() {
     assert.equal(saved.assignments[0].scheduledDate, date);
     assert.equal(saved.assignments[0].scheduledStart, '08:30');
     assert.equal(saved.assignments[0].scheduledSlots, 2);
+    const projectAppointments = (await db.collection('appointments').where('primaryVanId', '==', 'VAN-2').get()).docs;
+    assert.equal(projectAppointments.length, 1);
+    assert.equal(projectAppointments[0].data().visitReferences.notes, 'Referencia sintética de Proyecto histórico');
+    assert.equal(projectAppointments[0].data().visitReferences.version, 1, 'Lost response must not duplicate reference commitment');
     await page.reload();
     await van2.getByText('Project · Synthetic historical project', { exact: false }).waitFor();
     await page.screenshot({ path: path.join(output, 'backdated-project-saved.png'), fullPage: true });
@@ -143,6 +149,7 @@ async function main() {
     await drawer.waitFor({ state: 'detached' });
     const regular = (await db.collection('appointments').where('primaryVanId', '==', 'VAN-3').get()).docs;
     assert.equal(regular.length, 1); assert.equal(regular[0].data().backdated, true);
+    assert.equal(regular[0].data().visitReferences, undefined, 'Existing booking without optional references is unchanged');
     // Mobile renders the same historical Project selection and save action.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Next van', exact: true }).click();
@@ -152,6 +159,8 @@ async function main() {
     await drawer.getByLabel('Planned Project slots *').fill('1');
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.getByRole('region', { name: 'Información para la visita' }).waitFor();
+    for (const name of ['Añadir fotos', 'Añadir video', 'Añadir audio']) assert.equal(await drawer.getByRole('button', { name, exact: true }).count(), 1);
     await page.screenshot({ path: path.join(output, 'backdated-project-mobile.png'), fullPage: true });
     await drawer.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal((await db.doc('projectRecords/DEMO-PROJECT').get()).data().assignments.length, 1);
