@@ -34,7 +34,7 @@ are applied by this review.
 | Medium | Requiring a Visit ID disabled the existing no-access/cancel forms before visit preparation. | Allow local drafts scoped to the real Work Order until the Visit exists; add both pre-visit browser scenarios. No fabricated Visit or new command authority. |
 | Medium | Main detail back/open-job callbacks did not consult the shared original/draft exit guard. | Both user navigation callbacks now consult it; forced auth invalidation still clears the protected view. |
 | Low | Synthetic context switches could be asserted before React committed them. | Fixture switches use `flushSync`; assertions remain unchanged. No application permission or test expectation was relaxed. |
-| Low | Tests proved private photo decoding and audio recording but not combined video playback. | Added generated WAV/MP4 sample playback through the actual private upload/read adapter in the same procedure. Result must be green before claiming the check complete. |
+| Low | Tests proved private photo decoding and audio recording but not combined video playback. | Added generated WAV/MP4 sample playback through the actual private upload/read adapter in the same procedure. Passed Chromium and WebKit on the final source head. |
 
 ## Adversarial checks
 
@@ -53,7 +53,7 @@ are applied by this review.
 - Failure states retain originals and block unsafe navigation; only confirmed
   callbacks clear authored values. Unknown command outcomes keep their receipt.
 
-## Evidence recorded so far
+## Evidence
 
 - `f1cba8ad`: UI run 37701800242 green, including 11 draft cases per engine,
   19 original recovery cases per engine, six shared-part viewport scenarios and
@@ -66,14 +66,36 @@ are applied by this review.
 - ERP production build passed on the integrated code after replacing the local
   external dependency symlink with a local dependency copy. No source build gate
   was disabled. Generated TypeScript config edits were restored afterward.
-- Final expanded browser run and remaining CI results: pending; append exact
-  source/run evidence before changing this review's decision.
+- Final source `54c02f419181df9b257efd98721d469aba532571`: all 22 PR workflows
+  succeeded. Main remains `c45d51d03840019cbfe68a2ca9ae5e067532077f` and the PR
+  is mergeable. No merge or deployment was performed.
+- [UI run 37704314893](https://github.com/demac-aruba/demac-corporation/actions/runs/37704314893),
+  job 113075368714: 13 generic form recovery checks and 14 visit-form cases per
+  engine, including pre-visit no-access/cancel. Complete 14/9 visible workflow,
+  combined playable photo/audio/video, account isolation, 19 original-recovery
+  cases per engine and 32 actual backend provenance checks passed.
+- [Audio run 37704314845](https://github.com/demac-aruba/demac-corporation/actions/runs/37704314845):
+  19 controller plus 12 Chromium and 12 WebKit/macOS scenarios passed.
+- [Backend run 37704314813](https://github.com/demac-aruba/demac-corporation/actions/runs/37704314813):
+  425 tests and real authenticated emulator flow passed, including concurrent
+  contention and responsible/Office immutable submission-return-resubmit-approval.
+- [ERP run 37704314772](https://github.com/demac-aruba/demac-corporation/actions/runs/37704314772):
+  all three jobs passed: ERP acceptance/typecheck/build, backend authority and
+  235 booking regressions, and scheduling/attendance/bonus browser flows.
+- Mobile shared-parts/service selection and desktop acknowledgement artifacts were
+  visually inspected. Browser assertions cover viewport overflow, photo decoding,
+  enlargement bounds and keyboard return. No physical-device evidence is claimed.
 
 ## Decision
 
 - [ ] Pass
-- [ ] Pass with recorded follow-up
-- [x] Block / changes required until final browser and CI verification completes
+- [x] Pass with recorded follow-up
+- [ ] Block / changes required
+
+No unresolved implementation finding remains in the reviewed October increment.
+The separately performed adversarial review and green required gates support the
+technical result. The recorded follow-up is physical-phone/owner acceptance before
+release; this decision does not authorize merge, deployment or catalog activation.
 
 Residual limitations: physical phone recording/playback and owner workflow
 acceptance remain manual. Legacy non-procedure file selectors do not gain binary
