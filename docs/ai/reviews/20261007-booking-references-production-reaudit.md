@@ -202,3 +202,94 @@ Execution gates for the final tooling/documentation head:
 
 At this commit publication has not yet occurred. Exact final CI, merge, backend run
 and real-domain deployment results will be recorded in PR #559's release evidence.
+
+
+## Executed corrective release
+
+All final-head checks passed before merge at
+`2bb3ff479ddf8d14d3c2279139935cc510e603d6`. PR #559 was merged as
+`71beb70009f42150ce407c591ad1ac6e388f2efe` with `[merge-only]`; application trees
+and bounded release tooling were compared and identical to the reviewed PR head.
+No broad automatic backend or rules deployment was used.
+
+| Final-head gate | Successful run |
+| --- | --- |
+| Transactional WhatsApp | `37680833172` |
+| Office Booking Authority | `37680832879` |
+| Van Schedule Architecture | `37680833038` |
+| TypeScript / web build, PR and push | `37680833041`, `37680826480` |
+| ERP Next, browser refresh and field functions | `37680832898` |
+| Full historical Project acceptance | `37680833068` |
+| Corrective release guards, isolated concurrency/browser and read-only runtime audit | `37680826119` |
+
+Both Vercel project previews also passed at that head. The actual-project preview was
+`dpl_7JWpxz8y13irpb5dFCZBMudJK8bp`. Published preview chunks were checked for the
+photo/video/audio editor, retry control and production Firebase project identity.
+
+Bounded release `37681710271`, job `112999133705`, completed successfully. It reran
+235 Booking Authority tests, 121 transactional WhatsApp tests, gateway/Office consumers,
+syntax and release guards before privilege. Source/configuration checks passed:
+
+| Function | Previous revision | Corrected revision |
+| --- | --- | --- |
+| `officeBookingAuthority` | `officebookingauthority-00079-von` | `officebookingauthority-00080-peg` |
+| `queueAppointmentConfirmation` | `queueappointmentconfirmation-00044-yeb` | `queueappointmentconfirmation-00045-jax` |
+
+Both corrected sources match reviewed `a54e836b`; runtime identities, environment,
+trigger settings and each existing resolved dependency lock were preserved. All seven
+other reference-related functions retained their source and revision. The scheduler
+remains ENABLED, `0,5,10 8 * * *`, `America/Aruba`; target, retries and deadline were
+compared unchanged. Both business origins passed OPTIONS 204 and anonymous POST 401
+on Office and reference APIs before and after the release. Artifact `11510135486`
+contains the bounded summary, with stage `complete`.
+
+At 20:27:32 UTC the bridge retained source SHA-256
+`19d4f2b53aa942981f8c0bba8ba8f96ef10bc136833496038edc8e0ebe95d1f7`, was healthy in
+`outbound-only-v1` mode, had zero pending outbound ACKs and no reported outbound error;
+its last poll was 0.36 seconds old. No restart or test message was issued.
+
+### Actual business frontend
+
+Production deployment `dpl_7E94hXZQwhJQn5WRFdmM59dvxWKS` is READY in
+`demac-corporation-web` / `prj_bJz7bZZtj8qgj9gX4DHZglyP6Jl7`, target `production`,
+source `2bb3ff479ddf8d14d3c2279139935cc510e603d6`. This is the audited pre-squash
+source with application trees identical to merged main. Existing project configuration,
+production environment and ignored-build controls were retained.
+
+The Vercel production build passed and assigned these existing project domains:
+
+- https://demac-aruba.com/scheduling/
+- https://www.demac-aruba.com/scheduling/
+- https://demac-corporation-web.vercel.app/scheduling/
+
+Both actual-domain alias records were independently checked against that deployment
+ID and correct project; both `/scheduling/` routes returned 200 and referenced the
+new reference editor, retry and Firebase configuration chunks. Actual-domain chunk
+content was checked against the reviewed preview, including photo/video/audio controls
+and `demac-corporation` Firebase project / private bucket identity. This proves that
+the correct business domains now serve the reviewed UI code; it does not claim that
+an authenticated live customer booking was performed. The existing same-project
+`demac-corporation-web-git-main-demac-corporation.vercel.app` alias was aligned with
+the released artifact because `[merge-only]` intentionally suppresses a separate
+main-branch publication. No DNS or cross-project domain change was made.
+
+The secondary project was not rebuilt unnecessarily: its `8f5a0cb2` ERP runtime
+source is byte-identical to the corrected release's frontend; only a browser test
+script differs. It uses the same now-corrected backend. The previous actual ERP UI
+`dpl_9qiHNuFvpvhzFCstMURTFACewikC` is retained as the frontend rollback artifact.
+
+### Outcome and limits
+
+The conditional release is completed after the required audit and gates. The two
+stale-retry findings were rectified; no additional application blocker was identified
+in the recorded Solo Maintainer Adversarial Review. Existing scheduling, historical
+Project, hold, support, overtime and ordinary no-reference booking regressions passed.
+No production customer/appointment was used as a test fixture, no domain records were
+rewritten/deleted by release scripts, and no migration, rule, secret, Van mapping,
+scheduler or bridge change was performed. Ordinary live business activity continued.
+
+Functional browser acceptance used synthetic accounts and loopback Firestore. Actual
+production verification was source/configuration, anonymous authorization boundaries,
+bridge health and published domain/assets. No production load benchmark or forensic
+Cloud log/data comparison is implied; the previously recorded provider/retention limits
+remain. Documentation-only follow-up records this outcome without republishing runtime.
