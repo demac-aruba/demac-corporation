@@ -18,6 +18,7 @@ Earlier protocol/auth/media/recovery review remains in
 | Medium | The technician preview replaced the shared ERP login, conflicting with the owner's existing-design requirement. | Restore main's login exactly; retain auth provider/session protections and technician improvements. |
 | Medium | The broad main pipeline could republish unrelated functions on this PR's package changes. | Preserve `[merge-only]`; an exact release branch publishes only Field source after required tests and verified live frontend. |
 | Medium | Comparing only app/backend directory trees would overlook other build inputs. | Require a documentation-only release diff as well as identical application/workflow/script trees and an immediate current-main parent. |
+| Low | Live Field rejects an empty request with 400 before authentication; that is not a valid 401 smoke request. | Use the existing read-only `get_schedule` action without a token, as the original deployment smoke does; retain the exact 401 requirement. |
 
 ## Adversarial pass
 

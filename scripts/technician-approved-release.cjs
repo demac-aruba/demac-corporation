@@ -90,7 +90,8 @@ async function boundaries() {
         'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } });
       assert.equal(options.status, 204, name + ': CORS failed');
       assert.ok([origin, '*'].includes(options.headers.get('access-control-allow-origin')), name + ': business origin rejected');
-      const denied = await request(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
+      const body = name === FUNCTION ? JSON.stringify({ action: 'get_schedule', data: {} }) : '{}';
+      const denied = await request(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body });
       assert.equal(denied.status, 401, name + ': unauthenticated access accepted');
     }
   }
