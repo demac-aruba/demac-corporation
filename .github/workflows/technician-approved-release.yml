@@ -5,7 +5,7 @@ on:
       - '.github/workflows/technician-approved-release.yml'
       - 'scripts/technician-approved-release*'
   push:
-    branches: [release/technician-pr526-20261008]
+    branches: [release/technician-pr526-recovery-20261008]
 permissions:
   contents: read
 concurrency:
@@ -23,7 +23,7 @@ jobs:
       - run: node --check scripts/technician-approved-release.cjs
       - run: node --test scripts/technician-approved-release.test.cjs scripts/booking-references-release-config.test.cjs
   approved-field-release:
-    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/technician-pr526-20261008' && !contains(github.event.head_commit.message, '[merge-only]')
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/technician-pr526-recovery-20261008' && !contains(github.event.head_commit.message, '[merge-only]')
     needs: release-guards
     runs-on: ubuntu-latest
     timeout-minutes: 45

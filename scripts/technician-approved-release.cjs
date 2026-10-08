@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { canonicalFunctionConfig } = require('./booking-references-release-config.cjs');
 const PROJECT = 'demac-corporation';
 const FUNCTION = 'fieldOperationsAuthority';
-const BRANCH = 'release/technician-pr526-20261008';
+const BRANCH = 'release/technician-pr526-recovery-20261008';
 const ORIGINS = ['https://demac-aruba.com', 'https://www.demac-aruba.com'];
 const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 40 * 1024 * 1024 });
 const git = args => run('git', args).trim();
@@ -56,6 +56,14 @@ function deployArgs(stage, fn) {
 function assertLock(lock, manifest) {
   const root = JSON.parse(lock).packages?.[''];
   assert.deepEqual(root?.dependencies, manifest.dependencies, 'Running dependency lock differs from reviewed manifest');
+}
+function chooseDependencyLock({ runningLock, runningManifest, reviewedManifest, testedLock }) {
+  assert.deepEqual(runningManifest.dependencies, reviewedManifest.dependencies, 'Running dependency declarations differ from reviewed source');
+  // Older Field source uploads did not include a lock. Use the exact lock whose
+  // dependencies passed the required CI tests, never an untested fresh resolution.
+  const lock = runningLock === null ? testedLock : runningLock;
+  assertLock(lock, reviewedManifest);
+  return { lock, strategy: runningLock === null ? 'introduced-ci-tested-lock' : 'retained-running-lock' };
 }
 async function request(url, options = {}) {
   const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(25000) });
@@ -107,9 +115,12 @@ async function release() {
   try {
     await frontendGate();
     const names = [FUNCTION, 'officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyTechnicianSchedules', 'bookingVisitReferences', 'wacliOutboundPoll', 'wacliOutboundAck'];
-    const before = Object.fromEntries(names.map(name => [name, describe(name)]));
+    const before = Object.fromEntries(names.map(name => {
+      summary.stage = 'describe-' + name; record(); return [name, describe(name)];
+    }));
     assertRuntime(before[FUNCTION]);
     const schedulerArgs = ['scheduler', 'jobs', 'describe', 'firebase-schedule-sendDailyTechnicianSchedules-us-central1', '--project=' + PROJECT, '--location=us-central1', '--format=json'];
+    summary.stage = 'read-existing-scheduler'; record();
     const schedule = JSON.parse(cloud(schedulerArgs));
     assert.equal(schedule.state, 'ENABLED');
     assert.equal(schedule.schedule, '0,5,10 8 * * *');
@@ -124,11 +135,20 @@ async function release() {
       const s = fn.buildConfig.source.storageSource;
       cloud(['storage', 'cp', `gs://${s.bucket}/${s.object}${s.generation ? '#' + s.generation : ''}`, zip, '--quiet']);
     };
+    summary.stage = 'download-existing-source'; record();
     download(before[FUNCTION]);
-    const lock = run('unzip', ['-p', zip, 'package-lock.json']);
-    assertLock(lock, JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8')));
+    summary.stage = 'verify-source-dependencies'; record();
+    const uploadedFiles = run('unzip', ['-Z1', zip]).split('\n');
+    const runningManifest = JSON.parse(run('unzip', ['-p', zip, 'package.json']));
+    const reviewedManifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+    const selectedLock = chooseDependencyLock({ runningManifest, reviewedManifest,
+      runningLock: uploadedFiles.includes('package-lock.json') ? run('unzip', ['-p', zip, 'package-lock.json']) : null,
+      testedLock: fs.readFileSync(path.resolve('functions/package-lock.json'), 'utf8') });
+    const { lock } = selectedLock;
+    summary.dependencyStrategy = selectedLock.strategy;
     fs.writeFileSync(path.join(stage, 'package-lock.json'), lock);
     fs.unlinkSync(zip);
+    summary.stage = 'verify-access-and-concurrency'; record();
     await boundaries();
     assert.equal(sourceGate(), main, 'Main advanced before deploy');
     const current = describe(FUNCTION);
@@ -138,6 +158,7 @@ async function release() {
     summary.previousSource = current.buildConfig.source.storageSource;
     summary.stage = 'deploy-field-source'; record();
     cloud(deployArgs(stage, current));
+    summary.stage = 'verify-published-source'; record();
     const after = describe(FUNCTION); assertRuntime(after);
     assert.deepEqual(canonicalFunctionConfig(after), canonicalFunctionConfig(before[FUNCTION]), 'Runtime configuration changed');
     download(after);
@@ -156,10 +177,12 @@ async function release() {
       assert.deepEqual(afterSchedule[key], schedule[key], 'Scheduler changed: ' + key);
     await boundaries(); await frontendGate();
     summary.stage = 'complete'; summary.revision = after.serviceConfig.revision;
-    summary.configPreserved = true; summary.dependencyLockPreserved = true;
+    summary.configPreserved = true; summary.dependencyDeclarationsPreserved = true;
+    summary.dependencyLockVerified = true;
     summary.unchangedFunctions = names.filter(name => name !== FUNCTION);
     summary.schedulerPreserved = true; summary.sourceFilesVerified = files.length;
-    record(); console.log('PASS: Field source published; runtime/dependencies, six other functions and scheduler preserved.');
+    record(); console.log('PASS: Field source published; runtime/dependency declarations, six other functions and scheduler preserved.');
+    console.log(JSON.stringify(summary)); // Fixed non-secret release evidence only.
   } catch (error) {
     summary.error = error.code === 'ERR_ASSERTION' ? error.message.split('\n')[0] : 'Release failed at ' + summary.stage;
     record(); throw Error(summary.error); // Never print cloud output, environment values or credentials.
@@ -169,4 +192,4 @@ if (require.main === module) {
   const task = process.argv[2] === '--frontend' ? frontendGate : release;
   task().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
-module.exports = { assertContext, assertRuntime, assertLock, deployArgs, BRANCH };
+module.exports = { assertContext, assertRuntime, assertLock, chooseDependencyLock, deployArgs, BRANCH };

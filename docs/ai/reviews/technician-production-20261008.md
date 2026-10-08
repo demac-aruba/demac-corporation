@@ -74,3 +74,34 @@ There is no deploy, database operation, IAM/configuration change or raw cloud ou
 Only operation stage, allowlisted error category and non-secret revision/status
 metadata can reach logs. Syntax and existing guard tests remain required. The
 failed production check remains failed until its actual cause is corrected.
+
+### Diagnosis and separate correction review
+
+Read-only run `37855128604`, job `113577358639`, confirmed all seven functions
+ACTIVE, the existing scheduler unchanged, and Field revision
+`fieldoperationsauthority-00006-bag`. The source archive downloads successfully,
+but extracting `package-lock.json` returns unzip status 11 (no matching file).
+The historical source has no lock; the prior requirement assumed one existed.
+No backend deployment occurred during either failed release attempt.
+Follow-up read-only run `37855572975` passed and explicitly confirmed
+`dependencyDeclarationsMatch: true` and `lockPresent: false` for the live source.
+
+Reviewed the correction separately: preserve every original test and check. For
+legacy source without a lock, require exact equality between its dependency
+declarations and the reviewed manifest, then use the identical lock from the
+installation that passed the mandatory Field tests in the same job. An existing
+running lock is still reused exactly; malformed/incompatible locks cannot fall
+back. New negative regressions prove both boundaries (nine total guard/config
+tests pass). The uploaded lock must still match byte-for-byte after deployment.
+The new release branch still requires current main as its immediate parent and
+a docs-only change, plus exact source serving on both live domains before deploy.
+
+The temporary diagnosis script/workflow has fulfilled its read-only purpose and
+has no production callers; remove those task-only entry points while preserving
+their source in commit `7d9714da` and their execution evidence above. The release
+publisher now identifies each preflight stage and logs only its fixed non-secret
+summary after success. Residual risk: without a historical lock, the previously
+resolved transitive versions cannot be asserted identical. The new lock freezes
+the versions exercised by CI; published source, live authentication/CORS and runtime
+preservation remain mandatory. This is an explicit correction of a false legacy
+source assumption, not a waived or weakened failed security check.
