@@ -57,3 +57,20 @@ recording/playback, owner operational acceptance and selected catalog activation
 remain follow-ups; none is represented as passed. Deployment health can fail after
 a valid publication attempt; report actual state and retain compatible readers,
 private originals and immutable revisions rather than deleting records.
+
+## Post-merge release diagnosis
+
+Final head `9e72d6ec` passed all 23 workflows, including the actual compiled app's
+Chromium/WebKit login/role flows. PR #526 merged as `0c8cf94f`; production frontend
+`dpl_HsqxzrNp7nukijf9x1ppqdL4MdVY` serves release `23ba2497` on both real domains.
+Backend run `37854324540` passed the exact live frontend check but stopped in
+preflight before any deploy command on both initial and one retry attempt.
+
+A separate adversarial pass reviewed the diagnosis-only workflow and script:
+fixed task branch/repository, seven known function metadata reads, one existing
+scheduler read, download of the existing Field source archive to runner temporary
+storage, dependency-lock comparison and deletion of that local temporary archive.
+There is no deploy, database operation, IAM/configuration change or raw cloud output.
+Only operation stage, allowlisted error category and non-secret revision/status
+metadata can reach logs. Syntax and existing guard tests remain required. The
+failed production check remains failed until its actual cause is corrected.
