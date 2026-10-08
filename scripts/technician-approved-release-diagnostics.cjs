@@ -26,10 +26,14 @@ try {
   stage = 'download-existing-source';
   const source = field.buildConfig.source.storageSource;
   cloud(['storage', 'cp', `gs://${source.bucket}/${source.object}${source.generation ? '#' + source.generation : ''}`, zip, '--quiet']);
-  stage = 'read-existing-dependency-lock';
-  const lock = run('unzip', ['-p', zip, 'package-lock.json']);
-  assertLock(lock, JSON.parse(fs.readFileSync('functions/package.json', 'utf8')));
-  console.log(JSON.stringify({ stage, lockMatches: true }));
+  stage = 'read-existing-dependency-declarations';
+  const manifest = JSON.parse(run('unzip', ['-p', zip, 'package.json']));
+  const reviewed = JSON.parse(fs.readFileSync('functions/package.json', 'utf8'));
+  const same = require('node:util').isDeepStrictEqual(manifest.dependencies, reviewed.dependencies);
+  const lockPresent = run('unzip', ['-Z1', zip]).split('\n').includes('package-lock.json');
+  console.log(JSON.stringify({ stage, dependencyDeclarationsMatch: same, lockPresent, dependencies: manifest.dependencies }));
+  assert.deepEqual(manifest.dependencies, reviewed.dependencies);
+  if (lockPresent) assertLock(run('unzip', ['-p', zip, 'package-lock.json']), reviewed);
 } catch (error) {
   // Classify only an allowlisted status; never print cloud output/config/credentials.
   const category = String(error.stderr || '').match(/\b(PERMISSION_DENIED|NOT_FOUND|INVALID_ARGUMENT|UNAUTHENTICATED|UNAVAILABLE|RESOURCE_EXHAUSTED)\b/)?.[1] || error.code || 'COMMAND_FAILED';
