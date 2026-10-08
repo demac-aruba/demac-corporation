@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import { assertFieldPreviewBuildSafety } from './lib/field-preview-build-safety';
 
 // Public Firebase application configuration, not service-account credentials.
 const firebaseDefaults = {
@@ -10,6 +11,8 @@ const firebaseDefaults = {
   appId: '1:1053571783393:web:f40e18627a16acf4df75a0',
   measurementId: 'G-XCWED77MLQ',
 };
+// A Vercel URL alone is not an isolated environment. Never inherit live defaults here.
+assertFieldPreviewBuildSafety(process.env, firebaseDefaults);
 const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? firebaseDefaults.apiKey,
   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? firebaseDefaults.authDomain,

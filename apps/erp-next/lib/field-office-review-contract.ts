@@ -183,6 +183,7 @@ export type FieldOfficeReviewSnapshot = {
 };
 
 export type FieldOfficeReviewRevision = {
+  procedureDocuments?: FieldProcedureWorkspace[];
   id: string;
   reviewId: string;
   revisionNumber: number;
@@ -830,7 +831,8 @@ export function parseFieldOfficeReviewQueueResponse(value: unknown): FieldOffice
     const review = candidate as FieldOfficeReviewQueueItem;
     return revisionValid(review.currentRevision, review);
   })) throw new Error('Field Operations returned malformed Office Review queue data. Refresh and try again.');
-  return payload as FieldOfficeReviewQueueResponse;
+  const result=payload as FieldOfficeReviewQueueResponse;
+  return {...result,reviews:result.reviews.map(review=>({...review,currentRevision:parseRevisionProcedures(review.currentRevision)}))};
 }
 
 export function parseFieldSubmitOfficeReviewResponse(value: unknown): FieldSubmitOfficeReviewResponse {
@@ -842,7 +844,25 @@ export function parseFieldSubmitOfficeReviewResponse(value: unknown): FieldSubmi
     || (payload.visit as FieldVisitState).status !== 'ready_for_office_review') {
     throw new Error('Field Operations returned malformed Office Review submission data. Refresh and try again.');
   }
-  return payload as FieldSubmitOfficeReviewResponse;
+  const result=payload as FieldSubmitOfficeReviewResponse;
+  return {...result,revision:parseRevisionProcedures(result.revision)};
+}
+
+function parseRevisionProcedures(revision:FieldOfficeReviewRevision):FieldOfficeReviewRevision {
+  if(revision.procedureDocuments===undefined)return revision;
+  if(!Array.isArray(revision.procedureDocuments))throw new Error('Invalid frozen procedure documents.');
+  const ids=new Set<string>();
+  const documents=revision.procedureDocuments.map(candidate=>{
+    const raw=record(candidate);
+    if(!raw)throw new Error('Invalid frozen procedure document.');
+    const intervention=revision.snapshot.interventions.find(i=>i.id===raw.interventionId);
+    if(!intervention||ids.has(intervention.id)||raw.interventionVersion!==intervention.version||raw.interventionStatus!==intervention.status
+      ||raw.serverTime!==revision.submittedAt||!Array.isArray(raw.allowedActions)||raw.allowedActions.length
+      ||JSON.stringify(raw.workflow)!==JSON.stringify(record(intervention)?.procedureWorkflow))throw new Error('Frozen procedure context does not match this revision.');
+    ids.add(intervention.id);
+    return parseFieldProcedureWorkspace(raw,{ownerUserId:'office-review-reader',visitId:intervention.visitId,interventionId:intervention.id,assetId:intervention.assetId});
+  });
+  return {...revision,procedureDocuments:documents};
 }
 
 export function parseFieldDecideOfficeReviewResponse(value: unknown): FieldDecideOfficeReviewResponse {
@@ -863,3 +883,4 @@ export function parseFieldDecideOfficeReviewResponse(value: unknown): FieldDecid
   }
   return payload as FieldDecideOfficeReviewResponse;
 }
+import { parseFieldProcedureWorkspace, type FieldProcedureWorkspace } from './field-procedure-workspace';

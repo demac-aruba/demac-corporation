@@ -10,6 +10,7 @@ const { projectFieldPriceSnapshot } = require('./fieldOperationsPriceSnapshots')
 const { projectVisitAsset } = require('./fieldOperationsVisitAssets');
 const { WORK_INTERVENTION_COLLECTION, projectWorkIntervention } = require('./fieldOperationsVisitInterventions');
 const { resolveServicePriceSnapshot } = require('./servicePricingAuthority');
+const procedureProtocol = require('./fieldOperationsServiceProtocol');
 
 const FIELD_SALE_LINE_COLLECTION = 'fieldSaleLines';
 const FIELD_SALE_LINE_STORAGE_VERSION = 1;
@@ -116,7 +117,7 @@ function fieldSaleLineOptions(line) {
 
 function baseEligible(job) {
   return Boolean(job?.fieldVisit && FIELD_SALE_ACTIVE_VISIT_STATUSES.has(text(job.fieldVisit.status, 80))
-    && Array.isArray(job.allowedActions) && job.allowedActions.includes('execute'));
+    && Array.isArray(job.allowedActions) && (job.allowedActions.includes('execute') || job.allowedActions.includes('sale.propose')));
 }
 
 function catalogOption(record, capturedAt) {
@@ -194,7 +195,7 @@ function createFieldSaleLineCommand({ db, resolveAssignment, appendAuditInTransa
     const lineId = deterministicId('FSL', `${normalizedVisitId}:${stable}`);
     let result;
     await db.runTransaction(async (transaction) => {
-      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId: normalizedVisitId, resolveAssignment, action: 'execute', deniedMessage: 'This assignment cannot create Field Sale Lines.' });
+      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId: normalizedVisitId, resolveAssignment, action: 'sale.propose', deniedMessage: 'This assignment cannot create Field Sale Lines.' });
       if (!FIELD_SALE_ACTIVE_VISIT_STATUSES.has(context.canonicalVisit.status)) throw fieldError('field_sale_not_allowed', 'Field Sale Lines require an on-site or in-progress Work Visit.', 409);
       const lineRef = db.collection(FIELD_SALE_LINE_COLLECTION).doc(lineId);
       const existingSnapshot = await transaction.get(lineRef);
@@ -285,7 +286,7 @@ function createDecideFieldSaleLineCommand({ db, resolveAssignment, appendAuditIn
     const stable = stableRequestId(requestId);
     let result;
     await db.runTransaction(async (transaction) => {
-      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId, resolveAssignment, action: 'execute', deniedMessage: 'This assignment cannot record Field Sale customer decisions.' });
+      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId, resolveAssignment, action: 'sale.propose', deniedMessage: 'This assignment cannot record Field Sale customer decisions.' });
       const lineRef = db.collection(FIELD_SALE_LINE_COLLECTION).doc(text(saleLineId, 180));
       const lineSnapshot = await transaction.get(lineRef);
       if (!lineSnapshot.exists) throw fieldError('field_sale_line_not_found', 'Field Sale Line is not available.', 404);
@@ -340,7 +341,7 @@ function createTransitionFieldSaleLineCommand({ db, resolveAssignment, appendAud
     const stable = stableRequestId(requestId);
     let result;
     await db.runTransaction(async (transaction) => {
-      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId, resolveAssignment, action: 'execute', deniedMessage: 'This assignment cannot transition Field Sale Lines.' });
+      const context = await loadCurrentVisitMutationContext({ db, transaction, identity, visitId, resolveAssignment, action: 'sale.propose', deniedMessage: 'This assignment cannot transition Field Sale Lines.' });
       const lineRef = db.collection(FIELD_SALE_LINE_COLLECTION).doc(text(saleLineId, 180));
       const lineSnapshot = await transaction.get(lineRef);
       if (!lineSnapshot.exists) throw fieldError('field_sale_line_not_found', 'Field Sale Line is not available.', 404);
@@ -355,6 +356,13 @@ function createTransitionFieldSaleLineCommand({ db, resolveAssignment, appendAud
       if (!(FIELD_SALE_TRANSITIONS[line.status] || []).includes(target) || ['customer_approved', 'declined'].includes(target)) throw fieldError('field_sale_transition_not_allowed', `Field Sale Line cannot transition ${line.status} -> ${target}.`, 409);
       if (line.nonCatalog && target !== 'voided') throw fieldError('field_sale_non_catalog_transition_not_allowed', 'Non-catalog draft may only remain for Office Review or be voided.', 409);
       if (line.version !== expectedVersion) throw fieldError('version_conflict', 'Field Sale Line changed on another device.', 409, { expectedVersion, actualVersion: line.version });
+      if (target === 'installed') {
+        const interventions = await transaction.get(db.collection(WORK_INTERVENTION_COLLECTION).where('visitId', '==', text(visitId,180)));
+        const affected = snapshotRecords(interventions).filter(item => item.procedureWorkflow && (!line.assetId || item.assetId === line.assetId));
+        if (affected.some(item => procedureProtocol.blockers(procedureProtocol.validateWorkflow(item.procedureWorkflow)).length)) {
+          throw fieldError('field_sale_asset_risk_open', 'Resolve the documented high risk before recording physical add-on installation. Customer approval does not clear the risk.',409);
+        }
+      }
       const occurredAt = text(now(), 80);
       const patch = fieldFirestoreData({ status: target, notes: target === 'voided' ? text(note, 1500) : line.notes, updatedAt: occurredAt, updatedByUserId: text(identity.uid, 180), updatedByStaffId: text(identity.staffId, 180), version: line.version + 1, lastRequestId: stable, lastAction: target }, 'fieldSaleTransition');
       transaction.update(lineRef, patch);

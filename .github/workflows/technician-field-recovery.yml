@@ -1,0 +1,55 @@
+name: Technician field source recovery
+
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths: ['.github/workflows/technician-field-recovery.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  recover-prepared-objects:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/feature/technician-app-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Recover only the exact previously prepared Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, urllib.request
+          from pathlib import Path
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          output = Path(os.environ['RUNNER_TEMP']) / 'field-prepared-objects'
+          output.mkdir()
+          ids = ['78e38b5e3ff6f447c9e35a24806b0355dd572864', '614e349c885dd0dd5fd38c7bd5eeeb168f092315', 'be799ab3e2fa867b8b93b63eeb6b5bf57546f6fa', '6c46cc75819b0c8b0444f501d9afc3626cb4751a', '1e45d5fce3c159e0bfecb7e5e4a75269d0bd0f84']
+          manifest = []
+          for sha in ids:
+              request = urllib.request.Request('https://api.github.com/repos/demac-aruba/demac-corporation/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+              with opener.open(request, timeout=30) as response:
+                  obj = json.load(response)
+              if obj.get('sha') != sha or obj.get('encoding') != 'base64':
+                  raise RuntimeError('Unexpected Git blob response')
+              data = base64.b64decode(obj['content'])
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if actual != sha:
+                  raise RuntimeError('Git blob hash mismatch')
+              (output / (sha + '.bin')).write_bytes(data)
+              manifest.append({'gitBlob': sha, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+          print('Verified and retained five exact source objects; none executed.')
+          PY
+      - name: Retain source recovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-field-prepared-objects-${{ github.sha }}
+          path: ${{ runner.temp }}/field-prepared-objects/
+          retention-days: 3
+          if-no-files-found: error

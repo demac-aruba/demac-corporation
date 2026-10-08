@@ -1,0 +1,73 @@
+name: Technician procedure audio
+
+# Internal capture checks only. No public preview, cloud resources or deployment.
+# Linux WebKit in run 37687115856 has no native MediaRecorder (capability artifact).
+# Run BOTH native encoder suites on macOS instead of faking/enabling a recorder.
+# All 18 lifecycle and 12-per-engine assertions remain mandatory and unchanged.
+# Playwright documents platform-dependent WebKit media and recommends macOS for Safari media:
+# https://playwright.dev/docs/browsers#webkit
+on:
+  push:
+    branches: ['feature/technician-app-20260923']
+    paths:
+      - 'apps/erp-next/components/field/**'
+      - 'apps/erp-next/lib/field-*'
+      - 'apps/erp-next/scripts/field-procedure-audio*'
+      - '.github/workflows/technician-procedure-audio.yml'
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/field/**'
+      - 'apps/erp-next/lib/field-*'
+      - 'apps/erp-next/scripts/field-procedure-audio*'
+      - '.github/workflows/technician-procedure-audio.yml'
+permissions:
+  contents: read
+concurrency:
+  group: technician-procedure-audio-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+jobs:
+  capture:
+    if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 526)
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_ISOLATED_PREVIEW: 'true'
+      NEXT_PUBLIC_FIREBASE_API_KEY: synthetic
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-dwellings
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-dwellings.invalid
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-dwellings.appspot.com
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '0'
+      NEXT_PUBLIC_FIREBASE_APP_ID: synthetic
+      NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install existing app and isolated browser tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/audio-tools" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
+          "$RUNNER_TEMP/audio-tools/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Typecheck and native encoder recovery acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/audio-evidence"
+          uname -a > "$RUNNER_TEMP/audio-evidence/platform.txt"
+          npm run typecheck --prefix apps/erp-next 2>&1 | tee "$RUNNER_TEMP/audio-evidence/typecheck.log"
+          FIELD_PORTAL_TEST_TOOLS="$RUNNER_TEMP/audio-tools" FIELD_AUDIO_EVIDENCE="$RUNNER_TEMP/audio-evidence" node apps/erp-next/scripts/field-procedure-audio-browser.cjs 2>&1 | tee "$RUNNER_TEMP/audio-evidence/browser.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technician-audio-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/audio-evidence/
+          retention-days: 7
+          if-no-files-found: warn

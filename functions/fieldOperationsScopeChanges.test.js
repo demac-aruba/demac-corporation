@@ -324,9 +324,9 @@ test('non-matrix service uses canonical catalog base price while quote mode requ
   );
 });
 
-test('helper, read-only fallback and unassigned principals cannot propose additional work', async () => {
+test('read-only helper, read-only fallback and unassigned principals cannot propose additional work', async () => {
   for (const denied of [
-    assignment({ responsibility: 'helper' }),
+    assignment({ responsibility: 'helper', readOnly: true }),
     assignment({ source: 'profile_van_fallback', readOnly: true }),
     assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
   ]) {
@@ -439,4 +439,11 @@ test('job projection links ScopeChanges to priced additional WorkInterventions a
     }),
     (error) => error?.code === 'work_intervention_price_snapshot_required' && error?.status === 409,
   );
+});
+
+test('assigned helper proposes additional work without approving or performing it', async () => {
+ const f=fixture({resolveAssignment:async()=>assignment({responsibility:'helper'})});
+ await f.create(input());assert.equal(f.store.all('scopeChanges').length,1);
+ const intervention=f.store.all('workInterventions')[0];assert.equal(intervention.status,'pending_authorization');
+ assert.deepEqual(intervention.performedByStaffIds,[]);
 });

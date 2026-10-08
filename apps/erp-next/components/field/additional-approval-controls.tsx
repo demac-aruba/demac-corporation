@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import {FieldAuthoredForm} from './field-authored-form';
+import {fieldVisitFormTarget} from './field-form-context';
+
 import type {
   FieldAdditionalWorkDecision,
   FieldApproval,
@@ -36,22 +38,10 @@ export function AdditionalApprovalControls({
   error: string | null;
   onDecide: (input: DecisionInput) => void;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const interventionById = new Map(job.workInterventions.map((intervention) => [intervention.id, intervention]));
   const scopeById = new Map(job.scopeChanges.map((scopeChange) => [scopeChange.id, scopeChange]));
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
   const equipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
-
-  const setDraft = (interventionId: string, changes: Partial<Draft>) => {
-    setDrafts((current) => ({
-      ...current,
-      [interventionId]: {
-        receiverName: current[interventionId]?.receiverName ?? '',
-        note: current[interventionId]?.note ?? '',
-        ...changes,
-      },
-    }));
-  };
 
   return (
     <div className={styles.interventionGroup}>
@@ -81,21 +71,26 @@ export function AdditionalApprovalControls({
         const scopeChange = intervention.scopeChangeId ? scopeById.get(intervention.scopeChangeId) : undefined;
         const visitAsset = visitAssetById.get(intervention.visitAssetId);
         const equipment = visitAsset ? equipmentById.get(visitAsset.assetId) : undefined;
-        const draft = drafts[interventionId] ?? { receiverName: '', note: '' };
+        const price=intervention.priceSnapshot;
+        const formTarget=fieldVisitFormTarget(job);
+        return <FieldAuthoredForm key={JSON.stringify([formTarget,interventionId])} target={formTarget} scope={'additional-approval:'+interventionId} defaults={{receiverName:'',note:''}}>{form=>{
+        const draft=form.value;
+        const setDraft=(_id:string,changes:Partial<Draft>)=>form.change({...form.value,...changes});
+        const blocked=mutationBusy||!form.ready;
         const receiverName = draft.receiverName.trim();
-        const canSubmit = receiverName.length >= 2 && !mutationBusy;
+        const canSubmit = receiverName.length >= 2 && !blocked&&!form.saving&&!form.error;
         return (
           <div className={styles.interventionForm} key={interventionId}>
             <div style={{ gridColumn: '1 / -1' }}>
               <strong>{visitAsset?.locationLabel || equipment?.locationLabel || 'A/C confirmado'}</strong>
-              <div className={styles.helper}>{intervention.interventionType} · <strong>{presentedFieldPriceLabel(intervention.priceSnapshot)}</strong></div>
+              <div className={styles.helper}>{intervention.interventionType} · <strong>{presentedFieldPriceLabel(price)}</strong></div>
               {scopeChange ? <div className={styles.helper}>Razón: {scopeChange.reason}</div> : null}
             </div>
             <label>
               <span>Nombre de quien decide</span>
               <input
                 className={styles.select}
-                disabled={mutationBusy}
+                disabled={blocked} maxLength={1500}
                 value={draft.receiverName}
                 onChange={(event) => setDraft(interventionId, { receiverName: event.target.value })}
                 placeholder="Nombre del cliente o representante"
@@ -105,7 +100,7 @@ export function AdditionalApprovalControls({
               <span>Nota opcional</span>
               <input
                 className={styles.select}
-                disabled={mutationBusy}
+                disabled={blocked} maxLength={1500}
                 value={draft.note}
                 onChange={(event) => setDraft(interventionId, { note: event.target.value })}
                 placeholder="Detalle de la decisión verbal"
@@ -116,7 +111,7 @@ export function AdditionalApprovalControls({
                 className={`${styles.action} ${styles.primary}`}
                 disabled={!canSubmit}
                 type="button"
-                onClick={() => onDecide({ interventionId, decision: 'approved', receiverName, note: draft.note })}
+                onClick={async () => {if(await form.flush())onDecide({ interventionId, decision: 'approved', receiverName, note: draft.note });}}
               >
                 {decidingInterventionId === interventionId ? 'Registrando…' : 'Cliente aprueba'}
               </button>
@@ -124,13 +119,13 @@ export function AdditionalApprovalControls({
                 className={styles.action}
                 disabled={!canSubmit}
                 type="button"
-                onClick={() => onDecide({ interventionId, decision: 'rejected', receiverName, note: draft.note })}
+                onClick={async () => {if(await form.flush())onDecide({ interventionId, decision: 'rejected', receiverName, note: draft.note });}}
               >
                 {decidingInterventionId === interventionId ? 'Registrando…' : 'Cliente rechaza'}
               </button>
             </div>
           </div>
-        );
+        );}}</FieldAuthoredForm>;
       })}
 
       {!job.canRecordAdditionalApproval && job.fieldVisit ? (

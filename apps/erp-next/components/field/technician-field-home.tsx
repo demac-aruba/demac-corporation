@@ -4,6 +4,9 @@ import { SavedVisitReferences } from '../scheduling/booking-visit-references';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
+import { FieldPartSelector } from './field-part-selector';
+import { FieldDayOverview } from './field-day-overview';
+import { FieldPortalHeader, FieldPortalIdentity, FieldPortalNavigation, FieldJobContext, fieldPortalStyles, type FieldPortalTab } from './field-portal-chrome';
 import { arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
   addFieldReportFinding,
@@ -111,6 +114,7 @@ import { FieldHistoryPanel } from './field-history-panel';
 import { FieldQrLookup } from './field-qr-lookup';
 import { FieldAdminSimulationDetail, FieldAdminSimulationSelector } from './field-admin-simulator';
 import { ProfessionalReportPreview } from './professional-report-preview';
+import { requestProcedureExit } from '../../lib/field-procedure-navigation';
 import simulationStyles from './field-admin-simulator.module.css';
 import styles from './technician-field-home.module.css';
 
@@ -169,7 +173,7 @@ function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacing
 }
 
 function roleLabel(value: FieldScheduleJob['responsibility']) {
-  if (value === 'lead') return 'Líder';
+  if (value === 'lead') return 'Técnico responsable';
   if (value === 'helper') return 'Ayudante';
   if (value === 'office') return 'Oficina';
   return 'Técnico';
@@ -307,6 +311,7 @@ function mapHref(job: Pick<FieldScheduleJob, 'latitude' | 'longitude' | 'address
 }
 
 function contactLinks(job: FieldScheduleJob) {
+  if (process.env.NEXT_PUBLIC_ISOLATED_PREVIEW === 'true') return { call: '', whatsapp: '', map: '' };
   return {
     call: callHref(job.arrivalPhone),
     whatsapp: whatsappHref(job.arrivalWhatsapp || job.arrivalPhone),
@@ -522,7 +527,7 @@ function LegacyDetailView({
   onDecideFieldSaleLine: (input: FieldSaleDecisionInput) => Promise<boolean>;
   onTransitionFieldSaleLine: (input: FieldSaleTransitionInput) => Promise<boolean>;
   onOfficeReviewCorrectionNoteChange: (value: string) => void;
-  onSubmitOfficeReview: () => void;
+  onSubmitOfficeReview: (note?:string) => void;
   onSyncOutbox: () => void;
   onDiscardOutboxConflict: (id: string) => void;
   onBack: () => void;
@@ -614,28 +619,28 @@ function LegacyDetailView({
           </div>
         ) : <p className={styles.helper}>No hay otra transición activa disponible para esta visita en este slice.</p>}
         {availableTransitions.includes('pending') ? (
-          <VisitPendingControls
+          <VisitPendingControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitPendingInput) => onTransition(input)}
             saving={transitioning === 'pending'}
           />
         ) : null}
         {availableTransitions.includes('no_access') ? (
-          <VisitNoAccessControls
+          <VisitNoAccessControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitNoAccessInput) => onTransition(input)}
             saving={transitioning === 'no_access'}
           />
         ) : null}
         {availableTransitions.includes('cancelled') ? (
-          <VisitCancellationControls
+          <VisitCancellationControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitCancellationInput) => onTransition(input)}
             saving={transitioning === 'cancelled'}
           />
         ) : null}
         {availableTransitions.includes('requires_return_visit') ? (
-          <VisitReturnControls
+          <VisitReturnControls job={job}
             disabled={mutationBusy}
             onSubmit={(input: VisitReturnInput) => onTransition(input)}
             saving={transitioning === 'requires_return_visit'}
@@ -950,13 +955,17 @@ function DetailView({
   onSyncOutbox,
   onDiscardOutboxConflict,
   onBack,
-}: DetailViewProps) {
+  onRefreshProcedureContext,
+}: DetailViewProps & {onRefreshProcedureContext:()=>void}) {
+  const { principal: currentPrincipal } = useAuth();
   const canonicalStage = fieldExperienceStageForStatus(job?.fieldVisit?.status);
   const [activeStage, setActiveStage] = useState<FieldExperienceStage>(canonicalStage);
+  const [procedureInterventionId, setProcedureInterventionId] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveStage(canonicalStage);
-  }, [canonicalStage, job?.workOrderId]);
+    setProcedureInterventionId(null);
+  }, [canonicalStage, job?.workOrderId, currentPrincipal.userId]);
 
   if (loading || error || !job) {
     return (
@@ -965,7 +974,7 @@ function DetailView({
           <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
           <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
         </header>
-        <main className={styles.mobileContent}>
+        <main className={`${styles.mobileContent} ${fieldPortalStyles.detailSurface}`}>
           <section className={styles.panel}>
             <div className={error ? styles.error : styles.loading}>
               {loading ? 'Cargando información del trabajo…' : error || 'No se pudo abrir este trabajo.'}
@@ -974,6 +983,34 @@ function DetailView({
         </main>
       </div>
     );
+  }
+
+  const selectedProcedure = job.workInterventions.find((item) => item.id === procedureInterventionId);
+  if (selectedProcedure && job.fieldVisit && draftOwnerUserId === currentPrincipal.userId && offlineCapturedAt === null) {
+    const asset = job.visitAssets.find((item) => item.assetId === selectedProcedure.assetId);
+    const equipment = job.knownEquipment.find((item) => item.id === selectedProcedure.assetId);
+    return <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`}>
+      <FieldPortalHeader title="Seleccionar parte" subtitle="Un aire · un servicio · dos partes" onBack={() => { if (requestProcedureExit()) { setProcedureInterventionId(null); onRefreshProcedureContext(); } }} />
+      <main className={styles.mobileContent}>
+        <FieldJobContext job={job} />
+        <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
+        <FieldPartSelector
+          target={{ ownerUserId:currentPrincipal.userId, visitId:job.fieldVisit.id, interventionId:selectedProcedure.id, assetId:selectedProcedure.assetId }}
+          equipmentLabel={asset?.locationLabel || equipment?.locationLabel || 'Aire seleccionado'}
+          equipmentDescription={[equipment?.brand, equipment?.model, selectedProcedure.interventionType].filter(Boolean).join(' · ')}
+          onBack={() => { if (requestProcedureExit()) { setProcedureInterventionId(null); onRefreshProcedureContext(); } }}
+          onOpenAddons={() => {
+            if (!requestProcedureExit()) return;
+            setProcedureInterventionId(null);
+            onRefreshProcedureContext();
+            setActiveStage('service');
+          }}
+          correctionRequested={job.officeReviewSubmission?.correctionRequired === true}
+          reviewerNote={job.officeReviewSubmission?.reviewerNote}
+          canRecoverPart={job.responsibility === 'lead'}
+        />
+      </main>
+    </div>;
   }
 
   const links = contactLinks(job);
@@ -1016,41 +1053,31 @@ function DetailView({
           : '';
 
   return (
-    <div className={styles.technicianApp} data-field-experience-stage={activeStage}>
-      <header className={styles.mobileHeader}>
-        <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
-        <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
-        <span className={styles.headerStatus}>{visitStatusLabel(job.fieldVisit?.status)}</span>
-      </header>
+    <div className={`${styles.technicianApp} ${fieldPortalStyles.detailFrame}`} data-field-experience-stage={activeStage}>
+      <FieldPortalHeader title={job.fieldVisit?.status === 'in_progress' ? 'Trabajo en curso' : 'Detalle del trabajo'} onBack={onBack} />
 
       <main className={styles.mobileContent}>
-        <section className={styles.jobHero}>
-          <div className={styles.heroTopline}>
-            <span>{job.time || 'Hora pendiente'}{job.endTime ? ` – ${job.endTime}` : ''}</span>
-            <span>{job.vanId || 'Sin Van'}</span>
-          </div>
-          <h1>{job.customerName}</h1>
-          <p>{job.propertyName || job.address || 'Ubicación pendiente'}</p>
-          <div className={styles.heroWork}>{workSummary(job)}</div>
+        <FieldJobContext job={job} />
+        <FieldPortalIdentity name={currentPrincipal.displayName} staffId={currentPrincipal.staffId} date={job.date} job={job} compact />
           <div className={styles.quickActions}>
             {links.call ? <a href={links.call}>Llamar</a> : null}
             {links.whatsapp ? <a href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
             {links.map ? <a href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
           </div>
-        </section>
+
 
         <nav className={styles.flowStepper} aria-label="Pasos del trabajo">
           {FIELD_EXPERIENCE_STAGES.map((step, index) => {
-            const state = fieldExperienceStepState(step.id, activeStage);
+            const state = step.id === activeStage ? 'current' : 'upcoming';
             return (
               <button
-                className={state === 'current' ? styles.flowStepCurrent : state === 'complete' ? styles.flowStepComplete : styles.flowStep}
+                className={state === 'current' ? styles.flowStepCurrent : styles.flowStep}
                 key={step.id}
                 type="button"
                 aria-current={state === 'current' ? 'step' : undefined}
                 onClick={() => setActiveStage(step.id)}
               >
-                <b>{state === 'complete' ? '✓' : index + 1}</b>
+                <b>{index + 1}</b>
                 <span>{step.label}</span>
               </button>
             );
@@ -1085,10 +1112,10 @@ function DetailView({
           <details className={styles.moreOptions}>
             <summary>Más opciones de llegada</summary>
             {availableTransitions.includes('no_access') ? (
-              <VisitNoAccessControls disabled={mutationBusy} onSubmit={(input: VisitNoAccessInput) => onTransition(input)} saving={transitioning === 'no_access'} />
+              <VisitNoAccessControls job={job} disabled={mutationBusy} onSubmit={(input: VisitNoAccessInput) => onTransition(input)} saving={transitioning === 'no_access'} />
             ) : null}
             {availableTransitions.includes('cancelled') ? (
-              <VisitCancellationControls disabled={mutationBusy} onSubmit={(input: VisitCancellationInput) => onTransition(input)} saving={transitioning === 'cancelled'} />
+              <VisitCancellationControls job={job} disabled={mutationBusy} onSubmit={(input: VisitCancellationInput) => onTransition(input)} saving={transitioning === 'cancelled'} />
             ) : null}
           </details>
           {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
@@ -1147,6 +1174,9 @@ function DetailView({
             <summary><b>3</b><span>Evidencia y reporte<small>Checklist, fotos, mediciones, notas y voz</small></span></summary>
             <div className={styles.disclosureBody}>
               <InterventionExecutionControls job={job} mutationBusy={mutationBusy} transitioningInterventionId={transitioningInterventionId} error={executionError} onTransition={onTransitionIntervention} />
+              {job.workInterventions.map((intervention) => <button key={intervention.id} type="button" className={fieldPortalStyles.secondary} disabled={mutationBusy} onClick={() => setProcedureInterventionId(intervention.id)}>
+                Elegir parte / ver coordinación · {job.visitAssets.find((asset) => asset.assetId === intervention.assetId)?.locationLabel || intervention.interventionType}
+              </button>)}
               <InterventionReportControls job={job} mutationBusy={mutationBusy} uploadingPhotoKey={uploadingReportPhotoKey} savingMeasurementKey={savingReportMeasurementKey} savingFindingKey={savingReportFindingKey} savingChecklistKey={savingChecklistKey} error={reportError} onAddPhoto={onAddReportPhoto} onAddMeasurement={onAddReportMeasurement} onAddFinding={onAddReportFinding} onSetChecklistItem={onSetChecklistItem} />
               <FreeTextReportControls job={job} draftOwnerUserId={draftOwnerUserId} allowDraftWhileOffline={offlineCapturedAt !== null} mutationBusy={mutationBusy} savingKey={savingFreeTextKey} error={freeTextError} onSave={onSaveFreeText} />
               <VoiceNoteReportControls job={job} mutationBusy={mutationBusy} savingKey={savingVoiceNoteKey} error={voiceNoteError} onSave={onSaveVoiceNote} />
@@ -1160,8 +1190,8 @@ function DetailView({
 
           <details className={styles.moreOptions}>
             <summary>Pendiente, pieza o segunda visita</summary>
-            {availableTransitions.includes('pending') ? <VisitPendingControls disabled={mutationBusy} onSubmit={(input: VisitPendingInput) => onTransition(input)} saving={transitioning === 'pending'} /> : null}
-            {availableTransitions.includes('requires_return_visit') ? <VisitReturnControls disabled={mutationBusy} onSubmit={(input: VisitReturnInput) => onTransition(input)} saving={transitioning === 'requires_return_visit'} /> : null}
+            {availableTransitions.includes('pending') ? <VisitPendingControls job={job} disabled={mutationBusy} onSubmit={(input: VisitPendingInput) => onTransition(input)} saving={transitioning === 'pending'} /> : null}
+            {availableTransitions.includes('requires_return_visit') ? <VisitReturnControls job={job} disabled={mutationBusy} onSubmit={(input: VisitReturnInput) => onTransition(input)} saving={transitioning === 'requires_return_visit'} /> : null}
             {job.canCreateReturnVisit ? <VisitReturnCreationControls disabled={mutationBusy} onCreate={onCreateReturnVisit} saving={creatingReturnVisit} /> : null}
           </details>
           {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
@@ -1192,7 +1222,7 @@ function DetailView({
       </main>
 
       {activeStage !== 'close' ? (
-        <div className={styles.stickyActionBar}>
+        <div className={`${styles.stickyActionBar} ${fieldPortalStyles.detailSticky}`}>
           {primaryTransition ? (
             <button className={styles.primaryWorkAction} disabled={mutationBusy} type="button" onClick={() => onTransition({ target: primaryTransition })}>
               {transitioning === primaryTransition ? 'Procesando…' : primaryTransitionLabel}
@@ -1209,7 +1239,9 @@ function DetailView({
 }
 
 export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableAdminSimulation?: boolean }) {
-  const { principal } = useAuth();
+  const { principal, signOut } = useAuth();
+  const [portalTab, setPortalTab] = useState<FieldPortalTab>('home');
+  const [showDetail, setShowDetail] = useState(false);
   const adminSimulation = canUseFieldAdminSimulation(principal.role, enableAdminSimulation);
   const [clockNow, setClockNow] = useState(() => new Date());
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
@@ -2392,7 +2424,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     ));
   }, [runFieldSaleMutation]);
 
-  const runSubmitOfficeReview = useCallback(async () => {
+  const runSubmitOfficeReview = useCallback(async (submittedNote?:string) => {
     if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     const visit = currentDetail?.fieldVisit;
@@ -2403,7 +2435,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     }
 
     const correctionNote = currentDetail.officeReviewSubmission.correctionRequired
-      ? officeReviewCorrectionNote.trim()
+      ? (submittedNote??officeReviewCorrectionNote).trim()
       : '';
     if (currentDetail.officeReviewSubmission.correctionRequired && correctionNote.length < 3) {
       setOfficeReviewError('Describe brevemente qué corregiste antes de reenviar a la oficina.');
@@ -2519,6 +2551,9 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   const routeJobs = useMemo(() => fieldRouteWithoutNextJob(todayJobs, nextJob), [nextJob, todayJobs]);
 
   const openJob = (workOrderId: string) => {
+    if(!requestProcedureExit())return;
+    setPortalTab('jobs');
+    setShowDetail(true);
     selectedWorkOrderRef.current = workOrderId;
     setSelectedOwnerUserId(principalFieldIdentityKey);
     setSelectedWorkOrderId(workOrderId);
@@ -2540,10 +2575,20 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
     }
   }
 
-  if (!adminSimulation && selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
-    const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
-    return (
+  if (!adminSimulation) {
+    const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey && detail?.workOrderId === selectedWorkOrderId ? detail : null;
+    const hasSelectedJob = selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey;
+    const navigate = (tab: FieldPortalTab) => { if(!requestProcedureExit())return; setPortalTab(tab); setShowDetail(false); };
+    return <>
+      <div hidden={Boolean(hasSelectedJob && showDetail)}>
+        <FieldDayOverview tab={portalTab} identity={principal} date={today} jobs={todayJobs} nextJob={nextJob}
+          loading={loading} error={scheduleError} stale={Boolean(scheduleOfflineCapturedAt)}
+          synchronization={<OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
+          onRetry={() => void loadSchedule()} onOpen={openJob} onNavigate={navigate} onSignOut={() => { if(!requestProcedureExit())return; if (outboxSummary.total === 0 || window.confirm('Hay capturas pendientes de sincronizar en este dispositivo. Se conservarán para tu cuenta. ¿Cerrar sesión?')) signOut(); }} />
+      </div>
+      {hasSelectedJob ? <div hidden={!showDetail}>
       <DetailView
+        onRefreshProcedureContext={()=>{if(selectedWorkOrderId)void loadDetail(selectedWorkOrderId,true);}}
         job={authorizedDetail}
         loading={detailLoading}
         error={detailError}
@@ -2602,12 +2647,14 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         onDecideFieldSaleLine={runDecideFieldSaleLine}
         onTransitionFieldSaleLine={runTransitionFieldSaleLine}
         onOfficeReviewCorrectionNoteChange={setOfficeReviewCorrectionNote}
-        onSubmitOfficeReview={() => void runSubmitOfficeReview()}
+        onSubmitOfficeReview={(note) => void runSubmitOfficeReview(note)}
         onSyncOutbox={() => void syncOutbox()}
         onDiscardOutboxConflict={(id) => void discardOutboxConflict(id)}
-        onBack={closeJob}
+        onBack={() => { if(!requestProcedureExit())return;setShowDetail(false); setPortalTab('home'); }}
       />
-    );
+      </div> : null}
+      <FieldPortalNavigation active={showDetail ? 'jobs' : portalTab} onNavigate={navigate} />
+    </>;
   }
 
   return (

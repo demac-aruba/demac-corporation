@@ -9,6 +9,10 @@ import {
   type FieldOfficeReviewQueueItem,
 } from '@/lib/field-authority';
 import { BrowserOfficeReviewQueue } from './browser-office-review-queue';
+import { ProcedureExceptionOfficeQueue } from './procedure-exception-office-queue';
+import { FrozenProcedureContent } from './frozen-procedure-content';
+import {FieldAuthoredForm} from '../field/field-authored-form';
+import {requestProcedureExit} from '../../lib/field-procedure-navigation';
 import styles from './browser-office-review-queue.module.css';
 
 function requestId(reviewId: string, decision: FieldOfficeReviewDecision) {
@@ -114,10 +118,9 @@ function FrozenReportContent({ review }: { review: FieldOfficeReviewQueueItem })
   );
 }
 
-function CanonicalOfficeReviewQueue() {
+function CanonicalOfficeReviewQueue({userId}:{userId:string}) {
   const [reviews, setReviews] = useState<FieldOfficeReviewQueueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [note, setNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -149,7 +152,7 @@ function CanonicalOfficeReviewQueue() {
   );
   const pending = reviews.filter((review) => review.status === 'pending').length;
 
-  const decide = useCallback(async (decision: FieldOfficeReviewDecision) => {
+  const decide = useCallback(async (decision: FieldOfficeReviewDecision, note:string) => {
     if (!selected || selected.status !== 'pending' || deciding) return;
     const normalizedNote = note.trim();
     if (decision === 'return' && normalizedNote.length < 3) {
@@ -189,7 +192,6 @@ function CanonicalOfficeReviewQueue() {
         setNotice(null);
       }
       operationRef.current = null;
-      setNote('');
       await load();
     } catch (decisionError) {
       setError(decisionError instanceof Error ? decisionError.message : 'No se pudo guardar la decisión de Office Review.');
@@ -197,7 +199,7 @@ function CanonicalOfficeReviewQueue() {
     } finally {
       setDeciding(null);
     }
-  }, [deciding, load, note, selected]);
+  }, [deciding, load, selected]);
 
   if (loading) {
     return <section className={styles.queue}><header><div><span>OFFICE QUALITY GATE</span><h2>Cargando revisiones canónicas…</h2></div></header></section>;
@@ -222,7 +224,7 @@ function CanonicalOfficeReviewQueue() {
             <button
               className={selected?.id === review.id ? styles.active : ''}
               key={review.id}
-              onClick={() => { setSelectedId(review.id); setNote(review.reviewerNote ?? ''); setError(null); setNotice(null); }}
+              onClick={() => { if(deciding||!requestProcedureExit())return;setSelectedId(review.id); setError(null); setNotice(null); }}
               type="button"
             >
               <div><strong>{review.workOrderId}</strong><span>{review.customerId}</span><small>{review.propertyId} · rev. {review.currentRevisionNumber}</small></div>
@@ -247,6 +249,7 @@ function CanonicalOfficeReviewQueue() {
               </section>
             </div>
             <FrozenReportContent review={selected} />
+            <FrozenProcedureContent key={selected.currentRevision.id+':'+userId} review={selected} userId={userId}/>
             {selected.currentRevision.technicianCorrectionNote ? (
               <div className={styles.returnedNote}>
                 <span>CORRECCIÓN INMUTABLE · REV. {selected.currentRevision.revisionNumber}</span>
@@ -254,8 +257,9 @@ function CanonicalOfficeReviewQueue() {
                 <p>Corrección reportada por el técnico: {selected.currentRevision.technicianCorrectionNote}</p>
               </div>
             ) : null}
+            <FieldAuthoredForm key={JSON.stringify([userId,selected.currentRevision.id])} target={{ownerUserId:userId,workOrderId:selected.workOrderId,visitId:selected.visitId}} scope={'office:review:'+selected.currentRevision.id} defaults={{note:''}}>{draft=><>
             <div className={styles.reviewControls}>
-              <label className={styles.note} style={{ gridColumn: '1 / -1' }}>Nota de revisión<textarea rows={3} disabled={selected.status !== 'pending' || deciding !== null} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Corrección concreta o nota de calidad…" /></label>
+              <label className={styles.note} style={{ gridColumn: '1 / -1' }}>Nota de revisión<textarea rows={3} maxLength={1500} disabled={selected.status !== 'pending' || deciding !== null || !draft.ready} value={draft.value.note} onChange={(event) => draft.field('note',event.target.value)} placeholder="Corrección concreta o nota de calidad…" /></label>
             </div>
             {selected.status === 'returned' ? (
               <div className={styles.returnedNote}><span>DEVUELTA PARA CORRECCIÓN</span><strong>{selected.reviewerNote}</strong><p>El técnico debe corregir y reenviar el mismo Office Review; la revisión anterior permanece inmutable.</p></div>
@@ -263,10 +267,11 @@ function CanonicalOfficeReviewQueue() {
             <div className={styles.guardrail}><div><span>CONTROL DE ENTREGA AL CLIENTE</span><strong>Nada se envía automáticamente desde esta cola.</strong><p>Aprobar solo cierra el control de oficina. La entrega al cliente continúa como un flujo humano separado.</p></div></div>
             {selected.status === 'pending' ? (
               <footer>
-                <button className={styles.returnButton} disabled={deciding !== null} onClick={() => void decide('return')} type="button">{deciding === 'return' ? 'Devolviendo…' : 'Devolver para corrección'}</button>
-                <button className={styles.approveButton} disabled={deciding !== null} onClick={() => void decide('approve')} type="button">{deciding === 'approve' ? 'Aprobando…' : 'Aprobar reporte'}</button>
+                <button className={styles.returnButton} disabled={deciding !== null||!draft.ready||draft.saving||Boolean(draft.error)} onClick={async()=>{if(await draft.flush())void decide('return',draft.value.note);}} type="button">{deciding === 'return' ? 'Devolviendo…' : 'Devolver para corrección'}</button>
+                <button className={styles.approveButton} disabled={deciding !== null||!draft.ready||draft.saving||Boolean(draft.error)} onClick={async()=>{if(await draft.flush())void decide('approve',draft.value.note);}} type="button">{deciding === 'approve' ? 'Aprobando…' : 'Aprobar reporte'}</button>
               </footer>
             ) : null}
+            </>}</FieldAuthoredForm>
           </main>
         ) : null}
       </div>
@@ -278,7 +283,10 @@ export function OfficeReviewSurface() {
   const { mode, principal, status } = useAuth();
   if (status === 'loading') return null;
   if (mode === 'firebase') {
-    return principal.capabilities.has('field.review') ? <CanonicalOfficeReviewQueue /> : null;
+    return principal.capabilities.has('field.review') ? <>
+      <ProcedureExceptionOfficeQueue userId={principal.userId} />
+      <CanonicalOfficeReviewQueue key={principal.userId} userId={principal.userId}/>
+    </> : null;
   }
   return <BrowserOfficeReviewQueue />;
 }

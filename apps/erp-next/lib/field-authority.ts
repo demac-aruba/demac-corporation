@@ -1,4 +1,7 @@
+import { parseFieldProcedureWorkspace, type FieldProcedureCommand } from './field-procedure-workspace';
+import { assertFieldProcedureTarget, parseFieldProcedureSummary, type FieldPartCommand, type FieldProcedureTarget } from './field-procedure-contract';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
+import { isTransientFirebaseError } from './firebase/request-error';
 import { firebaseClientConfig } from './firebase/client-config';
 import { loadFirebaseWebSession, requireFirebaseWebSession, type FirebaseWebSession } from './firebase/session';
 import {
@@ -61,6 +64,7 @@ import {
   type FieldOfficeReviewDecision,
 } from './field-office-review-contract';
 import { parseFieldHistoryJobResponse } from './field-history-contract';
+import { parseFieldProcedureExceptionQueueResponse } from './field-procedure-exception-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -193,6 +197,7 @@ export type {
   FieldSaleTransitionOption,
   FieldTransitionSaleLineResponse,
 } from './field-sale-contract';
+export type { FieldProcedureExceptionQueueItem, FieldProcedureExceptionQueueResponse } from './field-procedure-exception-contract';
 export type {
   FieldDecideOfficeReviewResponse,
   FieldBillingCandidate,
@@ -292,7 +297,7 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 function retryableRequestError(error: unknown) {
-  return error instanceof FieldAuthorityRequestError && error.retryable;
+  return (error instanceof FieldAuthorityRequestError && error.retryable) || isTransientFirebaseError(error);
 }
 
 function browserTransportFailure(error: unknown) {
@@ -451,6 +456,10 @@ export async function getFieldJob(workOrderId: string) {
 
 export async function getFieldOfficeReviewQueue() {
   return parseFieldOfficeReviewQueueResponse(await callFieldAuthority('get_office_review_queue', {}));
+}
+
+export async function getFieldProcedureExceptionQueue() {
+  return parseFieldProcedureExceptionQueueResponse(await callFieldAuthority('get_procedure_exception_queue', {}));
 }
 
 export async function submitFieldVisitForOfficeReview(
@@ -621,4 +630,46 @@ export async function recordFieldCustomerAcknowledgement(visitId: string, interv
   return parseFieldRecordCustomerAcknowledgementResponse(await callFieldAuthority('record_customer_report_acknowledgement', {
     visitId, interventionId, sectionId, receiverName, note, requestId,
   }));
+}
+
+/** Shared coordination never enters the generic offline outbox or a cached-success path. */
+async function callFieldProcedureAuthority<T>(target: FieldProcedureTarget, action: string, data: Record<string, unknown>, parse: (value: unknown, target: FieldProcedureTarget) => T) {
+  assertFieldProcedureTarget(target);
+  const assertOwner = () => {
+    if (loadFirebaseWebSession()?.uid !== target.ownerUserId) {
+      throw new FieldAuthorityRequestError('La sesión cambió. Abre el trabajo desde tu cuenta.', false, 'procedure_session_changed', 401);
+    }
+  };
+  assertOwner();
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 12_000);
+  let session: FirebaseWebSession;
+  try { session = await abortable(requireFirebaseWebSession(), controller.signal); }
+  finally { window.clearTimeout(timer); }
+  assertOwner();
+  if (session.uid !== target.ownerUserId) throw new FieldAuthorityRequestError('La sesión cambió.', false, 'procedure_session_changed', 401);
+  const response = await performFieldAuthorityRequest(session, action, data, 12_000);
+  assertOwner();
+  try { return parse(response, target); }
+  catch { throw new FieldAuthorityRequestError('Respuesta de procedimientos inválida. Vuelve a abrir el trabajo.', false, 'invalid_procedure_response', 409); }
+}
+export function getFieldProcedureSummary(target: FieldProcedureTarget) {
+  return callFieldProcedureAuthority(target, 'get_procedure_workspace', {visitId:target.visitId, interventionId:target.interventionId}, parseFieldProcedureSummary);
+}
+export function updateFieldProcedurePart(target: FieldProcedureTarget, command: FieldPartCommand, requestId: string) {
+  if (!requestId || requestId.length > 180) throw new Error('La solicitud necesita un identificador estable.');
+  return callFieldProcedureAuthority(target, 'record_procedure_action', {visitId:target.visitId, interventionId:target.interventionId, command, requestId}, parseFieldProcedureSummary);
+}
+export function isFieldProcedureTemporaryFailure(error: unknown) {
+  return retryableRequestError(error) && !(error instanceof FieldAuthorityRequestError && error.status === 401)
+    || browserTransportFailure(error);
+}
+
+/** Procedure execution uses the same authenticated authority; never the generic text outbox. */
+export function getFieldProcedureWorkspace(target: FieldProcedureTarget) {
+  return callFieldProcedureAuthority(target, 'get_procedure_workspace', {visitId:target.visitId, interventionId:target.interventionId}, parseFieldProcedureWorkspace);
+}
+export function recordFieldProcedureAction(target: FieldProcedureTarget, command: FieldProcedureCommand, requestId: string) {
+  if (!/^[-A-Za-z0-9_.:]{1,180}$/.test(requestId) || requestId.includes('..')) throw new Error('La solicitud necesita un identificador estable.');
+  return callFieldProcedureAuthority(target, 'record_procedure_action', {visitId:target.visitId, interventionId:target.interventionId, command, requestId}, parseFieldProcedureWorkspace);
 }

@@ -3,6 +3,10 @@
 import { useMemo, useState } from 'react';
 import type { FieldExecutionJobDetail } from '@/lib/field-authority';
 import styles from './technician-field-home.module.css';
+import { useProcedureForm } from './use-procedure-form';
+import { ProcedureFormStatus } from './procedure-form-status';
+import { fieldVisitFormTarget } from './field-form-context';
+import type { FieldVisitFormTarget } from '../../lib/field-procedure-capture-store';
 
 export type CustomerAcknowledgementInput = {
   interventionId: string;
@@ -30,9 +34,7 @@ export function CustomerAcknowledgementControls({
   error: string | null;
   onRecord: (input: CustomerAcknowledgementInput) => Promise<boolean>;
 }) {
-  const [receiverByKey, setReceiverByKey] = useState<Record<string, string>>({});
-  const [noteByKey, setNoteByKey] = useState<Record<string, string>>({});
-  const [localErrorByKey, setLocalErrorByKey] = useState<Record<string, string>>({});
+  const target=fieldVisitFormTarget(job);
   const optionsByIntervention = useMemo(() => new Map(
     job.reportCustomerAcknowledgementOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
   ), [job.reportCustomerAcknowledgementOptions]);
@@ -56,11 +58,20 @@ export function CustomerAcknowledgementControls({
         <div className={styles.interventionGroup}>
           <div className={styles.plannedTitle}>CONFIRMACIÓN DEL CLIENTE</div>
           <p className={styles.helper}>El reconocimiento queda como evidencia inmutable del reporte. Una corrección posterior requiere revisión de oficina.</p>
-          {sections.map((section) => {
-            const key = `${section.interventionId}:${section.sectionId}`;
-            const receiverName = receiverByKey[key] ?? '';
-            const note = noteByKey[key] ?? '';
-            const localError = localErrorByKey[key] ?? '';
+          {sections.map(section=><AckSection key={JSON.stringify([target,section.interventionId,section.sectionId])} section={section} target={target} mutationBusy={mutationBusy} savingKey={savingKey} onRecord={onRecord}/>)}
+          {error ? <div className={styles.mutationError}>{error}</div> : null}
+        </div>
+      ) : null;
+}
+
+type AcknowledgementSection = {interventionId:string;sectionId:string;title:string;required:boolean;allowed:boolean;
+  acknowledgement:FieldExecutionJobDetail['interventionReports'][number]['customerAcknowledgements'][number]|undefined};
+function AckSection({section,target,mutationBusy:mutating,savingKey,onRecord}:{section:AcknowledgementSection;target:FieldVisitFormTarget|null;mutationBusy:boolean;savingKey:string|null;onRecord:(input:CustomerAcknowledgementInput)=>Promise<boolean>}){
+  const key=section.interventionId+':'+section.sectionId;
+  const draft=useProcedureForm(target,'ack:'+key,{receiverName:'',note:''});
+  const {receiverName,note}=draft.value;
+  const [localError,setLocalError]=useState('');
+  const mutationBusy=mutating||!draft.ready;
             if (section.acknowledgement) {
               return (
                 <div className={styles.interventionForm} key={key}>
@@ -76,12 +87,13 @@ export function CustomerAcknowledgementControls({
               );
             }
             const submit = async () => {
+              if(!await draft.flush())return;
               const normalizedReceiver = receiverName.trim();
               if (!normalizedReceiver) {
-                setLocalErrorByKey((current) => ({ ...current, [key]: 'Escribe el nombre de la persona que recibió y revisó el reporte.' }));
+                setLocalError('Escribe el nombre de la persona que recibió y revisó el reporte.');
                 return;
               }
-              setLocalErrorByKey((current) => ({ ...current, [key]: '' }));
+              setLocalError('');
               const success = await onRecord({
                 interventionId: section.interventionId,
                 sectionId: section.sectionId,
@@ -89,8 +101,7 @@ export function CustomerAcknowledgementControls({
                 note: note.trim(),
               });
               if (success) {
-                setReceiverByKey((current) => ({ ...current, [key]: '' }));
-                setNoteByKey((current) => ({ ...current, [key]: '' }));
+                draft.clear();
               }
             };
             return (
@@ -101,14 +112,15 @@ export function CustomerAcknowledgementControls({
                 </div>
                 {section.allowed ? (
                   <>
+                    <ProcedureFormStatus draft={draft}/>
                     <label>
                       <span>Nombre del cliente / receptor</span>
                       <input
                         className={styles.select}
                         disabled={mutationBusy}
                         value={receiverName}
-                        onChange={(event) => setReceiverByKey((current) => ({ ...current, [key]: event.target.value }))}
-                        placeholder="Ej. Maria Customer"
+                        onChange={(event) => draft.field('receiverName',event.target.value)}
+                        maxLength={180} placeholder="Ej. Maria Customer"
                       />
                     </label>
                     <label style={{ gridColumn: '1 / -1' }}>
@@ -117,12 +129,12 @@ export function CustomerAcknowledgementControls({
                         className={styles.select}
                         disabled={mutationBusy}
                         value={note}
-                        onChange={(event) => setNoteByKey((current) => ({ ...current, [key]: event.target.value }))}
-                        placeholder="Ej. Reporte explicado y revisado en sitio."
+                        onChange={(event) => draft.field('note',event.target.value)}
+                        maxLength={1500} placeholder="Ej. Reporte explicado y revisado en sitio."
                         rows={2}
                       />
                     </label>
-                    <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy} type="button" onClick={() => void submit()}>
+                    <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy||draft.saving||Boolean(draft.error)} type="button" onClick={() => void submit()}>
                       {savingKey === key ? 'Registrando…' : 'Registrar confirmación verbal'}
                     </button>
                   </>
@@ -134,8 +146,5 @@ export function CustomerAcknowledgementControls({
                 {localError ? <div className={styles.mutationError} style={{ gridColumn: '1 / -1' }}>{localError}</div> : null}
               </div>
             );
-          })}
-          {error ? <div className={styles.mutationError}>{error}</div> : null}
-        </div>
-      ) : null;
+
 }

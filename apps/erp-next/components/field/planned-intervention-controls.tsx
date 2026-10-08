@@ -1,11 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import {useState} from 'react';
+import {FieldAuthoredForm} from './field-authored-form';
+import {fieldVisitFormTarget} from './field-form-context';
+import {requestProcedureExit} from '../../lib/field-procedure-navigation';
 import type {
   FieldExecutionJobDetail,
   FieldPlannedWorkDispositionReason,
   FieldWorkInterventionStatus,
 } from '@/lib/field-authority';
+import { FieldAirContext, FieldChoiceCards, FieldServiceCards, fieldAirChoices, fieldServiceStyles as picker } from './field-service-picker';
 import { presentedFieldPriceLabel } from './field-price-display';
 import styles from './technician-field-home.module.css';
 
@@ -56,7 +60,7 @@ function interventionStatusLabel(status: FieldWorkInterventionStatus) {
   return 'Completada';
 }
 
-export function PlannedInterventionControls({
+function PlannedInterventionContent({
   job,
   mutationBusy,
   creatingVisitAssetId,
@@ -69,36 +73,12 @@ export function PlannedInterventionControls({
   error: string | null;
   onCreate: (input: PlannedWorkMutationInput) => void;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [dispositionDrafts, setDispositionDrafts] = useState<Record<string, DispositionDraft>>({});
+  const [selectedAir, setSelectedAir] = useState('');
   const plannedWorkById = new Map(job.plannedWork.map((line) => [line.id, line]));
   const serviceById = new Map(job.availableFieldServices.map((service) => [service.id, service]));
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
   const equipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
   const scopeChangeById = new Map(job.scopeChanges.map((scopeChange) => [scopeChange.id, scopeChange]));
-
-  const setDraft = (visitAssetId: string, changes: Partial<Draft>) => {
-    setDrafts((current) => ({
-      ...current,
-      [visitAssetId]: {
-        plannedWorkLineId: current[visitAssetId]?.plannedWorkLineId ?? '',
-        serviceCatalogItemId: current[visitAssetId]?.serviceCatalogItemId ?? '',
-        ...changes,
-      },
-    }));
-  };
-
-  const setDispositionDraft = (plannedWorkLineId: string, changes: Partial<DispositionDraft>, maxQuantity: number) => {
-    setDispositionDrafts((current) => ({
-      ...current,
-      [plannedWorkLineId]: {
-        reasonCode: current[plannedWorkLineId]?.reasonCode ?? '',
-        note: current[plannedWorkLineId]?.note ?? '',
-        ...changes,
-        quantity: Math.max(1, Math.min(maxQuantity, changes.quantity ?? current[plannedWorkLineId]?.quantity ?? 1)),
-      },
-    }));
-  };
 
   return (
     <div className={styles.interventionGroup}>
@@ -140,51 +120,62 @@ export function PlannedInterventionControls({
         </div>
       ) : null}
 
-      {job.plannedInterventionOptions.map((option) => {
-        const visitAsset = visitAssetById.get(option.visitAssetId);
-        if (!visitAsset) return null;
-        const equipment = equipmentById.get(visitAsset.assetId);
-        const rawDraft = drafts[option.visitAssetId] ?? { plannedWorkLineId: '', serviceCatalogItemId: '' };
-        const plannedWorkLineId = option.plannedWorkLineIds.includes(rawDraft.plannedWorkLineId)
-          ? rawDraft.plannedWorkLineId
-          : '';
-        const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId)
-          ? rawDraft.serviceCatalogItemId
-          : '';
-        const canSubmit = Boolean(plannedWorkLineId && serviceCatalogItemId) && !mutationBusy;
-        return (
-          <div className={styles.interventionForm} key={option.visitAssetId}>
-            <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
-            <label>
-              <span>Línea programada</span>
-              <select className={styles.select} disabled={mutationBusy} value={plannedWorkLineId} onChange={(event) => setDraft(option.visitAssetId, { plannedWorkLineId: event.target.value })}>
-                <option value="">Selecciona el trabajo programado</option>
-                {option.plannedWorkLineIds.map((lineId) => (
-                  <option key={lineId} value={lineId}>{plannedWorkById.get(lineId)?.label || lineId}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Servicio real realizado / a realizar</span>
-              <select className={styles.select} disabled={mutationBusy} value={serviceCatalogItemId} onChange={(event) => setDraft(option.visitAssetId, { serviceCatalogItemId: event.target.value })}>
-                <option value="">Selecciona el servicio canónico</option>
-                {job.availableFieldServices.map((service) => (
-                  <option key={service.id} value={service.id}>{service.label}</option>
-                ))}
-              </select>
-            </label>
-            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={() => onCreate({ kind: 'intervention', visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId })}>
-              {creatingVisitAssetId === option.visitAssetId ? 'Vinculando…' : 'Vincular trabajo planificado'}
-            </button>
-          </div>
-        );
-      })}
+      <section className={picker.panel} aria-label="Seleccionar servicio planificado">
+        <h3 className={picker.heading}>Seleccionar servicio</h3>
+        <p className={picker.help}>Vincula el trabajo programado al aire correcto. Seleccionar una tarjeta no inicia ni completa el servicio.</p>
+        <FieldChoiceCards title="¿En qué aire trabajarás?"
+          choices={fieldAirChoices(job, job.canAddPlannedIntervention ? job.plannedInterventionOptions.map((option) => option.visitAssetId) : [])}
+          value={selectedAir} disabled={mutationBusy} onChange={id=>{if(requestProcedureExit())setSelectedAir(id);}} />
+        {!job.canAddPlannedIntervention || !job.plannedInterventionOptions.length ? <p className={picker.notice} role="status">
+          No hay trabajo planificado disponible para vincular en este momento. Revisa los servicios registrados, los aires incluidos y el estado de la visita.
+        </p> : null}
+        {job.canAddPlannedIntervention && job.plannedInterventionOptions.filter((option) => option.visitAssetId === selectedAir).map((option) => {
+          if (!visitAssetById.has(option.visitAssetId)) return null;
+          const target=fieldVisitFormTarget(job);
+          return <FieldAuthoredForm key={JSON.stringify([target,option.visitAssetId])} target={target} scope={'planned:'+option.visitAssetId} defaults={{plannedWorkLineId:'',serviceCatalogItemId:''}}>{form=>{
+          const rawDraft=form.value;
+          const setDraft=(_id:string,changes:Partial<Draft>)=>form.change({...form.value,...changes});
+          const blocked=mutationBusy||!form.ready;
+          const plannedWorkLineId = option.plannedWorkLineIds.includes(rawDraft.plannedWorkLineId) && plannedWorkById.has(rawDraft.plannedWorkLineId) ? rawDraft.plannedWorkLineId : '';
+          const serviceCatalogItemId = serviceById.has(rawDraft.serviceCatalogItemId) ? rawDraft.serviceCatalogItemId : '';
+          const canSubmit = Boolean(plannedWorkLineId && serviceCatalogItemId) && !blocked&&!form.saving&&!form.error;
+          const selectionChanged = Boolean((rawDraft.plannedWorkLineId && !plannedWorkLineId) || (rawDraft.serviceCatalogItemId && !serviceCatalogItemId));
+          return <div className={picker.choiceList} key={option.visitAssetId}>
+            <FieldAirContext job={job} visitAssetId={option.visitAssetId} />
+            <FieldChoiceCards title="Trabajo programado por oficina"
+              choices={option.plannedWorkLineIds.flatMap((id) => {
+                const line = plannedWorkById.get(id);
+                return line ? [{ id, label: line.label, detail: 'Plan original · no se modifica la cita' }] : [];
+              })} value={plannedWorkLineId} disabled={blocked}
+              onChange={(id) => setDraft(option.visitAssetId, { plannedWorkLineId: id })} />
+            <FieldServiceCards services={job.availableFieldServices} value={serviceCatalogItemId} disabled={blocked}
+              onChange={(id) => setDraft(option.visitAssetId, { serviceCatalogItemId: id })} />
+            {selectionChanged ? <p className={picker.error} role="status">Las opciones disponibles cambiaron. Revisa la selección antes de guardar.</p> : null}
+            {plannedWorkLineId && serviceCatalogItemId ? <div className={picker.review} aria-label="Resumen de selección">
+              <span>Programado: <strong>{plannedWorkById.get(plannedWorkLineId)?.label}</strong></span>
+              <span>Servicio elegido: <strong>{serviceById.get(serviceCatalogItemId)?.label}</strong></span>
+              <span>Guardar registra la selección; no marca el servicio realizado ni crea una factura.</span>
+            </div> : null}
+            <div className={picker.actions}>
+              <button className={picker.secondary} disabled={blocked} type="button" onClick={() => setDraft(option.visitAssetId, { plannedWorkLineId: '', serviceCatalogItemId: '' })}>Limpiar selección</button>
+              <button className={picker.primary} disabled={!canSubmit} type="button" onClick={async () => {
+                if (!canSubmit||!await form.flush()) return;
+                onCreate({ kind: 'intervention', visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId });
+              }}>{creatingVisitAssetId === option.visitAssetId ? 'Guardando servicio…' : 'Guardar servicio para este aire'}</button>
+            </div>
+          </div>;}}</FieldAuthoredForm>;
+        })}
+      </section>
 
       {job.plannedWorkDispositionOptions.map((option) => {
-        const draft = dispositionDrafts[option.plannedWorkLineId] ?? { quantity: 1, reasonCode: '', note: '' };
+        const target=fieldVisitFormTarget(job);
+        return <FieldAuthoredForm key={JSON.stringify([target,option.plannedWorkLineId])} target={target} scope={'disposition:'+option.plannedWorkLineId} defaults={{quantity:'1',reasonCode:'',note:''}}>{form=>{
+        const draft={...form.value,quantity:Number(form.value.quantity),reasonCode:form.value.reasonCode as DispositionDraft['reasonCode']};
+        const setDispositionDraft=(_id:string,changes:Partial<DispositionDraft>,max:number)=>form.change({...form.value,...changes,quantity:String(Math.max(1,Math.min(max,changes.quantity??draft.quantity)))});
+        const blocked=mutationBusy||!form.ready;
         const reasonCode = draft.reasonCode;
         const needsNote = reasonCode === 'other';
-        const canSubmit = Boolean(reasonCode && (!needsNote || draft.note.trim().length >= 3)) && !mutationBusy;
+        const canSubmit = Boolean(reasonCode && (!needsNote || draft.note.trim().length >= 3)) && !blocked&&!form.saving&&!form.error;
         const busyKey = `disposition:${option.plannedWorkLineId}`;
         return (
           <div className={styles.interventionForm} key={busyKey}>
@@ -194,24 +185,24 @@ export function PlannedInterventionControls({
             </p>
             <label>
               <span>Cantidad no realizada</span>
-              <input className={styles.select} disabled={mutationBusy} type="number" min={1} max={option.maxQuantity} step={1} value={draft.quantity} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { quantity: Number(event.target.value) }, option.maxQuantity)} />
+              <input className={styles.select} disabled={blocked} type="number" min={1} max={option.maxQuantity} step={1} value={draft.quantity} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { quantity: Number(event.target.value) }, option.maxQuantity)} />
             </label>
             <label>
               <span>Razón</span>
-              <select className={styles.select} disabled={mutationBusy} value={reasonCode} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { reasonCode: event.target.value as FieldPlannedWorkDispositionReason }, option.maxQuantity)}>
+              <select className={styles.select} disabled={blocked} value={reasonCode} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { reasonCode: event.target.value as FieldPlannedWorkDispositionReason }, option.maxQuantity)}>
                 <option value="">Selecciona una razón</option>
                 {Object.entries(REASON_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label style={{ gridColumn: '1 / -1' }}>
               <span>Nota {needsNote ? '(requerida)' : '(opcional)'}</span>
-              <textarea className={styles.select} disabled={mutationBusy} rows={2} value={draft.note} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { note: event.target.value }, option.maxQuantity)} placeholder="Explica brevemente cuando sea necesario." />
+              <textarea className={styles.select} disabled={blocked} rows={2} value={draft.note} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { note: event.target.value }, option.maxQuantity)} placeholder="Explica brevemente cuando sea necesario." />
             </label>
-            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={() => reasonCode && onCreate({ kind: 'disposition', plannedWorkLineId: option.plannedWorkLineId, quantity: draft.quantity, reasonCode, note: draft.note.trim() })}>
+            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={async()=>{if(reasonCode&&await form.flush())onCreate({ kind: 'disposition', plannedWorkLineId: option.plannedWorkLineId, quantity: draft.quantity, reasonCode, note: draft.note.trim() });}}>
               {creatingVisitAssetId === busyKey ? 'Registrando…' : 'Registrar trabajo no realizado'}
             </button>
           </div>
-        );
+        );}}</FieldAuthoredForm>;
       })}
 
       {!job.canAddPlannedIntervention && !job.canRecordPlannedWorkDisposition && job.fieldVisit ? (
@@ -220,4 +211,9 @@ export function PlannedInterventionControls({
       {error ? <div className={styles.mutationError}>{error}</div> : null}
     </div>
   );
+}
+
+/** Existing controller retains mutation locks, request IDs, refresh, and server errors. */
+export function PlannedInterventionControls(props: Parameters<typeof PlannedInterventionContent>[0]) {
+  return <PlannedInterventionContent key={JSON.stringify([fieldVisitFormTarget(props.job)])} {...props} />;
 }

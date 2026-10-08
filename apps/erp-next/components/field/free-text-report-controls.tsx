@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { FieldExecutionJobDetail } from '@/lib/field-authority';
-import { deleteFieldOfflineDraft, readFieldOfflineDraft, saveFieldOfflineDraft } from '@/lib/field-offline';
+import { readFieldOfflineDraft } from '@/lib/field-offline';
+import {useProcedureForm} from './use-procedure-form';
+import {ProcedureFormStatus} from './procedure-form-status';
+import type {FieldVisitFormTarget} from '../../lib/field-procedure-capture-store';
 import styles from './technician-field-home.module.css';
 
 export type ReportFreeTextInput = {
@@ -26,7 +29,9 @@ function FreeTextSection({
   draftOwnerUserId,
   workOrderId,
   onSave,
+  target,
 }: {
+  target:FieldVisitFormTarget|null;
   interventionId: string;
   sectionId: string;
   title: string;
@@ -41,50 +46,19 @@ function FreeTextSection({
   workOrderId: string;
   onSave: (input: ReportFreeTextInput) => Promise<boolean>;
 }) {
-  const [value, setValue] = useState(canonicalValue);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [draftNotice, setDraftNotice] = useState<string | null>(null);
-  const editRevisionRef = useRef(0);
-
-  useEffect(() => {
-    let active = true;
-    const editRevision = editRevisionRef.current;
-    setValue(canonicalValue);
-    setDraftNotice(null);
-    void readFieldOfflineDraft(draftOwnerUserId, workOrderId, interventionId, sectionId).then(async (draft) => {
-      if (!active || !draft || editRevisionRef.current !== editRevision) return;
-      if (draft.value.trim() === canonicalValue) {
-        await deleteFieldOfflineDraft(draftOwnerUserId, workOrderId, interventionId, sectionId);
-      } else if (draft.baseVersion === expectedVersion) {
-        setValue(draft.value);
-        setDraftNotice('Borrador recuperado de este dispositivo; todavía no es contenido canónico.');
-      } else {
-        setDraftNotice(`Hay un borrador basado en la versión ${draft.baseVersion}; no se aplicó porque el servidor ya muestra la versión ${expectedVersion}.`);
-      }
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [canonicalValue, draftOwnerUserId, expectedVersion, interventionId, sectionId, workOrderId]);
-
-  useEffect(() => {
-    if (value.trim() === canonicalValue || value.length > 5000) return undefined;
-    const timer = window.setTimeout(() => {
-      void saveFieldOfflineDraft({
-        ownerUserId: draftOwnerUserId, workOrderId, interventionId, sectionId, baseVersion: expectedVersion, value,
-      }).then(() => setDraftNotice('Borrador guardado en este dispositivo; todavía no es contenido canónico.')).catch(() => undefined);
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [canonicalValue, draftOwnerUserId, expectedVersion, interventionId, sectionId, value, workOrderId]);
-
-  const changed = value.trim() !== canonicalValue;
-  const save = async () => {
-    if (value.length > 5000) {
-      setLocalError('La nota técnica no puede superar 5000 caracteres.');
-      return;
-    }
+  const draft=useProcedureForm(target,'free-text:'+interventionId+':'+sectionId,{value:canonicalValue,baseVersion:String(expectedVersion)},async()=>{
+    const original=await readFieldOfflineDraft(draftOwnerUserId,workOrderId,interventionId,sectionId);
+    return original?{value:original.value,baseVersion:String(original.baseVersion)}:null;
+  });
+  const {value}=draft.value;
+  const [localError,setLocalError]=useState<string|null>(null);
+  const changed=value.trim()!==canonicalValue;
+  const stale=draft.value.baseVersion!==String(expectedVersion)&&changed;
+  const save=async()=>{
+    if(stale||!await draft.flush())return;
     setLocalError(null);
-    if (await onSave({ interventionId, sectionId, value, expectedVersion })) {
-      await deleteFieldOfflineDraft(draftOwnerUserId, workOrderId, interventionId, sectionId).catch(() => undefined);
-      setDraftNotice(null);
+    if(await onSave({interventionId,sectionId,value,expectedVersion})){
+      draft.change({value,baseVersion:String(expectedVersion+1)});
     }
   };
 
@@ -98,17 +72,23 @@ function FreeTextSection({
         <span>Nota técnica</span>
         <textarea
           className={styles.select}
-          disabled={!allowed || (mutationBusy && !allowDraftWhileOffline)}
+          disabled={!allowed || !draft.ready || (mutationBusy && !allowDraftWhileOffline)}
           value={value}
           maxLength={5000}
           rows={4}
-          onChange={(event) => { editRevisionRef.current += 1; setValue(event.target.value); }}
+          onChange={(event) => draft.change({value:event.target.value,baseVersion:changed?draft.value.baseVersion:String(expectedVersion)})}
           placeholder="Registra observaciones técnicas relevantes de esta intervención."
         />
         <small className={styles.helper}>{value.length}/5000 caracteres</small>
       </label>
+      <ProcedureFormStatus draft={draft}/>
+      {stale?<div role="alert">El servidor tiene una versión distinta. Compara la nota antes de continuar.
+        <p>Nota actual del servidor: {canonicalValue||'Sin contenido'}</p>
+        <button type="button" disabled={mutationBusy||!draft.ready||draft.saving||Boolean(draft.error)} onClick={()=>draft.change({value,baseVersion:String(expectedVersion)})}>Comparé las notas; conservar mi texto</button>
+        <button type="button" disabled={mutationBusy||!draft.ready||draft.saving||Boolean(draft.error)} onClick={()=>draft.change({value:canonicalValue,baseVersion:String(expectedVersion)})}>Usar nota del servidor</button>
+      </div>:null}
       {allowed ? (
-        <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy || !changed} type="button" onClick={() => void save()}>
+        <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy || !changed || stale || !draft.ready || draft.saving || Boolean(draft.error)} type="button" onClick={() => void save()}>
           {saving ? 'Guardando nota…' : 'Guardar nota'}
         </button>
       ) : (
@@ -117,7 +97,6 @@ function FreeTextSection({
         </p>
       )}
       {localError ? <div className={styles.mutationError} style={{ gridColumn: '1 / -1' }}>{localError}</div> : null}
-      {draftNotice ? <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>{draftNotice}</div> : null}
     </div>
   );
 }
@@ -171,7 +150,8 @@ export function FreeTextReportControls({
         const key = `${section.interventionId}:${section.sectionId}`;
         return (
           <FreeTextSection
-            key={key}
+            key={JSON.stringify([draftOwnerUserId,job.workOrderId,job.fieldVisit?.id,key])}
+            target={job.fieldVisit?{ownerUserId:draftOwnerUserId,workOrderId:job.workOrderId,visitId:job.fieldVisit.id}:null}
             {...section}
             mutationBusy={mutationBusy}
             saving={savingKey === key}

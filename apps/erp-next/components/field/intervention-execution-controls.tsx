@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import {FieldAuthoredForm} from './field-authored-form';
+import {fieldVisitFormTarget} from './field-form-context';
+
 import type {
   FieldExecutionJobDetail,
   FieldInterventionExecutionTarget,
@@ -38,7 +40,6 @@ export function InterventionExecutionControls({
   error: string | null;
   onTransition: (input: TransitionInput) => void;
 }) {
-  const [notes, setNotes] = useState<Record<string, string>>({});
   const interventionById = new Map(job.workInterventions.map((intervention) => [intervention.id, intervention]));
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
   const equipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
@@ -53,7 +54,10 @@ export function InterventionExecutionControls({
         if (!intervention) return null;
         const visitAsset = visitAssetById.get(intervention.visitAssetId);
         const equipment = visitAsset ? equipmentById.get(visitAsset.assetId) : undefined;
-        const note = notes[intervention.id] ?? '';
+        const formTarget=fieldVisitFormTarget(job);
+        return <FieldAuthoredForm key={JSON.stringify([formTarget,intervention.id])} target={formTarget} scope={'execution:'+intervention.id} defaults={{note:''}}>{form=>{
+        const note=form.value.note;
+        const blocked=mutationBusy||!form.ready;
         const hasReasonTarget = option.allowedTargets.some(reasonRequired);
         return (
           <div className={styles.interventionForm} key={intervention.id}>
@@ -64,9 +68,9 @@ export function InterventionExecutionControls({
                 <span>Razón / nota de resultado</span>
                 <textarea
                   className={styles.textarea}
-                  disabled={mutationBusy}
+                  disabled={blocked} maxLength={1500}
                   value={note}
-                  onChange={(event) => setNotes((current) => ({ ...current, [intervention.id]: event.target.value }))}
+                  onChange={(event) => form.field('note',event.target.value)}
                   placeholder="Obligatoria para pendiente por pieza o no realizado"
                   rows={3}
                 />
@@ -79,15 +83,15 @@ export function InterventionExecutionControls({
                 return (
                   <button
                     className={`${styles.action} ${target === 'in_progress' || target === 'completed' ? styles.primary : ''}`}
-                    disabled={mutationBusy || !reasonOk}
+                    disabled={blocked||form.saving||Boolean(form.error)||!reasonOk}
                     key={target}
                     type="button"
-                    onClick={() => onTransition({
+                    onClick={async () => {if(await form.flush())onTransition({
                       interventionId: intervention.id,
                       target,
                       expectedVersion: intervention.version,
                       note: target === 'in_progress' ? '' : note.trim(),
-                    })}
+                    });}}
                   >
                     {active ? 'Procesando…' : TARGET_LABELS[target]}
                   </button>
@@ -95,7 +99,7 @@ export function InterventionExecutionControls({
               })}
             </div>
           </div>
-        );
+        );}}</FieldAuthoredForm>;
       })}
       {error ? <div className={styles.mutationError}>{error}</div> : null}
     </div>
