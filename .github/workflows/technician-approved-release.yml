@@ -1,0 +1,65 @@
+name: Technician owner-approved production release
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/technician-approved-release.yml'
+      - 'scripts/technician-approved-release*'
+  push:
+    branches: [release/technician-pr526-20261008]
+permissions:
+  contents: read
+concurrency:
+  group: field-operations-authority-production
+  cancel-in-progress: false
+jobs:
+  release-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/technician-approved-release.cjs
+      - run: node --test scripts/technician-approved-release.test.cjs scripts/booking-references-release-config.test.cjs
+  approved-field-release:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/technician-pr526-20261008' && !contains(github.event.head_commit.message, '[merge-only]')
+    needs: release-guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - name: Preserve Field authority gates before credentials
+        run: |
+          npm run validate:firebase --prefix functions
+          npm run test:field-authority --prefix functions
+      - name: Require the compatible reviewed frontend on both actual ERP domains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if node scripts/technician-approved-release.cjs --frontend; then exit 0; fi
+            sleep 15
+          done
+          echo '::error::Reviewed frontend not serving; no backend deployment was attempted.'
+          exit 1
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish only the existing Field function without runtime or data changes
+        run: node scripts/technician-approved-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technician-approved-release
+          path: ${{ runner.temp }}/technician-approved-release/summary.json
+          if-no-files-found: warn
+          retention-days: 14

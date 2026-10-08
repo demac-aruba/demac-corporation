@@ -56,7 +56,7 @@ saveResults('running');
     });
     try {
       await page.goto(`${base}/login/`);
-      await page.getByRole('heading', { name: 'Iniciar sesión', exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Sign in to DEMAC ERP', exact: true }).waitFor();
       await page.screenshot({ path: path.join(output, `00-login-${name}.png`) });
       phase = 'password-login';
       await page.getByLabel('Email', { exact: true }).fill(account.email);
