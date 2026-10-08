@@ -89,13 +89,17 @@ El proyecto secundario `demac-corporation.vercel.app` no es el ERP live.
 
 Después de todos los controles del candidato, integrar PR #526 con `[merge-only]`
 para mantener las protecciones existentes y evitar el despliegue automático amplio.
-Crear `release/technician-pr526-20261008` desde el merge y añadir un único commit
+Crear `release/technician-pr526-recovery-20261008` desde el merge corregido y añadir un único commit
 de autorización documental cuyo padre sea el `main` vigente. Publicar ese SHA en
 Vercel producción con la configuración existente. El workflow dedicado exige que
 ambos dominios sirvan exactamente ese SHA y el login original antes de obtener
 credenciales o actualizar únicamente el código de `fieldOperationsAuthority`.
 
-El publicador conserva el lock de dependencias de la función en ejecución, compara
+El publicador conserva el lock de dependencias de la función en ejecución cuando
+existe. La fuente histórica de Field no incluía lock: en ese caso exige que las
+dependencias declaradas sean idénticas y publica exactamente el lock generado por
+la instalación que pasó las pruebas obligatorias del mismo job. No resuelve otro
+conjunto de paquetes después de probar. Compara
 toda su configuración y verifica los bytes de fuente publicados. Comprueba además
 que seis funciones vecinas y el programador diario no cambien. Rechaza otra rama,
 otro repositorio, código diferente de `main`, dependencias incompatibles, movimiento
@@ -104,3 +108,11 @@ la revisión/fuente anterior para recuperación sin exponer configuración o sec
 No escribe datos de clientes, servicios ni catálogo. La versión frontend anterior
 es `dpl_7E94hXZQwhJQn5WRFdmM59dvxWKS`; después de crear datos de protocolo, conservar
 lectores/backend compatibles según la sección de reversión.
+
+El primer frontend se publicó como `dpl_HsqxzrNp7nukijf9x1ppqdL4MdVY`, fuente
+`23ba249757ef3a07d67721b5e30302a871b136fa`. Los dos intentos del workflow
+`37854324540` terminaron antes del despliegue del backend porque la fuente anterior
+no contenía `package-lock.json`. El diagnóstico de solo lectura `37855128604`
+confirmó siete funciones ACTIVE, el programador sin cambios y la ausencia del lock
+en la fuente de `fieldoperationsauthority-00006-bag`. La recuperación requiere
+publicar el SHA documental corregido y pasar de nuevo todos los controles.
