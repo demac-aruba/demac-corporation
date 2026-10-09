@@ -72,6 +72,22 @@ type AddToolDraft = {
   quantity: string;
   notes: string;
 };
+type BackgroundAddToolTask = {
+  requestId: string;
+  label: string;
+  vanLabel: string;
+  file: File;
+  input: Omit<AddInventoryToolToVanInput, 'photoUrl' | 'photoStoragePath' | 'thumbnailUrl' | 'thumbnailStoragePath'>;
+  uploadedPhoto?: InventoryToolPhotoUpload;
+};
+type BackgroundToolJob = {
+  requestId: string;
+  label: string;
+  vanLabel: string;
+  status: 'uploading' | 'saving' | 'complete' | 'failed';
+  task?: BackgroundAddToolTask;
+  error?: string;
+};
 
 const TOOL_CONDITIONS = ['Nueva', 'Poco uso', 'Uso medio', 'Muy usada', 'Requiere reemplazo', 'No inspeccionada'] as const;
 const passthroughImageLoader = ({ src }: ImageLoaderProps) => src;
@@ -221,11 +237,23 @@ export function ConsolidatedInventoryWorkspace() {
   const [addToolDraft, setAddToolDraft] = useState<AddToolDraft | null>(null);
   const [addToolPhoto, setAddToolPhoto] = useState<File | null>(null);
   const [addToolPhotoPreview, setAddToolPhotoPreview] = useState('');
-  const [uploadedToolPhoto, setUploadedToolPhoto] = useState<InventoryToolPhotoUpload | null>(null);
-  const [addToolStage, setAddToolStage] = useState('');
+  const [backgroundToolJob, setBackgroundToolJob] = useState<BackgroundToolJob | null>(null);
   const [mobileToolQuery, setMobileToolQuery] = useState('');
   const [mobileToolAction, setMobileToolAction] = useState<'summary' | 'edit' | 'transfer'>('summary');
   const operationsLoadStarted = useRef(false);
+  const toolProfileHistoryEntry = useRef(false);
+  const backgroundToolJobRunning = backgroundToolJob?.status === 'uploading' || backgroundToolJob?.status === 'saving';
+
+  const closeToolProfile = useCallback(() => {
+    const shouldConsumeHistory = typeof window !== 'undefined'
+      && toolProfileHistoryEntry.current
+      && window.history.state?.inventoryOverlay === 'tool-profile';
+    toolProfileHistoryEntry.current = false;
+    setToolLightbox('');
+    setMobileToolAction('summary');
+    setToolEdit(null);
+    if (shouldConsumeHistory) window.history.back();
+  }, []);
 
   const refresh = useCallback(async () => {
     const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
@@ -277,23 +305,26 @@ export function ConsolidatedInventoryWorkspace() {
     const closeOverlay = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (toolLightbox) setToolLightbox('');
-      else if (toolEdit) setToolEdit(null);
-      else if (!addToolStage) {
+      else if (toolEdit) closeToolProfile();
+      else {
         setError('');
         setAddToolDraft(null);
         setAddToolPhoto(null);
         setAddToolPhotoPreview('');
-        setUploadedToolPhoto(null);
       }
     };
     window.addEventListener('keydown', closeOverlay);
     return () => window.removeEventListener('keydown', closeOverlay);
-  }, [addToolDraft, addToolStage, toolEdit, toolLightbox]);
+  }, [addToolDraft, closeToolProfile, toolEdit, toolLightbox]);
   useEffect(() => () => {
     if (addToolPhotoPreview) URL.revokeObjectURL(addToolPhotoPreview);
   }, [addToolPhotoPreview]);
   useEffect(() => {
     const syncFromHistory = () => {
+      toolProfileHistoryEntry.current = false;
+      setToolLightbox('');
+      setToolEdit(null);
+      setMobileToolAction('summary');
       const params = new URLSearchParams(window.location.search);
       const requestedView = params.get('inventoryView');
       const requestedSection = params.get('vanSection');
@@ -610,6 +641,11 @@ export function ConsolidatedInventoryWorkspace() {
   function beginToolEdit(asset: InventoryToolAsset) {
     const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
     const purchaseCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+    if (typeof window !== 'undefined' && !toolProfileHistoryEntry.current) {
+      const currentState = window.history.state && typeof window.history.state === 'object' ? window.history.state : {};
+      window.history.pushState({ ...currentState, inventoryOverlay: 'tool-profile', inventoryToolId: asset.id }, '', window.location.href);
+      toolProfileHistoryEntry.current = true;
+    }
     setMobileToolAction('summary');
     setToolEdit({
       asset,
@@ -643,7 +679,7 @@ export function ConsolidatedInventoryWorkspace() {
         purchaseCost,
         ...(toolEdit.asset.trackingMode === 'quantity' ? { quantityExpected, quantityPresent } : {}),
       });
-      setToolEdit(null);
+      closeToolProfile();
     }, 'Tool details updated.');
   }
 
@@ -660,7 +696,7 @@ export function ConsolidatedInventoryWorkspace() {
         destinationLocationId: toolEdit.destinationLocationId,
         reason: toolEdit.transferReason,
       });
-      setToolEdit(null);
+      closeToolProfile();
     }, 'Tool transferred and movement recorded.');
   }
 
@@ -687,23 +723,19 @@ export function ConsolidatedInventoryWorkspace() {
   }
 
   function openAddTool(catalog?: InventoryToolCatalogItem) {
-    if (!activeVan) return;
+    if (!activeVan || backgroundToolJobRunning) return;
     setError('');
     setNotice('');
-    setAddToolStage('');
     setAddToolPhoto(null);
     setAddToolPhotoPreview('');
-    setUploadedToolPhoto(null);
     setAddToolDraft(addToolDraftFor(activeVan.id, catalog));
   }
 
   function closeAddTool() {
-    if (addToolStage) return;
     setError('');
     setAddToolDraft(null);
     setAddToolPhoto(null);
     setAddToolPhotoPreview('');
-    setUploadedToolPhoto(null);
   }
 
   function chooseCatalogForAdd(catalog: InventoryToolCatalogItem) {
@@ -732,12 +764,50 @@ export function ConsolidatedInventoryWorkspace() {
 
   function chooseAddToolPhoto(file?: File) {
     setAddToolPhoto(file ?? null);
-    setUploadedToolPhoto(null);
     setAddToolPhotoPreview(file ? URL.createObjectURL(file) : '');
     setAddToolDraft((current) => current ? { ...current, requestId: createInventoryRequestId('van-tool') } : current);
   }
 
-  async function submitAddTool() {
+  async function runBackgroundAddTool(task: BackgroundAddToolTask) {
+    setBackgroundToolJob({ requestId: task.requestId, label: task.label, vanLabel: task.vanLabel, status: task.uploadedPhoto ? 'saving' : 'uploading', task });
+    let retryTask = task;
+    try {
+      const photo = task.uploadedPhoto ?? await uploadVanToolPhoto({ file: task.file, requestId: task.requestId, vanId: task.input.vanId });
+      retryTask = { ...task, uploadedPhoto: photo };
+      setBackgroundToolJob((current) => current?.requestId === task.requestId
+        ? { ...current, status: 'saving', task: retryTask, error: undefined }
+        : current);
+      const result = await addInventoryToolToVan({
+        ...task.input,
+        photoUrl: photo.downloadUrl,
+        photoStoragePath: photo.storagePath,
+        thumbnailUrl: photo.thumbnailUrl,
+        thumbnailStoragePath: photo.thumbnailStoragePath,
+      });
+      await refresh();
+      const successMessage = `${toolCatalogName(result.catalog)} added to ${task.vanLabel} with a new physical photo.`;
+      setNotice(successMessage);
+      setBackgroundToolJob((current) => current?.requestId === task.requestId
+        ? { requestId: task.requestId, label: task.label, vanLabel: task.vanLabel, status: 'complete' }
+        : current);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'The tool could not be added to this Van.';
+      setBackgroundToolJob((current) => current?.requestId === task.requestId
+        ? { ...current, status: 'failed', task: retryTask, error: message }
+        : current);
+    }
+  }
+
+  function retryBackgroundAddTool() {
+    if (!backgroundToolJob?.task || backgroundToolJobRunning) return;
+    const task = backgroundToolJob.task;
+    setError('');
+    setNotice('');
+    setBackgroundToolJob({ requestId: task.requestId, label: task.label, vanLabel: task.vanLabel, status: task.uploadedPhoto ? 'saving' : 'uploading', task });
+    window.setTimeout(() => { void runBackgroundAddTool(task); }, 0);
+  }
+
+  function submitAddTool() {
     if (!addToolDraft) return;
     const existingCatalog = addToolDraft.catalogId
       ? activeToolCatalog.find((catalog) => catalog.id === addToolDraft.catalogId)
@@ -759,21 +829,13 @@ export function ConsolidatedInventoryWorkspace() {
     if (addToolDraft.creatingNew && (!Number.isInteger(recommendedQuantity) || recommendedQuantity < 1)) { setError('Recommended quantity must be a whole number of at least one.'); return; }
     if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) { setError('Quantity must be a whole number of at least one.'); return; }
 
-    setError('');
-    setNotice('');
-    try {
-      let photo = uploadedToolPhoto;
-      if (!photo) {
-        setAddToolStage('Optimizing and uploading photo…');
-        photo = await uploadVanToolPhoto({
-          file: addToolPhoto,
-          requestId: addToolDraft.requestId,
-          vanId: addToolDraft.vanId,
-        });
-        setUploadedToolPhoto(photo);
-      }
-      setAddToolStage('Adding tool to Van…');
-      const input: AddInventoryToolToVanInput = {
+    const targetVan = vans.find((van) => van.id === addToolDraft.vanId);
+    const task: BackgroundAddToolTask = {
+      requestId: addToolDraft.requestId,
+      label: addToolDraft.creatingNew ? addToolDraft.name.trim() : toolCatalogName(existingCatalog),
+      vanLabel: targetVan?.name || addToolDraft.vanId,
+      file: addToolPhoto,
+      input: {
         requestId: addToolDraft.requestId,
         vanId: addToolDraft.vanId,
         ...(addToolDraft.creatingNew ? {
@@ -790,24 +852,13 @@ export function ConsolidatedInventoryWorkspace() {
         purchaseCost: toolCost,
         quantity: requestedQuantity,
         ...(addToolDraft.notes.trim() ? { notes: addToolDraft.notes.trim() } : {}),
-        photoUrl: photo.downloadUrl,
-        photoStoragePath: photo.storagePath,
-        thumbnailUrl: photo.thumbnailUrl,
-        thumbnailStoragePath: photo.thumbnailStoragePath,
-      };
-      const result = await addInventoryToolToVan(input);
-      const targetVan = vans.find((van) => van.id === addToolDraft.vanId);
-      await refresh();
-      setNotice(`${toolCatalogName(result.catalog)} added to ${targetVan?.name || addToolDraft.vanId} with a new physical photo.`);
-      setAddToolDraft(null);
-      setAddToolPhoto(null);
-      setAddToolPhotoPreview('');
-      setUploadedToolPhoto(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The tool could not be added to this Van.');
-    } finally {
-      setAddToolStage('');
-    }
+      },
+    };
+    setError('');
+    setNotice('');
+    setBackgroundToolJob({ requestId: task.requestId, label: task.label, vanLabel: task.vanLabel, status: 'uploading', task });
+    closeAddTool();
+    window.setTimeout(() => { void runBackgroundAddTool(task); }, 0);
   }
 
   function StockTable({ locationId, itemKind, title }: { locationId: string; itemKind?: InventoryItem['itemKind']; title?: string }) {
@@ -843,7 +894,7 @@ export function ConsolidatedInventoryWorkspace() {
       return sum + unitCost * toolExpectedQuantity(asset);
     }, 0);
     return <section className={styles.panel}>
-      <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>{locationId ? 'Physically assigned to this Van' : 'Real asset details, stored photos and controlled editing'}</span></div><div className={styles.panelHeadActions}><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b>{allowAdd ? <button type="button" className={styles.addToolButton} onClick={() => openAddTool()}>+ Add Tool</button> : null}</div></header>
+      <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>{locationId ? 'Physically assigned to this Van' : 'Real asset details, stored photos and controlled editing'}</span></div><div className={styles.panelHeadActions}><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b>{allowAdd ? <button type="button" className={styles.addToolButton} disabled={backgroundToolJobRunning} onClick={() => openAddTool()}>{backgroundToolJobRunning ? 'Adding tool…' : '+ Add Tool'}</button> : null}</div></header>
       {locationId && allowAdd ? <div className={styles.mobileToolMetrics} aria-label="Van tool summary">
         <article><span className={styles.blue}><InventoryIcon name="tool" /></span><div><small>Total tools</small><strong>{quantity(assignedUnits)}</strong></div></article>
         <article><span className={missingUnits ? styles.red : styles.green}><InventoryIcon name="warning" /></span><div><small>Missing</small><strong>{quantity(missingUnits)}</strong></div></article>
@@ -897,7 +948,7 @@ export function ConsolidatedInventoryWorkspace() {
       {missingVanToolTemplates.length ? <div className={styles.missingToolGrid}>{missingVanToolTemplates.map(({ catalog, vans: templateVans }) => <article key={catalog.id} className={styles.missingToolCard}>
         <span className={styles.missingToolIcon}><InventoryIcon name="tool" /></span>
         <div className={styles.missingToolCopy}><strong>{toolCatalogName(catalog)}</strong><small>{catalog.description || catalog.category || 'No shared description'}</small><div><span>Cost</span><b>{money(Number(catalog.standardCost) || 0)}</b></div><p><span>Currently in</span>{templateVans.map((van) => van.name).join(', ')}</p></div>
-        <button type="button" onClick={() => openAddTool(catalog)}>Add to this Van</button>
+        <button type="button" disabled={backgroundToolJobRunning} onClick={() => openAddTool(catalog)}>{backgroundToolJobRunning ? 'Adding tool…' : 'Add to this Van'}</button>
       </article>)}</div> : <p className={styles.empty}>Every shared tool template already has an assignment in this Van.</p>}
     </section>;
   }
@@ -908,8 +959,8 @@ export function ConsolidatedInventoryWorkspace() {
     const hasTemplateChoice = addToolDraft.creatingNew || Boolean(selectedAddToolCatalog);
     const showCatalogResults = Boolean(addToolDraft.search.trim()) && !hasTemplateChoice;
     return <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) closeAddTool(); }}>
-      <section className={`${styles.toolDrawer} ${styles.addToolDrawer}`} role="dialog" aria-modal="true" aria-labelledby="add-tool-title" aria-busy={Boolean(addToolStage)}>
-        <header><div><span>New physical Van assignment</span><h2 id="add-tool-title">Add Tool</h2><small>{targetVan?.name || addToolDraft.vanId} · fresh photo required</small></div><button type="button" aria-label="Close add tool" disabled={Boolean(addToolStage)} onClick={closeAddTool}>×</button></header>
+      <section className={`${styles.toolDrawer} ${styles.addToolDrawer}`} role="dialog" aria-modal="true" aria-labelledby="add-tool-title">
+        <header><div><span>New physical Van assignment</span><h2 id="add-tool-title">Add Tool</h2><small>{targetVan?.name || addToolDraft.vanId} · fresh photo required</small></div><button type="button" aria-label="Close add tool" onClick={closeAddTool}>×</button></header>
         <div className={styles.addToolBody}>
           {error ? <div className={styles.addToolError} role="alert">{error}</div> : null}
           <section className={styles.catalogChooser}>
@@ -945,10 +996,10 @@ export function ConsolidatedInventoryWorkspace() {
               {addToolPhotoPreview ? <img src={addToolPhotoPreview} alt="New tool photo preview" /> : <span><InventoryIcon name="tool" /><strong>Take or choose a photo</strong><small>Image only · optimized before upload</small></span>}
               <input type="file" accept="image/*" capture="environment" onChange={(event) => chooseAddToolPhoto(event.target.files?.[0])} />
               {addToolPhotoPreview ? <b>Replace photo</b> : null}
-            </label>{uploadedToolPhoto ? <p className={styles.photoUploadState}>Photo and thumbnail uploaded. Ready to finish.</p> : null}</section>
+            </label></section>
           </> : <p className={styles.addToolPrompt}>Choose a shared template above or create a new one to continue.</p>}
         </div>
-        <footer className={styles.addToolFooter}><span>{addToolStage || (addToolWriteAvailable ? 'A new physical asset will be recorded in the selected Van.' : 'Preview ready · final saving activates with Inventory Authority v2.')}</span><div><button type="button" disabled={Boolean(addToolStage)} onClick={closeAddTool}>Cancel</button><button type="button" className={styles.primary} disabled={Boolean(addToolStage) || !hasTemplateChoice || !addToolWriteAvailable} onClick={() => void submitAddTool()}>{addToolStage || 'Add Tool'}</button></div></footer>
+        <footer className={styles.addToolFooter}><span>{addToolWriteAvailable ? 'The form closes immediately; photo processing continues in the background.' : 'Preview ready · final saving activates with Inventory Authority v2.'}</span><div><button type="button" onClick={closeAddTool}>Cancel</button><button type="button" className={styles.primary} disabled={!hasTemplateChoice || !addToolWriteAvailable} onClick={submitAddTool}>Add Tool & continue</button></div></footer>
       </section>
     </div>;
   }
@@ -1177,14 +1228,35 @@ export function ConsolidatedInventoryWorkspace() {
 
     <MobileBottomNav />
 
+    {backgroundToolJob ? <aside
+      className={`${styles.backgroundToolJob} ${backgroundToolJob.status === 'failed' ? styles.backgroundToolJobFailed : backgroundToolJob.status === 'complete' ? styles.backgroundToolJobComplete : styles.backgroundToolJobRunning}`}
+      role={backgroundToolJob.status === 'failed' ? 'alert' : 'status'}
+      aria-live={backgroundToolJob.status === 'failed' ? 'assertive' : 'polite'}
+    >
+      <span className={styles.backgroundToolJobIcon} aria-hidden="true"><InventoryIcon name={backgroundToolJob.status === 'failed' ? 'warning' : 'tool'} /></span>
+      <div className={styles.backgroundToolJobCopy}>
+        <strong>{backgroundToolJob.status === 'complete' ? `${backgroundToolJob.label} added` : `Adding ${backgroundToolJob.label}`}</strong>
+        <span>{backgroundToolJob.status === 'uploading'
+          ? 'Preparing and uploading the photo in the background…'
+          : backgroundToolJob.status === 'saving'
+            ? 'Photo uploaded. Saving the tool in Inventory…'
+            : backgroundToolJob.status === 'complete'
+              ? `Saved successfully in ${backgroundToolJob.vanLabel}.`
+              : backgroundToolJob.error || 'The tool could not be added.'}</span>
+        {backgroundToolJobRunning ? <small>You can continue working while this finishes.</small> : null}
+      </div>
+      {backgroundToolJob.status === 'failed' ? <div className={styles.backgroundToolJobActions}><button type="button" onClick={retryBackgroundAddTool}>Retry</button><button type="button" onClick={() => setBackgroundToolJob(null)}>Dismiss</button></div> : null}
+      {backgroundToolJob.status === 'complete' ? <button type="button" className={styles.backgroundToolJobDismiss} onClick={() => setBackgroundToolJob(null)}>Done</button> : null}
+    </aside> : null}
+
     {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="stock-edit-title"><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2 id="stock-edit-title">{stockEdit.item.name}</h2></div><button type="button" aria-label="Close stock editor" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`)} onClick={() => void saveStockEdit()}>{isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`) ? 'Saving…' : 'Save verified count'}</button></footer></div></section></div> : null}
 
     {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="legacy-allocation-title"><header><div><span>Historical stock assignment</span><h2 id="legacy-allocation-title">{legacyItem.name}</h2></div><button type="button" aria-label="Close historical stock assignment" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`legacy:${legacyItem.id}`)} onClick={() => void saveLegacyAllocation()}>{isPending(`legacy:${legacyItem.id}`) ? 'Assigning…' : 'Assign locations'}</button></footer></div></section></div> : null}
 
     {AddToolDrawer()}
 
-    {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) setToolEdit(null); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
-      <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={() => setToolEdit(null)}>×</button></header>
+    {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) closeToolProfile(); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
+      <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={closeToolProfile}>×</button></header>
       <div className={styles.toolDrawerBody}>
         <section className={styles.toolIdentityCard}><ToolPhoto asset={toolEdit.asset} onOpen={setToolLightbox} mode="detail" /><div><strong>{toolEdit.asset.assetCode || toolEdit.asset.id}</strong><span>{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.category || 'Tool asset'}</span><small>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')} · {toolEdit.asset.operationalStatus || 'Status unavailable'}</small></div></section>
 
@@ -1204,7 +1276,7 @@ export function ConsolidatedInventoryWorkspace() {
           <label>Tool cost (Afl.)<input type="number" min="0" step="0.01" value={toolEdit.purchaseCost} onChange={(event) => setToolEdit({ ...toolEdit, purchaseCost: event.target.value })} /></label>
           {toolEdit.asset.trackingMode === 'quantity' ? <><label>Assigned quantity<input type="number" min="0" step="1" value={toolEdit.quantityExpected} onChange={(event) => setToolEdit({ ...toolEdit, quantityExpected: event.target.value })} /></label><label>Present quantity<input type="number" min="0" step="1" max={toolEdit.quantityExpected} value={toolEdit.quantityPresent} onChange={(event) => setToolEdit({ ...toolEdit, quantityPresent: event.target.value })} /></label></> : <div className={styles.toolReadOnlyFact}><span>Quantity</span><strong>{toolPresentQuantity(toolEdit.asset)} / 1</strong><small>Individual tracked asset</small></div>}
           <label className={styles.wide}>Comments / observations<textarea rows={4} value={toolEdit.notes} onChange={(event) => setToolEdit({ ...toolEdit, notes: event.target.value })} placeholder="Use, condition, damage or other relevant details" /></label>
-        </div><footer><button type="button" onClick={() => setToolEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
+        </div><footer><button type="button" onClick={closeToolProfile}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
 
         <section className={`${styles.toolTransferSection} ${mobileToolAction === 'transfer' ? styles.mobileActionActive : ''}`}><header><button type="button" className={styles.mobileActionBack} onClick={() => setMobileToolAction('summary')}>← Details</button><strong>Transfer tool</strong><span>Separate controlled action — destination and reason are required.</span></header>
           {toolCanTransfer(toolEdit.asset) ? <div className={styles.toolTransferForm}>
