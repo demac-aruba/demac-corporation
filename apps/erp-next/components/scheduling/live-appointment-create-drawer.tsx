@@ -1618,13 +1618,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               <h3 className={styles.sourceLabel}>Appointment source</h3>
               <div className={styles.sourceActions}>
                 <div className={styles.sourceToggle}>
-                  <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
+                  <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-label="Regular Booking Choose customer, property and work from Services & Products." aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
                     <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
                   </button>
-                  {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
+                  {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-label="Project Find a Project and reserve whole Van capacity slots against it." aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
                     <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
                   </button> : null}
-                {onSendSupport ? <button type="button" className={styles.sourceOption} onClick={onSendSupport}>
+                {onSendSupport ? <button type="button" className={styles.sourceOption} aria-label="Send van support Use this open slot to help another Van with an existing appointment." onClick={onSendSupport}>
                   <strong>Send van support</strong><span>Use this open slot to help another Van with an existing appointment.</span>
                 </button> : null}
                 </div>

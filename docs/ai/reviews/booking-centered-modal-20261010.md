@@ -21,7 +21,8 @@ product diff inspection, real-component browser execution and screenshot inspect
 - Baseline: `fc09e0be77f22ec67b87af66f546a0464fc7a11a`. Review covers the task diff in
   `live-appointment-create-drawer.tsx`, its scoped stylesheet, `adhoc-support-drawer.tsx`,
   new support stylesheet and booking-dialog hook, the agenda Escape guard, and additive
-  browser CI gates. Latest rerun includes the corrected footer duration expression.
+  browser CI gates. Review includes the corrected footer duration expression and the follow-up source-button
+  accessible-name correction identified by the existing integrated coworker-support CI gate.
 - Affected callers/integrations: `LiveSchedulingOverview`, `AfterHoursEmergencyDrawer`,
   `PropertyEditor`, `PropertyLocations`, `PropertyCommunicationPanel`,
   `VisitReferenceEditor`, `ProjectBudgetConfirmation`, canonical booking transports.
@@ -40,6 +41,7 @@ product diff inspection, real-component browser execution and screenshot inspect
 | --- | --- | --- | --- |
 | Medium, resolved | Booking modal and owning agenda Escape handlers | Existing agenda handler could dismiss the parent when nested property/budget dialogs received Escape, and could discard the UI during uploads/master saves. Reusing the generic child focus hook for the parent would cause competing traps. | Dedicated parent hook defers to visible child dialogs, blocks dismissal during busy/recovery states, traps parent focus and restores focus; agenda explicitly defers while a booking modal exists. Browser cases verify nested Escape, Tab/Shift+Tab, focus restoration and upload/recovery protection. |
 | Medium, resolved | New footer workload summary | Initial footer passed the `allocationDurationLabel` function as a React child, omitting the duration in the screenshot. | Builder invokes the existing helper with the selected allocation and estimate, using the existing Project slot label for Projects. Browser assertions now require the visible computed workload at all three viewport sizes. |
+| Medium, product correction reviewed; CI rerun required | Responsive source buttons | Existing coworker-support CI could no longer locate the complete support action name when responsive CSS hid its descriptive span. The visual compacting also removed that description from the accessible name. | Builder added explicit full `aria-label` values to Regular Booking, Project and Send van support, preserving the original names at all viewport sizes. Existing test selectors and gates remain unchanged. The independent modal suite now asserts all three complete accessible names at 1440, 1366 and 390 px; the previously failing integrated CI gate must pass on the corrected commit. |
 | Release hygiene, pending final staging check | Build-generated files | Local dependency installation/build regenerated package locks, `next-env.d.ts` and `tsconfig.json`; these are outside the UI request. | Builder must exclude unrelated generated changes from the final commit. This review does not approve such changes. |
 
 No unresolved product-code defect was found after the footer correction. No existing
@@ -58,6 +60,8 @@ Reviewer executed:
 - Desktop 1440×1000 and 1366×768, mobile 390×844: centered/stacked geometry, footer
   inside the viewport, no horizontal overflow, visible computed footer duration. Desktop
   and mobile screenshots were inspected, including captures from the top of the form.
+- Complete accessible names for all three source actions are explicitly checked at desktop
+  and mobile widths, including Send van support after its visible description collapses.
 - Stateful references/contact editors remain connected across native disclosure toggles;
   reference notes/GPS, requester, access contact and recipient choices persist.
 - Mixed-service selection and quantities, manual description/instructions and recipients

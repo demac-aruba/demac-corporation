@@ -160,7 +160,14 @@ async function main(){
   finally{await context.close();}
  }
  try{
-  for(const viewport of [{width:1440,height:1000},{width:1366,height:768},{width:390,height:844}])await run('layout-'+viewport.width,viewport,async page=>{await setupRegular(page);await toggleDisclosure(page,'contacts',false);await toggleDisclosure(page,'references',false);await geometry(page,viewport.width,'layout-'+viewport.width);await assertNoWrites(page);});
+  for(const viewport of [{width:1440,height:1000},{width:1366,height:768},{width:390,height:844}])await run('layout-'+viewport.width,viewport,async page=>{
+   await ready(page);
+   for(const name of [
+    'Regular Booking Choose customer, property and work from Services & Products.',
+    'Project Find a Project and reserve whole Van capacity slots against it.',
+    'Send van support Use this open slot to help another Van with an existing appointment.',
+   ])assert.equal(await page.getByRole('button',{name,exact:true}).isVisible(),true,`${viewport.width}: preserve complete source-button accessible name`);
+   await setupRegular(page);await toggleDisclosure(page,'contacts',false);await toggleDisclosure(page,'references',false);await geometry(page,viewport.width,'layout-'+viewport.width);await assertNoWrites(page);});
   await run('keyboard-focus-stays-in-modal',{width:1366,height:768},async page=>{
    await setupRegular(page);await toggleDisclosure(page,'references',false);await toggleDisclosure(page,'contacts',false);
    await page.getByRole('button',{name:'Confirm appointment',exact:true}).focus();await page.keyboard.press('Tab');
