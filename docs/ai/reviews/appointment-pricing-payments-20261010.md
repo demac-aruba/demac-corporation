@@ -45,6 +45,7 @@ Actual Firestore emulator: 5/5 PASS in Office Booking workflow run 38087200202
 on first published head 2f599ba; local Java 17 cannot run Firebase's Java 21 emulator.
 Final release head must repeat the complete required CI; earlier success does not waive it.
 Final local financial/booking/pricing/Project suite: 99/99 PASS; deployment regressions: 5/5 PASS.
+Read-only production history inspection identified Project's older successful source 83862a11 (run 36465955456, deployment job 109077324496). Release was narrowed further: immutable older source plus ONLY current commercial guard, with all other dependencies retained. Reviewer independently ran that source's Project capacity/records/operator tests plus new charge-history protection: 32/32 PASS. CI additionally stages and verifies this actual old-generation compatibility. Production graph and staged graph must match the reviewed immutable source or exact patched source; unknown drift still blocks before deployment.
 
 ## Decision
 

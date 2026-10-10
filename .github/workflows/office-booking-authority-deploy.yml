@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'functions/bootstrap.js'
-      - 'scripts/appointment-charges-project-deploy*'
+      - 'scripts/appointment-charges-project-*'
       - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
@@ -68,7 +68,7 @@ on:
       - main
     paths:
       - 'functions/bootstrap.js'
-      - 'scripts/appointment-charges-project-deploy*'
+      - 'scripts/appointment-charges-project-*'
       - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
@@ -216,6 +216,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -235,6 +237,7 @@ jobs:
           node --test functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
           node --check scripts/appointment-charges-project-deploy.cjs
           node --test scripts/appointment-charges-project-deploy.test.cjs
+          node --test scripts/appointment-charges-project-compat.test.cjs
           npm run typecheck --prefix apps/erp-next
       - name: Real Firestore transaction and authorization checks
         run: >-

@@ -6,15 +6,17 @@ const path = require('node:path');
 const code = fs.readFileSync(path.join(__dirname,'appointment-charges-project-deploy.cjs'),'utf8');
 const sha='a'.repeat(40);
 async function scenario(options={}) {
-  const deployed=[],artifacts=new Map();let mainReads=0;
+  const deployed=[],artifacts=new Map(),staged={};let mainReads=0;
   const baseline={
     'package.json':'{"main":"bootstrap.js"}',
     'bootstrap.js':"module.exports = require('./projectAuthority');",
-    'projectAuthority.js':"require('./bookingAuthorityFirestore'); // original",
+    'projectAuthority.js':"require('./bookingAuthorityFirestore'); require('./projectCommercialGuard'); // original",
     'bookingAuthorityFirestore.js':"require('./servicePricingAuthority');",
     'servicePricingAuthority.js':'module.exports = {price:100};',
+    'projectCommercialGuard.js':'module.exports = {version:1};',
   };
-  const candidate={...baseline,'projectAuthority.js':"require('./bookingAuthorityFirestore'); // reviewed candidate",'bookingAuthorityFirestore.js':"require('./servicePricingAuthority'); require('./appointmentCharges');",'appointmentCharges.js':'module.exports = {};'};
+  const candidate={...baseline,'projectCommercialGuard.js':'module.exports = {version:2};'};
+  const office={...candidate,'bookingAuthorityFirestore.js':"require('./servicePricingAuthority'); require('./appointmentCharges');",'appointmentCharges.js':'module.exports = {};'};
   const observed={...(options.alreadyCandidate?candidate:baseline)};
   if(options.unreviewedSource)observed['projectAuthority.js']+=' // unreviewed';
   if(options.transitiveHotfix)observed['servicePricingAuthority.js']='module.exports = {price:200};';
@@ -30,7 +32,9 @@ async function scenario(options={}) {
       if(args.includes('--format=%B'))return '[merge-only] [deploy-appointment-charges] Owner-approved update';
       if(args[0]==='ls-tree')return Object.keys(baseline).map(file=>'functions/'+file).join('\n');
       if(args[0]==='show')return baseline[args.at(-1).split(':functions/')[1]];
+      if(args[0]==='archive')return '';
     }
+    if(command==='tar'){Object.assign(staged,baseline);return '';}
     if(command==='unzip')return args[0]==='-Z1'?Object.keys(observed).join('\n'):observed[args.at(-1)];
     if(command==='gcloud') {
       if(args[0]==='storage')return '';
@@ -40,15 +44,16 @@ async function scenario(options={}) {
     throw Error(`Unexpected command ${command} ${args.join(' ')}`);
   };
   let error;
-  const relative=file=>file.replace(/^functions\//,'');
-  try{await vm.runInNewContext(code,{require:name=>name==='node:child_process'?{execFileSync}:name==='node:fs'?{existsSync:file=>Object.hasOwn(candidate,relative(file)),statSync:()=>({isFile:()=>true}),readFileSync:file=>candidate[relative(file)],writeFileSync:(file,data)=>artifacts.set(file,data)}:require(name),process:runtime,console:{log(){},error(){}},fetch:async()=>({status:options.openAuth?200:401})});}catch(cause){error=cause;}
-  return {error,deployed,artifacts,exitCode:runtime.exitCode};
+  const relative=file=>file.replace(/^functions\//,'').replace('/synthetic/appointment-charges-project-source/','');
+  try{await vm.runInNewContext(code,{require:name=>name==='node:child_process'?{execFileSync}:name==='node:fs'?{mkdirSync(){},existsSync:file=>Object.hasOwn(staged,relative(file)),statSync:()=>({isFile:()=>true}),readFileSync:file=>(file.startsWith('functions/')?office:staged)[relative(file)],writeFileSync:(file,data)=>file.endsWith('.js')?staged[relative(file)]=data:artifacts.set(file,data)}:require(name),process:runtime,console:{log(){},error(){}},fetch:async()=>({status:options.openAuth?200:401})});}catch(cause){error=cause;}
+  return {error,deployed,artifacts,staged,baseline,candidate,exitCode:runtime.exitCode};
 }
 test('unreviewed deployed source and wrong release identity stop before any production mutation',async()=>{
   for(const options of [{unreviewedSource:true},{wrongBranch:true},{movedMain:true}]){const result=await scenario(options);assert.ok(result.error);assert.equal(result.deployed.length,0);}
 });
 test('reviewed source deploys only Project authority without changing access/runtime flags',async()=>{
   const result=await scenario();assert.equal(result.error,undefined);assert.equal(result.exitCode,0);assert.equal(result.deployed.length,1);const args=result.deployed[0];assert.equal(args[2],'projectAuthority');assert.ok(!args.some(value=>/allow-unauthenticated|service-account|set-env|memory|trigger/.test(value)));assert.equal(result.artifacts.size,1);
+  assert.ok(args.includes('--source=/synthetic/appointment-charges-project-source'));assert.deepEqual(result.staged,result.candidate);assert.equal(result.staged['bookingAuthorityFirestore.js'],result.baseline['bookingAuthorityFirestore.js']);assert.equal(result.staged['appointmentCharges.js'],undefined);
 });
 test('transitive hotfixes, redirected dependencies, manifests and dynamic imports stop before deployment',async()=>{
   for(const options of [{transitiveHotfix:true},{redirectedDependency:true},{changedManifest:true},{dynamicDependency:true}]){const result=await scenario(options);assert.ok(result.error);assert.equal(result.deployed.length,0);}
