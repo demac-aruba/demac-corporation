@@ -111,7 +111,11 @@ async function main() {
     await drawer.getByRole('button', { name: /PRJ-HIST-001 · Synthetic historical project/ }).click();
     await drawer.getByLabel('Planned Project slots *').fill('2');
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
+    // Inspect and close the compact capacity disclosure before continuing in the form.
+    await drawer.locator('[data-booking-capacity][data-tone="success"]').waitFor();
+    if (await drawer.locator('[data-booking-capacity]').getAttribute('open') === null) await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.locator('[data-booking-capacity] > summary').click();
     assert.equal(await drawer.getByRole('button', { name: 'Temporary hold', exact: true }).count(), 0);
     // Optional references now live in a mounted disclosure; open it as the operator does.
     await drawer.locator('[data-booking-disclosure="references"] > summary').click();
@@ -146,7 +150,10 @@ async function main() {
     await drawer.getByPlaceholder(/Name, company, phone/).fill('Cliente sintético');
     await drawer.getByRole('button').filter({ hasText: 'Cliente sintético' }).first().click();
     await drawer.getByRole('button', { name: /Standard Service/ }).first().click();
+    await drawer.locator('[data-booking-capacity][data-tone="success"]').waitFor();
+    if (await drawer.locator('[data-booking-capacity]').getAttribute('open') === null) await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.getByRole('button', { name: 'Save backdated appointment', exact: true }).click();
     await drawer.waitFor({ state: 'detached' });
     const regular = (await db.collection('appointments').where('primaryVanId', '==', 'VAN-3').get()).docs;
@@ -160,7 +167,10 @@ async function main() {
     await drawer.getByRole('button', { name: /PRJ-HIST-001 · Synthetic historical project/ }).click();
     await drawer.getByLabel('Planned Project slots *').fill('1');
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
+    await drawer.locator('[data-booking-capacity][data-tone="success"]').waitFor();
+    if (await drawer.locator('[data-booking-capacity]').getAttribute('open') === null) await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.locator('[data-booking-disclosure="references"] > summary').click();
     await drawer.getByRole('region', { name: 'Información para la visita' }).waitFor();
     for (const name of ['Añadir fotos', 'Añadir video', 'Añadir audio']) assert.equal(await drawer.getByRole('button', { name, exact: true }).count(), 1);

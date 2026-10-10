@@ -35,6 +35,7 @@ implement the reviewed product changes or perform production writes.
 | Medium, resolved | Booking/support component lifetime and dialog ownership | The old parent nulled `bookingTarget` before validating support duration, unmounting booking drafts. Keeping both components alive without activating only one focus/scroll handler would introduce competing traps or dismissals. | Builder preserves the session and validates duration before opening support. Inactive views are hidden/inert and their dialog hook is inactive. Round-trip tests cover both draft directions, one visible modal, keyboard containment and page scroll restoration. |
 | Required feature-preservation check, passed | Capacity panel moved into footer | The former capacity column contained interactive support spots, support alternatives, assignment windows, overtime consent, recheck and hold guidance, not only a status label. | The original authority subtree remains in an expandable footer panel. Required choices/overtime open automatically. Tests exercise support selection, exact selected option commit, overtime consent and special mode controls. |
 | Required stale-state check, passed | Compact status | Prior approved capacity may remain visible while metadata invalidates its booking offer. Green based only on that retained capacity would imply premature acceptance. | Status uses the current validated offer and remains neutral for incomplete/checking/stale/special-validation states, red on authoritative conflict, amber for overtime and green only for the current complete allocation. Regression tests cover ready → metadata change → pending → conflict → successful recheck. |
+| Transitive browser interaction adaptation, reviewed; CI rerun required | Project budget, historical and planned-overtime browser scripts | Existing tests waited for detailed authority approval/conflict text that now lives inside the approved collapsed footer disclosure. | Add only waits for the appropriate status and operator-equivalent summary clicks before the original text assertions. Historical/overtime tests close the panel afterward before editing fields. All original denial, no-write, payload, retry, persisted-data, Chromium/WebKit and external-request assertions remain unchanged. |
 
 No unresolved product defect was found. No existing authority control, field, permission
 predicate or command was removed. Regular ↔ Project continues its established source-change
@@ -72,6 +73,17 @@ Reviewer-run evidence:
 - Final small recovery-notice adjustment was inspected: rendering the existing authority
   error alongside the recovery instruction preserves its explanation while the capacity
   panel is absent. It adds no state, event handler or command change.
+- Follow-up transitive test adaptation: `project-budget-browser.cjs` (two conflict cases),
+  `backdated-project-browser.cjs` (three approval inspections) and
+  `planned-overtime-browser.cjs` (one approval inspection) now open the native footer details
+  through its summary. No DOM state is assigned, no assertion removed or weakened, and
+  Chromium/WebKit engine loops and all scenario lists remain unchanged. Syntax checks for
+  all three files and `git diff --check` pass. Their complete integration/engine runs remain
+  required on the new commit in CI; inspection or syntax checks do not substitute for them.
+  Builder-reported CI evidence for the original mismatch: budget run `38087952276`, job
+  `114318311314` passed its first ten Chromium scenarios, then failed `availability-conflict`
+  with no browser errors because the unchanged alert assertion correctly found its element
+  hidden inside closed details. The visible red status confirmed the expected conflict.
 
 Builder-reported transitive gates (separate from reviewer-run evidence): ERP typecheck,
 production build including all existing prebuild tests, frontend dispatch/lifecycle/booking
