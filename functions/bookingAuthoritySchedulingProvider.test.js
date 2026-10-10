@@ -126,8 +126,8 @@ function schedulingDb(data, whereCalls = []) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v15", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v15");
+test("provider exposes canonical provider v16", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v16");
 });
 
 test("canonical scheduling engine is versioned independently", () => {

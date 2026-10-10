@@ -5,6 +5,10 @@ on:
     paths:
       - 'functions/bootstrap.js'
       - 'scripts/appointment-charges-project-*'
+      - 'scripts/booking-spots-field-*'
+      - 'functions/bookingSpotsIndependentReview.test.js'
+      - 'functions/bookingRestDayOvertime.js'
+      - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
@@ -69,6 +73,10 @@ on:
     paths:
       - 'functions/bootstrap.js'
       - 'scripts/appointment-charges-project-*'
+      - 'scripts/booking-spots-field-*'
+      - 'functions/bookingSpotsIndependentReview.test.js'
+      - 'functions/bookingRestDayOvertime.js'
+      - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
@@ -257,9 +265,30 @@ jobs:
           name: appointment-charges-evidence
           path: ${{ runner.temp }}/charge-evidence
 
+  validate-booking-spots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - name: Verify existing booking and Field workflows
+        run: |
+          npm run test:booking-authority --prefix functions
+          npm run test:field-authority --prefix functions
+          node --test functions/bookingSpotsIndependentReview.test.js
+          node --test scripts/booking-spots-field-deploy.test.cjs scripts/booking-spots-field-compat.test.cjs
+
   deploy-office-booking-authority:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (!contains(github.event.head_commit.message, '[merge-only]') || contains(github.event.head_commit.message, '[deploy-appointment-charges]'))
-    needs: [validate-office-booking-authority, validate-appointment-charges]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (!contains(github.event.head_commit.message, '[merge-only]') || contains(github.event.head_commit.message, '[deploy-appointment-charges]') || contains(github.event.head_commit.message, '[deploy-booking-spots]'))
+    needs: [validate-office-booking-authority, validate-appointment-charges, validate-booking-spots]
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -278,6 +307,10 @@ jobs:
       - name: Deploy reviewed Project commercial guard first
         if: contains(github.event.head_commit.message, '[deploy-appointment-charges]')
         run: node scripts/appointment-charges-project-deploy.cjs
+
+      - name: Deploy reviewed Field helper-scope guard first
+        if: contains(github.event.head_commit.message, '[deploy-booking-spots]')
+        run: node scripts/booking-spots-field-deploy.cjs
 
       - name: Resolve DEMAC runtime identity
         id: config
@@ -367,3 +400,9 @@ jobs:
         with:
           name: appointment-charges-project-release
           path: ${{ runner.temp }}/appointment-charges-project-release.json
+
+      - uses: actions/upload-artifact@v4
+        if: always() && contains(github.event.head_commit.message, '[deploy-booking-spots]')
+        with:
+          name: booking-spots-field-release
+          path: ${{ runner.temp }}/booking-spots-field-release.json

@@ -8,6 +8,7 @@ const {
   MAX_SEARCH_DAYS,
   REGULAR_SLOTS,
   addDays,
+  bookingSlots,
   arubaDateParts,
   hashId,
   isHalfDay,
@@ -16,6 +17,7 @@ const {
   orderBlocksCapacity,
   propertyZone,
   resolveAssignment,
+  resolveCrewMembership,
   snapshotItems,
   vanCanReceiveAppointments,
 } = require("./bookingSchedulingPrimitives");
@@ -31,6 +33,8 @@ const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   buildAllocationPlan,
   exactPreset,
+  dateClosed,
+  resolveWorkScope,
   generateCanonicalOptions,
   normalizeOperationalRules,
   serviceIdForRequest,
@@ -39,7 +43,7 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v15";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v16";
 const BACKDATED_BOOKING_MODE = "backdated";
 
 function backdatingIntent({ context = {}, offer = null } = {}) {
@@ -255,6 +259,7 @@ function standardServicePreset(preset = {}) {
 }
 
 function supportSelectionPolicy(result = {}) {
+  if (result.workloadSupportPolicy) return result.workloadSupportPolicy;
   const quantity = Math.max(0, Number(result.quantity) || 0);
   const preset = result.preset || {};
   const durationMinutes = Math.max(30, Number(preset.durationMinutesPerUnit) || 60);
@@ -266,6 +271,48 @@ function supportSelectionPolicy(result = {}) {
   const maximum = Math.min(quantity - 1, policyMax);
   if (minimum > maximum) return null;
   return { quantity, durationMinutes, primaryMax, minimum, maximum };
+}
+
+// Same authority and capacity predicate as offers. Counts are advisory snapshots;
+// the complete selected allocation is still revalidated in the existing transaction.
+function officeCapacitySummary({ request, result, data, routeConfig, date, time, vanId }) {
+  const scope = resolveWorkScope(request, data);
+  const solo = result.options.find(option => option.date === date && option.time === time
+    && option.assignments.length === 1 && option.assignments[0].vanId === vanId);
+  const requiredSpots = solo?.assignments[0].slots || Math.ceil(scope.totalDurationMinutes / 60);
+  const van = data.vans.find(item => item.id === vanId);
+  const settings = data.businessSettings.find(item => item.id === "business-calendar");
+  const closed = dateClosed(date, settings, data.calendarClosures);
+  const crew = van && resolveAssignment(van, date, data.staffProfiles, data.dailyVanAssignments, data.staffAbsences);
+  const available = (start, spots) => !closed && van && candidateAvailability({ date, time: start,
+    allocation: { quantity: 1, durationMinutes: spots * 60, slots: spots, fullDay: false },
+    van, assignment: crew, data, routeConfig, candidateZone: result.candidateZone });
+  const starts = van ? bookingSlots(isHalfDay(vanId, date, data.vanHalfDaySchedules)).filter(start => start >= time) : [];
+  const availableStarts = starts.filter(start => available(start, 1));
+  let primarySpots = 0;
+  for (let spots = 1; spots <= starts.length; spots += 1) {
+    if (!available(time, spots)) break;
+    primarySpots = spots;
+  }
+  return { requiredSpots, availableSpots: availableStarts.length, availableStarts, primarySpots, closed,
+    durationMinutes: scope.totalDurationMinutes };
+}
+
+function workloadScopeUnchanged(option, request, data) {
+  const scope = resolveWorkScope(request, data);
+  const identity = items => JSON.stringify(items.map(item => [item.id, item.presetId, item.serviceId,
+    item.quantity, item.durationMinutes]));
+  return identity(scope.workItems) === identity(option.workItems || [])
+    && scope.totalDurationMinutes === option.assignments.reduce((sum, item) => sum + item.durationMinutes, 0);
+}
+
+function workloadCrewAvailable(assignments, data, date) {
+  return assignments.every(assignment => {
+    const ids = assignment.technicianIds || [];
+    if (!ids.length || new Set(ids).size !== ids.length) return false;
+    return !data.vans.some(van => van.id !== assignment.vanId
+      && resolveCrewMembership(van, date, data.dailyVanAssignments).technicianIds.some(id => ids.includes(id)));
+  });
 }
 
 function supportSlotTimes() {
@@ -293,7 +340,13 @@ function supportSlotCandidates({ result, data, routeConfig, date, requiredPrimar
       data.staffAbsences,
     );
     if (!vanCanReceiveAppointments(van, assignment)) continue;
+    if (policy.workloadSupport) {
+      const primaryVan = data.vans.find(item => item.id === requiredPrimaryVanId);
+      const primaryCrew = resolveAssignment(primaryVan, date, data.staffProfiles, data.dailyVanAssignments, data.staffAbsences);
+      if (assignment.technicianIds.some(id => primaryCrew.technicianIds.includes(id))) continue;
+    }
     for (const time of supportSlotTimes()) {
+      if (policy.workloadSupport && time < result.requestedTime) continue;
       const available = candidateAvailability({
         date,
         time,
@@ -382,8 +435,9 @@ function composeSelectedSupportOption({
     return { option: null, reason: "support-selection-unavailable" };
   }
 
-  const primaryQuantity = policy.quantity - selected.length;
-  if (primaryQuantity < 1) return { option: null, reason: "support-selection-count" };
+  const primaryQuantity = policy.workloadSupport ? policy.quantity : policy.quantity - selected.length;
+  const primaryMinutes = policy.workloadSupport ? policy.totalDurationMinutes - selected.length * 60 : primaryQuantity * policy.durationMinutes;
+  if (primaryQuantity < 1 || primaryMinutes <= 0) return { option: null, reason: "support-selection-count" };
   const primaryVan = data.vans.find((van) => van.id === requiredPrimaryVanId);
   if (!primaryVan) return { option: null, reason: "required-van-unavailable" };
   const primaryCrew = resolveAssignment(
@@ -393,11 +447,11 @@ function composeSelectedSupportOption({
     data.dailyVanAssignments,
     data.staffAbsences,
   );
-  const primaryFullDay = primaryQuantity > (Number(result.operationalRules?.standardService?.differentPropertyDailyCapacity) || 6);
+  const primaryFullDay = !policy.workloadSupport && primaryQuantity > (Number(result.operationalRules?.standardService?.differentPropertyDailyCapacity) || 6);
   const primaryAllocation = {
     quantity: primaryQuantity,
-    durationMinutes: primaryQuantity * policy.durationMinutes,
-    slots: primaryFullDay ? REGULAR_SLOTS.length : primaryQuantity,
+    durationMinutes: primaryMinutes,
+    slots: primaryFullDay ? REGULAR_SLOTS.length : Math.ceil(primaryMinutes / 60),
     fullDay: primaryFullDay,
   };
   const primary = candidateAvailability({
@@ -425,7 +479,7 @@ function composeSelectedSupportOption({
       data.staffAbsences,
     );
     const allocation = {
-      quantity: group.length,
+      quantity: policy.workloadSupport ? 1 : group.length,
       durationMinutes: group.length * policy.durationMinutes,
       slots: group.length,
       fullDay: false,
@@ -450,8 +504,19 @@ function composeSelectedSupportOption({
     });
   }
 
+  if (policy.workloadSupport) {
+    if (!workloadCrewAvailable([primary, ...supportAssignments], data, result.requestedDate)) {
+      return { option: null, reason: "support-selection-unavailable" };
+    }
+    const owners = new Map();
+    for (const assignment of [primary, ...supportAssignments]) for (const id of assignment.technicianIds) {
+      if (owners.has(id) && owners.get(id) !== assignment.vanId) return { option: null, reason: "support-selection-unavailable" };
+      owners.set(id, assignment.vanId);
+    }
+  }
   const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
   const option = {
+    ...(policy.workloadSupport ? { workloadSupport: true } : {}),
     id: `opt-${hashId(`${result.requestedDate}|${result.requestedTime}|${requiredPrimaryVanId}|${selectedIds.slice().sort().join(",")}|${policy.quantity}`, 16)}`,
     date: result.requestedDate,
     time: result.requestedTime,
@@ -679,7 +744,27 @@ function createSchedulingProvider({ db }) {
         includeRequestedDateAlternatives,
         allowBackdating: backdated,
       });
-      const selectionPolicy = officeExactTarget ? supportSelectionPolicy(result) : null;
+      let capacitySummary = null;
+      if (officeExactTarget) {
+        result.requestedDate = requestedDate;
+        result.requestedTime = requestedTime;
+        result.candidateZone = result.candidateZone || propertyZone(property, property.address || property.addressRaw || "", routeConfig);
+        capacitySummary = officeCapacitySummary({ request, result, data, routeConfig, date: requestedDate, time: requestedTime, vanId: requiredPrimaryVanId });
+        const soloFits = result.options.some(option => option.date === requestedDate && option.time === requestedTime
+          && option.assignments.length === 1 && option.assignments[0].vanId === requiredPrimaryVanId);
+        // Retain the approved large Standard-service policy. Extend its selector
+        // only for other explicit office workloads that cannot fit the primary.
+        if (!request.project && !capacitySummary.closed && !soloFits
+          && (!supportSelectionPolicy(result) || requestedTime !== REGULAR_SLOTS[0]
+            || capacitySummary.primarySpots < REGULAR_SLOTS.length)
+          && capacitySummary.primarySpots > 0 && capacitySummary.requiredSpots > capacitySummary.primarySpots) {
+          result.workloadSupportPolicy = { workloadSupport: true, quantity: result.quantity,
+            durationMinutes: 60, totalDurationMinutes: capacitySummary.durationMinutes,
+            minimum: capacitySummary.requiredSpots - capacitySummary.primarySpots,
+            maximum: capacitySummary.requiredSpots - 1 };
+        }
+      }
+      const selectionPolicy = officeExactTarget && !capacitySummary?.closed ? supportSelectionPolicy(result) : null;
       const candidates = selectionPolicy
         ? supportSlotCandidates({
           result,
@@ -692,6 +777,10 @@ function createSchedulingProvider({ db }) {
       const requestedSupportSlotIds = cleanSupportSelectionIds(context.requestedSupportSlotIds);
       let options = result.options;
       let supportReason = "";
+      if (selectionPolicy?.workloadSupport && !requestedSupportSlotIds.length) {
+        options = [];
+        supportReason = "support-selection-count";
+      }
       if (selectionPolicy && requestedSupportSlotIds.length) {
         const composed = composeSelectedSupportOption({
           result,
@@ -706,7 +795,7 @@ function createSchedulingProvider({ db }) {
         options = composed.option ? [composed.option] : [];
         supportReason = composed.reason;
       }
-      const defaultSupportSlotIds = selectionPolicy
+      const defaultSupportSlotIds = selectionPolicy && !selectionPolicy.workloadSupport
         ? candidates.slice(0, selectionPolicy.minimum).map((candidate) => candidate.id)
         : [];
       const metadata = {
@@ -719,9 +808,11 @@ function createSchedulingProvider({ db }) {
         requiredPrimaryVanId: requiredPrimaryVanId || "",
         includeRequestedDateAlternatives,
         routePolicy,
+        ...(capacitySummary ? { capacitySummary } : {}),
         ...(selectionPolicy
           ? {
             supportSlotCandidates: candidates,
+            ...(selectionPolicy.workloadSupport ? { workloadSupport: true } : {}),
             supportMinSlots: selectionPolicy.minimum,
             supportMaxSlots: selectionPolicy.maximum,
             defaultSupportSlotIds,
@@ -778,6 +869,9 @@ function createSchedulingProvider({ db }) {
       const routePolicy = explicitOfficeRoutePolicy({ context, request, option });
       const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
       const candidateZone = propertyZone(property, option.address, routeConfig);
+      if (option.workloadSupport && !workloadScopeUnchanged(option, request, data)) {
+        return { available: false, reason: "support-workload-changed" };
+      }
       const refreshedAssignments = [];
       for (const requested of option.assignments) {
         const van = data.vans.find((item) => item.id === requested.vanId);
@@ -811,6 +905,9 @@ function createSchedulingProvider({ db }) {
         }
         refreshedAssignments.push({ ...availability, time: startTime, endTime: availability.endTime, role: requested.role });
       }
+      if (option.workloadSupport && !workloadCrewAvailable(refreshedAssignments, data, option.date)) {
+        return { available: false, reason: "support-crew-unavailable" };
+      }
       const primary = refreshedAssignments.find((assignment) => assignment.role !== "support") || refreshedAssignments[0];
       return {
         available: true,
@@ -822,7 +919,7 @@ function createSchedulingProvider({ db }) {
       };
     },
 
-    async validateTransaction({ transaction, db: transactionDb, option, appointmentId, context = {} }) {
+    async validateTransaction({ transaction, db: transactionDb, request, option, appointmentId, context = {} }) {
       const sameDayQuery = transactionDb.collection("workOrders").where("date", "==", option.date);
       const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot, vanSnapshot] = await Promise.all([
         transaction.get(sameDayQuery),
@@ -836,6 +933,23 @@ function createSchedulingProvider({ db }) {
         workOrders: snapshotItems(sameDaySnapshot),
         vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
       });
+      if (option.workloadSupport) {
+        const names = ["dailyVanAssignments", "staffProfiles", "staffAbsences", "businessSettings", "calendarClosures"];
+        const snapshots = await Promise.all(names.map(name => transaction.get(transactionDb.collection(name))));
+        const data = { ...canonical, services };
+        names.forEach((name, index) => { data[name] = snapshotItems(snapshots[index]); });
+        if (!workloadScopeUnchanged(option, request, data)) return { available: false, reason: "support-workload-changed" };
+        if (dateClosed(option.date, data.businessSettings.find(item => item.id === "business-calendar"), data.calendarClosures)) {
+          return { available: false, reason: "company-calendar-closed" };
+        }
+        if (!workloadCrewAvailable(option.assignments, data, option.date)) return { available: false, reason: "support-crew-unavailable" };
+        for (const selected of option.assignments) {
+          const van = data.vans.find(item => item.id === selected.vanId);
+          const crew = van && resolveAssignment(van, option.date, data.staffProfiles, data.dailyVanAssignments, data.staffAbsences);
+          if (!crew || !vanCanReceiveAppointments(van, crew) || crew.technicianIds.length !== selected.technicianIds.length
+            || crew.technicianIds.some(id => !selected.technicianIds.includes(id))) return { available: false, reason: "support-crew-changed" };
+        }
+      }
       const halfDaySchedules = canonical.vanHalfDaySchedules;
       const operationalMove = context.changeKind === "operational_move";
       const sameDayOrders = canonical.workOrders
@@ -858,8 +972,10 @@ function createSchedulingProvider({ db }) {
         });
         if (!requestedInterval) return { available: false, reason: "invalid-capacity-interval" };
         const conflict = sameDayOrders.some((order) => {
-          if (order.vanId !== assignment.vanId) return false;
-          return intervalsOverlap(requestedInterval, workOrderCapacityInterval(order, services, halfDay));
+          if (order.vanId !== assignment.vanId && !(option.workloadSupport
+            && (order.technicianIds || []).some(id => assignment.technicianIds.includes(id)))) return false;
+          return intervalsOverlap(requestedInterval, workOrderCapacityInterval(order, services,
+            isHalfDay(order.vanId, option.date, halfDaySchedules)));
         });
         if (conflict) {
           return { available: false, reason: "work-order-conflict", vanId: assignment.vanId };
@@ -895,6 +1011,7 @@ module.exports = {
   loadAppointmentSchedule,
   loadSchedulingData,
   notificationRecipient,
+  officeCapacitySummary,
   operationalMoveDateAllowed,
   operationalMoveResult,
   operationalRulesFromSettings,

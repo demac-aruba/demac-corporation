@@ -933,6 +933,7 @@ module.exports = {
   assignmentCombinations,
   buildAllocationPlan,
   exactPreset,
+  dateClosed,
   generateCanonicalOptions,
   isOtherPreset,
   normalizeOperationalRules,
