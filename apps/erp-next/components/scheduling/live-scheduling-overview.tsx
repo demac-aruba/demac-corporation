@@ -50,7 +50,7 @@ import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
 import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey, jobOwnsCapacityStart } from '../../lib/scheduling-capacity';
-import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
+import { type AdhocSupportTarget } from './adhoc-support-drawer';
 import { AfterHoursEmergencyDrawer } from './after-hours-emergency-panel';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
@@ -553,7 +553,6 @@ function LiveSchedulingSession() {
     if (!van) return;
     setSelectedAppointmentId('');
     setMoveNotice('');
-    setBookingTarget(null);
     const vanJobs = activeJobs.filter(job => job.vanId === vanId);
     const durationOptions = consecutiveSupportOptions(
       displaySlotsForVan(activeDay, vanId, capacityState, activeJobs).map(slot => ({
@@ -564,6 +563,7 @@ function LiveSchedulingSession() {
       setMoveNotice('This support slot is no longer available. Refresh the agenda.');
       return;
     }
+    setBookingTarget(current => current ?? { dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
     setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end, durationOptions });
   };
 
@@ -610,6 +610,7 @@ function LiveSchedulingSession() {
   const handleCreatedSupport = async (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => {
     const target = supportTarget;
     setSupportTarget(null);
+    setBookingTarget(null);
     setSelectedAppointmentId('');
     setMoveNotice(result.supportWorkOrder.backdated === true && target
       ? `${target.vanName} support was recorded for ${target.dateKey} at ${formatTime(target.start)}. The original work remains unchanged. No customer or technician alerts were sent.`
@@ -970,8 +971,7 @@ function LiveSchedulingSession() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
-      {bookingTarget ? <LiveAppointmentCreateDrawer mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onSendSupport={canManage && Boolean(capacityState) && !bookingTarget.restDayOvertime && canPlanCoworkerSupport(bookingTarget.dateKey) ? () => openSupportAssignment(bookingTarget.vanId, bookingTarget.start, bookingTarget.end) : undefined} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
-      {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onSendSupport={canManage && Boolean(capacityState) && !bookingTarget.restDayOvertime && canPlanCoworkerSupport(bookingTarget.dateKey) ? () => openSupportAssignment(bookingTarget.vanId, bookingTarget.start, bookingTarget.end) : undefined} support={supportTarget ? { target: supportTarget, appointments, onCreated: handleCreatedSupport } : undefined} onClose={() => { setBookingTarget(null); setSupportTarget(null); }} onCreated={(booking) => { setSupportTarget(null); handleCreatedBooking(booking); }} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>

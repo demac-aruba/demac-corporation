@@ -37,3 +37,16 @@ Retain the original state, domain handlers, payloads, capabilities and authorita
 ## Verification and rollout
 
 See task and independent review. Require types, build, real-component synthetic browser scenarios, authority/lifecycle/project/communication regression and existing CI before merge. Publish only the verified live frontend project and verify its exact revision/assets. Keep prior ready deployment available for rollback. Revisit if future changes introduce tabs, unmount fields, change writes or alter nested dialog ownership.
+
+## Approved follow-up — 2026-10-10
+
+The owner requested three-way Regular / Project / Support navigation and more catalog space.
+The same session now keeps the regular/Project and support drafts mounted, while only the
+visible dialog owns focus/Escape/scroll. Returning from support to the same booking source
+retains its draft; changing Regular↔Project still uses the existing source reset rules.
+Support unknown outcomes lock navigation until the original idempotent command is recovered.
+Work summary, customer/technician descriptions and visit references move to the right column.
+Capacity is a compact footer status with its existing complete controls inside expandable
+details; actionable support/overtime decisions open those details automatically. This is a
+presentation/session-lifetime change only; all canonical authorities and payloads remain.
+See `docs/ai/tasks/booking-modal-followup-20261010.md` and its separate review for evidence.

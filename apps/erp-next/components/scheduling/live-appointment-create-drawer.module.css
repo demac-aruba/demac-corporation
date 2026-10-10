@@ -100,3 +100,31 @@
   .header p,.sourceOption span{display:none}
   .header,.footer{padding:10px 16px}
 }
+
+/* Keep catalog selection central and visit details at the right; capacity stays by the actions. */
+.detailsColumn{min-width:0}
+.detailsColumn .quantityRow{grid-template-columns:1fr;gap:8px;margin-top:0}
+.drawer{position:relative}
+.footerActions{align-items:center}
+.capacityStatus{min-width:0;color:var(--muted)}
+.capacityStatus>summary{display:flex;align-items:center;gap:7px;max-width:280px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--surface-2);cursor:pointer;list-style:none}
+.capacityStatus>summary::-webkit-details-marker{display:none}
+.capacityStatus>summary:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.capacityStatus>summary strong{overflow-wrap:anywhere}
+.capacityHint{font-weight:500;opacity:.8}
+.capacityStatus[data-tone="success"]>summary{color:var(--success);border-color:color-mix(in srgb,var(--success) 40%,var(--border));background:var(--success-soft)}
+.capacityStatus[data-tone="error"]>summary{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--border));background:color-mix(in srgb,var(--danger) 8%,var(--surface))}
+.capacityStatus[data-tone="warning"]>summary{color:var(--warning);border-color:var(--warning);background:color-mix(in srgb,var(--warning) 8%,var(--surface))}
+.capacityPanel{position:absolute;z-index:3;bottom:76px;right:20px;width:min(760px,calc(100% - 40px));max-height:min(480px,55dvh);overflow:auto;overscroll-behavior:contain;box-sizing:border-box;padding:12px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 12px 48px rgba(4,11,22,.3);color:var(--text);text-align:left}
+.capacityPanel>.secondaryButton{display:block;margin:0 0 8px auto}
+.capacityPanel .authorityHeading{flex-wrap:wrap}
+.capacityPanel .choiceGrid,.capacityPanel .assignmentGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:1100px){.detailsColumn{grid-column:1/-1}.footer{flex-wrap:wrap}.footerActions{margin-left:auto}}
+@media(max-width:760px){
+  .detailsColumn{grid-column:auto}
+  .footerActions{margin-left:0;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;width:100%}
+  .capacityStatus{grid-column:1/-1}
+  .capacityStatus>summary{max-width:none;padding:7px 9px}
+  .capacityPanel{bottom:145px;left:12px;right:12px;width:auto;max-height:45dvh}
+  .capacityPanel .choiceGrid,.capacityPanel .assignmentGrid{grid-template-columns:1fr}
+}
