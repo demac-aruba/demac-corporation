@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'functions/bootstrap.js'
+      - 'scripts/appointment-charges-project-deploy*'
+      - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -66,6 +68,8 @@ on:
       - main
     paths:
       - 'functions/bootstrap.js'
+      - 'scripts/appointment-charges-project-deploy*'
+      - 'functions/projectCommercialGuard.js'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -228,7 +232,9 @@ jobs:
           "$RUNNER_TEMP/charge-tools/node_modules/.bin/playwright" install --with-deps chromium
       - name: Financial authority and integration regressions
         run: |
-          node --test functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js
+          node --test functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
+          node --check scripts/appointment-charges-project-deploy.cjs
+          node --test scripts/appointment-charges-project-deploy.test.cjs
           npm run typecheck --prefix apps/erp-next
       - name: Real Firestore transaction and authorization checks
         run: >-
@@ -249,12 +255,14 @@ jobs:
           path: ${{ runner.temp }}/charge-evidence
 
   deploy-office-booking-authority:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (!contains(github.event.head_commit.message, '[merge-only]') || contains(github.event.head_commit.message, '[deploy-office-booking]'))
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (!contains(github.event.head_commit.message, '[merge-only]') || contains(github.event.head_commit.message, '[deploy-appointment-charges]'))
     needs: [validate-office-booking-authority, validate-appointment-charges]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
@@ -263,6 +271,10 @@ jobs:
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy reviewed Project commercial guard first
+        if: contains(github.event.head_commit.message, '[deploy-appointment-charges]')
+        run: node scripts/appointment-charges-project-deploy.cjs
 
       - name: Resolve DEMAC runtime identity
         id: config
@@ -346,3 +358,9 @@ jobs:
           console.log('officeBookingAuthority: ACTIVE and Firebase-auth protected');
           NODE
           rm -f "$body"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && contains(github.event.head_commit.message, '[deploy-appointment-charges]')
+        with:
+          name: appointment-charges-project-release
+          path: ${{ runner.temp }}/appointment-charges-project-release.json

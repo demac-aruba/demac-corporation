@@ -1376,7 +1376,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   } : undefined;
 
   const confirmBooking = async (acknowledgedBudget?: string, requestCapacityOvertime = false) => {
-    if (chargeDraft && !chargesInput?.quoteToken) { setAuthorityError('Revisa los importes y espera la tarifa actualizada antes de confirmar.'); setChargeTab(true); return; }
+    if ((chargeDraft || chargeTab) && !chargesInput?.quoteToken) { setAuthorityError('Revisa los importes y espera la tarifa actualizada antes de confirmar.'); setChargeTab(true); return; }
     if (requestCapacityOvertime && !activeCapacityOvertime) return;
     const useCapacityOvertime = Boolean(activeCapacityOvertime && (requestCapacityOvertime || !selectedValidatedOption));
     const projectBookingRequested = projectSourceSelected;
@@ -1524,7 +1524,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const holdBooking = async (acknowledgedBudget?: string) => {
-    if (chargeDraft && !chargesInput?.quoteToken) { setAuthorityError('Revisa la proyección actualizada antes de reservar.'); setChargeTab(true); return; }
+    if ((chargeDraft || chargeTab) && !chargesInput?.quoteToken) { setAuthorityError('Revisa la proyección actualizada antes de reservar.'); setChargeTab(true); return; }
     if (chargesInput?.payment) { setAuthorityError("Confirma la cita para registrar el anticipo, o desmarca el anticipo antes de crear la reserva temporal."); setChargeTab(true); return; }
     const projectBookingRequested = projectSourceSelected;
     if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
@@ -1592,7 +1592,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     : workLines.map(line => ({ id: line.id, workLineId: line.id, presetId: line.presetId,
       serviceId: presets.find(preset => preset.id === line.presetId)?.serviceId || '',
       label: presets.find(preset => preset.id === line.presetId)?.label || line.presetId, quantity: line.quantity }));
-  const chargesInput = bookingChargeDraft(chargeSeeds, chargeDraft);
+  const chargesInput = chargeDraft ? bookingChargeDraft(chargeSeeds, chargeDraft) : undefined;
   const busy = loading || masterSaving || saving || holding || referencesUploading;
   const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery));
 
@@ -1652,7 +1652,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           ) : null}
         </div>
 
-        <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita"><button type="button" className={!chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(false)}><ChargeIcon name="calendar"/>Datos de la cita</button><button type="button" className={chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(true)}><ChargeIcon name="receipt"/>Importes y pagos</button></nav>
+        <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita"><button type="button" className={!chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(false)}><ChargeIcon name="calendar"/>Datos de la cita</button><button type="button" className={chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => { setChargeDraft(current => bookingChargeDraft(chargeSeeds, current) || null); setChargeTab(true); }}><ChargeIcon name="receipt"/>Importes y pagos</button>{chargeDraft || chargeTab ? <button type="button" disabled={busy || Boolean(bookingRecovery)} onClick={() => { setChargeDraft(null); setChargeTab(false); }}>Descartar importes</button> : null}</nav>
         <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
 
           {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
@@ -2008,7 +2008,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           )}
           </div>
           </div>
-          {chargeTab ? <BookingChargesEditor seeds={chargeSeeds} value={chargeDraft} onChange={setChargeDraft} disabled={busy || Boolean(bookingRecovery)}/> : null}
+          {chargeTab ? <BookingChargesEditor key={`${customerId}:${propertyId}:${projectId}:${projectPhaseId}:${appointmentSource}`} seeds={chargeSeeds} value={chargeDraft} onChange={setChargeDraft} disabled={busy || Boolean(bookingRecovery)}/> : null}
         </div>
 
         <footer className={styles.footer}>

@@ -183,3 +183,9 @@ test('reviewed Field evidence can be explicitly reconciled without duplicating l
   db.write('fieldBillingCandidates/candidate', { ...candidate, revisionNumber: 2 });
   await rejectsCode(call('finalize_appointment_charges', { ...input, candidateReviewed: true, candidateFingerprint: view.candidateEvidence.fingerprint }), 'charge_field_review');
 });
+test('historical Project guard detects final-only charges and voided financial history without relying on receipts', async () => {
+  const { assertNoLinkedCommercialEvidence } = require('./projectCommercialGuard');
+  for (const jobCharges of [{ final: { totalCents: 0 }, paymentCount: 0, receivedCents: 0 }, { final: null, paymentCount: 1, receivedCents: 0 }]) {
+    await assert.rejects(assertNoLinkedCommercialEvidence({ appointment: { jobCharges }, order: {} }), /commercial or payroll evidence/);
+  }
+});

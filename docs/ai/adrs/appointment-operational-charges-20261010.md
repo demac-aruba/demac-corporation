@@ -16,7 +16,7 @@ Booking Authority owns an optional `appointments.jobCharges` operational snapsho
 
 Receipts use the existing `payments` collection, source `appointment-operational`, with canonical appointment/customer/property/Work Order IDs, method, reference, received timestamp and recording actor. These records document office-reported receipt of money; they do not issue official invoices, post to QBO, verify bank settlement, trigger POS/SUAVE charges, process refunds or create a general accounting ledger. QBO remains official accounting authority. A future accounting screen can consume this evidence.
 
-Initial financial data and optional deposit commit atomically with ordinary/special booking. Holds permit projection but no payment/final. Original booking clients may omit the new payload. The UI checks financial acknowledgment in successful booking responses, so an older backend cannot silently drop a deposit.
+Initial financial data and optional deposit commit atomically with ordinary/special booking. Holds permit projection but no payment/final. Untouched booking forms and original booking clients omit the optional financial payload; opening/editing the financial section opts in and requires a valid quote. This preserves existing scheduling-only permissions. The UI checks financial acknowledgment in successful booking responses, so an older backend cannot silently drop a deposit.
 
 Every mutation requires an active provisioned office/finance role inside the Firestore transaction, expected version, stable request identity and append-only `chargeEvents` evidence. Auditor is read-only. Identical retries replay; changed retries conflict. Receipt corrections retain the original as voided, never delete it. A void does not execute a refund. Credit balances remain explicit.
 
@@ -43,6 +43,6 @@ Financial confirmation never completes technical work or attendance. Existing Fi
 
 Independent review, financial negative/concurrency/recovery tests, actual Firestore emulator, existing Booking/Field/WhatsApp/Project regressions, ERP types/build and browser desktop/mobile gates precede merge.
 
-Release uses `[merge-only] [deploy-office-booking]` to deploy only the Office Booking Authority through its existing authenticated workflow after both existing and added gates. Other automatic function releases continue to honor `[merge-only]`. Deploy frontend exact tested tree only after backend success. No scheduled jobs or migrations are invoked.
+Release uses `[merge-only] [deploy-appointment-charges]` to deploy the Project commercial guard first, then Office Booking Authority through its existing authenticated workflow after both existing and added gates. Project deployment verifies the reviewed source baseline and preserves its current runtime configuration. Other automatic function releases continue to honor `[merge-only]`. Deploy frontend exact tested tree only after backend success. No scheduled jobs or migrations are invoked.
 
 Rollback frontend first to the previous production deployment; preserve new data and backend financial read/write compatibility. If backend rollback is necessary, financial acknowledgment checks stop silent omission. Never delete new receipts to roll back code. Review again before QBO posting, automated settlement, refunds, foreign-currency support or accounting reports.

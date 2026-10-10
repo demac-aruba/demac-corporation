@@ -62,7 +62,7 @@ const stubs = {
         {role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'12:30',capacityEndTime:'12:30',durationMinutes:minutes,slots:minutes/60,quantity:input.workLines.reduce((sum,line)=>sum+line.quantity,0)}]}]};
     }
     async function commit(input,hold){
-      const calls=hold?window.__holds:window.__commits;calls.push(input);
+      const calls=hold?window.__holds:window.__commits;if(!window.__allowCharges&&input.charges)throw Error('Untouched booking must omit financial payload');calls.push(input);
       if(window.__pendingCommit)await new Promise(resolve=>{window.__finishCommit=resolve;});
       window.__records[input.requestId]||={appointmentId:hold?'HOLD-TEST':'APPOINTMENT-TEST',workOrderIds:['WO-TEST']};
       if(window.__loseResponse&&calls.length===1)throw Error('Synthetic response lost');
