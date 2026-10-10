@@ -245,7 +245,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             </div>
           </section>
         </div> : null}
-        {tab !== 'details' ? <AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged}/> : null}
+        <div className={tab === 'details' ? ui.hidden : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
