@@ -27,3 +27,76 @@
 .overlay .drawer .editorPanel>header button{font-size:15px!important}
 .overlay .drawer .stepper b,.overlay .drawer .projectPlanSummary strong{font-size:14px!important}
 .overlay .drawer .errorBox span{font-size:12px!important}
+
+/* A single booking workspace; existing fields and validation stay mounted. */
+.overlay{align-items:center;justify-content:center;padding:24px}
+.drawer{width:min(1480px,100%);height:auto;max-height:calc(100dvh - 48px);min-height:0;border:1px solid var(--border);border-radius:20px;overflow:hidden;box-shadow:0 28px 90px rgba(4,11,22,.35)}
+.header{flex-shrink:0;padding:16px 20px 12px}
+.header p{max-width:1080px;margin-top:4px}
+.contextBar,.sourceBar{flex-shrink:0;background:var(--surface)}
+.contextBar{padding:12px 20px 0}
+.targetCard{margin-bottom:0;padding:4px}
+.sourceBar{padding:10px 20px 12px;border-bottom:1px solid var(--border)}
+.sourceBar:empty{display:none}
+.sourceSection{display:flex;align-items:center;gap:16px}
+.sourceLabel{flex:0 0 auto;margin:0;color:var(--muted);font-size:12px}
+.sourceActions{flex:1;min-width:0}
+.sourceToggle{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.sourceOption{padding:8px 10px}
+.sourceOption span{margin-top:2px}
+.body{min-height:0;padding:16px 20px;overscroll-behavior:contain}
+.columns{display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,1.12fr) minmax(0,1fr);gap:16px;align-items:start}
+.identityColumn,.workColumn,.capacityColumn{min-width:0}
+.columns .choiceGrid,.columns .formGrid,.columns .assignmentGrid{grid-template-columns:1fr}
+.columns .presetGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.columns .searchResult{grid-template-columns:minmax(0,1fr) auto}
+.columns .searchResult small{grid-column:1/-1;grid-row:2}
+.columns .authorityHeading{flex-wrap:wrap}
+.projectPicker{margin:0 0 11px;padding:11px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+.projectPicker label{display:grid;gap:5px}
+.projectPicker label>span{color:var(--muted);font-weight:850}
+.projectPicker input{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;padding:8px 9px;color:var(--text);background:var(--surface-2);font:inherit}
+.projectPicker input:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.disclosure{margin-top:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface);overflow:hidden}
+.disclosure>summary{padding:11px;cursor:pointer;color:var(--text);background:var(--surface-2)}
+.disclosure>summary strong{margin-left:5px}
+.disclosure>summary span{display:block;margin:3px 0 0 18px;color:var(--muted)}
+.disclosure[open]>summary{border-bottom:1px solid var(--border)}
+.disclosure>summary:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
+.footer{flex-shrink:0;padding:12px 20px}
+.footer>div:first-child{min-width:0}
+.footer>div:last-child{flex-shrink:0;flex-wrap:wrap}
+@media(max-width:1100px){
+  .overlay{padding:12px}
+  .drawer{max-height:calc(100dvh - 24px)}
+  .columns{grid-template-columns:1fr 1fr}
+  .capacityColumn{grid-column:1/-1}
+  .sourceSection{display:block}
+  .sourceLabel{margin-bottom:6px}
+}
+@media(max-width:760px){
+  .overlay{padding:0}
+  .drawer{width:100%;height:100dvh;max-height:100dvh;border-radius:0;border:0}
+  .header{padding:12px 14px}
+  .header p{display:none}
+  .contextBar{padding:8px 12px 0}
+  .targetCard{gap:0}
+  .targetCard>div{padding:4px 7px}
+  .sourceBar{padding:8px 12px}
+  .sourceToggle{grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:6px}
+  .sourceOption{padding:7px}
+  .sourceOption span{display:none}
+  .columns{grid-template-columns:1fr;gap:0}
+  .capacityColumn{grid-column:auto}
+  .body{padding:12px}
+  .footer{padding:10px 12px;gap:8px}
+  .footer>div:last-child{justify-content:stretch}
+  .footer>div:last-child>button{flex:1}
+  .overlay .drawer :where(input,select,textarea){font-size:16px!important}
+}
+@media(max-height:650px) and (min-width:761px){
+  .overlay{padding:8px}
+  .drawer{max-height:calc(100dvh - 16px)}
+  .header p,.sourceOption span{display:none}
+  .header,.footer{padding:10px 16px}
+}

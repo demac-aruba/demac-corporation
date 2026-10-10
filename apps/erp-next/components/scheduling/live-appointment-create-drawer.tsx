@@ -66,6 +66,7 @@ import {
 import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
 import { useAuth } from '../auth/auth-provider';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
+import { useBookingDialog } from './use-booking-dialog';
 import styles from './live-appointment-create-drawer.module.css';
 
 export type LiveBookingTarget = {
@@ -1574,6 +1575,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const busy = loading || masterSaving || saving || holding || referencesUploading;
+  const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery));
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
@@ -1584,7 +1586,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         onCancel={() => setBudgetConfirmation(null)}
         onContinue={() => { void (budgetConfirmation.action === 'hold' ? holdBooking(budgetConfirmation.signature) : confirmBooking(budgetConfirmation.signature)); }}
       />}
-      <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={isAfterHours ? `Create after-hours appointment for ${requestTarget.vanName}` : 'Create appointment'}>
+      <aside className={styles.drawer} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={isAfterHours ? `Create after-hours appointment for ${requestTarget.vanName}` : 'Create appointment'}>
         <header className={styles.header}>
           <div>
             <span className={styles.eyebrow}>Booking Authority · {isRestDayOvertime ? 'Weekly rest · Overtime' : isAfterHours ? 'After-Hours / Emergency' : 'Canonical Scheduling'}</span>
@@ -1598,7 +1600,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <button type="button" className={styles.close} disabled={busy || Boolean(bookingRecovery)} onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
+        <div className={styles.contextBar} inert={saving || holding || Boolean(bookingRecovery)}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
@@ -1608,26 +1610,40 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <div><span>{isSpecialBooking ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isRestDayOvertime ? 'Weekly rest · scheduled overtime' : isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
           </section>
 
+        </div>
+
+        <div className={styles.sourceBar} inert={saving || holding || Boolean(bookingRecovery)}>
+          {!isAfterHours ? (
+            <section className={styles.sourceSection}>
+              <h3 className={styles.sourceLabel}>Appointment source</h3>
+              <div className={styles.sourceActions}>
+                <div className={styles.sourceToggle}>
+                  <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-label="Regular Booking Choose customer, property and work from Services & Products." aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
+                    <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
+                  </button>
+                  {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-label="Project Find a Project and reserve whole Van capacity slots against it." aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
+                    <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
+                  </button> : null}
+                {onSendSupport ? <button type="button" className={styles.sourceOption} aria-label="Send van support Use this open slot to help another Van with an existing appointment." onClick={onSendSupport}>
+                  <strong>Send van support</strong><span>Use this open slot to help another Van with an existing appointment.</span>
+                </button> : null}
+                </div>
+              </div>
+            </section>
+          ) : null}
+        </div>
+
+        <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
+
           {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
           {authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
           {masterError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{masterError}</span>{projectMode ? <button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry Project property</button> : null}</div> : null}
           {backdatedTarget && backdatingAcknowledged ? <div className={styles.authorityIdle} style={{ marginBottom: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, background: 'var(--surface)' }} role="status"><strong style={{ display: 'block', marginBottom: 3, color: 'var(--warning, #b45309)' }}>BACKDATED APPOINTMENT</strong><span>This records work after it happened. Historical Van capacity will still be checked, and no automatic confirmation or reminder will be sent.</span></div> : null}
 
-          {!isAfterHours ? (
-            <section className={styles.section}>
-              <header><div><span>1</span><strong>Appointment source</strong><small>{canScheduleProjects ? 'Create a Regular Booking or reserve real Scheduling capacity for an existing Project.' : 'Create a Regular Booking from canonical customer, property, and Services & Products records.'}</small></div></header>
-              <div className={styles.sectionBody}>
-                <div className={styles.sourceToggle}>
-                  <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
-                    <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
-                  </button>
-                  {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
-                    <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
-                  </button> : null}
-                </div>
-                {onSendSupport ? <button type="button" className={styles.sourceOption} style={{ width: '100%', marginTop: 10 }} onClick={onSendSupport}>
-                  <strong>Send van support</strong><span>Use this open slot to help another Van with an existing appointment.</span>
-                </button> : null}
+
+
+          <div className={styles.columns}>
+          <div className={styles.identityColumn} data-booking-column="identity">
                 {projectMode ? (
                   <div className={styles.projectPicker}>
                     <label className={styles.fieldWide}>
@@ -1657,9 +1673,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     <div className={styles.previewBoundary} role="note"><strong>{selectedProject?.serverVersion ? 'Shared Project booking:' : 'Preview bridge:'}</strong> The Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. {backdatedTarget ? 'Record the slots worked on this date. No automatic confirmation or reminder will be sent.' : isRestDayOvertime ? 'Review the planned slots and estimated finish, then confirm overtime.' : 'A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.'}</div>
                   </div>
                 ) : null}
-              </div>
-            </section>
-          ) : null}
 
           <section className={styles.section}>
             <header><div><span>{isAfterHours ? '1' : '2'}</span><strong>Customer</strong><small>{projectMode ? 'The selected Project supplies its canonical CRM customer.' : 'Search canonical CRM records or register a new customer.'}</small></div></header>
@@ -1714,7 +1727,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       <label><span>Access contact · this visit</span><select value={accessContactId} onChange={(event) => { setAccessContactId(event.target.value); invalidateOfferValidation(); }}><option value="">Pending / not recorded</option><option value={`client:${customerId}`}>{customerLabel(selectedCustomer)} · owner</option>{references.contacts.filter((contact) => contact.clientId === customerId).map((contact) => <option key={contact.id} value={`contact:${contact.id}`}>{contact.name}{locationData?.assignments.some((item) => item.contactId === contact.id && item.dwellingId === dwellingId) ? ' · dwelling contact' : ''}</option>)}</select></label>
                     </div><p>These choices apply only to this visit. Ownership, dwelling contacts and billing responsibility remain separate.</p>
                   </> : null}
-                  {selectedProperty && !backdatedTarget ? <PropertyCommunicationPanel
+                  {selectedProperty && !backdatedTarget ? <details className={styles.disclosure} data-booking-disclosure="contacts">
+                    <summary><strong>Contactos y avisos</strong><span>Destinatarios · Confirmación · Recordatorio</span></summary>
+                    <PropertyCommunicationPanel
                     client={selectedCustomer}
                     propertyId={selectedProperty.id}
                     dwellingId={dwellingId}
@@ -1723,13 +1738,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     selections={recipientSelections}
                     onSelectionsChange={(next) => { setRecipientSelections(next); invalidateOfferValidation(); }}
                     onRefresh={refreshReferences}
-                  /> : selectedProperty ? <div className={styles.authorityIdle} style={{ marginTop: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10 }}><strong style={{ display: 'block', color: 'var(--warning, #b45309)' }}>Customer messages are off for this backdated appointment.</strong><span>Confirmation and reminder choices are intentionally suppressed because the work already happened.</span></div> : null}
+                  /></details> : selectedProperty ? <div className={styles.authorityIdle} style={{ marginTop: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10 }}><strong style={{ display: 'block', color: 'var(--warning, #b45309)' }}>Customer messages are off for this backdated appointment.</strong><span>Confirmation and reminder choices are intentionally suppressed because the work already happened.</span></div> : null}
                 </>
               ) : <div className={styles.emptyResult}>Select a customer to load their properties.</div>}
 
             </div>
           </section>
 
+          </div>
+          <div className={styles.workColumn} data-booking-column="work">
           <section className={styles.section}>
             <header><div><span>{isAfterHours ? '3' : '4'}</span><strong>Work & allocation</strong><small>{projectMode ? 'Choose the Project slots to reserve in the crew schedule.' : 'Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.'}</small></div></header>
             <div className={styles.sectionBody}>
@@ -1821,7 +1838,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             </div>
           </section>
 
+          <details className={styles.disclosure} data-booking-disclosure="references">
+            <summary><strong>Información para la visita</strong><span>Fotos · Video · Audio · GPS{visitReferences.files.length ? ` · ${visitReferences.files.length} archivos` : ''}{referencesUploading ? ' · Subiendo…' : ''}</span></summary>
           <VisitReferenceEditor value={visitReferences} onChange={setVisitReferences} disabled={loading || masterSaving || saving || holding || Boolean(bookingRecovery)} onBusyChange={setReferencesUploading} />
+          </details>
+          </div>
+          <div className={styles.capacityColumn} data-booking-column="capacity">
 
           {isRestDayOvertime ? (
             <section className={styles.authoritySection}>
@@ -1964,6 +1986,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             )}
           </section>
           )}
+          </div>
+          </div>
         </div>
 
         <footer className={styles.footer}>
@@ -1972,7 +1996,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <button type="button" className={styles.confirmButton} disabled={busy || projectWriteBlocked}
               onClick={() => void bookingRecovery.retry()}>Recuperar reserva original</button>
           </div> : <>
-          <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : projectMode ? 'PROJECT PREVIEW + CANONICAL SCHEDULING' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : projectMode ? 'Project → Booking Authority → Appointment + Work Order + Capacity Locks' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
+          <div><span>{isRestDayOvertime ? 'WEEKLY REST · OVERTIME' : isAfterHours ? 'AFTER-HOURS APPOINTMENT' : projectMode ? 'PROJECT BOOKING' : 'REGULAR BOOKING'}</span><strong>{requestTarget.vanName} · {formatTime(requestTarget.start)} · {isAfterHours ? 'Open-ended' : projectMode ? bookingBudgetPlan && selectedProject ? projectSlotLabel(bookingBudgetPlan.scheduledHours, selectedProject.slotDurationMinutes) : '—' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
             {!isSpecialBooking && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}

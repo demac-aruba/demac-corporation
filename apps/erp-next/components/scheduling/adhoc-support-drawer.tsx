@@ -9,6 +9,8 @@ import {
 } from '../../lib/office-booking-authority';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
+import modalStyles from './booking-support-modal.module.css';
+import { useBookingDialog } from './use-booking-dialog';
 
 export type AdhocSupportTarget = {
   dateKey: string;
@@ -78,6 +80,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [requestedSlots, setRequestedSlots] = useState(1);
+  const dialogRef = useBookingDialog(onClose, busy);
   const requestRef = useRef<{ signature: string; id: string } | null>(null);
   const duration = target.durationOptions.find(option => option.slots === requestedSlots);
 
@@ -146,8 +149,8 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
     }
   };
 
-  return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label="Send van support">
+  return <div className={`${styles.drawerOverlay} ${modalStyles.overlay}`} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <aside className={`${styles.drawer} ${modalStyles.dialog}`} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Send van support">
       <header className={styles.drawerHeader}>
         <div>
           <span>Operational support · Booking Authority</span>
@@ -157,7 +160,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
         <button type="button" disabled={busy} onClick={onClose}>×</button>
       </header>
 
-      <div className={styles.drawerBody}>
+      <div className={`${styles.drawerBody} ${modalStyles.body}`} inert={busy}>
         {historical ? <section className={styles.formSection}>
           <header><strong>Historical schedule correction</strong><span>Record support that actually happened on {formatDate(target.dateKey)}. No customer or technician alerts will be sent.</span></header>
           <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: 12 }}>

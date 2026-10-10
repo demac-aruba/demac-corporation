@@ -113,6 +113,8 @@ async function main() {
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
     assert.equal(await drawer.getByRole('button', { name: 'Temporary hold', exact: true }).count(), 0);
+    // Optional references now live in a mounted disclosure; open it as the operator does.
+    await drawer.locator('[data-booking-disclosure="references"] > summary').click();
     await drawer.getByRole('region', { name: 'Información para la visita' }).waitFor();
     await drawer.getByLabel('Indicaciones para el técnico y ayudante').fill('Referencia sintética de Proyecto histórico');
     await drawer.getByText('BACKDATED APPOINTMENT', { exact: true }).scrollIntoViewIfNeeded();
@@ -159,6 +161,7 @@ async function main() {
     await drawer.getByLabel('Planned Project slots *').fill('1');
     await drawer.getByLabel('Project phase *').selectOption('PHASE-1');
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.locator('[data-booking-disclosure="references"] > summary').click();
     await drawer.getByRole('region', { name: 'Información para la visita' }).waitFor();
     for (const name of ['Añadir fotos', 'Añadir video', 'Añadir audio']) assert.equal(await drawer.getByRole('button', { name, exact: true }).count(), 1);
     await page.screenshot({ path: path.join(output, 'backdated-project-mobile.png'), fullPage: true });

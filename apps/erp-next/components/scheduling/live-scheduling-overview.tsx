@@ -385,7 +385,9 @@ function LiveSchedulingSession() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || moveBusy) return;
+      if (event.key !== 'Escape' || moveBusy || event.defaultPrevented) return;
+      // Booking owns its focus, pending writes and nested-editor dismissal.
+      if (document.querySelector('[data-booking-modal]')) return;
       if (supportTarget) {
         setSupportTarget(null);
         return;
