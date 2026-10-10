@@ -76,6 +76,26 @@ jobs:
           ADDRESS_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           ADDRESS_TEST_OUTPUT: ${{ runner.temp }}/address-evidence
         run: node apps/erp-next/scripts/property-address-browser.cjs
+      - name: Booking modal layout, workflow parity and recovery
+        env:
+          BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/booking-modal-evidence
+        run: node apps/erp-next/scripts/booking-modal-browser.cjs
+      - name: Booking reference files, metadata and recovery
+        env:
+          REFERENCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools/node_modules
+          REFERENCE_TEST_OUTPUT: ${{ runner.temp }}/booking-reference-evidence
+        run: node apps/erp-next/scripts/booking-references-browser.cjs
+      - name: Retain synthetic booking browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booking-modal-and-reference-evidence
+          path: |
+            ${{ runner.temp }}/booking-modal-evidence/
+            ${{ runner.temp }}/booking-reference-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain synthetic property address browser evidence
         if: always()
         uses: actions/upload-artifact@v4
