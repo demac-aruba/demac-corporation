@@ -70,6 +70,9 @@ import {
 import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
 import { useAuth } from '../auth/auth-provider';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
+import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
+import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import type { OfficeAdhocSupportResult } from '../../lib/office-booking-authority';
 import { useBookingDialog } from './use-booking-dialog';
 import styles from './live-appointment-create-drawer.module.css';
 
@@ -110,6 +113,11 @@ type Props = {
   onCreated: (booking: LiveCreatedBooking) => void;
   onAvailabilityConflict?: () => Promise<void> | void;
   onSendSupport?: () => void;
+  support?: {
+    target: AdhocSupportTarget;
+    appointments: BrowserAppointmentRecord[];
+    onCreated: (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => Promise<void> | void;
+  };
 };
 
 type CustomerDraft = NewBookingCustomer & {
@@ -343,7 +351,9 @@ function sameStringArray(left: string[], right: string[]) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
-export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict, onSendSupport }: Props) {
+export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict, onSendSupport, support }: Props) {
+  const [supportActive, setSupportActive] = useState(Boolean(support));
+  useEffect(() => { if (support?.target) setSupportActive(true); }, [support?.target]);
   const { principal } = useAuth();
   const canScheduleProjects = principal.active && principal.capabilities.has('projects.schedule');
   const canManageProjects = principal.active && principal.capabilities.has('projects.view') && principal.capabilities.has('projects.manage');
@@ -446,6 +456,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   );
 
   useEffect(() => {
+    if (supportActive) return;
     if (!backdatedTarget) {
       backdatingPromptedRef.current = false;
       setBackdatingAcknowledged(false);
@@ -463,7 +474,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return;
     }
     setBackdatingAcknowledged(true);
-  }, [backdatedTarget, onClose]);
+  }, [backdatedTarget, onClose, supportActive]);
 
   const refreshReferences = useCallback(async () => {
     const referenceLoadEpoch = referenceLoadEpochRef.current + 1;
@@ -1280,7 +1291,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
     automaticValidationCapacityRef.current = capacitySignature;
     if (capacityChanged) validationChangeKindRef.current = 'capacity';
-    if (bookingRecovery || isSpecialBooking || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
+    if (supportActive || bookingRecovery || isSpecialBooking || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
     const timer = window.setTimeout(() => {
       if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
       validationChangeKindRef.current = 'metadata';
@@ -1291,7 +1302,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       window.clearTimeout(timer);
       if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
     };
-  }, [bookingRecovery, backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isSpecialBooking, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+  }, [supportActive, bookingRecovery, backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isSpecialBooking, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const saveProjectBookingLink = async (input: {
     appointmentId: string;
@@ -1594,10 +1605,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       label: presets.find(preset => preset.id === line.presetId)?.label || line.presetId, quantity: line.quantity }));
   const chargesInput = chargeDraft ? bookingChargeDraft(chargeSeeds, chargeDraft) : undefined;
   const busy = loading || masterSaving || saving || holding || referencesUploading;
-  const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery));
+  const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery), !supportActive);
+  const capacityDetailsRef = useRef<HTMLDetailsElement>(null);
+  const capacityActionRequired = Boolean(activeCapacityOvertime || supportSlotCandidates.length || (capacityValidation && capacityValidation.options.length > 1));
+  useEffect(() => {
+    if (capacityActionRequired && capacityDetailsRef.current) capacityDetailsRef.current.open = true;
+  }, [capacityActionRequired]);
+  const capacityReady = Boolean(selectedValidatedOption && !checking && !authorityError && !projectWriteBlocked && locationReady && (!backdatedTarget || backdatingAcknowledged));
+  const capacityTone = checking ? 'pending' : activeCapacityOvertime ? 'warning' : authorityError ? 'error' : capacityReady ? 'success' : 'pending';
+  const capacityLabel = checking ? 'Checking capacity…' : activeCapacityOvertime ? 'Review possible overtime' : authorityError ? 'Conflict · View details' : capacityReady ? 'Capacity validated' : isSpecialBooking ? 'Validation on confirmation' : capacityActionRequired ? 'Select support allocation' : 'Complete booking details';
 
   return (
-    <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
+    <>
+    <div className={styles.overlay} style={supportActive ? { display: 'none' } : undefined} inert={supportActive} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !bookingRecovery) onClose(); }}>
       {budgetConfirmation && budgetConfirmation.signature === budgetSignature && bookingBudgetPlan && canScheduleProjects && !busy && !checking && <ProjectBudgetConfirmation
         key={budgetConfirmation.signature}
         slotDurationMinutes={selectedProject?.slotDurationMinutes ?? 60}
@@ -1631,7 +1651,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
         </div>
 
-        <div className={styles.sourceBar} inert={saving || holding || Boolean(bookingRecovery)}>
+        <div className={styles.sourceBar} inert={busy || Boolean(bookingRecovery)}>
           {!isAfterHours ? (
             <section className={styles.sourceSection}>
               <h3 className={styles.sourceLabel}>Appointment source</h3>
@@ -1643,7 +1663,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   {canScheduleProjects ? <button type="button" className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-label="Project Find a Project and reserve whole Van capacity slots against it." aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
                     <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
                   </button> : null}
-                {onSendSupport ? <button type="button" className={styles.sourceOption} aria-label="Send van support Use this open slot to help another Van with an existing appointment." onClick={onSendSupport}>
+                {onSendSupport ? <button type="button" className={styles.sourceOption} aria-label="Send van support Use this open slot to help another Van with an existing appointment." disabled={busy || Boolean(bookingRecovery)} onClick={() => { if (busy || bookingRecovery || bookingInFlight.current) return; resetCapacityValidation(); if (support) setSupportActive(true); else onSendSupport(); }}>
                   <strong>Send van support</strong><span>Use this open slot to help another Van with an existing appointment.</span>
                 </button> : null}
                 </div>
@@ -1656,7 +1676,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
 
           {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
-          {authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
+          {chargeTab && authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
           {masterError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{masterError}</span>{projectMode ? <button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry Project property</button> : null}</div> : null}
           {backdatedTarget && backdatingAcknowledged ? <div className={styles.authorityIdle} style={{ marginBottom: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, background: 'var(--surface)' }} role="status"><strong style={{ display: 'block', marginBottom: 3, color: 'var(--warning, #b45309)' }}>BACKDATED APPOINTMENT</strong><span>This records work after it happened. Historical Van capacity will still be checked, and no automatic confirmation or reminder will be sent.</span></div> : null}
 
@@ -1846,6 +1866,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               ) : <div className={styles.emptyResult}>Add the work expected for this visit. BTU is not required when scheduling.</div>}
               </>}
 
+            </div>
+          </section>
+          </div>
+          <div className={styles.detailsColumn} data-booking-column="details">
+          <section className={styles.section}>
+            <header><div><span>5</span><strong>Work details & visit</strong><small>Review the workload and information for the customer and technicians.</small></div></header>
+            <div className={styles.sectionBody}>
               <div className={styles.quantityRow}>
                 <div><span>{projectMode ? 'Project task' : 'Work lines'}</span><strong>{projectMode ? selectedProjectPhase?.name || selectedProject?.type || '—' : `${workLines.length} line${workLines.length === 1 ? '' : 's'} · ${totalQuantity} item${totalQuantity === 1 ? '' : 's'}`}</strong></div>
                 <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{isRestDayOvertime ? `${Math.ceil(estimatedMinutes / 60)} overtime slots` : projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : '—'}</strong></div>
@@ -1863,7 +1890,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <VisitReferenceEditor value={visitReferences} onChange={setVisitReferences} disabled={loading || masterSaving || saving || holding || Boolean(bookingRecovery)} onBusyChange={setReferencesUploading} />
           </details>
           </div>
-          <div className={styles.capacityColumn} data-booking-column="capacity">
+
+          </div>
+          {chargeTab ? <BookingChargesEditor key={`${customerId}:${propertyId}:${projectId}:${projectPhaseId}:${appointmentSource}`} seeds={chargeSeeds} value={chargeDraft} onChange={setChargeDraft} disabled={busy || Boolean(bookingRecovery)}/> : null}
+        </div>
+
+        <footer className={styles.footer}>
+          {bookingRecovery ? <div role="alert">
+            <p>La respuesta de la reserva está pendiente. Recupera la solicitud original antes de cambiar la selección o cerrar esta ventana.</p>
+            {authorityError ? <p>{authorityError}</p> : null}
+            <button type="button" className={styles.confirmButton} disabled={busy || projectWriteBlocked}
+              onClick={() => void bookingRecovery.retry()}>Recuperar reserva original</button>
+          </div> : <>
+          <div><span>{isRestDayOvertime ? 'WEEKLY REST · OVERTIME' : isAfterHours ? 'AFTER-HOURS APPOINTMENT' : projectMode ? 'PROJECT BOOKING' : 'REGULAR BOOKING'}</span><strong>{requestTarget.vanName} · {formatTime(requestTarget.start)} · {isAfterHours ? 'Open-ended' : projectMode ? bookingBudgetPlan && selectedProject ? projectSlotLabel(bookingBudgetPlan.scheduledHours, selectedProject.slotDurationMinutes) : '—' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
+          <div className={styles.footerActions}>
+            <details className={styles.capacityStatus} data-booking-capacity data-tone={capacityTone} ref={capacityDetailsRef}>
+              <summary aria-label={`Capacity validation: ${capacityLabel}`}><span aria-hidden="true">{capacityTone === 'success' ? '✓' : capacityTone === 'error' ? '!' : capacityTone === 'warning' ? '!' : '◷'}</span><strong>{capacityLabel}</strong><span className={styles.capacityHint}>Details</span></summary>
+              <div className={styles.capacityPanel} inert={saving || holding || Boolean(bookingRecovery)}>
+                <button type="button" className={styles.secondaryButton} onClick={() => { if (capacityDetailsRef.current) capacityDetailsRef.current.open = false; }}>Close validation details</button>
+                {!chargeTab && authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
+
 
           {isRestDayOvertime ? (
             <section className={styles.authoritySection}>
@@ -2006,19 +2052,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             )}
           </section>
           )}
-          </div>
-          </div>
-          {chargeTab ? <BookingChargesEditor key={`${customerId}:${propertyId}:${projectId}:${projectPhaseId}:${appointmentSource}`} seeds={chargeSeeds} value={chargeDraft} onChange={setChargeDraft} disabled={busy || Boolean(bookingRecovery)}/> : null}
-        </div>
-
-        <footer className={styles.footer}>
-          {bookingRecovery ? <div role="alert">
-            <p>La respuesta de la reserva está pendiente. Recupera la solicitud original antes de cambiar la selección o cerrar esta ventana.</p>
-            <button type="button" className={styles.confirmButton} disabled={busy || projectWriteBlocked}
-              onClick={() => void bookingRecovery.retry()}>Recuperar reserva original</button>
-          </div> : <>
-          <div><span>{isRestDayOvertime ? 'WEEKLY REST · OVERTIME' : isAfterHours ? 'AFTER-HOURS APPOINTMENT' : projectMode ? 'PROJECT BOOKING' : 'REGULAR BOOKING'}</span><strong>{requestTarget.vanName} · {formatTime(requestTarget.start)} · {isAfterHours ? 'Open-ended' : projectMode ? bookingBudgetPlan && selectedProject ? projectSlotLabel(bookingBudgetPlan.scheduledHours, selectedProject.slotDurationMinutes) : '—' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
-          <div>
+              </div>
+            </details>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
             {!isSpecialBooking && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Project scheduling permission or a published Project required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
             <button type="button" className={styles.confirmButton} disabled={isSpecialBooking
@@ -2046,6 +2081,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       {propertyEditorOpen && selectedCustomer ? <PropertyEditor mode="create" requestId={masterRequestId.current} customerId={selectedCustomer.id} customerName={customerLabel(selectedCustomer)} contacts={references.contacts} initial={{ ...emptyPropertyEditor, zone: text(selectedCustomer.zone) }}
         onSave={saveProperty} onClose={() => setPropertyEditorOpen(false)} extraFields={<><details className={propertyEditorStyles.disclosure}><summary>Contactos generales de la propiedad</summary><PropertyContactDraftEditor clientId={selectedCustomer.id} contacts={references.contacts} links={propertyDraft.contactLinks ?? []} onChange={(contactLinks) => setPropertyDraft((current) => ({ ...current, contactLinks }))} /></details><div className={propertyEditorStyles.divider} /></>} /> : null}
     </div>
+    {support ? <AdhocSupportDrawer target={support.target} appointments={support.appointments} active={supportActive}
+      canScheduleProjects={canScheduleProjects}
+      onBookingSourceChange={(source) => { chooseAppointmentSource(source); resetCapacityValidation(); setSupportActive(false); }}
+      onClose={onClose} onCreated={support.onCreated} /> : null}
+    </>
   );
 }
 

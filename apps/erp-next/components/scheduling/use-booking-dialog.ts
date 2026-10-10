@@ -3,12 +3,13 @@
 import { useEffect, useRef } from 'react';
 
 /** Own only the booking layer. Existing property editors and native dialogs keep their focus/close handlers. */
-export function useBookingDialog(onClose: () => void, blocked: boolean) {
+export function useBookingDialog(onClose: () => void, blocked: boolean, active = true) {
   const dialogRef = useRef<HTMLElement>(null);
   const current = useRef({ onClose, blocked });
   current.current = { onClose, blocked };
 
   useEffect(() => {
+    if (!active) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -61,6 +62,6 @@ export function useBookingDialog(onClose: () => void, blocked: boolean) {
       document.body.style.overflow = overflow;
       if (previous?.isConnected) previous.focus();
     };
-  }, []);
+  }, [active]);
   return dialogRef;
 }

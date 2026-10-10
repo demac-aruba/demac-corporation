@@ -165,6 +165,9 @@ async function main() {
             }
             const confirm=page.getByRole('button',{name:'Confirm appointment',exact:true});
             if(scenario==='availability-conflict') {
+              // Capacity explanations are in the operator-opened compact footer disclosure.
+              await page.locator('[data-booking-capacity][data-tone="error"]').waitFor();
+              if (await page.locator('[data-booking-capacity]').getAttribute('open') === null) await page.locator('[data-booking-capacity] > summary').click();
               await page.getByText(/no longer has the complete requested capacity/).waitFor();
               assert.equal(await confirm.isDisabled(),true);
             } else {
@@ -212,6 +215,8 @@ async function main() {
                 }
               }
               if(scenario==='commit-conflict') {
+                await page.locator('[data-booking-capacity][data-tone="error"]').waitFor();
+                if (await page.locator('[data-booking-capacity]').getAttribute('open') === null) await page.locator('[data-booking-capacity] > summary').click();
                 await page.getByText('Synthetic final capacity conflict',{exact:true}).waitFor();
                 assert.equal(await page.evaluate(()=>window.__created),undefined);
               } else if(scenario!=='cancel') {

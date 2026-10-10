@@ -25,7 +25,7 @@ const project = {
   estimatedLaborHours: 6, scheduledFutureHours: 5, actualLaborHours: 0, phases: [], assignments: [],
 };
 const stubs = {
-  'auth-provider': `const principal={userId:'ACTOR-TEST',active:true,capabilities:new Set(['scheduling.manage','projects.schedule'])};export function useAuth(){return {principal};}`,
+  'auth-provider': `const principal={userId:'ACTOR-TEST',active:true,capabilities:new Set(window.__noProjectAccess?['scheduling.manage']:['scheduling.manage','projects.schedule'])};export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[${JSON.stringify(customer)},${JSON.stringify(secondCustomer)}],properties:[${JSON.stringify(property)},${JSON.stringify(secondProperty)}]};}
     export async function loadBookingContactReferenceData(){return {contacts:[${JSON.stringify(contact)}],contactAssignments:[]};}
@@ -57,7 +57,17 @@ const stubs = {
       {id:'other',label:'Other',active:true,serviceId:'SERVICE-OTHER',durationMode:'manual',durationMinutesPerUnit:60}]};}
     export async function checkOfficeCreateAvailability(input){
       window.__checks.push(input);await new Promise(resolve=>setTimeout(resolve,30));
+      if(window.__pauseCheck)await new Promise(resolve=>{window.__finishCheck=resolve;});
+      if(window.__conflict)return {available:false,options:[],reason:'required-primary-target-unavailable'};
       const minutes=input.workLines.reduce((sum,line)=>sum+(line.manualDurationMinutes||line.quantity*(line.presetId==='deep'?120:60)),0);
+      if(window.__overtime)return {available:false,options:[],reason:'ordinary-capacity-exceeded'};
+      if(window.__supportChoices){
+        const candidates=[{id:'SUPPORT-A',vanId:'VAN-A',vanName:'Support Van A',time:'08:30',endTime:'09:30',slots:1,durationMinutes:60},{id:'SUPPORT-B',vanId:'VAN-B',vanName:'Support Van B',time:'09:30',endTime:'10:30',slots:1,durationMinutes:60}];
+        const ids=input.supportSlotSelections.length?input.supportSlotSelections:['SUPPORT-A'];
+        return {available:true,offer:{id:'OFFER-TEST',version:window.__checks.length},metadata:{supportSlotCandidates:candidates,supportMinSlots:1,supportMaxSlots:2,defaultSupportSlotIds:['SUPPORT-A'],selectedSupportSlotIds:ids},options:[{id:'OPTION-'+ids.join('-'),date:input.requestedDate,time:input.requestedTime,endTime:'12:30',assignments:[
+          {role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'12:30',capacityEndTime:'12:30',durationMinutes:minutes,slots:minutes/60,quantity:3-ids.length},
+          ...candidates.filter(candidate=>ids.includes(candidate.id)).map(candidate=>({...candidate,role:'support',quantity:1}))]}]};
+      }
       return {available:true,offer:{id:'OFFER-TEST',version:window.__checks.length},options:[{id:'OPTION-TEST',date:input.requestedDate,time:input.requestedTime,endTime:'12:30',assignments:[
         {role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'12:30',capacityEndTime:'12:30',durationMinutes:minutes,slots:minutes/60,quantity:input.workLines.reduce((sum,line)=>sum+line.quantity,0)}]}]};
     }
@@ -70,8 +80,21 @@ const stubs = {
     }
     export async function confirmOfficeAppointment(input){return commit(input,false);}
     export async function createOfficeTemporaryHold(input){return commit(input,true);}
-    export async function addOfficeAdhocSupport(input){window.__supportWrites.push(input);return {supportWorkOrderId:'SUPPORT-WO-TEST',supportWorkOrder:{}};}`,
-  'after-hours-booking': `export class SpecialBookingError extends Error {} export async function prepareCapacityOvertime(){throw Error('Unexpected capacity overtime');} export async function createCapacityOvertime(){throw Error('Unexpected capacity overtime write');} export async function prepareRestDayOvertime(){throw Error('Unexpected rest overtime');} export async function createRestDayOvertime(){throw Error('Unexpected rest overtime write');} export async function createAfterHoursEmergency(){throw Error('Unexpected emergency write');}`,
+    export async function addOfficeAdhocSupport(input){
+      window.__supportWrites.push(input);
+      if(window.__pendingSupport)await new Promise(resolve=>{window.__finishSupport=resolve;});
+      window.__supportRecords[input.requestId]||={supportWorkOrderId:'SUPPORT-WO-TEST',supportWorkOrder:{}};
+      if(window.__loseSupportResponse&&window.__supportWrites.length===1)throw Error('Synthetic response lost');
+      return window.__supportRecords[input.requestId];
+    }`,
+  'after-hours-booking': `export class SpecialBookingError extends Error {}
+    async function prepare(input,kind){if(!window.__overtime&&kind==='capacity')throw Error('Unexpected capacity overtime');window.__specialPrepares.push({kind,input});return {proposal:{vanName:'Test Van',start:input.requestedTime,estimatedEnd:'17:30',capacityEnd:'17:30',requiredSlots:4,ordinarySlots:3,durationMinutes:240,confirmationToken:'SYNTHETIC-CONSENT'}};}
+    async function commit(input,kind){window.__specialWrites.push({kind,input});return {appointmentId:'SPECIAL-TEST',workOrderIds:['SPECIAL-WO-TEST']};}
+    export async function prepareCapacityOvertime(input){return prepare(input,'capacity');}
+    export async function createCapacityOvertime(input){return commit(input,'capacity');}
+    export async function prepareRestDayOvertime(input){return prepare(input,'rest');}
+    export async function createRestDayOvertime(input){return commit(input,'rest');}
+    export async function createAfterHoursEmergency(input){return commit(input,'after-hours');}`,
   'booking-reference-data': `
     export const emptyVisitReferences=()=>({notes:'',location:null,files:[],version:0});
     export const hasVisitReferences=value=>Boolean(value.notes.trim()||value.location?.url||value.files.length);
@@ -84,19 +107,41 @@ const stubs = {
 const entry = `
 import React,{useEffect,useState} from 'react';import {createRoot} from 'react-dom/client';
 import {LiveAppointmentCreateDrawer} from './components/scheduling/live-appointment-create-drawer';
-import {AdhocSupportDrawer} from './components/scheduling/adhoc-support-drawer';
 import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';
 function Harness(){
- const [open,setOpen]=useState(true),[support,setSupport]=useState(false),[created,setCreated]=useState(null);
+ const target={dateKey:window.__backdate?'2020-09-18':'2099-09-18',vanId:'VAN-TEST',vanName:'Test Van',start:window.__mode==='after_hours'?'17:00':'08:30',end:'12:30'};
+ const supportTarget={...target,durationOptions:[{slots:1,end:'09:30'},{slots:2,end:'10:30'},{slots:3,end:'11:30'}]};
+ const [open,setOpen]=useState(true),[support,setSupport]=useState(()=>window.__directSupport?supportTarget:null),[created,setCreated]=useState(null);
  // Mirrors the agenda listener's modal guard (also checked against owning source below).
  useEffect(()=>{const listener=event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!document.querySelector('[data-booking-modal]')){window.__agendaEscapes++;setOpen(false);setSupport(false);}};window.addEventListener('keydown',listener);return()=>window.removeEventListener('keydown',listener);},[]);
- const target={dateKey:window.__backdate?'2020-09-18':'2099-09-18',vanId:'VAN-TEST',vanName:'Test Van',start:'08:30',end:'12:30'};
- return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><button onClick={()=>setOpen(true)}>Synthetic agenda slot</button>{created?<h1>Synthetic booking result</h1>:open?<LiveAppointmentCreateDrawer target={target} onClose={()=>{window.__closes++;setOpen(false);}} onCreated={value=>{window.__created=value;setCreated(value);setOpen(false);}} onSendSupport={()=>{setOpen(false);setSupport(true);}}/>:null}
- {support?<AdhocSupportDrawer target={{...target,durationOptions:[{slots:1,end:'09:30'},{slots:2,end:'10:30'},{slots:3,end:'11:30'}]}} appointments={[{id:'EXISTING-TEST',dateKey:target.dateKey,status:'confirmed',customer:'Synthetic receiving customer',site:'Synthetic site',workLabel:'Existing service',assignments:[{isPrimaryAssignment:true,vanId:'VAN-OTHER',start:'08:30',end:'11:30'}]}]} onClose={()=>{window.__closes++;setSupport(false);}} onCreated={()=>{setCreated({support:true});}}/>:null}</div>;
+ const appointments=[{id:'EXISTING-TEST',dateKey:target.dateKey,status:'confirmed',customer:'Synthetic receiving customer',site:'Synthetic site',workLabel:'Existing service',assignments:[{isPrimaryAssignment:true,vanId:'VAN-OTHER',start:'08:30',end:'11:30'}]}];
+ return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><button onClick={()=>setOpen(true)}>Synthetic agenda slot</button>{created?<h1>Synthetic booking result</h1>:open?<LiveAppointmentCreateDrawer target={target} mode={window.__mode||'standard'} onClose={()=>{window.__closes++;setOpen(false);}} onCreated={value=>{window.__created=value;setCreated(value);setOpen(false);}} onSendSupport={window.__mode?undefined:()=>setSupport(supportTarget)} support={support?{target:support,appointments,onCreated:()=>setCreated({support:true})}:undefined}/>:null}</div>;
 }createRoot(document.getElementById('app')).render(<Harness/>);`;
 
 async function ready(page){await page.locator('[data-booking-modal]').waitFor();await page.waitForFunction(()=>!document.querySelector('[data-booking-modal] button[aria-label="Close"]')?.disabled);}
 async function toggleDisclosure(page,name,open){const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
+async function source(page,name){
+ await page.getByRole('button',{name:new RegExp('^'+name)}).click();
+ // Mode changes can commit after the click finishes; wait for the operator-visible destination.
+ const dialog=page.getByRole('dialog',{name:name==='Send van support'?'Send van support':'Create appointment',exact:true});
+ await dialog.waitFor();
+ await dialog.getByRole('button',{name:new RegExp('^'+name),pressed:true}).waitFor();
+}
+async function assertSourceBlocked(page,name){
+ const button=page.locator('button[aria-label^="'+name+'"]:visible');
+ assert.equal(await button.evaluate(node=>node.disabled||Boolean(node.closest('[inert]'))),true,'Pending work blocks '+name+' switching');
+}
+async function supportDraft(page){
+ await source(page,'Send van support');await page.getByRole('dialog',{name:'Send van support',exact:true}).waitFor();
+ await page.getByLabel('Support duration').selectOption('3');await page.getByRole('button',{name:/Synthetic receiving customer/}).click();
+ await page.getByRole('dialog',{name:'Send van support',exact:true}).getByLabel('Reason').selectOption('Other');await page.getByLabel('Describe support *').fill('Synthetic support note');
+}
+async function assertSingleActiveDialog(page){
+ assert.equal(await page.locator('[data-booking-modal]:visible').count(),1,'Only the selected booking mode is visible');
+ assert.equal(await page.evaluate(()=>document.body.style.overflow),'hidden','Active modal retains page scroll lock');
+ const last=page.locator('[data-booking-modal]:visible').getByRole('button').last();await last.focus();await page.keyboard.press('Tab');
+ assert.equal(await page.locator('[data-booking-modal]:visible').evaluate(node=>node.contains(document.activeElement)),true,'Tab stays in active mode');
+}
 async function setupRegular(page){
  await ready(page);
  await page.getByLabel('Search customer').fill('Synthetic');
@@ -125,7 +170,7 @@ async function geometry(page,width,label){
   const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
   const modal=document.querySelector('[data-booking-modal]');
   return {viewport:{width:innerWidth,height:innerHeight},modal:rect(modal),footer:rect(modal.querySelector('footer:last-child')),
-   columns:['identity','work','capacity'].map(name=>rect(modal.querySelector('[data-booking-column="'+name+'"]'))),
+   columns:['identity','work','details'].map(name=>rect(modal.querySelector('[data-booking-column="'+name+'"]'))),
    pageOverflow:document.documentElement.scrollWidth-innerWidth,modalOverflow:modal.scrollWidth-modal.clientWidth};
  });
  assert.ok(layout.pageOverflow<=2,`${label}: page horizontal overflow ${JSON.stringify(layout)}`);
@@ -142,7 +187,7 @@ async function geometry(page,width,label){
  }
  await page.screenshot({path:path.join(artifacts,label+'.png'),fullPage:true});return layout;
 }
-async function assertNoWrites(page){assert.deepEqual(await page.evaluate(()=>({commits:window.__commits,holds:window.__holds,master:window.__masterWrites,uploads:window.__uploads,support:window.__supportWrites})),{commits:[],holds:[],master:[],uploads:[],support:[]});}
+async function assertNoWrites(page){assert.deepEqual(await page.evaluate(()=>({commits:window.__commits,holds:window.__holds,master:window.__masterWrites,uploads:window.__uploads,support:window.__supportWrites,special:window.__specialWrites})),{commits:[],holds:[],master:[],uploads:[],support:[],special:[]});}
 
 async function main(){
  assert.match(fs.readFileSync(path.join(APP,'components/scheduling/live-scheduling-overview.tsx'),'utf8'),/if \(document\.querySelector\('\[data-booking-modal\]'\)\) return;/,'Agenda must defer Escape to booking modal and its nested dialogs');
@@ -157,7 +202,7 @@ async function main(){
  async function run(name,viewport,test,flags={}){
   const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],unexpected=[];
   await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();unexpected.push(route.request().url());return route.abort();});
-  await context.addInitScript(flags=>{Object.assign(window,{__checks:[],__commits:[],__holds:[],__masterWrites:[],__uploads:[],__supportWrites:[],__referenceReads:[],__locationReads:[],__records:{},__requests:0,__closes:0,__agendaEscapes:0,...flags});},flags);
+  await context.addInitScript(flags=>{Object.assign(window,{__checks:[],__commits:[],__holds:[],__masterWrites:[],__uploads:[],__supportWrites:[],__specialPrepares:[],__specialWrites:[],__referenceReads:[],__locationReads:[],__records:{},__supportRecords:{},__requests:0,__closes:0,__agendaEscapes:0,...flags});},flags);
   const page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>dialog.accept());
   try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}
   catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error(JSON.stringify({name,errors,unexpected,text:(await page.locator('body').innerText()).slice(0,7500)},null,2));throw error;}
@@ -171,7 +216,15 @@ async function main(){
     'Project Find a Project and reserve whole Van capacity slots against it.',
     'Send van support Use this open slot to help another Van with an existing appointment.',
    ])assert.equal(await page.getByRole('button',{name,exact:true}).isVisible(),true,`${viewport.width}: preserve complete source-button accessible name`);
-   await setupRegular(page);await toggleDisclosure(page,'contacts',false);await toggleDisclosure(page,'references',false);await geometry(page,viewport.width,'layout-'+viewport.width);await assertNoWrites(page);});
+   await setupRegular(page);await toggleDisclosure(page,'contacts',false);await toggleDisclosure(page,'references',false);await geometry(page,viewport.width,'layout-'+viewport.width);
+   assert.match(await page.locator('[data-booking-column="identity"]').innerText(),/Customer|Property/);
+   assert.match(await page.locator('[data-booking-column="work"]').innerText(),/Work & allocation/);
+   assert.equal(await page.locator('[data-booking-column="work"]').getByLabel('Technician instructions').count(),0,'Center column is reserved for work selection');
+   for(const label of ['Customer-facing work description','Technician instructions'])assert.equal(await page.locator('[data-booking-column="details"]').getByLabel(label).count(),1,'Right column owns '+label);
+   assert.equal(await page.locator('[data-booking-column="details"] [data-booking-disclosure="references"]').count(),1);
+   assert.equal(await page.locator('[data-booking-modal] > footer [data-booking-capacity]').count(),1,'Capacity moved into persistent footer');
+   assert.equal(await page.locator('[data-booking-capacity]').evaluate(node=>node.open),false,'Ordinary successful capacity stays compact');
+   await assertNoWrites(page);});
   await run('keyboard-focus-stays-in-modal',{width:1366,height:768},async page=>{
    await setupRegular(page);await toggleDisclosure(page,'references',false);await toggleDisclosure(page,'contacts',false);
    await page.getByRole('button',{name:'Confirm appointment',exact:true}).focus();await page.keyboard.press('Tab');
@@ -213,6 +266,7 @@ async function main(){
     await page.getByRole('button',{name:'Recuperar reserva original'}).waitFor();await page.keyboard.press('Escape');
     assert.equal(await page.locator('[data-booking-modal]').count(),1,'Uncertain booking cannot be abandoned by Escape');
     assert.equal(await page.getByRole('button',{name:'Close',exact:true}).isDisabled(),true);
+    for(const name of ['Regular Booking','Project','Send van support'])await assertSourceBlocked(page,name);
     await page.getByRole('button',{name:'Recuperar reserva original'}).click();
    }
    await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
@@ -226,6 +280,7 @@ async function main(){
    assert.equal(await page.locator('[data-booking-modal]').count(),1,'Escape cannot discard active upload');
    assert.equal(await page.getByRole('button',{name:'Close',exact:true}).isDisabled(),true);
    assert.equal(await page.getByRole('button',{name:'Confirm appointment',exact:true}).isDisabled(),true);
+   for(const name of ['Regular Booking','Project','Send van support'])await assertSourceBlocked(page,name);
    await page.evaluate(()=>window.__finishUpload());await page.getByLabel('Explicación de esta foto').waitFor();await page.getByLabel('Explicación de esta foto').fill('Synthetic equipment detail');
    await toggleDisclosure(page,'references',false);await toggleDisclosure(page,'references',true);
    assert.equal(await page.getByLabel('Explicación de esta foto').inputValue(),'Synthetic equipment detail');
@@ -260,10 +315,125 @@ async function main(){
    await page.getByText('Revisa los importes y espera la tarifa actualizada antes de confirmar.',{exact:true}).waitFor();
    await assertNoWrites(page);
   });
+  await run('financial-support-detour-and-exact-recovery',{width:1366,height:768},async page=>{
+   await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Afl. 375.00',{exact:true}).waitFor();
+   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByLabel('Nota de la proyección').fill('Synthetic preserved estimate');
+   await supportDraft(page);await source(page,'Regular Booking');
+   assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'100');assert.equal(await page.getByLabel('Nota de la proyección').inputValue(),'Synthetic preserved estimate');
+   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
+   await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await page.getByRole('button',{name:'Recuperar reserva original',exact:true}).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Importes y pagos',exact:true}).isDisabled(),true,'Uncertain charged booking cannot edit financial draft');await assertSourceBlocked(page,'Send van support');
+   await page.getByRole('button',{name:'Recuperar reserva original',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const result=await page.evaluate(()=>({commits:window.__commits,records:window.__records,holds:window.__holds,support:window.__supportWrites}));
+   assert.equal(result.commits.length,2);assert.deepEqual(result.commits[0],result.commits[1],'Booking recovery preserves complete financial input');assert.equal(Object.keys(result.records).length,1);assert.equal(result.commits[0].charges.payment.amount,'100');assert.equal(result.commits[0].charges.note,'Synthetic preserved estimate');assert.equal(result.commits[0].charges.lines.length,2);assert.ok(result.commits[0].charges.quoteToken);assert.deepEqual(result.holds,[]);assert.deepEqual(result.support,[]);
+  },{__allowCharges:true,__loseResponse:true});
+  await run('financial-hold-guard-and-support-isolation',{width:390,height:844},async page=>{
+   await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Afl. 375.00',{exact:true}).waitFor();
+   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByRole('button',{name:'Temporary hold',exact:true}).click();
+   await page.getByText('Confirma la cita para registrar el anticipo, o desmarca el anticipo antes de crear la reserva temporal.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.__holds.length+window.__commits.length),0,'Temporary hold cannot record an advance');
+   assert.equal(await page.locator('[data-booking-modal]:visible').evaluate(node=>node.scrollWidth<=node.clientWidth+2),true,'Combined financial tab fits the mobile booking modal');await page.screenshot({path:path.join(artifacts,'booking-charges-parent-mobile.png'),fullPage:true});
+   await supportDraft(page);await page.getByRole('button',{name:'Send support',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const result=await page.evaluate(()=>({writes:window.__supportWrites,commits:window.__commits,holds:window.__holds}));assert.equal(result.writes.length,1);assert.equal(result.writes[0].requestedSlots,3);assert.equal(result.writes[0].charges,undefined,'Coworker support never adopts a separate booking deposit');assert.deepEqual(result.commits,[]);assert.deepEqual(result.holds,[]);
+  });
   await run('support-preserves-existing-flow',{width:1366,height:768},async page=>{
    await ready(page);await page.getByRole('button',{name:/Send van support/}).click();const dialog=page.getByRole('dialog',{name:'Send van support'});await dialog.waitFor();await page.getByLabel('Support duration').selectOption('3');await page.getByRole('button',{name:/Synthetic receiving customer/}).click();await page.getByLabel('Reason').selectOption('Other');await page.getByLabel('Describe support *').fill('Synthetic support note');
    assert.equal(await page.evaluate(()=>window.__supportWrites.length),0);await page.getByRole('button',{name:'Send support',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();const writes=await page.evaluate(()=>window.__supportWrites);assert.equal(writes.length,1);assert.equal(writes[0].requestedSlots,3);assert.equal(writes[0].appointmentId,'EXISTING-TEST');assert.equal(writes[0].reason,'Synthetic support note');
   });
+  for(const viewport of [{width:1366,height:768},{width:390,height:844}])await run('regular-support-roundtrip-'+viewport.width,viewport,async page=>{
+   await setupRegular(page);await supportDraft(page);await assertSingleActiveDialog(page);
+   await source(page,'Regular Booking');await assertSingleActiveDialog(page);
+   assert.equal(await page.getByLabel('Technician instructions').inputValue(),'Synthetic retained technician instructions');
+   assert.equal(await page.getByLabel('Customer-facing work description').inputValue(),'Synthetic mixed work');
+   assert.equal(await page.getByLabel('Indicaciones para el técnico y ayudante').inputValue(),'Synthetic retained visit note');
+   assert.equal(await page.getByLabel('Ubicación GPS del trabajo').inputValue(),'12.5, -70.0');
+   assert.equal(await page.getByLabel('Access contact · this visit').inputValue(),'contact:CONTACT-TEST');
+   assert.equal(await page.getByLabel('Confirmation').first().isChecked(),false);
+   assert.match(await page.locator('[data-booking-column="details"]').innerText(),/2 lines · 3 items/);
+   await source(page,'Send van support');await assertSingleActiveDialog(page);
+   assert.equal(await page.getByLabel('Support duration').inputValue(),'3');assert.equal(await page.getByLabel('Describe support *').inputValue(),'Synthetic support note');
+   assert.equal(await page.getByRole('button',{name:/Synthetic receiving customer.*SELECTED/}).count(),1);
+   await source(page,'Project');assert.equal(await page.getByLabel(/Search Project/).isVisible(),true,'Support can switch directly to Project');
+   assert.equal(await page.evaluate(()=>window.__closes),0,'Switching never invokes Cancel');await assertNoWrites(page);
+  });
+  await run('project-support-roundtrip',{width:1440,height:1000},async page=>{
+   await ready(page);await source(page,'Project');await page.getByRole('button',{name:/PRJ-TEST.*Synthetic project/}).click();await page.getByLabel(/Planned Project slots/).fill('2');
+   await page.getByLabel('Technician instructions').fill('Synthetic project draft');await supportDraft(page);await source(page,'Project');await assertSingleActiveDialog(page);
+   assert.equal(await page.getByLabel(/Planned Project slots/).inputValue(),'2');assert.equal(await page.getByLabel('Technician instructions').inputValue(),'Synthetic project draft');
+   await source(page,'Send van support');await source(page,'Regular Booking');assert.equal(await page.getByLabel('Search customer').isVisible(),true,'Support can switch directly to Regular Booking');await assertNoWrites(page);
+  });
+  for(const kind of ['confirm','hold'])await run('pending-'+kind+'-blocks-source-switch',{width:1366,height:768},async page=>{
+   await setupRegular(page);await page.getByRole('button',{name:kind==='hold'?'Temporary hold':'Confirm appointment',exact:true}).click();await page.waitForFunction(()=>Boolean(window.__finishCommit));
+   for(const name of ['Regular Booking','Project','Send van support'])await assertSourceBlocked(page,name);
+   await page.keyboard.press('Escape');assert.equal(await page.locator('[data-booking-modal]:visible').count(),1);await page.evaluate(()=>window.__finishCommit());await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+  },{__pendingCommit:true});
+  await run('support-pending-and-exact-recovery',{width:1366,height:768},async page=>{
+   await ready(page);await supportDraft(page);await page.getByRole('button',{name:'Send support',exact:true}).click();await page.waitForFunction(()=>Boolean(window.__finishSupport));
+   for(const name of ['Regular Booking','Project'])await assertSourceBlocked(page,name);
+   await page.keyboard.press('Escape');assert.equal(await page.locator('[data-booking-modal]:visible').count(),1);
+   await page.evaluate(()=>{window.__pendingSupport=false;window.__finishSupport();});
+   const recovery=page.getByRole('button',{name:/Recuperar.*original/i});await recovery.waitFor();
+   for(const name of ['Regular Booking','Project'])await assertSourceBlocked(page,name);
+   await page.keyboard.press('Escape');assert.equal(await page.locator('[data-booking-modal]:visible').count(),1);await recovery.click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const result=await page.evaluate(()=>({writes:window.__supportWrites,records:window.__supportRecords,commits:window.__commits,holds:window.__holds}));
+   assert.equal(result.writes.length,2);assert.deepEqual(result.writes[0],result.writes[1]);assert.equal(Object.keys(result.records).length,1);assert.deepEqual(result.commits,[]);assert.deepEqual(result.holds,[]);
+  },{__pendingSupport:true,__loseSupportResponse:true});
+  await run('support-project-permission',{width:390,height:844},async page=>{
+   await ready(page);assert.equal(await page.getByRole('button',{name:/^Project Find/}).count(),0);await source(page,'Send van support');assert.equal(await page.getByRole('button',{name:/^Project/}).count(),0);await source(page,'Regular Booking');assert.equal(await page.getByRole('button',{name:/^Project Find/}).count(),0);await assertNoWrites(page);
+  },{__noProjectAccess:true});
+  await run('capacity-footer-pending-ready-conflict',{width:1366,height:768},async page=>{
+   await ready(page);const status=page.locator('[data-booking-capacity]');assert.equal(await status.getAttribute('data-tone'),'pending','Incomplete form is never green');
+   await setupRegular(page);assert.equal(await status.getAttribute('data-tone'),'success','Only complete current authority result is green');
+   const positions=await page.evaluate(()=>{const status=document.querySelector('[data-booking-capacity]').getBoundingClientRect(),cancel=[...document.querySelectorAll('footer button')].find(button=>button.textContent==='Cancel').getBoundingClientRect();return {status:{x:status.x,right:status.right,y:status.y},cancel:{x:cancel.x,y:cancel.y}};});
+   assert.ok(positions.status.right<=positions.cancel.x+2&&Math.abs(positions.status.y-positions.cancel.y)<3,'Compact status immediately precedes Cancel');
+   await page.evaluate(()=>{window.__pauseCheck=true;});await page.getByLabel('Technician instructions').fill('Metadata changed after approval');
+   assert.equal(await status.getAttribute('data-tone'),'pending','A stale metadata offer is not presented as green');
+   await page.waitForFunction(()=>Boolean(window.__finishCheck));assert.equal(await status.getAttribute('data-tone'),'pending');
+   assert.equal(await page.getByRole('button',{name:'Confirm appointment',exact:true}).isDisabled(),true);
+   await page.evaluate(()=>{window.__pauseCheck=false;window.__conflict=true;window.__finishCheck();});await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.dataset.tone==='error');
+   assert.equal(await page.getByRole('button',{name:'Confirm appointment',exact:true}).isDisabled(),true);await status.locator(':scope > summary').click();
+   assert.match(await status.innerText(),/no longer has the complete requested capacity/);assert.equal(await page.getByRole('button',{name:'Recheck now',exact:true}).isVisible(),true);
+   await page.evaluate(()=>{window.__conflict=false;});await page.getByRole('button',{name:'Recheck now',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.dataset.tone==='success');await assertNoWrites(page);
+  });
+  await run('capacity-support-choices-retained',{width:1366,height:768},async page=>{
+   await setupRegular(page);const panel=page.locator('[data-booking-capacity]');assert.equal(await panel.evaluate(node=>node.open),true,'Required support choices automatically remain discoverable');
+   const choice=panel.getByRole('button',{name:/Support Van B · support/});await choice.click();await page.waitForFunction(()=>window.__checks.at(-1)?.supportSlotSelections.includes('SUPPORT-B'));
+   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
+   assert.match(await panel.innerText(),/Support Van A/);assert.match(await panel.innerText(),/Support Van B/);assert.match(await panel.innerText(),/PRIMARY \/ RESPONSIBLE/);
+   await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   assert.equal(await page.evaluate(()=>window.__commits[0].optionId),'OPTION-SUPPORT-A-SUPPORT-B');assert.equal(await page.evaluate(()=>window.__supportWrites.length),0,'New-booking support allocation remains distinct from coworker support command');
+  },{__supportChoices:true});
+  await run('capacity-overtime-control-retained',{width:1366,height:768},async page=>{
+   await ready(page);await page.getByLabel('Search customer').fill('Synthetic');await page.getByRole('button',{name:/Synthetic customer.*SELECT/i}).click();await page.getByRole('button',{name:/^Standard service/}).click();
+   const panel=page.locator('[data-booking-capacity]');await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.dataset.tone==='warning');assert.equal(await panel.evaluate(node=>node.open),true);
+   await panel.getByRole('button',{name:'Confirmar con posible overtime',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const writes=await page.evaluate(()=>window.__specialWrites);assert.equal(writes.length,1);assert.equal(writes[0].kind,'capacity');assert.deepEqual(writes[0].input.overtimeConsent,{accepted:true,confirmationToken:'SYNTHETIC-CONSENT'});assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length+window.__supportWrites.length),0);
+  },{__overtime:true});
+  for(const mode of ['rest_day_overtime','after_hours'])await run('special-mode-'+mode,{width:1366,height:768},async page=>{
+   await ready(page);assert.equal(await page.getByRole('button',{name:/^Send van support/}).count(),0,'Special entry keeps original support availability boundary');
+   await page.getByLabel('Search customer').fill('Synthetic');await page.getByRole('button',{name:/Synthetic customer.*SELECT/i}).click();await page.getByRole('button',{name:/^Standard service/}).click();
+   assert.equal(await page.getByRole('button',{name:'Temporary hold',exact:true}).count(),0);const panel=page.locator('[data-booking-capacity]');assert.equal(await panel.getAttribute('data-tone'),'pending','Special mode waits for authoritative commit validation');await panel.locator(':scope > summary').click();
+   assert.match(await panel.innerText(),mode==='rest_day_overtime'?/Overtime durante descanso semanal/:/After-hours operational validation/);
+   await page.getByRole('button',{name:mode==='rest_day_overtime'?'Review and confirm overtime':'Create for Test Van',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const writes=await page.evaluate(()=>window.__specialWrites);assert.equal(writes.length,1);assert.equal(writes[0].kind,mode==='rest_day_overtime'?'rest':'after-hours');assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length+window.__supportWrites.length),0);
+  },{__mode:mode});
+  await run('historical-support-roundtrip',{width:1366,height:768},async page=>{
+   await ready(page);await supportDraft(page);const acknowledgement=page.getByLabel('I confirm this Van actually provided support on the selected date and time.');await acknowledgement.check();await source(page,'Regular Booking');await source(page,'Send van support');assert.equal(await acknowledgement.isChecked(),true);
+   await page.getByRole('button',{name:'Save historical support',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   const writes=await page.evaluate(()=>window.__supportWrites);assert.equal(writes.length,1);assert.equal(writes[0].bookingMode,'backdated');assert.equal(writes[0].backdatingAcknowledged,true);assert.equal(writes[0].requestedSlots,3);
+  },{__backdate:true});
+  await run('direct-support-entry-and-close',{width:1366,height:768},async page=>{
+   await page.getByRole('dialog',{name:'Send van support',exact:true}).waitFor();await assertSingleActiveDialog(page);
+   await source(page,'Project');await page.getByLabel('Search Project').waitFor();await assertSingleActiveDialog(page);
+   await page.getByRole('button',{name:/PRJ-TEST.*Synthetic project/}).click();await page.getByLabel(/Planned Project slots/).fill('1');await source(page,'Send van support');await source(page,'Project');assert.equal(await page.getByLabel(/Planned Project slots/).inputValue(),'1');
+   await page.keyboard.press('Escape');assert.equal(await page.locator('[data-booking-modal]').count(),0);assert.equal(await page.evaluate(()=>document.body.style.overflow),'','Closing restores page scroll after multiple mode switches');assert.equal(await page.evaluate(()=>window.__closes),1);await assertNoWrites(page);
+  },{__directSupport:true});
+  await run('mobile-expanded-capacity-controls',{width:390,height:844},async page=>{
+   await setupRegular(page);const details=page.locator('[data-booking-capacity]');assert.equal(await details.evaluate(node=>node.open),true);
+   const geometry=await details.locator(':scope > div').evaluate(node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,overflow:node.scrollWidth-node.clientWidth};});
+   assert.ok(geometry.x>=0&&geometry.right<=geometry.width&&geometry.y>=0&&geometry.bottom<=geometry.height,'Expanded controls fit mobile viewport');assert.ok(geometry.overflow<=2,'Expanded controls do not overflow horizontally');
+   await details.getByRole('button',{name:/Support Van B · support/}).click();await page.waitForFunction(()=>window.__checks.at(-1)?.supportSlotSelections.includes('SUPPORT-B'));
+   await details.getByRole('button',{name:'Close validation details',exact:true}).click();assert.equal(await details.evaluate(node=>node.open),false);await page.screenshot({path:path.join(artifacts,'mobile-capacity-controls.png'),fullPage:true});await assertNoWrites(page);
+  },{__supportChoices:true});
   fs.writeFileSync(path.join(artifacts,'results.json'),JSON.stringify({boundary:'Real React components; synthetic backend commands; no production requests.',results},null,2));
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(output,{recursive:true,force:true});}
 }

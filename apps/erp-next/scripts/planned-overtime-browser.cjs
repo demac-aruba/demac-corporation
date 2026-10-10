@@ -157,7 +157,11 @@ async function main() {
     await drawer.getByRole('button').filter({ hasText: 'Synthetic overtime customer' }).first().click();
     await drawer.getByRole('button', { name: /Standard Service/ }).first().click();
     for (let i = 0; i < 2; i++) await drawer.getByRole('button', { name: '＋', exact: true }).click();
+    // Inspect the compact capacity disclosure, then return to editing the workload.
+    await drawer.locator('[data-booking-capacity][data-tone="success"]').waitFor();
+    if (await drawer.locator('[data-booking-capacity]').getAttribute('open') === null) await drawer.locator('[data-booking-capacity] > summary').click();
     await drawer.getByText('Booking Authority approved the complete allocation', { exact: true }).waitFor();
+    await drawer.locator('[data-booking-capacity] > summary').click();
     assert.equal(await drawer.getByRole('button', { name: 'Confirmar con posible overtime', exact: true }).count(), 0);
     await drawer.getByRole('button', { name: '＋', exact: true }).click();
     const capacityConfirm = drawer.getByRole('button', { name: 'Confirmar con posible overtime', exact: true });

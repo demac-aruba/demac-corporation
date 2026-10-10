@@ -122,7 +122,12 @@ async function runCase(browser, origin, label, viewport, historical = false, req
     await saveSupport.click();
     if (requestedSlots === 2) {
       await support.getByText('Synthetic lost response after commit', { exact: true }).waitFor();
-      await saveSupport.click();
+      // Unknown outcomes preserve the original request behind an explicit recovery action.
+      assert.equal(await support.locator('button[aria-label^="Regular Booking"]').isDisabled(), true);
+      assert.equal(await support.locator(':scope > header > button').isDisabled(), true);
+      await page.keyboard.press('Escape');
+      assert.equal(await support.isVisible(), true);
+      await support.getByRole('button', { name: 'Recuperar apoyo original', exact: true }).click();
     }
     await support.waitFor({ state: 'detached' });
     const requests = actions.filter(item => item.action === 'add_adhoc_support');
