@@ -1,6 +1,20 @@
 import type { SVGProps } from 'react';
-export type ChargeIconName = 'money' | 'receipt' | 'clock' | 'check' | 'bank' | 'card' | 'phone' | 'plus' | 'info' | 'history' | 'work' | 'person' | 'van' | 'calendar';
+export type ChargeIconName = 'money' | 'receipt' | 'clock' | 'check' | 'bank' | 'card' | 'phone' | 'plus' | 'info' | 'history' | 'work' | 'person' | 'van' | 'calendar' | 'air' | 'clipboard' | 'note' | 'pin' | 'camera' | 'video' | 'microphone' | 'whatsapp' | 'chevron' | 'arrow' | 'edit' | 'grid' | 'more' | 'call';
 const paths: Record<ChargeIconName, React.ReactNode> = {
+  air: <><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M6 11h12M7 17l-1 3m6-3v4m5-4 1 3M17 7h1"/></>,
+  clipboard: <><rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M8 11h8m-8 4h5"/></>,
+  note: <><path d="M14 3H5v18h11v-6M8 7h5m-5 4h3m4 1 5-5 2 2-5 5-3 1 1-3Z"/></>,
+  pin: <><path d="M20 10c0 6-8 11-8 11S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="3"/></>,
+  camera: <><path d="M3 7h4l2-3h6l2 3h4v14H3V7Z"/><circle cx="12" cy="13" r="4"/></>,
+  video: <><rect x="3" y="6" width="12" height="13" rx="2"/><path d="m15 10 6-3v11l-6-3"/></>,
+  microphone: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/></>,
+  whatsapp: <><path d="M4 17a9 9 0 1 1 4 3l-5 1 1-4Z"/><path d="m8 7 2 3-1 1c1 2 2 3 4 3l1-1 3 1c0 3-4 3-7 0S6 8 8 7Z"/></>,
+  chevron: <path d="m6 9 6 6 6-6"/>,
+  arrow: <path d="m9 5 7 7-7 7"/>,
+  edit: <><path d="m4 16 12-12 4 4L8 20l-5 1 1-5Zm9-9 4 4"/></>,
+  grid: <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></>,
+  more: <><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></>,
+  call: <path d="m5 3 4 4-2 3c2 4 3 5 7 7l3-2 4 4-2 3C10 22 2 14 2 5l3-2Z"/>,
   money: <><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v6m12-6v6"/></>,
   receipt: <><path d="M6 3h9l4 4v14l-3-2-3 2-3-2-4 2V3Z"/><path d="M14 3v5h5M9 12h7m-7 4h5"/></>,
   clock: <><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></>,

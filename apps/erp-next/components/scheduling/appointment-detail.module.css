@@ -1,0 +1,63 @@
+.modal{font-size:13px;line-height:1.45;width:min(1320px,100%);color:#13243e}
+.modal *{box-sizing:border-box}
+.header{display:flex;justify-content:space-between;align-items:center;padding:20px 26px 14px;gap:16px;flex-shrink:0}
+.eyebrow{font-size:11px;font-weight:800;color:#1268ff;letter-spacing:.04em}
+.header h2{font-size:25px;line-height:1.2;margin:5px 0 0;letter-spacing:-.025em}
+.headerActions{display:flex;align-items:center;gap:10px}
+.button,.primary,.close{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 15px;min-height:40px;background:#fff;border:1px solid #ccdcf2;border-radius:9px;color:#1268ff;font:inherit;font-weight:650;cursor:pointer;text-decoration:none}
+.button svg,.primary svg{width:19px;height:19px;flex-shrink:0}
+.primary{background:#1268ff;color:#fff;border-color:#1268ff;box-shadow:0 3px 8px #1268ff22}
+.close{width:36px;min-height:36px;padding:0;color:#647a9b;font-size:22px}
+.modal button:disabled{opacity:.5;cursor:not-allowed}
+.modal :is(button,a,input,textarea,summary):focus-visible{outline:3px solid #8bb9ff;outline-offset:3px}
+.context{margin:0 26px 4px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid #cfe2ff;background:linear-gradient(100deg,#e9f2ff,#f3f7ff);border-radius:12px;padding:15px 6px;flex-shrink:0}
+.context>div{display:flex;gap:14px;align-items:center;padding:0 20px;border-right:1px solid #b9d3fa;font-size:16px;font-weight:700;min-width:0}
+.context>div:last-child{border:0}.context svg{color:#1268ff;flex-shrink:0;width:25px;height:25px}
+.context span{overflow-wrap:anywhere}
+.body{background:#f4f7fb;padding:18px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.grid{display:grid;grid-template-columns:minmax(0,1.47fr) minmax(0,1fr);gap:16px;align-items:start}
+.column{display:grid;gap:16px;min-width:0}
+.card{border:1px solid #dce6f3;border-radius:14px;padding:18px;background:#fff;min-width:0}
+.cardHeader{display:flex;gap:13px;align-items:center;margin-bottom:16px}
+.cardHeader h3{margin:0;font-size:17px;letter-spacing:-.02em;color:#142943}
+.cardHeader p{font-size:12px;color:#6a7e98;margin:2px 0 0}
+.tile{display:inline-grid;place-items:center;flex-shrink:0;width:46px;height:46px;border-radius:12px;color:#1268ff;background:linear-gradient(135deg,#d7e7ff,#eef7ff)}
+.tile svg{width:25px;height:25px}.violet{background:#f0e6ff;color:#8950ea}.green{background:#e2faeb;color:#00a453}
+.service{display:flex;align-items:center;gap:17px;padding:18px;border:1px solid #dce6f3;border-radius:12px;background:linear-gradient(100deg,#f6faff,#fff)}
+.service>.tile{width:62px;height:62px}.service>.tile svg{width:34px;height:34px}
+.service strong{font-size:17px;display:block;overflow-wrap:anywhere}.muted{font-size:12px;color:#7185a0;margin:3px 0}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid #dbe7f7;border-radius:7px;background:#fff;font-size:12px}.pill svg{width:17px;height:17px;color:#1268ff}
+.disclosure{border-top:1px solid #e3ebf5;margin-top:14px;padding-top:12px}
+.disclosure summary{display:flex;align-items:center;gap:12px;cursor:pointer;list-style:none;font-size:12px;font-weight:650;min-height:30px}
+.disclosure summary::-webkit-details-marker{display:none}.disclosure summary>svg{width:18px;height:18px;color:#386091;flex-shrink:0}.disclosure[open]>summary>svg{transform:rotate(180deg)}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}.field{min-width:0}.wide{grid-column:1/-1}.field span{font-size:11px;color:#74859c}.field strong{display:block;margin-top:3px;font-size:13px;font-weight:600;white-space:pre-wrap;overflow-wrap:anywhere}
+.identity{display:flex;align-items:center;gap:15px;margin:4px 0 18px}.avatar{width:60px;height:60px;display:grid;place-items:center;border-radius:50%;background:linear-gradient(140deg,#b8d6ff,#e1eeff);color:#1159bd;font-size:21px;font-weight:750;flex-shrink:0}.identity strong{font-size:17px;overflow-wrap:anywhere}
+.contactRows{display:grid;gap:14px;border-top:1px solid #e3ebf5;padding-top:16px}.contactRow{display:flex;align-items:flex-start;gap:14px;font-size:13px;overflow-wrap:anywhere}.contactRow svg{color:#1268ff;width:20px;height:20px;flex-shrink:0}.contactRow a{color:inherit;text-decoration:none}.contactRow p{margin:0}
+.shortcut{display:flex;align-items:center;gap:14px;padding:17px;background:linear-gradient(110deg,#e9f4ff,#e7f4ff);border:1px solid #cce5ff;border-radius:13px;color:#14304e;cursor:pointer;text-align:left;font:inherit;width:100%}.shortcut strong{font-size:16px;display:block}.shortcut small{font-size:12px;color:#5b779a;display:block;margin-top:3px}.shortcut>svg{margin-left:auto;color:#1268ff;flex-shrink:0}
+.footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-top:1px solid #dce6f3;background:#fff;flex-shrink:0}.footerActions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.more{position:relative}.more summary{list-style:none}.more summary::-webkit-details-marker{display:none}.menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:240px;display:grid;padding:7px;background:#fff;border:1px solid #dce6f3;border-radius:11px;box-shadow:0 10px 35px #15284325;z-index:2}.menu button{border:0;background:#fff;text-align:left;padding:12px;border-radius:6px;color:#25446a;font:inherit;cursor:pointer}.menu button:hover{background:#eff5ff}.menu .danger{color:#bd354c}
+.notice{padding:13px 16px;border:1px solid #f5d99c;background:#fff8e8;border-radius:11px;margin-bottom:14px;color:#835511;font-size:13px}.notice strong{display:block}.notice p{margin:5px 0 0}.notice .pills{margin-top:8px}
+.history{display:grid;gap:18px;margin-bottom:18px}.flow{background:#fff;border:1px solid #dce6f3;border-radius:12px;padding:14px}.hidden{display:none}
+.communicationRows{display:grid;gap:0}.statusRow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #e7edf6;font-size:13px}.statusRow:last-child{border:0}
+.status{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:7px;font-size:11px;line-height:1.4;background:#eef3f9;color:#59718f}.status svg{width:16px;height:16px}.success{background:#e6faed;color:#05854b}.warning{background:#fff2d5;color:#94600b}.error{background:#fff0f2;color:#b72c44}.statusLink{display:inline-flex;align-items:center;gap:9px;padding-top:13px;color:#1268ff;font-size:12px;font-weight:600;cursor:pointer}.statusLink svg{width:17px;height:17px}
+.recipient{background:#f7faff;border:1px solid #dde8f5;border-radius:10px;padding:12px;margin-top:12px;min-width:0}.recipient>strong{font-size:13px}.purposeGrid{display:grid;gap:10px;margin-top:10px}.purpose{padding:12px;background:#fff;border:1px solid #dbe6f4;border-radius:9px;display:grid;gap:7px;font-size:12px}.purpose strong{font-size:13px}.purpose p{margin:0;font-size:12px;color:#607895}.purposeActions{display:flex;flex-wrap:wrap;gap:6px}.purposeActions button{font-size:11px;min-height:36px;padding:7px 9px}
+@media(min-width:1200px) and (max-height:860px){.header{padding:14px 24px 10px}.context{padding:11px 5px}.body{padding:14px}.card{padding:14px}.cardHeader{margin-bottom:12px}.service{padding:13px}.cardHeader p{margin-top:0}.tile{width:40px;height:40px}.grid,.column{gap:12px}.identity{margin-bottom:13px}.footer{padding:10px 18px}}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.context>div{font-size:13px;padding:0 10px;gap:8px}.context svg{width:20px;height:20px}.header{padding:16px}.context{margin:0 16px 4px}.body{padding:14px}.header h2{font-size:22px}}
+@media(max-width:600px){.modal{height:100dvh;max-height:100dvh;border-radius:0}.header{padding:14px}.eyebrow{font-size:10px}.headerActions{gap:5px}.headerActions .button{padding:8px;font-size:11px}.header h2{font-size:21px}.context{margin:0 14px 4px;grid-template-columns:1fr 1fr;padding:9px 0;row-gap:8px}.context>div{font-size:12px;padding:0 10px}.context>div:nth-child(2){border:0}.context>div:last-child{grid-column:1/-1}.body{padding:12px}.card{padding:14px}.cardHeader h3{font-size:16px}.footer{padding:10px;gap:8px;align-items:stretch}.footerActions{gap:6px}.footer .button,.footer .primary{font-size:11px;min-height:42px;padding:8px}.footer .more .button{font-size:0;gap:3px}.footer .more .button svg{width:18px}.fields{grid-template-columns:1fr}.menu{min-width:220px}.service{padding:12px;gap:12px}.service>.tile{width:48px;height:48px}.service strong{font-size:16px}.contactRow{font-size:13px}}
+/* The dense agenda's inherited !important type rules must not shrink this dialog. */
+.modal.modal{width:min(1240px,100%);outline:none}
+.modal :is(.header,.context,.grid,.footer) :where(span,p,small,button,label,input,textarea,strong){font-size:inherit!important}
+.modal .eyebrow{font-size:11px!important}.modal .context span{font-size:16px!important}
+.modal .header .button,.modal .footer .button,.modal .footer .primary{font-size:13px!important}.modal .header .close{font-size:22px!important}
+.modal>nav button{font-size:13px!important}
+.modal .cardHeader p,.modal .muted,.modal .shortcut small{font-size:12px!important}
+.modal .service strong,.modal .identity strong{font-size:17px!important}.modal .avatar{font-size:21px!important}
+.modal .pill{font-size:12px!important}.modal .field span{font-size:11px!important}.modal .field strong{font-size:13px!important}
+.modal .status{font-size:11px!important}.modal .shortcut strong{font-size:16px!important}
+.modal .statusRow{padding:8px 0}.modal .cardHeader{margin-bottom:12px}.modal .identity{margin-bottom:14px}
+.modal .contactRows{padding-top:13px;gap:12px}.modal .disclosure{margin-top:10px;padding-top:9px}
+.modal .purpose p{font-size:12px!important}.modal .purposeActions button{font-size:11px!important}
+@media(max-width:900px){.modal .context span{font-size:13px!important}}
+@media(max-width:600px){.modal .context span{font-size:12px!important}.modal .header .button,.modal .footer .button,.modal .footer .primary{font-size:11px!important}.modal .footer .more .button{font-size:0!important}.modal .grid :is(input,textarea){font-size:16px!important}}
+
+.modal .body{padding:14px 18px}.modal .cardHeader .tile{width:42px;height:42px}.modal .statusRow{padding:7px 0}

@@ -12,6 +12,22 @@ import {
   type OfficeRecipientCommunicationState,
 } from '../../lib/office-booking-authority';
 import styles from './scheduling-overview-v2.module.css';
+import ui from './appointment-detail.module.css';
+import { ChargeIcon } from './appointment-charge-icons';
+
+function compactState(value: string) {
+  const labels: Record<string, string> = { not_requested: 'No solicitado', not_sent: 'Pendiente', closed: 'Cerrada', queued: 'En cola', processing: 'Enviando', accepted: 'Enviado', sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Error de envío', cancelled: 'Cancelado', partial: 'Parcial', missing: 'Sin información' };
+  return labels[value] || stateLabel(value);
+}
+
+function DeliverySummary({ recipients, purpose }: { recipients: OfficeAppointmentCommunicationRecipient[]; purpose: OfficeCommunicationPurpose }) {
+  const sent = recipients.filter(recipient => isSuccessful(recipient[purpose].state)).length;
+  const failed = recipients.some(recipient => recipient[purpose].state === 'failed');
+  const allSent = recipients.length > 0 && sent === recipients.length;
+  const states = new Set(recipients.map(recipient => recipient[purpose].state));
+  const label = !recipients.length ? 'Sin destinatarios' : allSent ? (purpose === 'confirmation' ? 'Enviada' : 'Enviado') : sent ? `${sent} de ${recipients.length} enviados` : states.size === 1 ? compactState(recipients[0][purpose].state) : 'Estados distintos';
+  return <div className={ui.statusRow}><span>{purpose === 'confirmation' ? 'Confirmación' : 'Recordatorio'}</span><span className={`${ui.status} ${allSent ? ui.success : failed ? ui.error : ui.warning}`}>{allSent ? <ChargeIcon name="check"/> : null}{label}{failed && sent ? ' · Error' : ''}</span></div>;
+}
 
 function stateLabel(value?: string) {
   switch (String(value || '').toLowerCase()) {
@@ -92,15 +108,27 @@ function PurposeCard({
   busy,
   onSend,
   onToggleReminder,
+  compact = false,
 }: {
   recipient: OfficeAppointmentCommunicationRecipient;
   purpose: OfficeCommunicationPurpose;
   busy: boolean;
   onSend: (recipientId: string, purpose: OfficeCommunicationPurpose) => Promise<void>;
   onToggleReminder: (recipient: OfficeAppointmentCommunicationRecipient) => Promise<void>;
+  compact?: boolean;
 }) {
   const state = recipient[purpose];
   const successful = isSuccessful(state.state);
+  if (compact) return <div className={ui.purpose}>
+    <div className={ui.statusRow}><strong>{purpose === 'confirmation' ? 'Confirmación' : 'Recordatorio'}</strong><span className={`${ui.status} ${successful ? ui.success : state.state === 'failed' ? ui.error : ui.warning}`}>{compactState(state.state)}</span></div>
+    <p>{state.state === 'closed' ? 'La fase de confirmación está cerrada porque ya comenzó el recordatorio.' : state.selected ? purpose === 'reminder' ? 'Recordatorio automático activado para este contacto.' : 'Solicitada al crear la cita.' : 'No seleccionado para este contacto.'}</p>
+    {successful && state.manual ? <p>Enviado manualmente por WhatsApp.</p> : null}
+    {state.state === 'failed' ? <p role="alert">{state.lastError || 'El último intento de envío falló.'}</p> : null}
+    <div className={ui.purposeActions}>
+      {purpose === 'reminder' ? <button type="button" className={ui.button} disabled={busy || successful || isActive(state.state)} onClick={() => void onToggleReminder(recipient)}>{state.selected ? 'Desactivar recordatorio' : 'Activar recordatorio'}</button> : null}
+      <button type="button" className={ui.button} disabled={busy || !state.canSendNow} onClick={() => void onSend(recipient.id, purpose)}>{successful ? 'Enviado' : isActive(state.state) ? compactState(state.state) : state.state === 'closed' ? 'Confirmación cerrada' : 'Enviar ahora'}</button>
+    </div>
+  </div>;
   return <div style={{ border: '1px solid var(--border)', borderRadius: 9, padding: 9, background: 'var(--surface)', display: 'grid', gap: 6 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'start' }}>
       <div>
@@ -130,10 +158,11 @@ function PurposeCard({
   </div>;
 }
 
-export function AppointmentCommunicationPanel({ appointmentId }: { appointmentId: string }) {
+export function AppointmentCommunicationPanel({ appointmentId, compact = false, onBusyChange }: { appointmentId: string; compact?: boolean; onBusyChange?: (busy: boolean) => void }) {
   const [communication, setCommunication] = useState<OfficeAppointmentCommunication | null>(null);
   const [busyKey, setBusyKey] = useState('');
   const [error, setError] = useState('');
+  useEffect(() => { onBusyChange?.(Boolean(busyKey)); }, [busyKey, onBusyChange]);
 
   useEffect(() => {
     let active = true;
@@ -187,6 +216,17 @@ export function AppointmentCommunicationPanel({ appointmentId }: { appointmentId
     }
   };
 
+  if (compact) return <section className={ui.card} aria-label="Comunicación">
+    <div className={ui.cardHeader}><span className={`${ui.tile} ${ui.green}`}><ChargeIcon name="whatsapp"/></span><div><h3>Comunicación</h3><p>Mensajes automáticos al cliente</p></div></div>
+    {communication ? <>
+      <div className={ui.statusRow}><span>Mensajes automáticos</span><span className={`${ui.status} ${communication.whatsappEnabled ? ui.success : ''}`}>{communication.whatsappEnabled ? 'Activos' : 'Sin seleccionar'}</span></div>
+      <DeliverySummary recipients={communication.recipients} purpose="confirmation"/><DeliverySummary recipients={communication.recipients} purpose="reminder"/>
+      <details className={ui.disclosure}><summary className={ui.statusLink}><ChargeIcon name="chevron"/>Ver destinatarios y configuración</summary>
+        {communication.recipients.length ? communication.recipients.map(recipient => <div className={ui.recipient} key={recipient.id}><strong>{recipient.name || recipient.phone}</strong><p className={ui.muted}>{recipient.role || 'Contacto'} · {recipient.phone} · {recipient.preferredLanguage}</p><div className={ui.purposeGrid}><PurposeCard compact recipient={recipient} purpose="confirmation" busy={Boolean(busyKey)} onSend={sendNow} onToggleReminder={toggleReminder}/><PurposeCard compact recipient={recipient} purpose="reminder" busy={Boolean(busyKey)} onSend={sendNow} onToggleReminder={toggleReminder}/></div></div>) : <p className={ui.muted}>No hay destinatarios guardados para esta cita.</p>}
+      </details>
+    </> : !error ? <p className={ui.muted} role="status">Cargando confirmación y recordatorio…</p> : null}
+    {error ? <p className={ui.notice} role="alert">{error}</p> : null}
+  </section>;
   return <section className={styles.formSection}>
     <header><strong>Customer communication</strong><span>Per-recipient policy and actual WhatsApp delivery state.</span></header>
     {communication ? <div style={{ padding: 11, display: 'grid', gap: 10 }}>

@@ -81,6 +81,11 @@ jobs:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/booking-modal-evidence
         run: node apps/erp-next/scripts/booking-modal-browser.cjs
+      - name: Appointment detail layout, workflow parity and recovery
+        env:
+          BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/appointment-detail-evidence
+        run: node apps/erp-next/scripts/appointment-detail-browser.cjs
       - name: Booking reference files, metadata and recovery
         env:
           REFERENCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools/node_modules
@@ -94,6 +99,7 @@ jobs:
           path: |
             ${{ runner.temp }}/booking-modal-evidence/
             ${{ runner.temp }}/booking-reference-evidence/
+            ${{ runner.temp }}/appointment-detail-evidence/
           if-no-files-found: warn
           retention-days: 7
       - name: Retain synthetic property address browser evidence
