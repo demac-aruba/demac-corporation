@@ -5,6 +5,7 @@ import { AppointmentChargesWorkspace } from './appointment-charges';
 import { ChargeIcon } from './appointment-charge-icons';
 import { useBookingDialog } from './use-booking-dialog';
 import chargeStyles from './appointment-charges.module.css';
+import ui from './appointment-detail.module.css';
 
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
@@ -85,25 +86,25 @@ function formatTime(value?: string) {
 }
 
 function formatDate(value: string) {
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+  return new Date(`${value}T12:00:00Z`).toLocaleDateString('es', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
   });
 }
 
 function formatDateTime(value?: string) {
-  if (!value) return 'Not recorded';
+  if (!value) return 'Sin registrar';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-US', {
+  return date.toLocaleString('es', {
     timeZone: 'America/Aruba', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
   });
 }
 
 function durationLabel(minutes?: number) {
   const value = Number(minutes || 0);
-  if (!value) return 'Not recorded';
+  if (!value) return 'Sin registrar';
   const hours = value / 60;
-  return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))} hour${hours === 1 ? '' : 's'}`;
+  return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))} hora${hours === 1 ? '' : 's'}`;
 }
 
 function sourceLabel(value?: string) {
@@ -113,13 +114,16 @@ function sourceLabel(value?: string) {
 }
 
 function Field({ label, value, wide = false }: { label: string; value: React.ReactNode; wide?: boolean }) {
-  return <div className={wide ? styles.wide : undefined}><span style={{ color: 'var(--muted)', fontSize: 7 }}>{label}</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{value || '—'}</strong></div>;
+  return <div className={`${ui.field} ${wide ? ui.wide : ''}`}><span>{label}</span><strong>{value || '—'}</strong></div>;
 }
 
 export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, onClose, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>('details');
   const [tab, setTab] = useState<'details' | 'charges' | 'history'>('details');
   const [chargeBusy, setChargeBusy] = useState(false);
+  const [referenceBusy, setReferenceBusy] = useState(false);
+  const [communicationBusy, setCommunicationBusy] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -132,7 +136,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   const support = appointment.assignments.find((assignment) => !assignment.isPrimaryAssignment && assignment.status !== 'cancelled');
   const primaryCapacityEnd = primary?.capacityEnd || primary?.end;
   const supportCapacityEnd = support?.capacityEnd || support?.end;
-  const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
+  const primarySlotCount = primary ? assignmentReservedSlots(primary) : undefined;
+  const canManageLifecycle = Boolean(canManage && appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
   const temporaryHold = appointment.status === 'temporary_hold';
   const workLabel = schedulingWorkSummary(appointment, undefined, project);
   const serviceEstimate = hasServiceWorkEstimate(appointment, project);
@@ -157,6 +162,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   }, [appointment.id]);
 
   const begin = (next: Mode) => {
+    setMoreOpen(false);
     setMode(next);
     setReason('');
     setNote('');
@@ -206,121 +212,81 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
     }
   };
 
-  const dialogRef = useBookingDialog(onClose, busy || chargeBusy);
+  const blocked = busy || chargeBusy || referenceBusy || communicationBusy;
+  const dialogRef = useBookingDialog(onClose, blocked);
   const chargeSeeds = (appointment.workSummaryLines?.length ? appointment.workSummaryLines : [{ label: workLabel, quantity: appointment.totalQuantity }]).map((line, index) => ({ id: `work-${index + 1}`, label: line.label, quantity: line.quantity || 1, ...(index === 0 && !appointment.workSummaryLines?.length ? { presetId: appointment.workTypeId || appointment.presetId, serviceId: appointment.serviceId } : {}) }));
 
-  return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !chargeBusy) onClose(); }}>
-    <aside className={chargeStyles.modal} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Appointment ${appointment.id}`}>
-      <header className={chargeStyles.modalHeader}>
-        <div>
-          <span>DEMAC · SCHEDULING</span>
-          <h2>{tab === 'history' ? 'Historial de la cita' : 'Detalle de la cita'}</h2>
-          <p>{appointment.propertyAddress || appointment.site} · {appointment.sector}</p>
+  const initials = appointment.customer.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase();
+  const outcomeAction = partialOutcome ? partialOutcome.remainingWorkStatus === 'scheduled' ? 'Revisar resultado' : `Agendar ${partialOutcome.remainingQuantity} pendientes` : 'Registrar resultado';
+  return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !blocked) onClose(); }}>
+    <aside className={`${chargeStyles.modal} ${ui.modal}`} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Detalle de la cita · ${appointment.customer}`}>
+      <header className={ui.header}>
+        <div><span className={ui.eyebrow}>DEMAC · SCHEDULING</span><h2>Detalle de la cita</h2></div>
+        <div className={ui.headerActions}>
+          {tab === 'details' && mode === 'details' && !partialOutcome ? <button type="button" className={ui.button} disabled={!canManageLifecycle || blocked} onClick={() => begin('edit')}><ChargeIcon name="edit"/>Editar cita</button> : null}
+          <button type="button" className={ui.close} disabled={blocked} aria-label="Cerrar cita" onClick={onClose}>×</button>
         </div>
-        <button type="button" disabled={busy || chargeBusy} aria-label="Cerrar cita" onClick={onClose}>×</button>
       </header>
-
-      <div className={chargeStyles.context}>
-        <div><ChargeIcon name="calendar"/><div><small>FECHA</small><strong>{formatDate(appointment.dateKey)}</strong></div></div>
-        <div><ChargeIcon name="van"/><div><small>VAN</small><strong>{primary?.vanId?.replace('VAN-', 'Van ') || '—'}</strong></div></div>
-        <div><ChargeIcon name="clock"/><div><small>HORARIO</small><strong>{formatTime(primary?.start)}–{formatTime(primaryCapacityEnd)}</strong></div></div>
-        <div><ChargeIcon name="person"/><div><small>CLIENTE</small><strong>{appointment.customer}</strong></div></div>
+      <div className={ui.context}>
+        <div><ChargeIcon name="calendar"/><span>{formatDate(appointment.dateKey)}</span></div>
+        <div><ChargeIcon name="clock"/><span>{formatTime(primary?.start)}–{formatTime(primaryCapacityEnd)}</span></div>
+        <div><ChargeIcon name="van"/><span>{primary?.vanId?.replace('VAN-', 'Van ') || 'Sin van asignada'}</span></div>
       </div>
-      <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita">{([{ id: 'details', label: 'Datos de la cita', icon: 'calendar' }, { id: 'charges', label: 'Importes y pagos', icon: 'receipt' }, { id: 'history', label: 'Historial', icon: 'history' }] as const).map(item => <button key={item.id} type="button" disabled={busy || chargeBusy} className={tab === item.id ? chargeStyles.active : ''} onClick={() => setTab(item.id)}><ChargeIcon name={item.icon}/>{item.label}</button>)}</nav>
-      <div className={chargeStyles.modalBody}>
+      <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita">{([{ id: 'details', label: 'Resumen', icon: 'clipboard' }, { id: 'charges', label: 'Importes y pagos', icon: 'receipt' }, { id: 'history', label: 'Historial', icon: 'history' }] as const).map(item => <button key={item.id} type="button" disabled={blocked || mode !== 'details'} aria-current={tab === item.id ? 'page' : undefined} className={tab === item.id ? chargeStyles.active : ''} onClick={() => { setMoreOpen(false); setTab(item.id); }}><ChargeIcon name={item.icon}/>{item.label}</button>)}</nav>
+      <div className={ui.body}>
+        {tab === 'history' ? <div className={ui.history}>
+          <section className={ui.card} aria-label="Auditoría de la cita">
+            <div className={ui.cardHeader}><span className={ui.tile}><ChargeIcon name="history"/></span><div><h3>Historial de la reserva</h3><p>Creación, confirmación y referencias de la cita</p></div></div>
+            <div className={ui.fields}>
+              <Field label="Creada por" value={appointment.bookedByName}/><Field label="Origen" value={sourceLabel(appointment.bookedBySource)}/>
+              <Field label="Creación" value={formatDateTime(appointment.createdAt)}/><Field label="Confirmación" value={temporaryHold ? 'Reserva pendiente de confirmar' : formatDateTime(appointment.confirmedAt)}/>
+              <Field label="Última actualización" value={formatDateTime(appointment.updatedAt)}/><Field label="Orden de trabajo" value={appointment.workOrderIds?.join(', ') || appointment.workOrderId}/>
+              <Field wide label="Identificador de cita" value={appointment.id}/>
+            </div>
+          </section>
+        </div> : null}
         {tab !== 'details' ? <AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged}/> : null}
-        <div className={styles.drawerBody} style={tab === 'details' ? { padding: 0 } : { display: 'none' }}>
-        <section className={styles.formSection}>
-          <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · Van capacity ${formatTime(primary?.start)}–${formatTime(primaryCapacityEnd)}`}</span></header>
-          <div className={styles.formGrid}>
-            <Field wide label="WORK TYPE · ENTIRE APPOINTMENT" value={workLabel} />
-            {serviceEstimate && (appointment.workSummaryLines?.length ?? 0) === 1 ? <Field label="TIME / UNIT" value={durationLabel(appointment.durationMinutesPerUnit)} /> : null}
-            {serviceEstimate ? <Field label="TECHNICAL WORK ESTIMATE" value={durationLabel(appointment.scheduledDurationMinutes)} /> : null}
-            <Field label="PRIMARY RESERVED SLOTS" value={primary ? assignmentReservedSlots(primary) ?? 'Not verified' : 'Not recorded'} />
-            {serviceEstimate ? <Field label="PRIMARY WORK ESTIMATE · NOT VAN RELEASE" value={primary ? `${formatTime(primary.start)}–${formatTime(primary.end)}` : 'Not recorded'} /> : null}
-            <Field label="CAPACITY WINDOW" value={primary ? `${formatTime(primary.start)}–${formatTime(primaryCapacityEnd)}` : 'Not recorded'} />
-            <Field label="PRIMARY VAN" value={primary?.vanId?.replace('VAN-', 'Van ') || '—'} />
-            <Field label="SUPPORT VAN" value={support?.vanId.replace('VAN-', 'Van ') || 'None'} />
-            {support && serviceEstimate ? <Field label="SUPPORT WORK ESTIMATE · NOT VAN RELEASE" value={`${formatTime(support.start)}–${formatTime(support.end)}`} /> : null}
-            {support ? <Field label="SUPPORT RESERVED SLOTS" value={assignmentReservedSlots(support) ?? 'Not verified'} /> : null}
-            {support ? <Field label="SUPPORT CAPACITY WINDOW" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`} /> : null}
-            <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
+        <div className={tab === 'details' ? undefined : ui.hidden}>
+          <div className={mode === 'details' ? undefined : ui.hidden}>
+            {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
+            {temporaryHold ? <div className={ui.notice} role="status"><strong>Reserva temporal · Capacidad reservada</strong>La confirmación y los recordatorios permanecen pausados hasta confirmar esta reserva.</div> : null}
+            {partialOutcome ? <div className={ui.notice} role="status"><strong>Trabajo completado parcialmente</strong><div className={ui.pills}><span>Planificado: {partialOutcome.plannedQuantity}</span><span>Completado: {partialOutcome.completedQuantity}</span><span>Pendiente: {partialOutcome.remainingQuantity}</span></div><p>Equipo liberado: {formatTime(partialOutcome.actualEndTime)} · {partialOutcome.reason}</p><p>{partialOutcome.remainingWorkStatus === 'scheduled' && partialOutcome.followUpAppointmentId ? `Seguimiento: ${partialOutcome.followUpAppointmentId}` : 'Trabajo pendiente por agendar.'}</p></div> : null}
+            <div className={ui.grid}>
+              <div className={ui.column}>
+                <section className={ui.card} aria-label="Trabajo programado">
+                  <div className={ui.cardHeader}><span className={ui.tile}><ChargeIcon name="clipboard"/></span><div><h3>Trabajo programado</h3><p>Servicio a realizar en esta cita</p></div></div>
+                  <div className={ui.service}><span className={ui.tile}><ChargeIcon name={project ? 'work' : 'air'}/></span><div><strong>{workLabel}</strong><div className={ui.pills}>{serviceEstimate ? <span className={ui.pill}><ChargeIcon name="clock"/>{durationLabel(appointment.scheduledDurationMinutes)} estimada{appointment.scheduledDurationMinutes === 60 ? '' : 's'}</span> : null}<span className={ui.pill}><ChargeIcon name="grid"/>{primary ? primarySlotCount ?? 'Sin verificar' : 'Sin registrar'} cupo{primarySlotCount === 1 ? '' : 's'} reservado{primarySlotCount === 1 ? '' : 's'}</span>{support ? <span className={ui.pill}><ChargeIcon name="van"/>Apoyo: {support.vanId.replace('VAN-', 'Van ')}</span> : null}</div></div></div>
+                  <details className={ui.disclosure}><summary><ChargeIcon name="chevron"/>Detalle técnico y capacidad</summary><div className={ui.fields}>
+                    {serviceEstimate && (appointment.workSummaryLines?.length ?? 0) === 1 ? <Field label="Tiempo por unidad" value={durationLabel(appointment.durationMinutesPerUnit)}/> : null}
+                    {serviceEstimate ? <Field label="Trabajo técnico estimado" value={durationLabel(appointment.scheduledDurationMinutes)}/> : null}
+                    <Field label="Cupos reservados · Van principal" value={primary ? primarySlotCount ?? 'Sin verificar' : 'Sin registrar'}/>
+                    {serviceEstimate ? <Field label="Horario estimado del trabajo · No libera la van" value={primary ? `${formatTime(primary.start)}–${formatTime(primary.end)}` : 'Sin registrar'}/> : null}
+                    <Field label="Horario de capacidad reservada" value={primary ? `${formatTime(primary.start)}–${formatTime(primaryCapacityEnd)}` : 'Sin registrar'}/><Field label="Van principal" value={primary?.vanId.replace('VAN-', 'Van ')}/>
+                    <Field label="Van de apoyo" value={support?.vanId.replace('VAN-', 'Van ') || 'Sin apoyo'}/>
+                    {support && serviceEstimate ? <Field label="Trabajo estimado · Apoyo" value={`${formatTime(support.start)}–${formatTime(support.end)}`}/> : null}
+                    {support ? <><Field label="Cupos reservados · Apoyo" value={assignmentReservedSlots(support) ?? 'Sin verificar'}/><Field label="Capacidad reservada · Apoyo" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`}/></> : null}
+                    <Field wide label="Descripción para el cliente" value={appointment.customerFacingDescription}/>
+                  </div></details>
+                </section>
+                <SavedVisitReferences key={appointment.id} appointmentId={appointment.id} canEdit={canManage && appointment.status !== 'cancelled'} compact onBusyChange={setReferenceBusy}/>
+              </div>
+              <div className={ui.column}>
+                <section className={ui.card} aria-label="Cliente y propiedad">
+                  <div className={ui.cardHeader}><span className={ui.tile}><ChargeIcon name="person"/></span><div><h3>Cliente y propiedad</h3><p>Información del cliente y dirección</p></div></div>
+                  <div className={ui.identity}><span className={ui.avatar}>{initials || '—'}</span><div><strong>{appointment.customer}</strong><p className={ui.muted}>{appointment.customerPreferredLanguage || 'Idioma sin registrar'}</p></div></div>
+                  <div className={ui.contactRows}>
+                    <div className={ui.contactRow}><ChargeIcon name="call"/><span>{appointment.customerPhone || appointment.customerWhatsapp || 'Teléfono sin registrar'}</span></div>
+                    <div className={ui.contactRow}><ChargeIcon name="pin"/><div><p>{appointment.propertyAddress || appointment.site || 'Dirección sin registrar'}</p><p>{appointment.sector}</p></div></div>
+                  </div>
+                  <details className={ui.disclosure}><summary><ChargeIcon name="chevron"/>Contacto y acceso</summary><div className={ui.fields}><Field label="Teléfono" value={appointment.customerPhone}/><Field label="WhatsApp" value={appointment.customerWhatsapp}/><Field wide label="Correo electrónico" value={appointment.customerEmail}/><Field wide label="Propiedad" value={appointment.site}/><Field wide label="Indicaciones de acceso" value={appointment.propertyAccessInstructions || 'Sin indicaciones adicionales'}/></div></details>
+                </section>
+                {temporaryHold ? <section className={ui.card}><div className={ui.cardHeader}><span className={`${ui.tile} ${ui.green}`}><ChargeIcon name="whatsapp"/></span><div><h3>Comunicación pausada</h3><p>Disponible al confirmar la reserva</p></div></div></section> : <AppointmentCommunicationPanel appointmentId={appointment.id} compact onBusyChange={setCommunicationBusy}/>}
+                <button type="button" className={ui.shortcut} disabled={blocked} onClick={() => setTab('charges')}><span className={ui.tile}><ChargeIcon name="receipt"/></span><span><strong>Importes y pagos</strong><small>Proyección, monto final y cobros</small></span><ChargeIcon name="arrow"/></button>
+              </div>
+            </div>
+            {error ? <p className={ui.notice} role="alert">{error}</p> : null}
+            {canManage && !canManageLifecycle && appointment.status !== 'cancelled' ? <p className={ui.notice}>Vincula el cliente y la propiedad antes de modificar esta cita.</p> : null}
           </div>
-        </section>
-
-        {partialOutcome ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
-          <header><strong style={{ color: 'var(--warning, #b45309)' }}>PARTIAL COMPLETION · ACTUAL OUTCOME</strong><span>Executed history preserved</span></header>
-          <div className={styles.descriptionPreview} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
-            <div><span>PLANNED</span><strong style={{ fontSize: 17 }}>{partialOutcome.plannedQuantity}</strong></div>
-            <div><span>COMPLETED</span><strong style={{ fontSize: 17 }}>{partialOutcome.completedQuantity}</strong></div>
-            <div><span>REMAINING</span><strong style={{ fontSize: 17 }}>{partialOutcome.remainingQuantity}</strong></div>
-          </div>
-          <div className={styles.descriptionPreview}>
-            <span>CREW RELEASED {formatTime(partialOutcome.actualEndTime)}</span>
-            <strong>{partialOutcome.reason || 'Partial work recorded.'}{partialOutcome.remainingWorkStatus === 'scheduled' && partialOutcome.followUpAppointmentId ? ` Remaining work is linked to ${partialOutcome.followUpAppointmentId}.` : ' Remaining work is pending scheduling.'}</strong>
-          </div>
-        </section> : null}
-
-        {temporaryHold ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
-          <header><strong style={{ color: 'var(--warning, #b45309)' }}>TEMPORARY HOLD · CAPACITY RESERVED</strong><span>Customer is not confirmed</span></header>
-          <div className={styles.descriptionPreview}><span>COMMUNICATION PAUSED</span><strong>This hold owns the canonical Van/time capacity, but customer confirmation and reminder communication stay disabled until an office user confirms the hold.</strong></div>
-        </section> : null}
-
-        <section className={styles.formSection}>
-          <header><strong>Customer</strong><span>Canonical CRM relationship</span></header>
-          <div className={styles.formGrid}>
-            <Field label="CUSTOMER / COMPANY" value={appointment.customer} />
-            <Field label="PREFERRED LANGUAGE" value={appointment.customerPreferredLanguage || 'Not recorded'} />
-            <Field label="PHONE" value={appointment.customerPhone || 'Not recorded'} />
-            <Field label="WHATSAPP" value={appointment.customerWhatsapp || 'Not recorded'} />
-            <Field wide label="EMAIL" value={appointment.customerEmail || 'Not recorded'} />
-          </div>
-        </section>
-
-        <section className={styles.formSection}>
-          <header><strong>Job location</strong><span>Where the appointment will be executed</span></header>
-          <div className={styles.formGrid}>
-            <Field label="LOCATION" value={appointment.site} />
-            <Field label="AREA / ZONE" value={appointment.sector} />
-            <Field wide label="ADDRESS" value={appointment.propertyAddress || 'Not recorded'} />
-            <Field wide label="ACCESS INSTRUCTIONS" value={appointment.propertyAccessInstructions || 'None'} />
-          </div>
-        </section>
-
-        <section className={styles.formSection}>
-          <header><strong>Booking audit</strong><span>Who created it and when</span></header>
-          <div className={styles.formGrid}>
-            <Field label="BOOKED BY" value={appointment.bookedByName || 'Not recorded'} />
-            <Field label="SOURCE" value={sourceLabel(appointment.bookedBySource)} />
-            <Field label="BOOKING CREATED" value={formatDateTime(appointment.createdAt)} />
-            <Field label="CONFIRMED" value={temporaryHold ? 'Not confirmed — capacity held' : formatDateTime(appointment.confirmedAt)} />
-            <Field label="LAST UPDATED" value={formatDateTime(appointment.updatedAt)} />
-            <Field label="WORK ORDER" value={appointment.workOrderIds?.join(', ') || appointment.workOrderId || 'Not recorded'} />
-            <Field wide label="APPOINTMENT ID" value={appointment.id} />
-          </div>
-        </section>
-
-        <SavedVisitReferences key={appointment.id} appointmentId={appointment.id} canEdit={canManage && appointment.status !== 'cancelled'} />
-
-        {temporaryHold ? <section className={styles.formSection}>
-          <header><strong>Customer communication</strong><span>Paused while temporary hold</span></header>
-          <div className={styles.descriptionPreview}><span>NO CUSTOMER MESSAGE IS ACTIVE</span><strong>Recipient intent is preserved on the canonical hold and becomes eligible only after the hold is manually confirmed.</strong></div>
-        </section> : <AppointmentCommunicationPanel appointmentId={appointment.id} />}
-
-        {mode === 'details' ? <section className={styles.formSection}>
-          <header><strong>Manage {partialOutcome ? 'actual outcome' : temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>{partialOutcome ? 'Executed history is locked. Continue by scheduling the canonical remaining work.' : 'All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.'}</span></header>
-          {temporaryHold ? <div style={{ padding: '11px 11px 0' }}><button type="button" className={styles.primary} style={{ width: '100%' }} disabled={!canManageLifecycle || busy} onClick={() => void confirmHold()}>{busy ? 'Confirming hold…' : 'Confirm temporary hold'}</button></div> : null}
-          {partialOutcome ? <div style={{ padding: 11 }}><button type="button" className={styles.primary} style={{ width: '100%' }} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>{partialOutcome.remainingWorkStatus === 'scheduled' ? 'Review Actual Outcome' : `Schedule Remaining ${partialOutcome.remainingQuantity}`}</button></div> : <div style={{ display: 'grid', gridTemplateColumns: temporaryHold ? 'repeat(3,minmax(0,1fr))' : 'repeat(4,minmax(0,1fr))', gap: 8, padding: 11 }}>
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('edit')}>Edit Appointment</button>
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('reschedule')}>Reschedule</button>
-            {!temporaryHold ? <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>Record Actual Outcome</button> : null}
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>{temporaryHold ? 'Cancel Hold' : 'Cancel Appointment'}</button>
-          </div>}
-          {canCorrectHistoricalCapacity ? <div style={{ padding: '0 11px 11px' }}><button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('capacity')}>Correct past reserved slots</button><p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 11 }}>Capacity only; not technician actual hours or billing.</p></div> : null}
-          {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
-          {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
-        </section> : null}
-
         {mode === 'edit' ? <LiveAppointmentEditPanel appointment={appointment} onBack={() => begin('details')} onSaved={async () => { await onChanged(); onClose(); }} /> : null}
 
         {mode === 'capacity' ? <RegularHistoricalCapacityPanel appointment={appointment} onBack={() => begin('details')} onSaved={onChanged} onBusyChange={setBusy} /> : null}
@@ -344,6 +310,16 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         </section> : null}
         </div>
       </div>
+      {tab === 'details' && mode === 'details' ? <footer className={ui.footer}>
+        {!partialOutcome ? <details className={ui.more} open={moreOpen}><summary className={ui.button} aria-disabled={blocked} onClick={event => { event.preventDefault(); if (!blocked) setMoreOpen(!moreOpen); }}><ChargeIcon name="more"/>Más acciones<ChargeIcon name="chevron"/></summary><div className={ui.menu}>
+          {canCorrectHistoricalCapacity ? <button type="button" disabled={blocked} onClick={() => begin('capacity')}>Corregir cupos pasados</button> : null}
+          <button type="button" className={ui.danger} disabled={!canManageLifecycle || blocked} onClick={() => begin('cancel')}>{temporaryHold ? 'Cancelar reserva' : 'Cancelar cita'}</button>
+        </div></details> : <span/>}
+        <div className={ui.footerActions}>
+          {!partialOutcome ? <button type="button" className={ui.button} disabled={!canManageLifecycle || blocked} onClick={() => begin('reschedule')}><ChargeIcon name="calendar"/>Reprogramar</button> : null}
+          {temporaryHold ? <button type="button" className={ui.primary} disabled={!canManageLifecycle || blocked} onClick={() => void confirmHold()}><ChargeIcon name="check"/>{busy ? 'Confirmando…' : 'Confirmar reserva'}</button> : <button type="button" className={ui.primary} disabled={!canManageLifecycle || blocked} onClick={() => begin('outcome')}><ChargeIcon name="check"/>{outcomeAction}</button>}
+        </div>
+      </footer> : null}
     </aside>
   </div>;
 }
