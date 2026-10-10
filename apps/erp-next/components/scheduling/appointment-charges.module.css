@@ -53,6 +53,11 @@
 @media(max-width:1000px){.columns{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric strong{font-size:22px}.context{grid-template-columns:1fr 1fr;gap:14px}.context>div:nth-child(2){border:0}}
 @media(max-width:600px){.modalOverlay{padding:0}.modal{height:100dvh;max-height:100dvh;border-radius:0}.modalHeader{padding:16px}.modalBody{padding:14px}.modalTabs{margin:4px 14px 0;gap:12px}.modalTabs button{font-size:12px}.context{margin:12px 14px 0;padding:12px 2px}.context>div{padding:0 8px;gap:6px}.context strong{font-size:12px}.panel{padding:13px}.lineFields{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.metrics{gap:8px}.metric{padding:11px 8px;gap:6px}.metric strong{font-size:18px}.tile{width:28px;height:28px}.tile svg{width:18px}.metric span{font-size:9px}.hero>strong{font-size:30px}.footer{align-items:stretch;flex-direction:column}.footer button{flex:1}.table :is(th,td){padding:9px 5px}.table{font-size:11px}.payment{grid-template-columns:25px minmax(0,1fr) auto;gap:5px}}
 
-.catalog{margin-bottom:12px}.refresh{display:flex;justify-content:flex-end;margin-top:-10px;margin-bottom:6px}
+.catalog{margin-bottom:12px}.refresh{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:-10px;margin-bottom:6px}
 .workspace .hero>strong{font-size:36px!important}.workspace .hero>span{font-size:11px!important}.workspace .metric strong{font-size:23px!important}.workspace .metric span{font-size:10px!important}
 @media(max-width:600px){.workspace .hero>strong{font-size:30px!important}.workspace .metric strong{font-size:18px!important}.workspace .metric span{font-size:9px!important}}
+
+.loadingWorkspace{min-height:430px}.loadingLabel{display:flex;align-items:center;gap:8px;color:#587194;font-size:12px;margin-bottom:12px;min-height:30px}.loadingLabel svg{color:var(--charge-blue)}
+.skeletonMetric{flex:1;min-width:0}.skeletonBar{display:block!important;height:12px;border-radius:6px;background:linear-gradient(100deg,#edf3fc 25%,#dce9fa 50%,#edf3fc 75%);background-size:200% 100%;animation:charge-loading 1.5s ease-in-out infinite}.skeletonMetric .skeletonBar+span{height:25px;width:72%;margin-top:10px}.skeletonPanel{min-height:295px}.skeletonRow{display:flex;justify-content:space-between;gap:30px;padding:21px 0;border-bottom:1px solid #edf2fa}.skeletonRow .skeletonBar:first-child{width:62%}.skeletonRow .skeletonBar:last-child{width:18%}
+@keyframes charge-loading{to{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.skeletonBar{animation:none}}
