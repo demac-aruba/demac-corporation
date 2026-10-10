@@ -123,8 +123,8 @@ function provider(overrides = {}) {
   };
 }
 
-function authorityFixture({ seed = {}, providerOverrides = {} } = {}) {
-  const db = new FakeFirestore({
+function authorityFixture({ seed = {}, providerOverrides = {}, Database = FakeFirestore } = {}) {
+  const db = new Database({
     "clients/client-1": { name: "Richard", phone: "+2975600000" },
     "properties/property-1": { clientId: "client-1", address: "Wayaca 217" },
     ...seed,
@@ -402,4 +402,35 @@ test('invalid reference claim rejects appointment and capacity writes together',
     context: { visitReferences: { files: [{ id: 'missing-file-001' }] } } }), /missing or incomplete/);
   assert.equal([...db.store.keys()].some(key => key.startsWith('appointments/')), false);
   assert.equal([...db.store.keys()].some(key => key.startsWith('bookingCapacityLocks/')), false);
+});
+
+const { TransactionalFirestore } = require('./test-support/transactionalFirestore');
+function chargedBookingFixture() {
+  return authorityFixture({ Database: TransactionalFirestore, seed: { 'users/office': { role: 'office', active: true, name: 'Synthetic office' } } });
+}
+async function chargedRequest(authority, changes = {}) {
+  const availability = await authority.checkAvailability({ request: baseRequest(), context: { inboundMessageId: 'charged-offer-id' } });
+  return { offerId: availability.offer.id, offerVersion: availability.offer.version, optionId: 'opt-1', idempotencyKey: 'charged-booking-request', actor: { source: 'office-scheduling', id: 'office' }, context: { charges: { lines: [{ id: 'work', label: 'Synthetic service', quantity: 2, unitPrice: '125', reason: 'Agreed price' }], payment: { method: 'cash', amount: '100' } } }, ...changes };
+}
+test('ordinary appointment, initial estimate and receipt commit together and exact replay never doubles deposit', async () => {
+  const { db, authority } = chargedBookingFixture(); const request = await chargedRequest(authority);
+  const result = await authority.createAppointment(request); const replay = await authority.createAppointment(request);
+  assert.equal(replay.replayed, true); assert.equal(result.appointment.jobCharges.originalEstimate.totalCents, 25000);
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('payments/')).length, 1);
+  assert.equal(result.appointment.jobCharges.receivedCents, 10000); assert.equal(result.workOrderIds.length, 1);
+  await assert.rejects(authority.createAppointment({ ...request, context: { charges: { ...request.context.charges, payment: { method: 'cash', amount: '101' } } } }), error => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
+  db.write('users/office', { role: 'office', active: false });
+  await assert.rejects(authority.createAppointment(request), error => error.code === 'permission_denied');
+});
+test('invalid deposit prevents appointment/work orders/locks/receipts from being partially committed', async () => {
+  const { db, authority } = chargedBookingFixture(); const request = await chargedRequest(authority);
+  const before = [...db.store]; request.context.charges.payment = { method: 'transfer', amount: '100', reference: '' };
+  await assert.rejects(authority.createAppointment(request), error => error.code === 'payment_reference');
+  assert.deepEqual([...db.store], before);
+});
+test('temporary hold can save projection but rejects deposit atomically', async () => {
+  const { db, authority } = chargedBookingFixture(); const request = await chargedRequest(authority, { createMode: BOOKING_CREATE_MODES.TEMPORARY_HOLD });
+  const before = [...db.store]; await assert.rejects(authority.createAppointment(request), error => error.code === 'payment_hold'); assert.deepEqual([...db.store], before);
+  delete request.context.charges.payment; const result = await authority.createAppointment(request);
+  assert.equal(result.appointment.status, 'temporary_hold'); assert.equal(result.appointment.jobCharges.receivedCents, 0);
 });

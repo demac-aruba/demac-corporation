@@ -149,8 +149,8 @@ function baseSeed(extra = {}) {
   };
 }
 
-function fixture(extra = {}, clock = CLOCK) {
-  const db = new FakeFirestore(baseSeed(extra));
+function fixture(extra = {}, clock = CLOCK, Database = FakeFirestore) {
+  const db = new Database(baseSeed(extra));
   const authority = createAfterHoursAuthority({
     db,
     clock: () => new Date(clock),
@@ -577,4 +577,15 @@ test('after-hours references are included at the initial atomic appointment writ
     visitReferences: { notes: 'Entrance behind kitchen', files: [], location: { url: '12.5,-70.0', label: 'Entrance' } } }));
   assert.equal(result.appointment.visitReferences.notes, 'Entrance behind kitchen');
   assert.match(result.appointment.visitReferences.location.url, /query=12.5,-70/);
+});
+
+test('emergency booking saves charges and deposit atomically without completing attendance or Field work', async () => {
+  const { TransactionalFirestore } = require('./test-support/transactionalFirestore');
+  const { db, authority } = fixture({ 'users/office-1': { active: true, role: 'office' } }, CLOCK, TransactionalFirestore);
+  const request = input({ actor: { id: 'office-1', source: 'office-scheduling' }, charges: { lines: [{ id: 'emergency', label: 'Synthetic emergency', quantity: 1, unitPrice: '250', reason: 'Office quote' }], payment: { amount: '100', method: 'cash' } } });
+  const result = await authority.createEmergency(request); const replay = await authority.createEmergency(request);
+  const appointment = db.read(`appointments/${result.appointmentId}`);
+  assert.equal(appointment.jobCharges.estimate.totalCents, 25000); assert.equal(appointment.jobCharges.receivedCents, 10000);
+  assert.equal(appointment.actualCompletedAt, null); assert.equal(appointment.afterHoursOpenEnded, true);
+  assert.equal(replay.replayed, true); assert.equal([...db.store.keys()].filter(key => key.startsWith('payments/')).length, 1);
 });

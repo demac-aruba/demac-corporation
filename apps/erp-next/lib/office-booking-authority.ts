@@ -1,3 +1,5 @@
+import { initialChargesAcknowledged } from './appointment-charge-contract';
+import type { ChargeDraft } from './appointment-charges';
 import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type {
@@ -523,6 +525,7 @@ export async function checkOfficeCreateAvailability(input: {
 }
 
 export async function confirmOfficeAppointment(input: {
+  charges?: ChargeDraft;
   visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
@@ -535,10 +538,12 @@ export async function confirmOfficeAppointment(input: {
   if (!result.success || !result.appointmentId) {
     throw new Error('Booking Authority did not return a verified appointment id. Nothing was marked as confirmed.');
   }
+  if (!initialChargesAcknowledged(result.appointment, input.charges)) throw new OfficeBookingRequestError('La cita respondió sin confirmar los importes y el anticipo. Reintenta la misma solicitud; no registres otro pago.', true);
   return result;
 }
 
 export async function createOfficeTemporaryHold(input: {
+  charges?: ChargeDraft;
   visitReferences?: VisitReferences;
   requestId: string;
   offerId: string;
@@ -549,6 +554,7 @@ export async function createOfficeTemporaryHold(input: {
   if (!result.success || !result.appointmentId || result.createMode !== 'temporary_hold') {
     throw new Error('Booking Authority did not return a verified temporary hold. Nothing was reserved.');
   }
+  if (!initialChargesAcknowledged(result.appointment, input.charges)) throw new OfficeBookingRequestError('La reserva respondió sin confirmar la proyección. Reintenta la misma solicitud.', true);
   return result;
 }
 

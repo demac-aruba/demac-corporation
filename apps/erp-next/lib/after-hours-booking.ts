@@ -1,3 +1,5 @@
+import { initialChargesAcknowledged } from './appointment-charge-contract';
+import type { ChargeDraft } from './appointment-charges';
 import type { VisitReferences } from './booking-visit-references';
 import { firebaseTransportUrl } from './firebase/isolated-preview';
 import type { AppointmentRecipientSelection } from './customer-contacts';
@@ -20,6 +22,7 @@ function endpoint() {
 }
 
 export type SpecialBookingInput = {
+  charges?: ChargeDraft;
   visitReferences?: VisitReferences;
   project?: { id: string; phaseId: string; version: number };
   dwellingId?: string; requesterId?: string; accessContactId?: string;
@@ -74,6 +77,7 @@ async function specialBookingRequest<T>(action: string, input: SpecialBookingInp
         || payload.workOrder?.projectId !== input.project.id || payload.workOrder?.projectPhaseId !== input.project.phaseId)) {
       throw new SpecialBookingError('The Project booking link could not be verified. Retry the original request.', true);
     }
+    if (action.startsWith('create_') && !initialChargesAcknowledged(payload.appointment, input.charges)) throw new SpecialBookingError('La cita respondió sin confirmar los importes y el anticipo. Reintenta la misma solicitud.', true);
     return payload as T;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
