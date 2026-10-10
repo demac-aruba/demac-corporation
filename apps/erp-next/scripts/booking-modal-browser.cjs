@@ -15,6 +15,8 @@ const output = fs.mkdtempSync(path.join(os.tmpdir(), 'demac-booking-modal-'));
 fs.mkdirSync(artifacts, { recursive: true });
 const customer = { id: 'CUSTOMER-TEST', name: 'Synthetic customer', phone: '+2970000000', active: true };
 const property = { id: 'PROPERTY-TEST', clientId: customer.id, name: 'Synthetic site', address: 'Synthetic site 1', zone: 'Noord', active: true, hasIndependentDwellings: false, locationVersion: 0 };
+const secondCustomer={...customer,id:'CUSTOMER-OTHER',name:'Another customer'};
+const secondProperty={...property,id:'PROPERTY-OTHER',clientId:secondCustomer.id,name:'Another property'};
 const contact = { id: 'CONTACT-TEST', clientId: customer.id, name: 'Synthetic access contact', phone: '+2970000001', active: true };
 const project = {
   id: 'PROJECT-TEST', projectNumber: 'PRJ-TEST', name: 'Synthetic project', customerId: customer.id, customerName: customer.name, siteId: property.id,
@@ -25,14 +27,14 @@ const project = {
 const stubs = {
   'auth-provider': `const principal={userId:'ACTOR-TEST',active:true,capabilities:new Set(['scheduling.manage','projects.schedule'])};export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
-    export async function loadBookingMasterReferenceData(){return {clients:[${JSON.stringify(customer)}],properties:[${JSON.stringify(property)}]};}
+    export async function loadBookingMasterReferenceData(){return {clients:[${JSON.stringify(customer)},${JSON.stringify(secondCustomer)}],properties:[${JSON.stringify(property)},${JSON.stringify(secondProperty)}]};}
     export async function loadBookingContactReferenceData(){return {contacts:[${JSON.stringify(contact)}],contactAssignments:[]};}
     export async function createBookingCustomerWithProperty(input){window.__masterWrites.push(input);throw Error('Unexpected customer write');}
     export async function createBookingProperty(...input){window.__masterWrites.push(input);throw Error('Unexpected property write');}`,
   'live-scheduling-fast': `export function primeLiveSchedulingReferenceCache(){};`,
   'live-operational-capacity': `export async function loadLiveOperationalCapacityState(){return {};}export function liveVanCrew(){return {label:'Synthetic crew'};}`,
   'shared-projects': `export const PROJECTS_CHANGED_EVENT='synthetic-projects-changed';
-    export async function loadSchedulingProjects(){return [${JSON.stringify(project)}];}
+    export async function loadSchedulingProjects(){return [${JSON.stringify(project)},${JSON.stringify({...project,id:'PROJECT-OTHER',projectNumber:'PRJ-OTHER',name:'Another project'})}];}
     export async function loadSharedProjects(){throw Error('Scheduling-only actor must not read full planning');}
     export async function commitSharedProjects(){throw Error('Scheduling-only actor must not write planning');}`,
   'office-booking-authority': `
@@ -40,9 +42,11 @@ const stubs = {
     export function createOfficeLifecycleRequestId(prefix='request'){return prefix+'-'+(++window.__requests);}
     export function officeBookingOutcomeUnknown(error){return error.message==='Synthetic response lost';}
     export async function callOfficeBookingAuthority(action,input){
+      if(action==='list_charge_services')return {success:true,services:[]};
+      if(action==='quote_appointment_charges'){if(window.__pendingQuote)await new Promise(resolve=>{window.__finishQuote=resolve;});return {success:true,quote:{lines:input.lines.map(line=>({...line,quantityMillis:Number(line.quantity)*1000,baseUnitCents:12500,unitCents:12500,totalCents:12500*Number(line.quantity),pendingReason:''})),totalCents:input.lines.reduce((sum,line)=>sum+Number(line.quantity)*12500,0),quoteToken:JSON.stringify(input.lines),knownTotalCents:0,currency:'AWG'}};}
       if(action!=='list_property_locations')throw Error('Unexpected authority operation '+action);
       window.__locationReads.push(input);
-      return {success:true,property:${JSON.stringify(property)},dwellings:[],areas:[],assignments:[]};
+      return {success:true,property:input.propertyId==='PROPERTY-OTHER'?${JSON.stringify(secondProperty)}:${JSON.stringify(property)},dwellings:[],areas:[],assignments:[]};
     }
     export async function updateOfficeProperty(input){window.__masterWrites.push(input);throw Error('Unexpected property edit');}
     export async function saveOfficeContactAssignment(input){window.__masterWrites.push(input);throw Error('Unexpected contact save');}
@@ -232,6 +236,29 @@ async function main(){
    await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Confirm appointment'&&!button.disabled));await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();
    const decision=page.getByRole('dialog',{name:'La reserva supera el presupuesto estimado'});await decision.waitFor();await page.keyboard.press('Escape');await decision.waitFor({state:'hidden'});
    assert.equal(await page.locator('[data-booking-modal]').count(),1,'Budget Escape preserves booking');assert.equal(await page.getByLabel(/Planned Project slots/).inputValue(),'2');await assertNoWrites(page);
+  });
+  await run('financial-draft-identity-and-quote-guard',{width:1440,height:1000},async page=>{
+   await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();
+   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');
+   await page.getByRole('button',{name:'Datos de la cita',exact:true}).click();await page.getByLabel('Search customer').fill('Another');await page.getByRole('button',{name:/Another customer.*SELECT/i}).click();
+   await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),false,'Customer change clears advance');
+   await page.getByRole('button',{name:/^Project Find a Project/i}).click();await page.getByRole('button',{name:'Datos de la cita',exact:true}).click();await page.getByRole('button',{name:/PRJ-TEST.*Synthetic project/}).click();
+   await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('200');
+   await page.getByRole('button',{name:'Datos de la cita',exact:true}).click();await page.getByRole('button',{name:/PRJ-OTHER.*Another project/}).click();
+   await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),false,'Same-property Project change clears advance');
+   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('300');
+   await page.getByRole('button',{name:/^Regular Booking/}).click();await page.getByRole('button',{name:'Datos de la cita',exact:true}).click();await page.getByRole('button',{name:/^Standard service/}).click();
+   await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),false,'Source change clears advance');
+   await assertNoWrites(page);
+  });
+  await run('financial-quote-in-flight',{width:1440,height:1000},async page=>{
+   await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();
+   await page.getByText('Afl. 375.00',{exact:true}).waitFor();
+   await page.screenshot({path:path.join(artifacts,'booking-charges-parent.png'),fullPage:true});
+   await page.evaluate(()=>{window.__pendingQuote=true;});await page.getByLabel('BTU 1',{exact:true}).fill('18000');
+   await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();assert.equal(await page.evaluate(()=>window.__commits.length),0,'Pending quote cannot confirm');
+   await page.getByText('Revisa los importes y espera la tarifa actualizada antes de confirmar.',{exact:true}).waitFor();
+   await assertNoWrites(page);
   });
   await run('support-preserves-existing-flow',{width:1366,height:768},async page=>{
    await ready(page);await page.getByRole('button',{name:/Send van support/}).click();const dialog=page.getByRole('dialog',{name:'Send van support'});await dialog.waitFor();await page.getByLabel('Support duration').selectOption('3');await page.getByRole('button',{name:/Synthetic receiving customer/}).click();await page.getByLabel('Reason').selectOption('Other');await page.getByLabel('Describe support *').fill('Synthetic support note');

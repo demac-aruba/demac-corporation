@@ -433,6 +433,7 @@ function buildOfficeProperty({ id, clientId, input, identity, now }) {
 }
 
 function apiError(error) {
+  if (error?.status >= 400 && error?.status < 500) return { status: error.status, body: { success: false, error: { code: error.code, message: error.message, details: {} } } };
   if (error instanceof BookingAuthorityError) {
     return {
       status: 409,
@@ -1276,7 +1277,7 @@ function createOfficeBookingApi({
         idempotencyKey: `office:${identity.uid}:${requestId}:${temporaryHold ? "hold" : "create"}:${offerId}:${optionId}`,
         actor,
         createMode: temporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED,
-        context: { channel: "office", projectActorId: identity.uid, officeRequestId: requestId, visitReferences: data.visitReferences, ...bookingIntent },
+        context: { channel: "office", projectActorId: identity.uid, officeRequestId: requestId, visitReferences: data.visitReferences, charges: data.charges, ...bookingIntent },
       });
       if (!result?.success || !cleanText(result.appointmentId, 180)) {
         throw new BookingAuthorityError(

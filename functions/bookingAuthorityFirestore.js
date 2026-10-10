@@ -1,3 +1,4 @@
+const { chargeFingerprint, prepareInitialCharges, authorizeInitialCharges } = require('./appointmentCharges');
 const { prepareVisitReferencesCommit, referenceFingerprint } = require('./bookingVisitReferences');
 const crypto = require("node:crypto");
 const { resolvePropertyLocation } = require('./propertyLocations');
@@ -350,6 +351,7 @@ function createBookingAuthority({
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
     const idempotencyRef = db.collection(collections.idempotency).doc(identity.idempotencyKeyHash);
 
+    await authorizeInitialCharges({ db, get: ref => ref.get(), input: context.charges, actor });
     const existingIdempotencySnapshot = await idempotencyRef.get();
     if (existingIdempotencySnapshot.exists) {
       const record = existingIdempotencySnapshot.data();
@@ -358,7 +360,8 @@ function createBookingAuthority({
         && record.optionId === cleanText(optionId, 180)
         && record.appointmentId === identity.appointmentId
         && normalizeCreateMode(record.createMode) === normalizedCreateMode
-        && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences);
+        && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences)
+        && (record.chargesFingerprint || chargeFingerprint(null)) === chargeFingerprint(context.charges);
       if (!sameRequest) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -419,6 +422,7 @@ function createBookingAuthority({
         transaction.get(offerRef),
       ]);
 
+      await authorizeInitialCharges({ db, get: ref => transaction.get(ref), input: context.charges, actor });
       if (idempotencySnapshot.exists) {
         const record = idempotencySnapshot.data();
         const sameRequest = record.offerId === canonicalOfferId
@@ -426,7 +430,8 @@ function createBookingAuthority({
           && record.optionId === cleanText(optionId, 180)
           && record.appointmentId === identity.appointmentId
           && normalizeCreateMode(record.createMode) === normalizedCreateMode
-          && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences);
+          && (record.referencesFingerprint || referenceFingerprint(null)) === referenceFingerprint(context.visitReferences)
+        && (record.chargesFingerprint || chargeFingerprint(null)) === chargeFingerprint(context.charges);
         if (!sameRequest) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -459,7 +464,8 @@ function createBookingAuthority({
       if (appointmentSnapshot.exists) {
         const existing = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
         if (existing.projectId && availabilityProvider.authorizeProjectReplay) await availabilityProvider.authorizeProjectReplay({ appointment: existing, actor, transaction });
-        if (existing.idempotencyKeyHash !== identity.idempotencyKeyHash) {
+        if (existing.idempotencyKeyHash !== identity.idempotencyKeyHash
+          || (existing.initialChargesFingerprint || chargeFingerprint(null)) !== chargeFingerprint(context.charges)) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
             "The canonical appointment id already exists with a different idempotency identity.",
@@ -586,7 +592,10 @@ function createBookingAuthority({
       const workOrderIds = workOrders.map((item) => item.id);
       const actorInfo = actorFields(actor);
       const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: context.visitReferences, actor, appointmentId: identity.appointmentId, now });
+      const chargesCommit = await prepareInitialCharges({ db, transaction, input: context.charges, actor, appointmentId: identity.appointmentId,
+        appointment: { ...appointment, status: normalizedCreateMode, workOrderIds }, now });
       const appointmentRecord = compactObject({
+        ...(chargesCommit ? { jobCharges: chargesCommit.value, initialChargesFingerprint: chargeFingerprint(context.charges) } : {}),
         ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
         ...appointment,
         ...(projectCommit?.fields || {}),
@@ -614,6 +623,7 @@ function createBookingAuthority({
 
       transaction.set(appointmentRef, appointmentRecord);
       if (referencesCommit) referencesCommit.write();
+      if (chargesCommit) chargesCommit.write();
       if (projectCommit) projectCommit.write({ workOrders, createMode: normalizedCreateMode });
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
@@ -664,6 +674,7 @@ function createBookingAuthority({
         createMode: normalizedCreateMode,
         operation: temporaryHold ? "createTemporaryHold" : "createAppointment",
         referencesFingerprint: referenceFingerprint(context.visitReferences),
+        chargesFingerprint: chargeFingerprint(context.charges),
         ...actorInfo,
         createdAtIso: now.toISOString(),
         createdAt: serverTimestamp(),

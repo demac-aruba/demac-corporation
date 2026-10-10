@@ -3,6 +3,8 @@ const { initialVisitDocumentId } = require('./fieldOperationsAuthorityWorkVisit'
 const { fail } = require('./projectRecords');
 
 function commercialEvidence(record) {
+  if (record?.jobCharges && (record.jobCharges.final || Number(record.jobCharges.paymentCount || 0) > 0
+    || Number(record.jobCharges.receivedCents || 0) !== 0)) return true;
   if (['invoiceId', 'paymentId', 'billingCandidateId', 'fieldBillingCandidateId', 'payrollEntryId']
     .some(key => String(record?.[key] || '').trim())) return true;
   if (['invoiceIds', 'paymentIds', 'billingCandidateIds', 'payrollEntryIds']

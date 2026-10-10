@@ -1,6 +1,10 @@
 'use client';
 
 import { VisitReferenceEditor } from './booking-visit-references';
+import { BookingChargesEditor } from './appointment-charges';
+import { ChargeIcon } from './appointment-charge-icons';
+import { bookingChargeDraft, type ChargeDraft, type ChargeLineInput } from '../../lib/appointment-charges';
+import chargeStyles from './appointment-charges.module.css';
 import { emptyVisitReferences, hasVisitReferences, type VisitReferences } from '../../lib/booking-visit-references';
 
 import { ProjectLaborBudgetWarning } from '@/components/projects/project-labor-budget-status';
@@ -375,6 +379,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const locationReady = locationData?.property.id === propertyId && (!locationData.property.hasIndependentDwellings || locationData.dwellings.some((item) => item.id === dwellingId));
   const [recipientSelections, setRecipientSelections] = useState<AppointmentRecipientSelection[]>([]);
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
+  const [chargeTab, setChargeTab] = useState(false);
+  const [chargeDraft, setChargeDraft] = useState<ChargeDraft | null>(null);
+  useEffect(() => { setChargeDraft(null); }, [customerId, propertyId, projectId, projectPhaseId, appointmentSource]);
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
   const technicianInstructionsTouchedRef = useRef(false);
@@ -1369,6 +1376,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   } : undefined;
 
   const confirmBooking = async (acknowledgedBudget?: string, requestCapacityOvertime = false) => {
+    if (chargeDraft && !chargesInput?.quoteToken) { setAuthorityError('Revisa los importes y espera la tarifa actualizada antes de confirmar.'); setChargeTab(true); return; }
     if (requestCapacityOvertime && !activeCapacityOvertime) return;
     const useCapacityOvertime = Boolean(activeCapacityOvertime && (requestCapacityOvertime || !selectedValidatedOption));
     const projectBookingRequested = projectSourceSelected;
@@ -1399,6 +1407,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requiredVanId: requestTarget.vanId, customerFacingDescription: authorizedDescription.trim(),
         technicianInstructions: authorizedTechnicianInstructions.trim(), recipientSelections,
         ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
+        ...(chargesInput ? { charges: chargesInput } : {}),
       };
       const signature = JSON.stringify({ mode: useCapacityOvertime ? 'capacity_overtime' : mode, data });
       if (specialRequestRef.current.signature !== signature) specialRequestRef.current = {
@@ -1471,6 +1480,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     try {
       const result = await confirmOfficeAppointment({
         ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
+        ...(chargesInput ? { charges: chargesInput } : {}),
         requestId: `schedule-create:${offerId}:${offerVersion}:${option.id}`,
         offerId,
         offerVersion,
@@ -1514,6 +1524,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const holdBooking = async (acknowledgedBudget?: string) => {
+    if (chargeDraft && !chargesInput?.quoteToken) { setAuthorityError('Revisa la proyección actualizada antes de reservar.'); setChargeTab(true); return; }
+    if (chargesInput?.payment) { setAuthorityError("Confirma la cita para registrar el anticipo, o desmarca el anticipo antes de crear la reserva temporal."); setChargeTab(true); return; }
     const projectBookingRequested = projectSourceSelected;
     if (projectBookingRequested && (!projectAccessRef.current.canSchedule || projectAccessRef.current.uid !== principal.userId
       || (selectedProject && !selectedProject.serverVersion && (isRestDayOvertime || !projectAccessRef.current.canManage)))) {
@@ -1535,6 +1547,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     try {
       const result = await createOfficeTemporaryHold({
         ...(hasVisitReferences(visitReferences) ? { visitReferences } : {}),
+        ...(chargesInput ? { charges: chargesInput } : {}),
         requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
         offerId,
         offerVersion,
@@ -1574,6 +1587,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     }
   };
 
+  const chargeSeeds: ChargeLineInput[] = projectMode
+    ? [{ id: 'project-visit', workLineId: 'project-visit', label: `Visita de proyecto · ${selectedProject?.name || 'Proyecto'}`, quantity: 1 }]
+    : workLines.map(line => ({ id: line.id, workLineId: line.id, presetId: line.presetId,
+      serviceId: presets.find(preset => preset.id === line.presetId)?.serviceId || '',
+      label: presets.find(preset => preset.id === line.presetId)?.label || line.presetId, quantity: line.quantity }));
+  const chargesInput = bookingChargeDraft(chargeSeeds, chargeDraft);
   const busy = loading || masterSaving || saving || holding || referencesUploading;
   const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery));
 
@@ -1633,6 +1652,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           ) : null}
         </div>
 
+        <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita"><button type="button" className={!chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(false)}><ChargeIcon name="calendar"/>Datos de la cita</button><button type="button" className={chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(true)}><ChargeIcon name="receipt"/>Importes y pagos</button></nav>
         <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
 
           {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
@@ -1642,7 +1662,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
 
 
-          <div className={styles.columns}>
+          <div className={styles.columns} style={chargeTab ? { display: 'none' } : undefined}>
           <div className={styles.identityColumn} data-booking-column="identity">
                 {projectMode ? (
                   <div className={styles.projectPicker}>
@@ -1988,6 +2008,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           )}
           </div>
           </div>
+          {chargeTab ? <BookingChargesEditor seeds={chargeSeeds} value={chargeDraft} onChange={setChargeDraft} disabled={busy || Boolean(bookingRecovery)}/> : null}
         </div>
 
         <footer className={styles.footer}>

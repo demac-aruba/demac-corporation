@@ -1,6 +1,10 @@
 'use client';
 
 import { SavedVisitReferences } from './booking-visit-references';
+import { AppointmentChargesWorkspace } from './appointment-charges';
+import { ChargeIcon } from './appointment-charge-icons';
+import { useBookingDialog } from './use-booking-dialog';
+import chargeStyles from './appointment-charges.module.css';
 
 import { useEffect, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
@@ -114,6 +118,8 @@ function Field({ label, value, wide = false }: { label: string; value: React.Rea
 
 export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, onClose, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>('details');
+  const [tab, setTab] = useState<'details' | 'charges' | 'history'>('details');
+  const [chargeBusy, setChargeBusy] = useState(false);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -200,18 +206,30 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
     }
   };
 
-  return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={`Appointment ${appointment.id}`}>
-      <header className={styles.drawerHeader}>
+  const dialogRef = useBookingDialog(onClose, busy || chargeBusy);
+  const chargeSeeds = (appointment.workSummaryLines?.length ? appointment.workSummaryLines : [{ label: workLabel, quantity: appointment.totalQuantity }]).map((line, index) => ({ id: `work-${index + 1}`, label: line.label, quantity: line.quantity || 1, ...(index === 0 && !appointment.workSummaryLines?.length ? { presetId: appointment.workTypeId || appointment.presetId, serviceId: appointment.serviceId } : {}) }));
+
+  return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !chargeBusy) onClose(); }}>
+    <aside className={chargeStyles.modal} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Appointment ${appointment.id}`}>
+      <header className={chargeStyles.modalHeader}>
         <div>
-          <span>{partialOutcome ? 'Partial completion' : temporaryHold ? 'Temporary hold' : 'Live appointment'} · Booking Authority</span>
-          <h2>{appointment.customer}</h2>
+          <span>DEMAC · SCHEDULING</span>
+          <h2>{tab === 'history' ? 'Historial de la cita' : 'Detalle de la cita'}</h2>
           <p>{appointment.propertyAddress || appointment.site} · {appointment.sector}</p>
         </div>
-        <button type="button" disabled={busy} onClick={onClose}>×</button>
+        <button type="button" disabled={busy || chargeBusy} aria-label="Cerrar cita" onClick={onClose}>×</button>
       </header>
 
-      <div className={styles.drawerBody}>
+      <div className={chargeStyles.context}>
+        <div><ChargeIcon name="calendar"/><div><small>FECHA</small><strong>{formatDate(appointment.dateKey)}</strong></div></div>
+        <div><ChargeIcon name="van"/><div><small>VAN</small><strong>{primary?.vanId?.replace('VAN-', 'Van ') || '—'}</strong></div></div>
+        <div><ChargeIcon name="clock"/><div><small>HORARIO</small><strong>{formatTime(primary?.start)}–{formatTime(primaryCapacityEnd)}</strong></div></div>
+        <div><ChargeIcon name="person"/><div><small>CLIENTE</small><strong>{appointment.customer}</strong></div></div>
+      </div>
+      <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita">{([{ id: 'details', label: 'Datos de la cita', icon: 'calendar' }, { id: 'charges', label: 'Importes y pagos', icon: 'receipt' }, { id: 'history', label: 'Historial', icon: 'history' }] as const).map(item => <button key={item.id} type="button" disabled={busy || chargeBusy} className={tab === item.id ? chargeStyles.active : ''} onClick={() => setTab(item.id)}><ChargeIcon name={item.icon}/>{item.label}</button>)}</nav>
+      <div className={chargeStyles.modalBody}>
+        {tab !== 'details' ? <AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged}/> : null}
+        <div className={styles.drawerBody} style={tab === 'details' ? { padding: 0 } : { display: 'none' }}>
         <section className={styles.formSection}>
           <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · Van capacity ${formatTime(primary?.start)}–${formatTime(primaryCapacityEnd)}`}</span></header>
           <div className={styles.formGrid}>
@@ -324,6 +342,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           <footer className={styles.drawerFooter}><div><span>{temporaryHold ? 'Temporary hold' : 'Appointment'}</span><strong>{appointment.customer} · {formatDate(appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : temporaryHold ? 'Cancel Hold & Release Capacity' : 'Cancel Appointment'}</button></div></footer>
         </section> : null}
+        </div>
       </div>
     </aside>
   </div>;
