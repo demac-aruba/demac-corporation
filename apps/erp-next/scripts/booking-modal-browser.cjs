@@ -116,7 +116,13 @@ function Harness(){
 
 async function ready(page){await page.locator('[data-booking-modal]').waitFor();await page.waitForFunction(()=>!document.querySelector('[data-booking-modal] button[aria-label="Close"]')?.disabled);}
 async function toggleDisclosure(page,name,open){const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
-async function source(page,name){await page.getByRole('button',{name:new RegExp('^'+name)}).click();}
+async function source(page,name){
+ await page.getByRole('button',{name:new RegExp('^'+name)}).click();
+ // Mode changes can commit after the click finishes; wait for the operator-visible destination.
+ const dialog=page.getByRole('dialog',{name:name==='Send van support'?'Send van support':'Create appointment',exact:true});
+ await dialog.waitFor();
+ await dialog.getByRole('button',{name:new RegExp('^'+name),pressed:true}).waitFor();
+}
 async function assertSourceBlocked(page,name){
  const button=page.locator('button[aria-label^="'+name+'"]:visible');
  assert.equal(await button.evaluate(node=>node.disabled||Boolean(node.closest('[inert]'))),true,'Pending work blocks '+name+' switching');

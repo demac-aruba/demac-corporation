@@ -36,6 +36,7 @@ implement the reviewed product changes or perform production writes.
 | Required feature-preservation check, passed | Capacity panel moved into footer | The former capacity column contained interactive support spots, support alternatives, assignment windows, overtime consent, recheck and hold guidance, not only a status label. | The original authority subtree remains in an expandable footer panel. Required choices/overtime open automatically. Tests exercise support selection, exact selected option commit, overtime consent and special mode controls. |
 | Required stale-state check, passed | Compact status | Prior approved capacity may remain visible while metadata invalidates its booking offer. Green based only on that retained capacity would imply premature acceptance. | Status uses the current validated offer and remains neutral for incomplete/checking/stale/special-validation states, red on authoritative conflict, amber for overtime and green only for the current complete allocation. Regression tests cover ready → metadata change → pending → conflict → successful recheck. |
 | Transitive browser interaction adaptation, reviewed; CI rerun required | Project budget, historical and planned-overtime browser scripts | Existing tests waited for detailed authority approval/conflict text that now lives inside the approved collapsed footer disclosure. | Add only waits for the appropriate status and operator-equivalent summary clicks before the original text assertions. Historical/overtime tests close the panel afterward before editing fields. All original denial, no-write, payload, retry, persisted-data, Chromium/WebKit and external-request assertions remain unchanged. |
+| Transitive recovery interaction and test synchronization, reviewed; CI rerun required | Coworker-support and modal browser scripts | Coworker support's old lost-response test retried the ordinary Send button, which is intentionally replaced by exact-request recovery. A new no-Project modal case could click the old Regular control before the support activation effect completed. | Retry through `Recuperar apoyo original` while retaining all original equality/idempotency/data assertions and adding blocked-switch/close/Escape checks. The modal source helper waits for the requested visible dialog and its pressed source control after each click; no sleep, force click, scenario skip or product change. |
 
 No unresolved product defect was found. No existing authority control, field, permission
 predicate or command was removed. Regular ↔ Project continues its established source-change
@@ -84,6 +85,12 @@ Reviewer-run evidence:
   `114318311314` passed its first ten Chromium scenarios, then failed `availability-conflict`
   with no browser errors because the unchanged alert assertion correctly found its element
   hidden inside closed details. The visible red status confirmed the expected conflict.
+- Builder-reported CI on `405253c` exposed the old coworker Send-button retry and the new
+  source-helper race above, with no browser application error. The corrected tests retain
+  all scenarios/engines and wait for actual visible UI state. Both scripts pass syntax and
+  whitespace checks; coworker integration must rerun with its real authority fixture in CI.
+  The reviewer reran the complete modal browser suite after the synchronization correction:
+  **27/27 PASS**, exit 0, including the denied-Project case and every original regression.
 
 Builder-reported transitive gates (separate from reviewer-run evidence): ERP typecheck,
 production build including all existing prebuild tests, frontend dispatch/lifecycle/booking
