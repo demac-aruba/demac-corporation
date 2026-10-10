@@ -277,6 +277,10 @@ function orderAssignedToIdentity(identity, order, dateKey, context) {
 }
 
 function plannedWorkItems(order, appointment) {
+  // Workload helpers share the visit, but the primary owns the customer scope.
+  // Do not fall back to all Appointment services on an intentionally empty helper.
+  if (order?.workloadSupport === true && order.supportNonBillable === true
+      && order.appointmentAssignmentRole === 'support') return [];
   const orderItems = Array.isArray(order?.appointmentWorkItems) ? order.appointmentWorkItems : [];
   if (orderItems.length) return orderItems.map((item, index) => ({
     id: text(item.id || item.presetId || `planned-${index + 1}`, 180),

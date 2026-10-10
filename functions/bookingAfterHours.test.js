@@ -539,7 +539,7 @@ test('afternoon overflow preserves three-at-14:30 and mixed workloads; ordinary 
     await assert.rejects(() => authority.prepareCapacityOvertime(restInput(extra)));
   }
   await assert.rejects(() => authority.prepareCapacityOvertime(restInput({ quantity: 11 })), /finish on the selected date/);
-  await assert.rejects(() => restFixture().authority.prepareCapacityOvertime(restInput()), /remaining ordinary afternoon slots/);
+  await assert.rejects(() => restFixture().authority.prepareCapacityOvertime(restInput()), /remaining ordinary slots/);
 });
 
 test('capacity overflow consent is mandatory; changes, absences and actual reservations still block', async () => {

@@ -108,6 +108,7 @@ export type LiveBookingMode = 'standard' | 'after_hours' | 'rest_day_overtime';
 
 type Props = {
   target: LiveBookingTarget;
+  availableSlotStarts?: string[];
   mode?: LiveBookingMode;
   onClose: () => void;
   onCreated: (booking: LiveCreatedBooking) => void;
@@ -225,7 +226,7 @@ function formatDate(value: string) {
 function durationLabel(minutes: number) {
   const hours = Math.max(0, minutes) / 60;
   const value = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, '');
-  return `${value} hour${hours === 1 ? '' : 's'}`;
+  return `${value} spot${hours === 1 ? '' : 's'}`;
 }
 
 function customerLabel(customer: BookingCustomer) {
@@ -351,7 +352,7 @@ function sameStringArray(left: string[], right: string[]) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
-export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict, onSendSupport, support }: Props) {
+export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode = 'standard', onClose, onCreated, onAvailabilityConflict, onSendSupport, support }: Props) {
   const [supportActive, setSupportActive] = useState(Boolean(support));
   useEffect(() => { if (support?.target) setSupportActive(true); }, [support?.target]);
   const { principal } = useAuth();
@@ -438,6 +439,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [validated, setValidated] = useState<ValidationState | null>(null);
   const [capacityOvertime, setCapacityOvertime] = useState<{ signature: string; proposal: RestDayOvertimeProposal } | null>(null);
   const [supportSlotCandidates, setSupportSlotCandidates] = useState<OfficeSupportSlotCandidate[]>([]);
+  const [capacitySnapshot, setCapacitySnapshot] = useState<{ signature: string; requiredSpots: number; availableSpots: number; primarySpots: number; workloadSupport: boolean } | null>(null);
   const [supportMinSlots, setSupportMinSlots] = useState(0);
   const [supportMaxSlots, setSupportMaxSlots] = useState(0);
   const [selectedSupportSlotIds, setSelectedSupportSlotIds] = useState<string[]>([]);
@@ -836,6 +838,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return [...grouped.values()].sort((left, right) => left.vanName.localeCompare(right.vanName));
   }, [selectedSupportSlotIds, supportSlotCandidates]);
   const capacitySignature = [appointmentSource, customerId, propertyId, dwellingId, requesterId, accessContactId, Number(locationReady), workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
+  const currentCapacity = capacitySnapshot?.signature === capacitySignature ? capacitySnapshot : null;
+  const requiredSpots = currentCapacity?.requiredSpots ?? Math.ceil(estimatedMinutes / 60);
+  const availableSpots = currentCapacity?.availableSpots
+    ?? availableSlotStarts?.filter(start => start >= requestTarget.start).length;
+  const workloadOverflow = !projectMode && !isSpecialBooking && currentCapacity !== null
+    && currentCapacity.requiredSpots > currentCapacity.primarySpots;
   const offerSignature = [capacitySignature, `support:${supportSelectionSignature}`, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim(),
     projectMode && selectedProject?.serverVersion ? `${selectedProject.id}:${selectedProjectPhase?.id || 'GENERAL-PROJECT-WORK'}:${selectedProject.serverVersion}` : '',
   ].join('|');
@@ -850,6 +858,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
+  const allocatedPrimarySpots = selectedValidatedOption ? optionPrimaryAssignment(selectedValidatedOption)?.slots : undefined;
+  const remainingSpots = availableSpots === undefined ? null : Math.max(0, availableSpots - (allocatedPrimarySpots ?? requiredSpots));
+  const workloadLabel = estimatedMinutes ? `${durationLabel(estimatedMinutes)}${remainingSpots ? ` · ${remainingSpots} remaining` : ''}` : 'Add work';
   const displayAllocationOption = activeValidation
     ? selectedValidatedOption
     : supportSlotCandidates.length ? null : selectedCapacityOption;
@@ -919,7 +930,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const toggleSupportSlot = (slotId: string) => {
     const selected = selectedSupportSlotIds.includes(slotId);
-    if (selected && selectedSupportSlotIds.length <= supportMinSlots) return;
     if (!selected && supportMaxSlots > 0 && selectedSupportSlotIds.length >= supportMaxSlots) return;
     cancelValidationRequest();
     validationChangeKindRef.current = 'capacity';
@@ -1229,6 +1239,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         if (overtimeProposal) setCapacityOvertime({ signature: validationOfferSignature, proposal: overtimeProposal });
       }
 
+      const summary = result.metadata?.capacitySummary as Record<string, unknown> | undefined;
+      if (summary && ['requiredSpots', 'availableSpots', 'primarySpots'].every(key => Number.isFinite(summary[key]))) {
+        setCapacitySnapshot({ signature: validationCapacitySignature, requiredSpots: Number(summary.requiredSpots),
+          availableSpots: Number(summary.availableSpots), primarySpots: Number(summary.primarySpots),
+          workloadSupport: result.metadata?.workloadSupport === true });
+      }
       const candidates = supportCandidatesFromMetadata(result.metadata);
       const candidateIds = new Set(candidates.map((candidate) => candidate.id));
       const nextMinSlots = metadataNumber(result.metadata, 'supportMinSlots');
@@ -1607,7 +1623,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const busy = loading || masterSaving || saving || holding || referencesUploading;
   const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery), !supportActive);
   const capacityDetailsRef = useRef<HTMLDetailsElement>(null);
-  const capacityActionRequired = Boolean(activeCapacityOvertime || supportSlotCandidates.length || (capacityValidation && capacityValidation.options.length > 1));
+  const capacityActionRequired = Boolean(workloadOverflow || activeCapacityOvertime || supportSlotCandidates.length || (capacityValidation && capacityValidation.options.length > 1));
   useEffect(() => {
     if (capacityActionRequired && capacityDetailsRef.current) capacityDetailsRef.current.open = true;
   }, [capacityActionRequired]);
@@ -1854,7 +1870,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                           <span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: '12px' }}>{durationLabel(lineMinutes)} scheduled{other ? ' · manual' : ` · ${durationLabel(preset.durationMinutesPerUnit)} each`}</span>
                         </div>
                         {other ? (
-                          <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual hours</span><input type="number" min="1" max="12" step="0.5" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 1))} /></label>
+                          <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual spots</span><input type="number" min="1" max="12" step="0.5" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 1))} /></label>
                         ) : (
                           <div className={styles.stepper}><button type="button" disabled={line.quantity <= 1} onClick={() => changeQuantity(line.id, -1)}>−</button><b>{line.quantity}</b><button type="button" disabled={line.quantity >= 20} onClick={() => changeQuantity(line.id, 1)}>＋</button></div>
                         )}
@@ -1874,8 +1890,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <header><div><span>5</span><strong>Work details & visit</strong><small>Review the workload and information for the customer and technicians.</small></div></header>
             <div className={styles.sectionBody}>
               <div className={styles.quantityRow}>
-                <div><span>{projectMode ? 'Project task' : 'Work lines'}</span><strong>{projectMode ? selectedProjectPhase?.name || selectedProject?.type || '—' : `${workLines.length} line${workLines.length === 1 ? '' : 's'} · ${totalQuantity} item${totalQuantity === 1 ? '' : 's'}`}</strong></div>
-                <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{isRestDayOvertime ? `${Math.ceil(estimatedMinutes / 60)} overtime slots` : projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : '—'}</strong></div>
+                {projectMode ? <div><span>Project task</span><strong>{selectedProjectPhase?.name || selectedProject?.type || '—'}</strong></div> : null}
+                <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{isRestDayOvertime ? `${Math.ceil(estimatedMinutes / 60)} overtime slots` : projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : workloadLabel}</strong></div>
                 <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : projectMode ? bookingBudgetPlan && selectedProject ? projectSlotLabel(bookingBudgetPlan.scheduledHours, selectedProject.slotDurationMinutes) : '—' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
@@ -1927,10 +1943,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <section className={styles.authoritySection}>
             <div className={styles.authorityHeading}><div><span>5</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
+            {workloadOverflow ? <div className={styles.errorBox} role="alert">
+              <strong>La carga supera los spots disponibles de {requestTarget.vanName}.</strong>
+              <p>{durationLabel(estimatedMinutes)} de trabajo · {currentCapacity?.primarySpots} spots utilizables desde el inicio seleccionado. Selecciona quién puede apoyar y en qué horario, o acepta continuar sin apoyo con posible overtime cuando esté disponible.</p>
+              {!supportSlotCandidates.length && !activeCapacityOvertime ? <p>No hay una asignación válida para esta carga. Selecciona otra van, hora o fecha.</p> : null}
+            </div> : null}
             {activeCapacityOvertime ? <div className={styles.authorityIdle} role="status" style={{ margin: 10, border: '1px solid var(--warning)', borderRadius: 10 }}>
               <strong style={{ display: 'block', color: 'var(--warning)' }}>Posible overtime · {activeCapacityOvertime.vanName}</strong>
-              <p>Este trabajo requiere {activeCapacityOvertime.requiredSlots} cupos y quedan {activeCapacityOvertime.ordinarySlots} cupos normales. Puedes reservar toda la carga en esta van, con fin estimado a las {formatTime(activeCapacityOvertime.estimatedEnd)}, aceptando posible overtime.</p>
-              <button type="button" className={styles.confirmButton} disabled={busy || checking} onClick={() => void confirmBooking(undefined, true)}>Confirmar con posible overtime</button>
+              <p>Este trabajo requiere {activeCapacityOvertime.requiredSlots} cupos y quedan {activeCapacityOvertime.ordinarySlots} cupos normales. Puedes reservar toda la carga en esta van, con fin estimado a las {formatTime(activeCapacityOvertime.estimatedEnd)}, aceptando continuar sin apoyo y posible overtime si el trabajo no termina antes.</p>
+              <button type="button" className={styles.confirmButton} disabled={busy || checking} onClick={() => void confirmBooking(undefined, true)}>Continuar sin apoyo · posible overtime</button>
             </div> : null}
 
             {supportSlotCandidates.length ? (
@@ -1942,7 +1963,6 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 <div className={styles.choiceGrid}>
                   {supportSlotCandidates.map((candidate) => {
                     const selected = selectedSupportSlotIds.includes(candidate.id);
-                    const lockedAtMinimum = selected && selectedSupportSlotIds.length <= supportMinSlots;
                     const lockedAtMaximum = !selected && supportMaxSlots > 0 && selectedSupportSlotIds.length >= supportMaxSlots;
                     return (
                       <button
@@ -1950,7 +1970,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         key={candidate.id}
                         className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`}
                         aria-pressed={selected}
-                        disabled={busy || checking || lockedAtMinimum || lockedAtMaximum}
+                        disabled={busy || checking || lockedAtMaximum}
                         onClick={() => toggleSupportSlot(candidate.id)}
                       >
                         <strong>{candidate.vanName || candidate.vanId} · support</strong>
@@ -1962,9 +1982,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 </div>
                 <div className={styles.authorityIdle} style={{ marginTop: 8 }}>
                   <strong>Allocation summary</strong>
-                  <span style={{ display: 'block', marginTop: 4 }}>{requestTarget.vanName} · Primary / Responsible — {Math.max(0, totalQuantity - selectedSupportSlotIds.length)} unit{Math.max(0, totalQuantity - selectedSupportSlotIds.length) === 1 ? '' : 's'}</span>
-                  {selectedSupportByVan.map((item) => <span key={item.vanId} style={{ display: 'block', marginTop: 2 }}>{item.vanName} · Support — {item.count} unit{item.count === 1 ? '' : 's'}</span>)}
-                  <span style={{ display: 'block', marginTop: 4, fontWeight: 850 }}>Total scheduled — {totalQuantity} units</span>
+                  <span style={{ display: 'block', marginTop: 4 }}>{requestTarget.vanName} · Primary / Responsible — {currentCapacity?.workloadSupport ? durationLabel(Math.max(0, estimatedMinutes - selectedSupportSlotIds.length * 60)) : `${Math.max(0, totalQuantity - selectedSupportSlotIds.length)} units`}</span>
+                  {selectedSupportByVan.map((item) => <span key={item.vanId} style={{ display: 'block', marginTop: 2 }}>{item.vanName} · Support — {item.count} spot{item.count === 1 ? '' : 's'}</span>)}
+                  <span style={{ display: 'block', marginTop: 4, fontWeight: 850 }}>Total scheduled — {durationLabel(estimatedMinutes)}</span>
                   <small style={{ display: 'block', marginTop: 5 }}>Consecutive selected spots on the same Van become one continuous support visit in the daily Van schedule. Non-consecutive spots remain separate visits in chronological order.</small>
                 </div>
               </div>
@@ -2000,7 +2020,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                               return <span key={`${support.vanId}-${window.start}-${window.capacityEnd}`}>
                                 {supportWindows.length > 1 ? `${support.vanName || support.vanId} · ` : ''}Van capacity {formatTime(window.start)}{window.capacityEnd ? `–${formatTime(window.capacityEnd)}` : ''}
                                 <small>
-                                  {support.quantity} support unit{support.quantity === 1 ? '' : 's'}
+                                  {support.slots} support spot{support.slots === 1 ? '' : 's'}
                                   {!projectMode && window.workEnd && window.capacityEnd !== window.workEnd ? ` · Service-work estimate ends ${formatTime(window.workEnd)}` : ''}
                                 </small>
                               </span>;
@@ -2029,7 +2049,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
                         <strong>{assignment.vanName || assignment.vanId}</strong>
                         <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {projectMode && selectedProject ? projectSlotLabel((assignment.durationMinutes || assignment.slots * 60) / 60, selectedProject.slotDurationMinutes) : durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
-                        {support ? <small>{assignment.quantity} support unit{assignment.quantity === 1 ? '' : 's'}</small> : null}
+                        {support ? <small>{assignment.slots} support spot{assignment.slots === 1 ? '' : 's'}</small> : null}
                         {!projectMode && workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
                       </article>;
                     })}

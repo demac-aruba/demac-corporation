@@ -1,9 +1,9 @@
-// Explicit office-only booking in weekly rest or beyond an ordinary afternoon tail.
+// Explicit office-only booking in weekly rest or beyond the ordinary capacity tail.
 // This never adds ordinary availability or changes attendance/payroll truth.
 const { BOOKING_ERROR_CODES, BookingAuthorityError } = require('./bookingAuthorityCore');
-const { REGULAR_SLOTS, hashId, isHalfDay, resolveCrewMembership, arubaDateParts, normalizeTime } = require('./bookingSchedulingPrimitives');
-const { resolveWorkScope } = require('./bookingAuthoritySchedulingEngine');
-const { workOrderCapacityInterval } = require('./bookingCapacityAvailability');
+const { REGULAR_SLOTS, bookingSlots, hashId, isHalfDay, resolveCrewMembership, arubaDateParts, normalizeTime } = require('./bookingSchedulingPrimitives');
+const { resolveWorkScope, allocationPlanForScope } = require('./bookingAuthoritySchedulingEngine');
+const { workOrderCapacityInterval, assignmentCapacityInterval } = require('./bookingCapacityAvailability');
 
 const KIND = 'weekly_rest_overtime';
 const minutes = (time) => /^\d{2}:\d{2}$/.test(time || '') ? Number(time.slice(0, 2)) * 60 + Number(time.slice(3)) : NaN;
@@ -23,21 +23,34 @@ function plannedOvertimePlan({ data, van, crew, date, time, workLines, now, acto
   const regularStart = minutes(schedule?.workdayStart || '08:00');
   const regularEnd = minutes(schedule ? schedule.workdayEnd || '13:00' : '16:30');
   const start = minutes(time);
-  if (!Number.isFinite(regularStart) || !Number.isFinite(regularEnd) || regularEnd <= regularStart || !REGULAR_SLOTS.includes(time)
+  if (!Number.isFinite(regularStart) || !Number.isFinite(regularEnd) || regularEnd <= regularStart || !(capacityOvertime ? [...REGULAR_SLOTS, ...bookingSlots(Boolean(schedule))] : REGULAR_SLOTS).includes(time)
       || (!capacityOvertime && start >= regularStart && start < regularEnd)) fail('overtime-not-weekly-rest', 'Select a blocked weekly rest slot.');
   const scope = resolveWorkScope({ workLines }, data);
   const slots = Math.ceil(scope.totalDurationMinutes / 60);
-  const end = start + scope.totalDurationMinutes;
-  const capacityEnd = start + slots * 60;
-  const ordinaryTail = REGULAR_SLOTS.filter(slot => minutes(slot) >= start && minutes(slot) >= regularStart && minutes(slot) + 60 <= regularEnd);
-  if (capacityOvertime && (start < 13 * 60 || ordinaryTail[0] !== time
-      || ordinaryTail.some((slot, index) => minutes(slot) !== start + index * 60)
-      || slots <= ordinaryTail.length)) {
-    fail('overtime-not-afternoon-overflow', 'Possible overtime requires work exceeding the remaining ordinary afternoon slots.');
+  const ordinaryPlan = allocationPlanForScope(scope, 1,
+    data.businessSettings.find(item => item.id === 'company-operational-rules'));
+  const fullDayFits = !schedule && ordinaryPlan.length === 1 && ordinaryPlan[0].fullDay
+    && ordinaryPlan[0].fixedTime === time
+    && Boolean(assignmentCapacityInterval({ time, allocation: ordinaryPlan[0], halfDay: false }));
+
+  const ordinaryAnchors = bookingSlots(Boolean(schedule));
+  const ordinaryTail = ordinaryAnchors.filter(slot => minutes(slot) >= start && minutes(slot) >= regularStart && minutes(slot) + 60 <= regularEnd);
+  if (capacityOvertime && (fullDayFits || ordinaryTail[0] !== time || slots <= ordinaryTail.length)) {
+    fail('overtime-not-capacity-overflow', 'Possible overtime requires work exceeding the remaining ordinary slots.');
   }
+  // An ordinary morning allocation owns the canonical slots across lunch. Extra
+  // capacity starts only after that dated Van's final ordinary spot.
+  const extraStart = Math.max(minutes(ordinaryTail.at(-1)) + 60, 13 * 60 + 30);
+  const slotStarts = capacityOvertime
+    ? [...ordinaryTail, ...Array.from({ length: slots - ordinaryTail.length }, (_, index) =>
+      clock(extraStart + index * 60))]
+    : Array.from({ length: slots }, (_, index) => clock(start + index * 60));
+  const lastStart = minutes(slotStarts.at(-1));
+  const end = lastStart + (scope.totalDurationMinutes - (slots - 1) * 60);
+  const capacityEnd = lastStart + 60;
   if (capacityEnd >= 24 * 60) fail('overtime-crosses-midnight', 'The complete overtime booking must finish on the selected date.');
-  if (start < regularStart && capacityEnd > regularStart) fail('overtime-crosses-regular-shift', 'Overtime during morning rest must finish before the regular shift starts.');
-  if (start < 13 * 60 && capacityEnd > 12 * 60) fail('overtime-protected-lunch', 'The lunch interval remains protected. Select an afternoon start.');
+  if (!capacityOvertime && start < regularStart && capacityEnd > regularStart) fail('overtime-crosses-regular-shift', 'Overtime during morning rest must finish before the regular shift starts.');
+  if (!capacityOvertime && start < 13 * 60 && capacityEnd > 12 * 60) fail('overtime-protected-lunch', 'The lunch interval remains protected. Select an afternoon start.');
   const members = resolveCrewMembership(van, date, data.dailyVanAssignments).technicianIds;
   if (new Set(members).size !== members.length || members.length !== crew.technicianIds.length
       || members.some((id) => !crew.technicianIds.includes(id))) fail('overtime-staff-unavailable', 'Every assigned crew member must be available.');
@@ -54,7 +67,6 @@ function plannedOvertimePlan({ data, van, crew, date, time, workLines, now, acto
     if (!Number.isFinite(otherStart) || !Number.isFinite(otherEnd)) fail('overtime-unresolved-conflict', 'Existing Van or crew work has an unresolved time window.');
     if (start < otherEnd && capacityEnd > otherStart) fail('overtime-interval-conflict', 'The complete overtime interval conflicts with existing Van or staff work.', BOOKING_ERROR_CODES.SLOT_CONFLICT);
   }
-  const slotStarts = Array.from({ length: slots }, (_, index) => clock(start + index * 60));
   const proposal = { kind: capacityOvertime ? 'capacity_overflow_overtime' : KIND, date, vanId: van.id, vanName: van.name || van.id, start: time,
     estimatedEnd: clock(end), capacityEnd: clock(capacityEnd), durationMinutes: scope.totalDurationMinutes,
     requiredSlots: slots, quantity: scope.totalQuantity, regularStart: clock(regularStart), regularEnd: clock(regularEnd), slotStarts,

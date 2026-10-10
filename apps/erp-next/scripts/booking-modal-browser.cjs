@@ -61,6 +61,15 @@ const stubs = {
       if(window.__conflict)return {available:false,options:[],reason:'required-primary-target-unavailable'};
       const minutes=input.workLines.reduce((sum,line)=>sum+(line.manualDurationMinutes||line.quantity*(line.presetId==='deep'?120:60)),0);
       if(window.__overtime)return {available:false,options:[],reason:'ordinary-capacity-exceeded'};
+      if(window.__genericSupport){
+        const candidates=[{id:'SUPPORT-A',vanId:'VAN-A',vanName:'Support Van A',time:'09:30',endTime:'10:30',slots:1,durationMinutes:60},{id:'SUPPORT-B',vanId:'VAN-B',vanName:'Support Van B',time:'10:30',endTime:'11:30',slots:1,durationMinutes:60}];
+        const ids=input.supportSlotSelections,valid=ids.length>=1;
+        return {available:valid,reason:valid?'available':'support-selection-count',offer:valid?{id:'OFFER-GENERIC',version:window.__checks.length}:null,
+          metadata:{capacitySummary:{requiredSpots:Math.ceil(minutes/60),availableSpots:3,primarySpots:3},workloadSupport:true,supportSlotCandidates:candidates,supportMinSlots:1,supportMaxSlots:2,defaultSupportSlotIds:[],selectedSupportSlotIds:ids},
+          options:valid?[{id:'OPTION-'+ids.join('-'),date:input.requestedDate,time:input.requestedTime,endTime:'11:30',workloadSupport:true,assignments:[
+            {role:'primary',vanId:input.requiredVanId,vanName:'Test Van',time:input.requestedTime,endTime:'11:30',durationMinutes:minutes-ids.length*60,slots:Math.ceil(minutes/60)-ids.length,quantity:3},
+            ...candidates.filter(candidate=>ids.includes(candidate.id)).map(candidate=>({...candidate,role:'support',quantity:1}))]}]:[]};
+      }
       if(window.__supportChoices){
         const candidates=[{id:'SUPPORT-A',vanId:'VAN-A',vanName:'Support Van A',time:'08:30',endTime:'09:30',slots:1,durationMinutes:60},{id:'SUPPORT-B',vanId:'VAN-B',vanName:'Support Van B',time:'09:30',endTime:'10:30',slots:1,durationMinutes:60}];
         const ids=input.supportSlotSelections.length?input.supportSlotSelections:['SUPPORT-A'];
@@ -115,7 +124,7 @@ function Harness(){
  // Mirrors the agenda listener's modal guard (also checked against owning source below).
  useEffect(()=>{const listener=event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!document.querySelector('[data-booking-modal]')){window.__agendaEscapes++;setOpen(false);setSupport(false);}};window.addEventListener('keydown',listener);return()=>window.removeEventListener('keydown',listener);},[]);
  const appointments=[{id:'EXISTING-TEST',dateKey:target.dateKey,status:'confirmed',customer:'Synthetic receiving customer',site:'Synthetic site',workLabel:'Existing service',assignments:[{isPrimaryAssignment:true,vanId:'VAN-OTHER',start:'08:30',end:'11:30'}]}];
- return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><button onClick={()=>setOpen(true)}>Synthetic agenda slot</button>{created?<h1>Synthetic booking result</h1>:open?<LiveAppointmentCreateDrawer target={target} mode={window.__mode||'standard'} onClose={()=>{window.__closes++;setOpen(false);}} onCreated={value=>{window.__created=value;setCreated(value);setOpen(false);}} onSendSupport={window.__mode?undefined:()=>setSupport(supportTarget)} support={support?{target:support,appointments,onCreated:()=>setCreated({support:true})}:undefined}/>:null}</div>;
+ return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><button onClick={()=>setOpen(true)}>Synthetic agenda slot</button>{created?<h1>Synthetic booking result</h1>:open?<LiveAppointmentCreateDrawer availableSlotStarts={window.__availableSlotStarts || ['08:30','09:30','10:30','13:30','14:30','15:30']} target={target} mode={window.__mode||'standard'} onClose={()=>{window.__closes++;setOpen(false);}} onCreated={value=>{window.__created=value;setCreated(value);setOpen(false);}} onSendSupport={window.__mode?undefined:()=>setSupport(supportTarget)} support={support?{target:support,appointments,onCreated:()=>setCreated({support:true})}:undefined}/>:null}</div>;
 }createRoot(document.getElementById('app')).render(<Harness/>);`;
 
 async function ready(page){await page.locator('[data-booking-modal]').waitFor();await page.waitForFunction(()=>!document.querySelector('[data-booking-modal] button[aria-label="Close"]')?.disabled);}
@@ -165,7 +174,7 @@ async function setupRegular(page){
 }
 async function geometry(page,width,label){
  await page.locator('[data-booking-column="identity"]').evaluate(node=>node.parentElement.parentElement.scrollTo(0,0));
- assert.match(await page.locator('[data-booking-modal] > footer').innerText(),/Test Van · 8:30 AM · 4 hours/,'Footer retains visible computed workload');
+ assert.match(await page.locator('[data-booking-modal] > footer').innerText(),/Test Van · 8:30 AM · 4 spots/,'Footer retains visible computed workload');
  const layout=await page.evaluate(()=>{
   const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
   const modal=document.querySelector('[data-booking-modal]');
@@ -348,7 +357,7 @@ async function main(){
    assert.equal(await page.getByLabel('Ubicación GPS del trabajo').inputValue(),'12.5, -70.0');
    assert.equal(await page.getByLabel('Access contact · this visit').inputValue(),'contact:CONTACT-TEST');
    assert.equal(await page.getByLabel('Confirmation').first().isChecked(),false);
-   assert.match(await page.locator('[data-booking-column="details"]').innerText(),/2 lines · 3 items/);
+   assert.doesNotMatch(await page.locator('[data-booking-column="details"]').innerText(),/2 lines · 3 items/);
    await source(page,'Send van support');await assertSingleActiveDialog(page);
    assert.equal(await page.getByLabel('Support duration').inputValue(),'3');assert.equal(await page.getByLabel('Describe support *').inputValue(),'Synthetic support note');
    assert.equal(await page.getByRole('button',{name:/Synthetic receiving customer.*SELECTED/}).count(),1);
@@ -380,6 +389,26 @@ async function main(){
   await run('support-project-permission',{width:390,height:844},async page=>{
    await ready(page);assert.equal(await page.getByRole('button',{name:/^Project Find/}).count(),0);await source(page,'Send van support');assert.equal(await page.getByRole('button',{name:/^Project/}).count(),0);await source(page,'Regular Booking');assert.equal(await page.getByRole('button',{name:/^Project Find/}).count(),0);await assertNoWrites(page);
   },{__noProjectAccess:true});
+  await run('spots-live-workload-and-existing-capacity',{width:1366,height:768},async page=>{
+   await ready(page);
+   const details=page.locator('[data-booking-column="details"]');
+   await page.getByRole('button',{name:/^Standard service/}).click();
+   await page.getByText('1 spot · 5 remaining',{exact:true}).waitFor();
+   await page.getByRole('button',{name:/^Deep cleaning/}).click();
+   await page.getByText('3 spots · 3 remaining',{exact:true}).waitFor();
+   await page.getByRole('button',{name:/^Other/}).click();await page.getByLabel('Manual spots').fill('1.5');
+   await page.getByText('4.5 spots · 1 remaining',{exact:true}).waitFor();
+   assert.doesNotMatch(await page.locator('[data-booking-column="work"]').innerText(),/\bhours?\b/i);
+   assert.doesNotMatch(await details.innerText(),/WORK LINES|lines · .*items/i);
+   await page.screenshot({path:path.join(artifacts,'spots-workload.png'),fullPage:true});await assertNoWrites(page);
+  });
+  await run('spots-remaining-uses-real-calendar-snapshot',{width:390,height:844},async page=>{
+   await ready(page);await page.getByRole('button',{name:/^Standard service/}).click();
+   await page.getByText('1 spot · 1 remaining',{exact:true}).waitFor();
+   await page.getByRole('button',{name:/^Deep cleaning/}).click();
+   assert.doesNotMatch(await page.locator('[data-booking-column="details"]').innerText(),/remaining/);
+   await assertNoWrites(page);
+  },{__availableSlotStarts:['08:30','09:30']});
   await run('capacity-footer-pending-ready-conflict',{width:1366,height:768},async page=>{
    await ready(page);const status=page.locator('[data-booking-capacity]');assert.equal(await status.getAttribute('data-tone'),'pending','Incomplete form is never green');
    await setupRegular(page);assert.equal(await status.getAttribute('data-tone'),'success','Only complete current authority result is green');
@@ -402,10 +431,28 @@ async function main(){
    await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
    assert.equal(await page.evaluate(()=>window.__commits[0].optionId),'OPTION-SUPPORT-A-SUPPORT-B');assert.equal(await page.evaluate(()=>window.__supportWrites.length),0,'New-booking support allocation remains distinct from coworker support command');
   },{__supportChoices:true});
+  await run('mixed-overflow-reuses-selection-and-recalculates-primary-remaining',{width:1366,height:768},async page=>{
+   await ready(page);await page.getByLabel('Search customer').fill('Synthetic');await page.getByRole('button',{name:/Synthetic customer.*SELECT/i}).click();
+   await page.getByRole('button',{name:/^Standard service/}).click();await page.getByRole('button',{name:/^Standard service/}).click();await page.getByRole('button',{name:/^Deep cleaning/}).click();
+   const panel=page.locator('[data-booking-capacity]');await panel.getByText(/La carga supera los spots disponibles/).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Confirm appointment',exact:true}).isDisabled(),true,'Overflow requires a deliberate allocation choice');
+   assert.equal(await page.evaluate(()=>window.__checks.at(-1).supportSlotSelections.length),0,'Generic support is never selected silently');
+   await panel.getByRole('button',{name:/Support Van A · support/}).click();
+   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
+   await panel.getByRole('button',{name:/Support Van B · support/}).click();
+   await page.getByText('4 spots · 1 remaining',{exact:true}).waitFor();
+   assert.match(await panel.innerText(),/Primary \/ Responsible — 2 spots/);
+   await panel.getByRole('button',{name:/Support Van A · support/}).click();
+   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
+   await panel.getByRole('button',{name:/Support Van B · support/}).click();
+   await page.waitForFunction(()=>window.__checks.at(-1)?.supportSlotSelections.length===0);
+   assert.equal(await page.getByRole('button',{name:'Confirm appointment',exact:true}).isDisabled(),true,'Removing all helpers invalidates approval');
+   await page.screenshot({path:path.join(artifacts,'spots-overflow-support.png'),fullPage:true});await assertNoWrites(page);
+  },{__genericSupport:true});
   await run('capacity-overtime-control-retained',{width:1366,height:768},async page=>{
    await ready(page);await page.getByLabel('Search customer').fill('Synthetic');await page.getByRole('button',{name:/Synthetic customer.*SELECT/i}).click();await page.getByRole('button',{name:/^Standard service/}).click();
    const panel=page.locator('[data-booking-capacity]');await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.dataset.tone==='warning');assert.equal(await panel.evaluate(node=>node.open),true);
-   await panel.getByRole('button',{name:'Confirmar con posible overtime',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
+   await panel.getByRole('button',{name:'Continuar sin apoyo · posible overtime',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
    const writes=await page.evaluate(()=>window.__specialWrites);assert.equal(writes.length,1);assert.equal(writes[0].kind,'capacity');assert.deepEqual(writes[0].input.overtimeConsent,{accepted:true,confirmationToken:'SYNTHETIC-CONSENT'});assert.equal(await page.evaluate(()=>window.__commits.length+window.__holds.length+window.__supportWrites.length),0);
   },{__overtime:true});
   for(const mode of ['rest_day_overtime','after_hours'])await run('special-mode-'+mode,{width:1366,height:768},async page=>{

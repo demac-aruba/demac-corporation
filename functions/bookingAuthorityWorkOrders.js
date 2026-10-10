@@ -36,9 +36,11 @@ function fallbackWorkItem(option, assignment, request) {
 
 function workItemsForAssignment(option, assignment, request) {
   const optionItems = Array.isArray(option.workItems) ? option.workItems : [];
+  if (option.workloadSupport && assignment.role === "support") return [];
+  if (option.workloadSupport) return optionItems.map(item => ({ ...item }));
   if (!optionItems.length) return [fallbackWorkItem(option, assignment, request)];
 
-  // Mixed appointments are intentionally kept on one van, so every selected
+  // Unmarked mixed appointments retain their single-van projection, so every
   // line belongs to the same Work Order. A single-service job may use support;
   // in that case split only that service quantity according to the assignment.
   if (optionItems.length > 1 || option.assignments.length === 1) {
@@ -187,7 +189,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, act
         createdBy: "booking-authority",
       };
 
-    return {
+    const order = {
       id,
       appointmentId: appointment.appointmentId,
       clientId: customer.id,
@@ -247,6 +249,25 @@ function buildWorkOrders({ appointment, option, request, customer, property, act
       ...initializationSnapshot,
       updatedAt: now.toISOString(),
     };
+    if (option.workloadSupport && !isPrimary) {
+      // Reuse the existing operational-helper projection without copying any
+      // billable service or Field scope into the helper's Work Order.
+      const { supportOrderSnapshot } = require("./bookingAdhocSupport");
+      const snapshot = supportOrderSnapshot({ id, appointment, primaryOrder: {
+        id: `WO-${appointment.appointmentId}-1`, clientId: customer.id, propertyId: property.id,
+        customerFacingDescription: order.customerFacingDescription, address: order.address, zone: order.zone },
+        property, primaryVanId: option.assignments[0].vanId, targetVan: { id: assignment.vanId }, crew: assignment,
+        targetDate: option.date, targetTime: assignment.time || option.time, endTime: appointmentEndTime,
+        requestedSlots: assignment.slots, reason: technicianInstructions || "Apoyo para completar la carga de esta cita.", actor, now });
+      return { ...order, ...snapshot, workloadSupport: true, serviceId: "", appointmentWorkItems: workItems,
+        status: order.status, appointmentCapacityEndTime, ...communicationSnapshot,
+        ...(preserveExistingDomainState ? { createdAt: undefined, createdBy: undefined, createdByName: undefined } : initializationSnapshot) };
+    }
+    if (preserveExistingDomainState && appointment.workloadSupport && !option.workloadSupport) {
+      Object.assign(order, { workloadSupport: false, supportNonBillable: false, supportAssignmentKind: "", supportForWorkOrderId: "",
+        supportPrimaryVanId: "", supportReason: "", customerCommunicationOwner: isPrimary });
+    }
+    return order;
   });
 }
 

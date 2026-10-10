@@ -556,4 +556,5 @@ module.exports = {
   createAdhocSupportAuthority,
   supportCapacityLock,
   supportWorkOrderId,
+  supportOrderSnapshot,
 };

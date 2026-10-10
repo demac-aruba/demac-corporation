@@ -326,3 +326,7 @@ Production activation remains separately owner-approved through the server-side 
 - Existing financial records are not imported or overwritten. Field candidate evidence
   requires explicit fingerprint-bound reconciliation before final confirmation and is not
   automatically summed again. No live migration or new client-write permission is needed.
+
+## Booking Spots and workload support
+
+- `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.
