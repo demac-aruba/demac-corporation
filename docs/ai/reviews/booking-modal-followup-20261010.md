@@ -13,6 +13,9 @@ implement the reviewed product changes or perform production writes.
 ## Scope reviewed
 
 - Base: `1f1bf7783a9bf6706b8008ce0a3fa63a5c065741` (the prior released modal tree).
+- Final integration base: `20a9747eb1a8af3508dd5dce27898c377deaec69` after concurrent
+  pricing/payments PR #563 merged. That approved feature is retained; the follow-up diff
+  is reviewed against this updated main below.
 - User intent: return from Send van support to Regular Booking or Project without Cancel;
   keep Customer/Property/contacts left, work selection central, and work summary,
   descriptions, technician instructions and visit references right. Move capacity feedback
@@ -124,3 +127,49 @@ every future data/concurrency combination is implied. Owner: implementation main
 Human approval boundary: Christian explicitly authorized this follow-up merge/deploy after
 the deep audit succeeds. This review performs and approves no production data test writes,
 migrations, secret/security changes or messaging.
+
+## Concurrent pricing/payments integration
+
+The independent reviewer inspected the resolved combined drawer against updated main
+`20a9747eb1a8af3508dd5dce27898c377deaec69`. `BookingChargesEditor` and its two tabs remain
+inside the booking body; the main identity/work/visit columns stay mounted behind the
+financial tab. Financial draft identity resets, quote-token checks, temporary-hold deposit
+denial, financial acknowledgement contracts and optional monetary payloads on ordinary,
+hold, after-hours and overtime commits are preserved. The price components/styles,
+Appointment Details drawer, financial transports/contracts, backend Functions and deployment
+workflow are byte-identical to updated main. The shared dialog hook defaults to active for
+the incoming details modal, retaining its pending-payment dismissal protection.
+
+Integration finding resolved: financial quote/deposit guards also use `authorityError`.
+Moving those explanations exclusively into a collapsed capacity panel would obscure the
+incoming payment workflow. The Builder preserves an alert in the active financial tab and
+renders it in capacity details when the booking-data tab is active. The original incoming
+quote-in-flight test and new hold-with-deposit test verify the explanations and zero writes.
+
+Final reviewer-run combined verification:
+
+- Real modal suite **31/31 PASS**, exit 0: all 27 follow-up cases, both incoming pricing
+  cases, and two added integration cases. Evidence:
+  `/workspace/scratch/6e6b400440d1/booking-followup-merged-review`.
+- The new cases verify that an estimate/deposit survives a Support detour and is sent with
+  the identical payload on uncertain-booking retry; the financial tab remains blocked during
+  recovery. A deposit cannot create a temporary hold, and its separate financial payload
+  never enters the coworker-support command. Actual-parent mobile financial layout has no
+  horizontal overflow; its screenshot was inspected.
+- Incoming real-component financial flow **PASS at 1440, 1366 and 390 px**, using its real
+  client transport and Office Booking facade over an isolated synthetic database. It verifies
+  BTU splits, quotation, initial advance, final scope changes/add-ons, combined payment
+  methods, response-loss retry, history, unchanged technical status and no external requests.
+  Evidence: `/workspace/scratch/6e6b400440d1/booking-followup-merged-charges-review`.
+- Final script syntax and `git diff --check`: PASS. Builder separately reports combined
+  typecheck and production build with all original prebuild gates PASS.
+
+Independent combined review remains **PASS**, with no unresolved material finding. The
+follow-up introduces no backend/data changes relative to the updated main; inherited pricing
+authority changes retain their separate independent audit. Required CI must run on the
+new two-parent integration commit, and production publication must preserve the updated
+pricing backend/frontend baseline. Prior branch successes do not waive these release gates.
+Builder-verified updated live rollback baseline: `dpl_E8ALuXC2Hv3Zf9yQAoAAc3Qikthd`,
+source `2bd6d261fd1743b87463ac7b46e7fae3245c5c27`, tree
+`d63f4fc3e8a36466d16fbe5f303d8a2f47476624` equal to updated main. Rollback must retain
+that approved pricing release rather than returning to the older pre-pricing modal build.

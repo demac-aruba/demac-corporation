@@ -9,7 +9,8 @@
 - Permit Regular / Project / Support navigation in one modal session before committing; retain drafts when visiting support and returning to the same source.
 - Keep customer/property/recipients left; catalog, quantities/manual duration and Project slot planning center; workload summary, descriptions, instructions, media/GPS right.
 - Compact capacity status immediately left of Cancel, retaining all authoritative explanations, recheck, support allocation choices, overtime consent and hold guidance in accessible details.
-- No backend, rules, schema, migrations, pricing/payment work, live test bookings or customer messages.
+- Follow-up diff changes no backend, rules, schema, migrations or financial contracts. No live test bookings or customer messages.
+- Integrate concurrent main 20a9747eb1a8af3508dd5dce27898c377deaec69 (pricing/payments PR #563) without removing its opt-in editor, quote guards, initial deposit rules, identity resets, transport acknowledgment or exact recovery payload. Retain visible finance guard explanations in the payments tab.
 
 ## Governance
 - Booking Authority remains sole owner of capacity, Appointment/Work Order writes, support locks, transaction revalidation and idempotency.
@@ -36,3 +37,10 @@
 - Required: ERP typecheck, production build including existing prebuild gates, applicable booking/lifecycle/dispatch/live-scheduling/project suites, existing references browser, extended real-component synthetic browser cases, CI on final SHA, preview and production alias/source verification.
 - Tests use isolated synthetic/emulator data. Authenticated live writes are excluded to protect operational data.
 - Results recorded in the independent review and PR before release.
+
+## Concurrent integration
+- GitHub blocked merge while pricing/payments PR #563 entered main. Resolved the shared JSX boundary by retaining the three-column booking body and footer capacity controls, inserting the existing financial editor after the columns inside the body, with its existing dedicated tab.
+- Re-run combined browser acceptance, types and production build. Independent review adds financial-draft/support-detour and deposit/hold isolation cases. Final PR CI must use the combined tree.
+- Pricing main workflow 38088318873 completed its validation, real Firestore/financial component tests, Project commercial-guard deployment, then Office deployment and verification successfully. This follow-up deploys frontend only and does not repeat backend deployment.
+- Combined local typecheck and full production build passed; independent modal browser suite 31/31 and financial component flows at 1440/1366/390 passed.
+- Concurrent pricing frontend finished: demac-aruba.com now points to dpl_E8ALuXC2Hv3Zf9yQAoAAc3Qikthd, source 2bd6d261fd1743b87463ac7b46e7fae3245c5c27. Its tree d63f4fc3e8a36466d16fbe5f303d8a2f47476624 equals integrated main20a9747. Use this version as the frontend rollback baseline.

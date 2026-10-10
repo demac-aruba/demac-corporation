@@ -1,3 +1,4 @@
+const { chargeFingerprint, prepareInitialCharges, authorizeInitialCharges } = require('./appointmentCharges');
 const { prepareVisitReferencesCommit, referenceInput } = require('./bookingVisitReferences');
 const {
   BOOKING_ERROR_CODES,
@@ -114,6 +115,7 @@ function createAfterHoursAuthority({
     technicianInstructions = "",
     recipientSelections = [],
     visitReferences,
+    charges,
     actor = {},
     overtimeConsent,
   } = {}, { restDay = false, capacityOvertime = false, prepareOnly = false } = {}) {
@@ -159,6 +161,7 @@ function createAfterHoursAuthority({
     const requestFingerprint = hashId(JSON.stringify({ restDay, ...(capacityOvertime ? { capacityOvertime: true } : {}), clientId, siteId, dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '',
       ...(projectRequest ? { project: projectRequest.project } : {}),
       ...(visitReferences !== undefined ? { visitReferences: referenceInput(visitReferences) } : {}),
+      ...(charges !== undefined ? { chargesFingerprint: chargeFingerprint(charges) } : {}),
       requestedWorkLines, dateKey, startTime, rawVanId, customerFacingDescription, technicianInstructions, recipientSelections, actorId: actor.id || actor.userId || '' }), 64);
     const appointmentId = boundedOvertime ? `APT-${capacityOvertime ? 'CO' : 'OT'}-${hashId(stableRequestId, 20).toUpperCase()}` : afterHoursAppointmentId(stableRequestId);
     const workOrderId = afterHoursWorkOrderId(appointmentId);
@@ -175,11 +178,13 @@ function createAfterHoursAuthority({
     });
 
     return db.runTransaction(async (transaction) => {
+      await authorizeInitialCharges({ db, get: ref => transaction.get(ref), input: charges, actor });
       const replaySnapshot = await transaction.get(appointmentRef);
       if (replaySnapshot.exists) {
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
         if (cleanText(boundedOvertime ? replay.overtimeRequestId : replay.afterHoursRequestId, 240) !== stableRequestId
-            || (replay.specialBookingFingerprint && replay.specialBookingFingerprint !== requestFingerprint)) {
+            || (replay.specialBookingFingerprint && replay.specialBookingFingerprint !== requestFingerprint)
+            || (charges != null && !replay.specialBookingFingerprint)) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
             "The deterministic after-hours appointment identity belongs to another request.",
@@ -383,7 +388,10 @@ function createAfterHoursAuthority({
           : { afterHoursOpenEnded: true, afterHoursKind: AFTER_HOURS_KIND }),
       });
       const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: visitReferences, actor, appointmentId, now });
+      const chargesCommit = await prepareInitialCharges({ db, transaction, input: charges, actor, appointmentId,
+        appointment: { customerId: clientId, propertyId: siteId, status: "confirmed", workOrderIds: [workOrderId] }, now });
       const appointment = compactObject({
+        ...(chargesCommit ? { jobCharges: chargesCommit.value } : {}),
         ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
         ...(projectCommit?.fields || {}),
         ...(locationSnapshot ? { dwellingId: dwellingId || '', requesterId: requesterId || '', accessContactId: accessContactId || '', locationSnapshot } : {}),
@@ -456,6 +464,7 @@ function createAfterHoursAuthority({
       if (projectCommit) projectCommit.write({ workOrders: [workOrder], createMode: 'confirmed' });
       transaction.set(appointmentRef, appointment);
       if (referencesCommit) referencesCommit.write();
+      if (chargesCommit) chargesCommit.write();
       transaction.set(workOrderRef, workOrder);
       if (overtime) {
         for (const { lock, ref } of lockSnapshots) transaction.set(ref, { ...lock, appointmentId, workOrderId, active: true, createdAtIso: timestamp, updatedAtIso: timestamp });

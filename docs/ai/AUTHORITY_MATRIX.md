@@ -151,3 +151,12 @@ Agents must not create inside DEMAC ERP:
 - duplicate official estimate-numbering authority;
 - recreated historical QuickBooks accounting transactions as a competing source of truth; or
 - independent accounting balances that compete with QuickBooks.
+
+## Appointment operational charges (2026-10-10)
+
+Under owner-approved `OPS-SCHED-CHARGES-001`, Booking Authority owns optional
+`appointments.jobCharges` projections/final charge and append-only `chargeEvents`.
+The existing `payments` collection holds office-recorded appointment receipts with
+`source = appointment-operational`. They are operational evidence, not a parallel
+accounting ledger, official invoice or bank reconciliation. QBO's authority is unchanged.
+See [the decision](adrs/appointment-operational-charges-20261010.md).

@@ -55,6 +55,7 @@ function canonicalBtu(value) {
 }
 
 function canonicalMoney(value) {
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.round(number * 100) / 100 : null;
 }

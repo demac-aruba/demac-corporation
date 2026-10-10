@@ -312,3 +312,17 @@ Production activation remains separately owner-approved through the server-side 
 - Persist `scheduledOvertime.kind = capacity_overflow_overtime` as accepted planning evidence,
   displayed as possible overtime. Ordinary/automated availability and actual payroll remain
   unchanged; elapsed real attendance determines payable overtime. No existing data migration.
+
+## Appointment projections, final amounts and receipts
+
+- `OPS-SCHED-CHARGES-001` — Owner request and deployment authorization 2026-10-10.
+  Preserve the original projection, separately record current projection/final amount,
+  and record actual office-reported receipts by cash, transfer, POS or SUAVE against
+  the canonical appointment. Exact BTU/catalog tariffs or reasoned manual prices apply.
+- Unknown prices remain pending; explicit zero is allowed with supporting pricing/reason.
+  Final scope review permits an outstanding balance and never marks Field/attendance complete.
+- Split payments, immutable receipt identity, exact replay, expected-version conflicts,
+  dated actor audit and reasoned voids are mandatory. Voids do not execute refunds.
+- Existing financial records are not imported or overwritten. Field candidate evidence
+  requires explicit fingerprint-bound reconciliation before final confirmation and is not
+  automatically summed again. No live migration or new client-write permission is needed.
