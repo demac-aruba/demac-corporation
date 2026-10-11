@@ -90,3 +90,12 @@
   unverified. Ask the owner to reopen Booking in the existing signed-in ERP session.
 - Root cause remains unconfirmed; do not describe the incident as permanently fixed or
   merge/deploy the diagnostic branch as a production correction.
+
+## Owner confirmation, 2026-10-11 01:22 UTC
+- In response to the request to reopen Booking and check contacts/work types, the owner
+  confirmed: "si ya desaparecio el error". The reported loading failure is no longer visible
+  in the owner's ERP session, consistent with the preceding successful endpoint checks.
+- Operational recovery of this reported error is confirmed by the owner. This does not
+  establish the original cause, sustained availability, or successful creation of a booking.
+- No corrective production merge/deployment or customer/appointment data mutation was
+  performed for this investigation. Diagnostic commits remain on the incident branch.
