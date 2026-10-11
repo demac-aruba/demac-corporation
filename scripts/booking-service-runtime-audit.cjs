@@ -71,6 +71,23 @@ async function main() {
   // The first diagnostic proved Logs access is denied. Do not change IAM or retry it.
   console.log(JSON.stringify({ logs: 'blocked-by-existing-permissions', sourceRun: 38098705455 }));
   const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const quotaResponse = await fetch('https://serviceusage.googleapis.com/v1beta1/projects/demac-corporation/services/run.googleapis.com/consumerQuotaMetrics?view=FULL&pageSize=200', {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000),
+  });
+  if (!quotaResponse.ok) console.log(JSON.stringify({ effectiveQuotaRead: quotaResponse.status }));
+  else {
+    const quotas = await quotaResponse.json();
+    console.log(JSON.stringify({ effectiveQuotaRead: quotaResponse.status, morePages: Boolean(quotas.nextPageToken), metrics: (quotas.metrics || []).filter(metric => metric.metric === 'run.googleapis.com/instances').map(metric => ({
+      metric: metric.metric, displayName: metric.displayName,
+      limits: (metric.consumerQuotaLimits || []).map(limit => ({
+        unit: limit.unit,
+        buckets: (limit.quotaBuckets || []).map(bucket => ({
+          region: bucket.dimensions?.region, effective: Number(bucket.effectiveLimit), default: Number(bucket.defaultLimit),
+          consumerOverride: Boolean(bucket.consumerOverride), adminOverride: Boolean(bucket.adminOverride), producerOverride: Boolean(bucket.producerOverride),
+        })),
+      })),
+    })) }));
+  }
   for (const metric of ['container/memory/utilizations', 'container/instance_count', 'request_count']) {
     const url = new URL('https://monitoring.googleapis.com/v3/projects/demac-corporation/timeSeries');
     url.search = new URLSearchParams({
