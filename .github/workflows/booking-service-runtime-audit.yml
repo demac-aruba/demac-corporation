@@ -1,0 +1,25 @@
+name: Booking service read-only runtime audit
+on:
+  push:
+    branches: [fix/booking-service-availability]
+    paths:
+      - scripts/booking-service-runtime-audit.cjs
+      - .github/workflows/booking-service-runtime-audit.yml
+permissions:
+  contents: read
+jobs:
+  read-only-runtime-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Read sanitized infrastructure diagnostics without production data access
+        run: node scripts/booking-service-runtime-audit.cjs
