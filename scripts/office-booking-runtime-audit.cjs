@@ -4,6 +4,10 @@
 const { execFileSync } = require('node:child_process');
 const project = 'demac-corporation', region = 'us-central1';
 const run = args => JSON.parse(execFileSync('gcloud', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 5 * 1024 * 1024 }));
+function failureKind(error) {
+  const text=String(error?.stderr||'')+' '+String(error?.message||'');
+  return /PERMISSION_DENIED|permission.*denied|does not have permission/i.test(text)?'permission_denied':/not found|NOT_FOUND/i.test(text)?'not_found':'unavailable';
+}
 const tag = value => typeof value === 'string' && /^[A-Za-z0-9_:-]{1,100}$/.test(value) ? value : undefined;
 const conditions = values => (values || []).map(item => ({type:tag(item.type),status:tag(item.status),reason:tag(item.reason),severity:tag(item.severity)}));
 function signals(message) {
@@ -22,17 +26,22 @@ async function main(){
   const srv = run(['run','services','describe',service,'--project='+project,'--region='+region,'--format=json']);
   console.log(JSON.stringify({kind:'service',latestCreated:srv.status.latestCreatedRevisionName,latestReady:srv.status.latestReadyRevisionName,conditions:conditions(srv.status.conditions),traffic:(srv.status.traffic||[]).map(item=>({revision:item.revisionName,percent:item.percent}))}));
   const filter = `resource.type="cloud_run_revision" AND resource.labels.service_name="${service}" AND (logName="projects/${project}/logs/run.googleapis.com%2Fvarlog%2Fsystem" OR textPayload:"Memory limit" OR textPayload:"Cannot find module" OR textPayload:"failed to start" OR textPayload:"Startup probe")`;
-  const logs = run(['logging','read',filter,'--project='+project,'--freshness=4h','--limit=40','--order=desc','--format=json']);
+  let logs=[];
+  try { logs = run(['logging','read',filter,'--project='+project,'--freshness=4h','--limit=40','--order=desc','--format=json']); }
+  catch(error){ console.log(JSON.stringify({kind:'diagnostic-limit',stage:'runtime-signals',reason:failureKind(error)})); }
   for(const item of logs)console.log(JSON.stringify({kind:'runtime',at:item.timestamp,severity:tag(item.severity),revision:item.resource?.labels?.revision_name,signals:signals(item.textPayload||item.jsonPayload?.message||'')}));
-  const endpoint='https://us-central1-demac-corporation.cloudfunctions.net/officeBookingAuthority';
+  const gateway='https://us-central1-demac-corporation.cloudfunctions.net/officeBookingAuthority';
+  const endpoints=[gateway,fn.serviceConfig.uri];
+  for(const endpoint of endpoints){
   for(const origin of ['https://demac-aruba.com','https://www.demac-aruba.com']){
     const start=performance.now();
     const preflight=await fetch(endpoint,{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'authorization,content-type'},signal:AbortSignal.timeout(20_000)});
-    console.log(JSON.stringify({kind:'preflight',origin,status:preflight.status,allowOrigin:preflight.headers.get('access-control-allow-origin'),allowMethods:preflight.headers.get('access-control-allow-methods'),allowHeaders:preflight.headers.get('access-control-allow-headers'),elapsedMs:Math.round(performance.now()-start)}));
+    console.log(JSON.stringify({kind:'preflight',endpoint,origin,status:preflight.status,allowOrigin:preflight.headers.get('access-control-allow-origin'),allowMethods:preflight.headers.get('access-control-allow-methods'),allowHeaders:preflight.headers.get('access-control-allow-headers'),elapsedMs:Math.round(performance.now()-start)}));
   }
   const denied=await fetch(endpoint,{method:'POST',headers:{Origin:'https://demac-aruba.com','Content-Type':'application/json'},body:JSON.stringify({action:'get_appointment_charges',data:{}}),signal:AbortSignal.timeout(20_000)});
   const body=await denied.json().catch(()=>null);
-  console.log(JSON.stringify({kind:'unauthenticated-read',status:denied.status,allowOrigin:denied.headers.get('access-control-allow-origin'),code:tag(body?.error?.code)}));
+  console.log(JSON.stringify({kind:'unauthenticated-read',endpoint,status:denied.status,allowOrigin:denied.headers.get('access-control-allow-origin'),code:tag(body?.error?.code)}));
+  }
 }
-module.exports={signals,conditions};
+module.exports={signals,conditions,failureKind};
 if(require.main===module)main().catch(()=>{console.error('Read-only runtime audit failed; raw command output intentionally withheld.');process.exitCode=1;});
