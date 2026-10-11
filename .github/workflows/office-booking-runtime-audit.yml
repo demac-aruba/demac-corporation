@@ -4,6 +4,7 @@ on:
     branches: [fix/booking-authority-runtime-health]
     paths:
       - scripts/office-booking-runtime-audit.cjs
+      - scripts/office-booking-runtime-audit.test.cjs
       - .github/workflows/office-booking-runtime-audit.yml
   workflow_dispatch:
 permissions:
