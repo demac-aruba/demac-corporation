@@ -73,3 +73,20 @@
 - Another incident branch/PR #568 covers appointment finance against the same Office endpoint.
   A single coordinated runtime correction must cover both affected readers; do not create a
   competing backend or duplicate business process.
+
+## Recovery observed, 2026-10-11 01:19 UTC
+- Owner's 01:17 UTC Cloud Run Overview screenshot shows no visible account/project alert.
+  Absence of a banner does not establish the cause or exclude a previous billing interruption.
+- New production checks returned HTTP 204 with the expected CORS headers for Office on
+  both real ERP origins (`demac-aruba.com` and `www.demac-aruba.com`) and its direct Cloud
+  Run URL. Project and Field preflights also returned 204.
+- Anonymous POSTs for `list_contact_directory` and `list_presets` returned the expected
+  HTTP 401 JSON `unauthenticated` with CORS, replacing the previous platform 429/503.
+  Source inspection confirms missing tokens are rejected before profile/domain reads.
+- This agent made no corrective deployment, runtime/IAM/quota/billing change, or customer
+  read/write to obtain these results. Another actor's actions have not been established.
+- This verifies observed endpoint connectivity and anonymous-access enforcement only.
+  Authenticated contact/preset loading, a complete booking, and sustained recovery remain
+  unverified. Ask the owner to reopen Booking in the existing signed-in ERP session.
+- Root cause remains unconfirmed; do not describe the incident as permanently fixed or
+  merge/deploy the diagnostic branch as a production correction.
