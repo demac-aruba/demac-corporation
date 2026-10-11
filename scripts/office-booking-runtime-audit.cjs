@@ -37,13 +37,13 @@ async function main(){
   // sent solely to Google's Monitoring API. No identity/customer labels emitted.
   try {
     const accessToken=execFileSync('gcloud',['auth','print-access-token'],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
-    const end=new Date(),start=new Date(end.getTime()-3600_000);
-    for(const metric of ['container/instance_count','request_count','container/memory/utilizations']){
+    const end=new Date(),start=new Date(end.getTime()-4*3600_000);
+    for(const metric of ['container/instance_count','request_count','container/memory/utilizations','container/startup_latencies']){
       const query=new URLSearchParams({filter:`metric.type="run.googleapis.com/${metric}" AND resource.labels.service_name="${service}"`,'interval.startTime':start.toISOString(),'interval.endTime':end.toISOString(),pageSize:'100'});
       const response=await fetch('https://monitoring.googleapis.com/v3/projects/'+project+'/timeSeries?'+query,{headers:{Authorization:'Bearer '+accessToken},signal:AbortSignal.timeout(20_000)});
       if(!response.ok){console.log(JSON.stringify({kind:'diagnostic-limit',stage:'capacity-metrics',status:response.status}));break;}
       const body=await response.json();
-      for(const series of body.timeSeries||[])console.log(JSON.stringify({kind:'metric',metric,revision:tag(series.resource?.labels?.revision_name),responseCode:tag(series.metric?.labels?.response_code),state:tag(series.metric?.labels?.state),samples:(series.points||[]).slice(0,8).map(point=>({at:point.interval?.endTime,value:point.value?.int64Value??point.value?.doubleValue,mean:point.value?.distributionValue?.mean,count:point.value?.distributionValue?.count}))}));
+      for(const series of body.timeSeries||[])console.log(JSON.stringify({kind:'metric',metric,revision:tag(series.resource?.labels?.revision_name),responseCode:tag(series.metric?.labels?.response_code),state:tag(series.metric?.labels?.state),samples:(series.points||[]).filter(point=>point.value?.distributionValue?.count || point.value?.doubleValue || Number(point.value?.int64Value)>0).slice(0,15).map(point=>({at:point.interval?.endTime,value:point.value?.int64Value??point.value?.doubleValue,mean:point.value?.distributionValue?.mean,count:point.value?.distributionValue?.count}))}));
     }
   }catch(error){console.log(JSON.stringify({kind:'diagnostic-limit',stage:'capacity-metrics',reason:failureKind(error)}));}
   const gateway='https://us-central1-demac-corporation.cloudfunctions.net/officeBookingAuthority';
