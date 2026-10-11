@@ -22,4 +22,4 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Read sanitized infrastructure diagnostics without production data access
-        run: node scripts/booking-service-runtime-audit.cjs
+        run: node scripts/booking-service-runtime-audit.cjs --scaling-only

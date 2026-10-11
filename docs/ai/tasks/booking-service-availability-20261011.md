@@ -53,6 +53,10 @@
   quota investigation source c112a8b. These commits are diagnostic-only, not a runtime release.
 
 ## Remaining blocker and recovery boundary
+- Owner's expanded request log (image 20261011-005247, entry 20:46:34 local / 00:46:34 UTC)
+  confirms the platform's exact reason: request aborted because there was no available instance.
+  It is a request warning, not the runtime/system error explaining why an instance is unavailable.
+  Check the independent service/revision scaling limits through both Cloud Run API versions.
 - Need an actual runtime/platform error or authoritative applicable limit to establish the cause.
   The owner can provide the expanded Office runtime error from Google Cloud, or explicitly
   approve the necessary read-only logging permission for the existing deployment identity.

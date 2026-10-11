@@ -34,6 +34,37 @@ function classify(entry) {
   };
 }
 
+async function inspectScalingOnly() {
+  const service = read(['run', 'services', 'describe', 'officebookingauthority', '--project=demac-corporation', '--region=us-central1', '--format=json']);
+  const select = annotations => Object.fromEntries([
+    'run.googleapis.com/minScale', 'run.googleapis.com/maxScale',
+    'run.googleapis.com/manualInstanceCount', 'run.googleapis.com/scalingMode',
+    'autoscaling.knative.dev/minScale', 'autoscaling.knative.dev/maxScale',
+  ].filter(key => annotations?.[key] != null).map(key => [key, String(annotations[key]).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40)]));
+  console.log(JSON.stringify({
+    scalingAudit: 'v1', service: select(service.metadata?.annotations),
+    revision: select(service.spec?.template?.metadata?.annotations),
+    concurrency: service.spec?.template?.spec?.containerConcurrency,
+  }));
+  const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const response = await fetch('https://run.googleapis.com/v2/projects/demac-corporation/locations/us-central1/services/officebookingauthority', {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) { console.log(JSON.stringify({ scalingAudit: 'v2', status: response.status })); process.exitCode = 1; return; }
+  const result = await response.json();
+  const scaling = value => ({
+    min: value?.minInstanceCount, max: value?.maxInstanceCount,
+    manual: value?.manualInstanceCount,
+    mode: ['AUTOMATIC', 'MANUAL', 'SCALING_MODE_UNSPECIFIED'].includes(value?.scalingMode) ? value.scalingMode : undefined,
+  });
+  console.log(JSON.stringify({
+    scalingAudit: 'v2', service: scaling(result.scaling), revision: scaling(result.template?.scaling),
+    reconciling: result.reconciling, generation: result.generation, observedGeneration: result.observedGeneration,
+    condition: { state: result.terminalCondition?.state, reason: result.terminalCondition?.reason, revisionReason: result.terminalCondition?.revisionReason },
+  }));
+  process.exitCode = 1; // A configuration read does not establish incident recovery.
+}
+
 async function main() {
   // A second network vantage point distinguishes a platform failure from local egress.
   for (const name of ['officeBookingAuthority', 'projectAuthority', 'fieldOperationsAuthority', 'bookingVisitReferences']) {
@@ -134,6 +165,6 @@ async function main() {
   process.exitCode = 1; // The required runtime-log evidence remains unavailable.
 }
 if (require.main === module) {
-  main().catch(() => { console.error('Read-only Booking runtime audit failed; no raw provider output emitted.'); process.exitCode = 1; });
+  (process.argv.includes('--scaling-only') ? inspectScalingOnly() : main()).catch(() => { console.error('Read-only Booking runtime audit failed; no raw provider output emitted.'); process.exitCode = 1; });
 }
 module.exports = { classify };
