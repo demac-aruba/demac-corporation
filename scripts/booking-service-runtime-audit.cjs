@@ -34,7 +34,20 @@ function classify(entry) {
   };
 }
 
-function main() {
+async function main() {
+  // A second network vantage point distinguishes a platform failure from local egress.
+  for (const name of ['officeBookingAuthority', 'projectAuthority', 'fieldOperationsAuthority', 'bookingVisitReferences']) {
+    const endpoint = `https://us-central1-demac-corporation.cloudfunctions.net/${name}`;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'OPTIONS', signal: AbortSignal.timeout(25_000),
+        headers: { Origin: 'https://demac-aruba.com', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' },
+      });
+      console.log(JSON.stringify({ probe: name, status: response.status, cors: response.headers.get('access-control-allow-origin') }));
+    } catch {
+      console.log(JSON.stringify({ probe: name, transportFailure: true }));
+    }
+  }
   const common = ['--project=demac-corporation', '--region=us-central1', '--format=json'];
   const fn = read(['functions', 'describe', 'officeBookingAuthority', '--gen2', ...common]);
   const service = read(['run', 'services', 'describe', 'officebookingauthority', ...common]);
@@ -49,13 +62,36 @@ function main() {
     latestReady: service.status?.latestReadyRevisionName,
     traffic: service.status?.traffic?.map(({ revisionName, percent }) => ({ revisionName, percent })),
   }));
-  const filter = 'resource.type="cloud_run_revision" AND resource.labels.service_name="officebookingauthority"';
-  for (const extra of [' AND severity>=ERROR', ' AND logName:"run.googleapis.com%2Fvarlog%2Fsystem"']) {
-    const entries = read(['logging', 'read', filter + extra, '--project=demac-corporation', '--freshness=3h', '--limit=80', '--format=json']);
-    console.log(JSON.stringify({ logCategory: extra.includes('ERROR') ? 'errors' : 'system', entries: entries.map(classify) }));
+  // The first diagnostic proved Logs access is denied. Do not change IAM or retry it.
+  console.log(JSON.stringify({ logs: 'blocked-by-existing-permissions', sourceRun: 38098705455 }));
+  const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  for (const metric of ['container/memory/utilizations', 'container/instance_count']) {
+    const url = new URL('https://monitoring.googleapis.com/v3/projects/demac-corporation/timeSeries');
+    url.search = new URLSearchParams({
+      filter: `metric.type="run.googleapis.com/${metric}" AND resource.labels.service_name="officebookingauthority"`,
+      'interval.startTime': new Date(Date.now() - 3 * 3600_000).toISOString(),
+      'interval.endTime': new Date().toISOString(), pageSize: '100',
+    });
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) {
+      console.log(JSON.stringify({ metric, status: response.status, unavailable: true }));
+      break;
+    }
+    const result = await response.json();
+    console.log(JSON.stringify({ metric, series: (result.timeSeries || []).map(series => ({
+      revision: series.resource?.labels?.revision_name,
+      points: series.points?.map(point => ({
+        time: point.interval?.endTime,
+        number: Number(point.value?.doubleValue ?? point.value?.int64Value),
+        count: Number(point.value?.distributionValue?.count),
+        mean: Number(point.value?.distributionValue?.mean),
+        max: Number(point.value?.distributionValue?.range?.max),
+      })),
+    })) }));
   }
+  process.exitCode = 1; // The required runtime-log evidence remains unavailable.
 }
 if (require.main === module) {
-  try { main(); } catch { console.error('Read-only Booking runtime audit failed; no raw provider output emitted.'); process.exitCode = 1; }
+  main().catch(() => { console.error('Read-only Booking runtime audit failed; no raw provider output emitted.'); process.exitCode = 1; });
 }
 module.exports = { classify };
