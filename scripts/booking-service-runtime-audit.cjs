@@ -65,12 +65,12 @@ async function main() {
   // The first diagnostic proved Logs access is denied. Do not change IAM or retry it.
   console.log(JSON.stringify({ logs: 'blocked-by-existing-permissions', sourceRun: 38098705455 }));
   const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  for (const metric of ['container/memory/utilizations', 'container/instance_count']) {
+  for (const metric of ['container/memory/utilizations', 'container/instance_count', 'request_count']) {
     const url = new URL('https://monitoring.googleapis.com/v3/projects/demac-corporation/timeSeries');
     url.search = new URLSearchParams({
-      filter: `metric.type="run.googleapis.com/${metric}" AND resource.labels.service_name="officebookingauthority"`,
+      filter: `metric.type="run.googleapis.com/${metric}" AND resource.labels.service_name="officebookingauthority" AND resource.labels.revision_name="${cfg.revision}"`,
       'interval.startTime': new Date(Date.now() - 3 * 3600_000).toISOString(),
-      'interval.endTime': new Date().toISOString(), pageSize: '100',
+      'interval.endTime': new Date().toISOString(), pageSize: '1000',
     });
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
     if (!response.ok) {
@@ -78,8 +78,10 @@ async function main() {
       break;
     }
     const result = await response.json();
-    console.log(JSON.stringify({ metric, series: (result.timeSeries || []).map(series => ({
+    console.log(JSON.stringify({ metric, morePages: Boolean(result.nextPageToken), series: (result.timeSeries || []).map(series => ({
       revision: series.resource?.labels?.revision_name,
+      responseCode: Number(series.metric?.labels?.response_code),
+      state: ['active', 'idle'].includes(series.metric?.labels?.state) ? series.metric.labels.state : undefined,
       points: series.points?.map(point => ({
         time: point.interval?.endTime,
         number: Number(point.value?.doubleValue ?? point.value?.int64Value),
