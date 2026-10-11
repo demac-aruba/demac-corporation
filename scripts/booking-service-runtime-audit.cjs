@@ -61,7 +61,13 @@ async function main() {
     conditions: service.status?.conditions?.map(({ type, status, reason }) => ({ type, status, reason })),
     latestReady: service.status?.latestReadyRevisionName,
     traffic: service.status?.traffic?.map(({ revisionName, percent }) => ({ revisionName, percent })),
+    scalingMode: service.metadata?.annotations?.['run.googleapis.com/scalingMode'],
+    manualInstances: Number(service.metadata?.annotations?.['run.googleapis.com/manualInstanceCount']),
   }));
+  try {
+    const billing = read(['billing', 'projects', 'describe', 'demac-corporation', '--format=json']);
+    console.log(JSON.stringify({ billingEnabled: billing.billingEnabled === true }));
+  } catch { console.log(JSON.stringify({ billingStatus: 'unavailable-with-existing-access' })); }
   // The first diagnostic proved Logs access is denied. Do not change IAM or retry it.
   console.log(JSON.stringify({ logs: 'blocked-by-existing-permissions', sourceRun: 38098705455 }));
   const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -89,6 +95,23 @@ async function main() {
         mean: Number(point.value?.distributionValue?.mean),
         max: Number(point.value?.distributionValue?.range?.max),
       })),
+    })) }));
+  }
+  for (const metric of ['allocation/usage', 'limit', 'exceeded']) {
+    const url = new URL('https://monitoring.googleapis.com/v3/projects/demac-corporation/timeSeries');
+    url.search = new URLSearchParams({
+      filter: `metric.type="serviceruntime.googleapis.com/quota/${metric}" AND resource.labels.service="run.googleapis.com" AND resource.labels.location="us-central1"`,
+      'interval.startTime': new Date(Date.now() - 3600_000).toISOString(),
+      'interval.endTime': new Date().toISOString(), pageSize: '1000',
+    });
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) { console.log(JSON.stringify({ quotaMetric: metric, status: response.status })); break; }
+    const result = await response.json();
+    console.log(JSON.stringify({ quotaMetric: metric, morePages: Boolean(result.nextPageToken), series: (result.timeSeries || []).map(series => ({
+      quota: series.metric?.labels?.quota_metric,
+      limit: series.metric?.labels?.limit_name,
+      latest: series.points?.slice(0, 2).map(point => ({ time: point.interval?.endTime, number: Number(point.value?.int64Value ?? point.value?.doubleValue), exceeded: point.value?.boolValue === true })),
+      max: Math.max(...(series.points || []).map(point => Number(point.value?.int64Value ?? point.value?.doubleValue) || 0)),
     })) }));
   }
   process.exitCode = 1; // The required runtime-log evidence remains unavailable.
