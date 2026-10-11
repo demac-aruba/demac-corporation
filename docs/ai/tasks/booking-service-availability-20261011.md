@@ -57,6 +57,13 @@
   confirms the platform's exact reason: request aborted because there was no available instance.
   It is a request warning, not the runtime/system error explaining why an instance is unavailable.
   Check the independent service/revision scaling limits through both Cloud Run API versions.
+- Read-only scaling run 38100053471/job 114353941272 at 00:55 UTC confirms both service
+  and revision maximums are 100 in Cloud Run v1 and v2. Observed generation equals
+  generation 82 and terminal condition is succeeded. No manual mode is returned.
+  This does not explain why there are no available instances; no configuration fix is justified.
+- Next owner evidence should exclude the `run.googleapis.com/requests` log and include
+  runtime/system messages after 2026-10-10T23:20:00Z, so repeated request warnings do not
+  obscure startup or platform errors. Production remains unchanged and unresolved.
 - Need an actual runtime/platform error or authoritative applicable limit to establish the cause.
   The owner can provide the expanded Office runtime error from Google Cloud, or explicitly
   approve the necessary read-only logging permission for the existing deployment identity.
