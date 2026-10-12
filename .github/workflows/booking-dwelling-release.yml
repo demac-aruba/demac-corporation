@@ -5,6 +5,26 @@ on:
 permissions:
   contents: read
 jobs:
+  configuration-diagnostic:
+    if: github.ref == 'refs/heads/fix/booking-dwelling-messages'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: node scripts/booking-dwelling-config-inspect.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dwelling-config-inspection
+          path: ${{ runner.temp }}/dwelling-config-inspection.json
   isolated-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -24,7 +44,7 @@ jobs:
           npm run validate:firebase --prefix functions
           npm run test:booking-authority --prefix functions
           npm run test:transactional-whatsapp --prefix functions
-          node --test scripts/booking-dwelling-release.test.cjs scripts/booking-references-release-config.test.cjs
+          node --test scripts/booking-dwelling-release.test.cjs scripts/booking-references-release-config.test.cjs scripts/booking-dwelling-scaling-proof.test.cjs
       - name: Isolated apartment create/read/edit/booking/persistence and message preparation
         env:
           GCLOUD_PROJECT: demo-demac-dwellings

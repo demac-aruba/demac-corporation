@@ -4,6 +4,19 @@ const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+test('an added maximum cannot be accepted without history and every other configuration field must match', () => {
+  const { configHash, configurationRestorationPlan } = require('./booking-dwelling-release.cjs');
+  const original = { buildConfig: { runtime: 'nodejs22', entryPoint: 'notifyBookingReferenceUpdate' }, serviceConfig: { memory: '256M' },
+    eventTrigger: { eventType: 'updated', retryPolicy: 'RETRY_POLICY_RETRY' } };
+  const expected = configHash(original);
+  assert.equal(configurationRestorationPlan('notifyBookingReferenceUpdate', original, expected).required, false);
+  const changed = { ...original, serviceConfig: { ...original.serviceConfig, maxInstanceCount: 20 } };
+  assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', changed, expected), /Historical service scaling evidence required/);
+  assert.throws(() => configurationRestorationPlan('queueAppointmentConfirmation', changed, expected));
+  assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', { ...changed, serviceConfig: { ...changed.serviceConfig, memory: '512M' } }, expected));
+  assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', { ...changed, serviceConfig: { ...changed.serviceConfig, maxInstanceCount: 100 } }, expected));
+  assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', { ...changed, eventTrigger: { ...changed.eventTrigger, retryPolicy: 'RETRY_POLICY_DO_NOT_RETRY' } }, expected));
+});
 test('published source tolerates only absent packaging metadata and rejects application drift or added files', () => {
   const { verifyPublishedSource, runtimeSourceHash } = require('./booking-dwelling-release.cjs');
   const candidate = { '.gitignore': 'ignore', 'bootstrap.js': 'code', 'package-lock.json': 'lock' };
@@ -57,11 +70,11 @@ test('reconstruction cannot silently cover another function, revision or depende
 });
 test('all five packages and rollback evidence must match before publication', () => {
   const functions = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'].map(name => ({ name,
-    beforeRevision: name + '-revision', originalManifestHash: 'original', baselineManifestHash: 'baseline', candidateManifestHash: 'candidate', baselineArchiveSha256: 'baseline-archive', candidateArchiveSha256: 'candidate-archive', configHash: 'config', iamHash: 'iam',
+    beforeRevision: name + '-revision', originalManifestHash: 'original', baselineManifestHash: 'baseline', candidateManifestHash: 'candidate', baselineArchiveSha256: 'baseline-archive', candidateArchiveSha256: 'candidate-archive', configHash: 'config', targetConfigHash: 'original-config', configurationRestoration: { required: false }, iamHash: 'iam',
     rollbackSourceVerified: true, baselineResult: { runtimeSmokePassed: true }, candidateResult: { runtimeSmokePassed: true } }));
   const prepared = { stage: 'complete', sourceSha: 'reviewed', functions };
   verifyPreparedRelease(prepared, structuredClone(prepared));
-  for (const field of ['candidateManifestHash', 'baselineManifestHash', 'candidateArchiveSha256', 'baselineArchiveSha256', 'beforeRevision', 'configHash', 'iamHash']) {
+  for (const field of ['candidateManifestHash', 'baselineManifestHash', 'candidateArchiveSha256', 'baselineArchiveSha256', 'beforeRevision', 'configHash', 'targetConfigHash', 'configurationRestoration', 'iamHash']) {
     const changed = structuredClone(prepared); changed.functions[4][field] = 'changed';
     assert.throws(() => verifyPreparedRelease(prepared, changed));
   }
@@ -103,7 +116,7 @@ test('a recovered image lock must pin the deployed direct dependencies with pack
   assert.throws(() => validateRecoveredLock(JSON.stringify({ ...lock, packages: { '': lock.packages[''] } }), manifest));
   assert.throws(() => validateRecoveredLock('{}', manifest));
 });
-test('deployment is limited to the five approved source targets and has no configuration/IAM/migration flags', () => {
+test('deployment is limited to approved source targets and preserves the existing reference-update retry and scaling policies', () => {
   for (const name of ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate']) {
     const args = deployArgs(name, '/tmp/reviewed-source');
     assert.deepEqual(args, ['functions', 'deploy', name, '--project=demac-corporation', '--region=us-central1', '--gen2', '--source=/tmp/reviewed-source', '--quiet', '--format=value(state)']);

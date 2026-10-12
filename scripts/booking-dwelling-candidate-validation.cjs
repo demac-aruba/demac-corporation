@@ -73,6 +73,10 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     }
     for (const file of office) assert.ok(fs.existsSync(path.join(validation, file)), 'Missing Office regression: ' + file);
     pass(run(process.execPath, ['--test', ...office], validation, testEnv));
+    if (fs.existsSync(path.join(validation, 'bookingScheduleHistory.js'))) {
+      fs.copyFileSync(path.join(root, 'functions/bookingScheduleHistory.test.js'), path.join(validation, 'bookingScheduleHistory.test.js'));
+      pass(run(process.execPath, ['--test', 'bookingScheduleHistory.test.js'], validation, testEnv));
+    }
     const emulatorEnv = { ...env, GCLOUD_PROJECT: 'demo-demac-dwellings', GOOGLE_CLOUD_PROJECT: 'demo-demac-dwellings',
       FIRESTORE_EMULATOR_HOST: '127.0.0.1:8297', FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9297', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:9397' };
     assert.ok(fs.existsSync(path.join(validation, 'propertyLocations.emulator.test.cjs')), 'Missing saved-booking emulator suite');
