@@ -93,6 +93,18 @@ async function main() {
       const pkg = JSON.parse(fs.readFileSync(path.join(directory, 'package.json')));
       const lockPresent = Object.hasOwn(files, 'package-lock.json');
       if (lockPresent) validateLock(fs.readFileSync(path.join(directory, 'package-lock.json')), pkg);
+      let runtimeImage = null;
+      if (!lockPresent) {
+        const revision = JSON.parse(run('gcloud', ['run', 'revisions', 'describe', fn.serviceConfig.revision, '--project=' + PROJECT, '--region=us-central1', '--format=json']));
+        const image = revision.status?.imageDigest || revision.spec?.containers?.[0]?.image;
+        assert.ok(image && !image.includes('://') && image.includes('@sha256:'), 'Immutable runtime image required');
+        const [registry, ...parts] = image.split('/');
+        assert.ok(registry.endsWith('.pkg.dev') || registry.endsWith('.gcr.io') || registry === 'gcr.io', 'Unexpected Google image registry');
+        const [repository, digest] = parts.join('/').split('@');
+        const manifestResponse = await fetch(`https://${registry}/v2/${repository}/manifests/${digest}`, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' }, signal: AbortSignal.timeout(20000) });
+        runtimeImage = { image, manifestStatus: manifestResponse.status, available: manifestResponse.ok };
+        if (manifestResponse.ok) { const manifestBytes = Buffer.from(await manifestResponse.arrayBuffer()); assert.equal('sha256:' + hash(manifestBytes), digest); runtimeImage.manifestVerified = true; }
+      }
       const archive = path.join(packages, name + '-baseline.tar.gz');
       if (!unknownFiles.length) {
         run('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', '-czf', archive, '-C', directory, '.']);
@@ -104,7 +116,7 @@ async function main() {
       assert.deepEqual(fresh.buildConfig.source, fn.buildConfig.source, 'Source changed during read-only inspection');
       assert.equal(hash(releaseConfig(fresh)), hash(releaseConfig(fn)), 'Configuration changed during inspection');
       report.functions.push({ name, revision: fn.serviceConfig.revision, state: fn.state, runtime: fn.buildConfig.runtime,
-        source, configHash: hash(releaseConfig(fn)), iamHash: hash(policy), sourceHash: runtimeSourceHash(files), lockPresent,
+        source, configHash: hash(releaseConfig(fn)), iamHash: hash(policy), sourceHash: runtimeSourceHash(files), lockPresent, runtimeImage,
         archiveHash: unknownFiles.length ? null : hash(fs.readFileSync(archive)), archiveVerified: !unknownFiles.length, unknownFiles,
         relevantFiles: Object.fromEntries(['appointmentCharges.js', 'serviceCatalogEditing.js', 'appointmentChargeEditing.js', 'servicePricingAuthority.js', 'inventoryAuthority.js', 'commercialSalesAuthority.js', 'demacCustomerSalesTools.js'].filter(file => files[file]).map(file => [file, files[file]])),
         files });
