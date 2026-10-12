@@ -79,6 +79,7 @@ type LiveWorkOrder = {
   problem?: string;
   customerFacingDescription?: string;
   customerFacingDescriptionIsDefault?: boolean;
+  technicianInstructions?: string;
   status?: string;
   source?: string;
   confirmedAt?: string;
@@ -560,6 +561,7 @@ export function projectLiveSchedulingAppointments(
         customerFacingDescription,
       }],
       customerFacingDescription,
+      technicianInstructions: text(primary.technicianInstructions) || undefined,
       customerPhone: text(client?.phone) || undefined,
       customerWhatsapp: text(client?.whatsapp) || undefined,
       customerEmail: text(client?.email) || undefined,
