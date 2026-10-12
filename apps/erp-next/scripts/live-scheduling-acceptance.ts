@@ -98,6 +98,7 @@ const canonicalWorkOrders = [
     appointmentDurationMinutes: 120,
     scheduledSlots: 2,
     problem: 'Servicio estándar para 2 aires acondicionados.',
+    technicianInstructions: 'Avisar a recepción antes de entrar.\nRevisar el equipo de la oficina.',
     zone: 'Santa Cruz',
     confirmedAt: '2026-08-17T20:49:00.000Z',
     createdAt: '2026-08-17T20:49:00.000Z',
@@ -121,6 +122,9 @@ const canonicalAppointments = projectLiveSchedulingAppointments(canonicalWorkOrd
 requireCondition(canonicalAppointments.length === 1, 'A canonical Booking Authority work order must appear as one live appointment.');
 const canonical = canonicalAppointments[0];
 requireCondition(canonical.id === 'APT-CANONICAL-1', 'Canonical appointmentId must be preserved.');
+requireCondition(canonical.technicianInstructions === canonicalWorkOrders[0].technicianInstructions, 'The live appointment must retain the Work Order instructions, including line breaks.');
+requireCondition(!canonical.customerFacingDescription.includes('Avisar a recepción'), 'Internal technician instructions must remain separate from the customer-facing description.');
+requireCondition(projectLiveSchedulingAppointments([{ ...canonicalWorkOrders[0], technicianInstructions: '  ' }], clients, properties)[0].technicianInstructions === undefined, 'Missing instructions must not be invented from the customer description or property access notes.');
 requireCondition(canonical.primaryVanId === 'VAN-1', 'Canonical vanId must be projected into the live schedule.');
 requireCondition(canonical.assignments[0].start === '08:30', 'Canonical start time must be preserved.');
 requireCondition(canonical.assignments[0].end === '10:30', 'Canonical elapsed duration must be preserved.');

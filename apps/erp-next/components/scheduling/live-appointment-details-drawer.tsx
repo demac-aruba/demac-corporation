@@ -266,6 +266,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
                     {support && serviceEstimate ? <Field label="Trabajo estimado · Apoyo" value={`${formatTime(support.start)}–${formatTime(support.end)}`}/> : null}
                     {support ? <><Field label="Cupos reservados · Apoyo" value={assignmentReservedSlots(support) ?? 'Sin verificar'}/><Field label="Capacidad reservada · Apoyo" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`}/></> : null}
                     <Field wide label="Descripción para el cliente" value={appointment.customerFacingDescription}/>
+                    <Field wide label="Instrucciones para el técnico" value={appointment.technicianInstructions || 'Sin instrucciones registradas.'}/>
                   </div></details>
                 </section>
                 <SavedVisitReferences key={appointment.id} appointmentId={appointment.id} canEdit={canManage && appointment.status !== 'cancelled'} compact onBusyChange={setReferenceBusy}/>
