@@ -21,8 +21,8 @@ function successfulPublication(operation,patch,fn,sourceMatches=exactSource){
  assert.deepEqual(operation.response?.buildConfig?.source?.storageSource,fn.buildConfig?.source?.storageSource,'Live source differs from successful operation');
 }
 async function settleOperation(operation,{getOperation,wait,record}){
- let attempts=0;
- while(!operation.done){assert.ok(attempts++<90,'Source operation exceeded30minutes');record(operation);await wait(20000);operation=await getOperation(operation.name);}
+ let attempts=0;const acceptedName=operation.name;
+ while(!operation.done){assert.ok(attempts++<90,'Source operation exceeded30minutes');record(operation);await wait(20000);operation=await getOperation(acceptedName);assert.equal(operation.name,acceptedName,'Operation identity changed during provenance read');}
  record(operation);return operation;
 }
 // Adapter-driven so lost responses, terminal failures and resume are tested
@@ -49,8 +49,15 @@ async function updateSource({patch,baselineRevision,operations,inspect,publish,g
   if(!operation)throw error;
  }
  record(operation);
+ // The initial PATCH receipt is not the publication proof. Poll that exact
+ // accepted identity to completion, then require complete source provenance.
+ // No downstream mutation can occur while that proof is incomplete.
+ const acceptedName=operation.name;
+ assert.ok(typeof acceptedName==='string'&&acceptedName.startsWith(patch.name.split('/functions/')[0]+'/operations/'),'PATCH returned an unexpected operation identity');
+ if(operation.metadata?.target)assert.equal(operation.metadata.target,patch.name,'PATCH returned another function target');
+ operation=await settleOperation(operation,{getOperation,wait,record});
  assert.equal(reviewedOperation(operation,patch,sourceMatches),true,'PATCH returned an unreviewed operation');
- operation=await settleOperation(operation,{getOperation,wait,record});assert.ok(!operation.error,'Source update failed; retain exact candidate for forward recovery');
+ assert.ok(!operation.error,'Source update failed; retain exact candidate for forward recovery');
  current=await inspect({allowFailed:false});assert.equal(current.fn.state,'ACTIVE');assert.equal(current.alreadyApplied,true);
  assert.notEqual(current.fn.serviceConfig.revision,baselineRevision,'Source update did not produce a new revision');
  successfulPublication(operation,patch,current.fn,sourceMatches);return current;

@@ -130,3 +130,20 @@ Independent reviewer repeated28/28 checks and found the ZIP/provenance correctio
 sound. Their single diagnostic finding was resolved by recording a fixed error
 category instead of arbitrary operation error messages. Exact correction-head CI
 and the controlled retry remain the final activation gates.
+
+PR579 merged as2979d5e0 after all correction-head CI passed; its merge tree is exactly
+the reviewed tree and merge CI also passed. Run38322029114 retained and verified all
+five ZIP transports. Its initial Inventory operation response did not yet satisfy the
+provenance gate, so the coordinator stopped without any downstream activation. Read-only
+run38322416928 subsequently proves that exact operation completed successfully, the
+copied ZIP SHA matches, and Inventory is ACTIVE00005-nup with100% traffic. Other four
+services remain on baseline. The initial differing field was not captured; no specific
+missing-field cause is asserted. Evidence is pinned in appointment-finance-zip-operation-20261012.json.
+
+The correction reads the same accepted operation to completion using the existing
+bounded30-minute/90-read loop before requiring the unchanged provenance gate. It never
+repeats PATCH or accepts a different operation identity or function target. Safe presence
+flags are now retained. Reviewer independently
+passed30/30 and reproduced the provenance check using the real completed operation,
+then gave GO after CI. Resume must verify Inventory source/config/IAM/traffic and skip
+its already-proven update; remaining functions, tariffs, rules and UI are still pending.

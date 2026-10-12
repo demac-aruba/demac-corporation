@@ -1,0 +1,311 @@
+{
+  "releaseRunId": 38322029114,
+  "releaseArtifactId": 11779266421,
+  "releaseArtifactSha256": "6ad2e4d537ae6e181a8e4e5146f6bb85d9c677a8234159a060bc948b75d21599",
+  "release": {
+    "sourceSha": "2979d5e01f1ea5068593ac7b5a18badee39717b4",
+    "preparedSha": "a8fa5a9acb61c400b02c077d30726475566d60cd",
+    "stage": "source-inventoryAuthority",
+    "functions": [
+      {
+        "name": "officeBookingAuthority",
+        "beforeRevision": "officebookingauthority-00084-vak",
+        "alreadyApplied": false,
+        "sourceHash": "744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190"
+      },
+      {
+        "name": "inventoryAuthority",
+        "beforeRevision": "inventoryauthority-00004-dis",
+        "alreadyApplied": false,
+        "sourceHash": "d0863be9a354923b0cb3cea752ec263f6ec296f979602b28e5676df7eb2b65ff"
+      },
+      {
+        "name": "fieldOperationsAuthority",
+        "beforeRevision": "fieldoperationsauthority-00008-goz",
+        "alreadyApplied": false,
+        "sourceHash": "dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d"
+      },
+      {
+        "name": "processCustomerAgentInbound",
+        "beforeRevision": "processcustomeragentinbound-00054-bav",
+        "alreadyApplied": false,
+        "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c"
+      },
+      {
+        "name": "processCustomerAgentReactivation",
+        "beforeRevision": "processcustomeragentreactivation-00054-juj",
+        "alreadyApplied": false,
+        "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c"
+      }
+    ],
+    "transports": [
+      {
+        "name": "officeBookingAuthority",
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "3402c0aef0070f6d567acdcba56e7444113033d40f2ed8b840db0c967d4b8e17",
+        "fullManifestHash": "38e152b4ca9ed1134e19e6fd9164af92b03d5e26cf4b171cf08fd106fab7e7d7",
+        "extractionVerified": true,
+        "recoverySha256": "4973b8f5711b767909e3c7e71f5b0f825f17ec356091b60b9412560fa12cbc8e",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/officeBookingAuthority-candidate.zip",
+        "generation": "1791847562173110",
+        "createdAt": "2026-10-12T23:26:02+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      {
+        "name": "inventoryAuthority",
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "785330393418f5fa63e7f80c8d8c54619b11bd3f62b3878c0feeea90f064314c",
+        "fullManifestHash": "69cdfda9c0e07418b709d7f0667c0cddc86567c2b414b3a8bcbb9726d63e11d4",
+        "extractionVerified": true,
+        "recoverySha256": "ca184f0d68089b5cb8f5f8c87430a9896d12db6b88e0d7552e02a63c6eb97f9c",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/inventoryAuthority-candidate.zip",
+        "generation": "1791847585790998",
+        "createdAt": "2026-10-12T23:26:25+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      {
+        "name": "fieldOperationsAuthority",
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "6ff246ea5f280154fd9217c2fa855bfeace06342ff320154033e44c080e3af8e",
+        "fullManifestHash": "c0c8b3a20560abb6d0a10860b8c7a17c3ac287f25d1b4568990bfd40d7cc9765",
+        "extractionVerified": true,
+        "recoverySha256": "19e6ce24e4de4af30c9df20dfb10eed0b60d2d00edfb91ae163a37a825fefff4",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/fieldOperationsAuthority-candidate.zip",
+        "generation": "1791847610788035",
+        "createdAt": "2026-10-12T23:26:50+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      {
+        "name": "processCustomerAgentInbound",
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "3620eb04aca11985b190915af13ce06156bc68e12273947bb116513532680a67",
+        "fullManifestHash": "4d66ba452e18579e57cec0d65e07eb02b7c2d4083fcd2662921edbe3eaceb81e",
+        "extractionVerified": true,
+        "recoverySha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentInbound-candidate.zip",
+        "generation": "1791847635626985",
+        "createdAt": "2026-10-12T23:27:15+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      {
+        "name": "processCustomerAgentReactivation",
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "3620eb04aca11985b190915af13ce06156bc68e12273947bb116513532680a67",
+        "fullManifestHash": "4d66ba452e18579e57cec0d65e07eb02b7c2d4083fcd2662921edbe3eaceb81e",
+        "extractionVerified": true,
+        "recoverySha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentReactivation-candidate.zip",
+        "generation": "1791847658716339",
+        "createdAt": "2026-10-12T23:27:38+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      }
+    ],
+    "mode": "forward-release",
+    "mainSha": "2979d5e01f1ea5068593ac7b5a18badee39717b4",
+    "rulesBefore": {
+      "rulesetName": "projects/demac-corporation/rulesets/17419371-17cf-4a7c-aef3-f66323276c75",
+      "sourceHash": "2ed66f4dab0ed612eb080b778b50e72e8081e7b12c77a5d90c884c7fa076a5c2"
+    },
+    "operations": [
+      {
+        "function": "inventoryAuthority",
+        "name": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+        "done": false,
+        "errorCode": null,
+        "intent": true,
+        "at": "2026-10-12T23:27:55.438Z"
+      },
+      {
+        "function": "inventoryAuthority",
+        "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791847676710-65dad0c430e35-2b6c089f-1389e63c",
+        "done": false,
+        "errorCode": null
+      }
+    ],
+    "error": "PATCH returned an unreviewed operation"
+  },
+  "diagnosticRunId": 38322416928,
+  "diagnosticArtifactId": 11778424153,
+  "diagnosticArtifactSha256": "fada277f673a645a980b72422c6c43899ade2787ce19626a12cdf1a7a125ccb2",
+  "acceptedSource": {
+    "operation": "projects/demac-corporation/locations/us-central1/operations/operation-1791847676710-65dad0c430e35-2b6c089f-1389e63c",
+    "sha256": "785330393418f5fa63e7f80c8d8c54619b11bd3f62b3878c0feeea90f064314c",
+    "bytes": 559702,
+    "magic": "504b0304"
+  },
+  "completedOperation": {
+    "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791847676710-65dad0c430e35-2b6c089f-1389e63c",
+    "target": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+    "verb": "update",
+    "done": true,
+    "errorCode": null,
+    "errorCategory": null,
+    "createTime": "2026-10-12T23:27:57.394256450Z",
+    "requestName": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+    "requestKeys": [
+      "@type",
+      "name",
+      "buildConfig",
+      "serviceConfig",
+      "state",
+      "labels",
+      "environment",
+      "url",
+      "satisfiesPzi"
+    ],
+    "requestSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1791847677335307",
+      "generationType": "string"
+    },
+    "responseSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1791847677335307",
+      "generationType": "string"
+    },
+    "requestResolvedSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1788215232822379",
+      "generationType": "string"
+    },
+    "responseResolvedSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1791847677335307",
+      "generationType": "string"
+    },
+    "requestType": "type.googleapis.com/google.cloud.functions.v2.Function",
+    "requestHasName": true,
+    "requestHasFunction": false,
+    "requestHasStorageSource": true,
+    "responseType": "type.googleapis.com/google.cloud.functions.v2.Function",
+    "responseHasName": true,
+    "responseHasRevision": true,
+    "responseHasStorageSource": true
+  },
+  "activeFunctions": [
+    {
+      "name": "officeBookingAuthority",
+      "state": "ACTIVE",
+      "current": "officebookingauthority-00084-vak",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791844438804991",
+        "object": "officeBookingAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "officebookingauthority-00084-vak",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "inventoryAuthority",
+      "state": "ACTIVE",
+      "current": "inventoryauthority-00005-nup",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791847677335307",
+        "object": "inventoryAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "inventoryauthority-00005-nup",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "state": "ACTIVE",
+      "current": "fieldoperationsauthority-00008-goz",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791672075422069",
+        "object": "fieldOperationsAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "fieldoperationsauthority-00008-goz",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "state": "ACTIVE",
+      "current": "processcustomeragentinbound-00054-bav",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657179928828",
+        "object": "processCustomerAgentInbound/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "processcustomeragentinbound-00054-bav",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "state": "ACTIVE",
+      "current": "processcustomeragentreactivation-00054-juj",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657228411844",
+        "object": "processCustomerAgentReactivation/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "processcustomeragentreactivation-00054-juj",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    }
+  ]
+}
