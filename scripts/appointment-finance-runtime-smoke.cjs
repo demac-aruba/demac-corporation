@@ -6,6 +6,9 @@ const http = require('node:http');
 const source = path.resolve(process.argv[2]);
 const target = process.argv[3];
 assert.ok(['officeBookingAuthority','inventoryAuthority','fieldOperationsAuthority','processCustomerAgentInbound','processCustomerAgentReactivation'].includes(target));
+// Cloud Functions supplies these non-secret SDK options. The isolated test uses
+// a synthetic bucket; the preload rejects all non-loopback network requests.
+process.env.FIREBASE_CONFIG=JSON.stringify({projectId:'demo-demac-dwelling-runtime',storageBucket:'demo-demac-dwelling-runtime.invalid'});
 const load = createRequire(path.join(source, 'package.json'));
 async function main() {
   const mod = load('./bootstrap.js');
@@ -31,8 +34,11 @@ async function main() {
     try {
       const url = 'http://127.0.0.1:' + server.address().port + '/authority';
       const headers = { Origin: 'https://demac-aruba.com', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' };
-      assert.equal((await fetch(url, { method: 'OPTIONS', headers })).status, 204);
-      assert.equal((await fetch(url, { method: 'POST', headers: { Origin: headers.Origin, 'Content-Type': 'application/json' }, body: '{"action":"list_presets","data":{}}' })).status, 401);
+      const options=await fetch(url, { method: 'OPTIONS', headers });
+      assert.equal(options.status,204,'Synthetic OPTIONS status=' + options.status);
+      const action=target==='fieldOperationsAuthority' ? 'get_schedule' : 'list_presets';
+      const denied=await fetch(url, { method: 'POST', headers: { Origin: headers.Origin, 'Content-Type': 'application/json' }, body: JSON.stringify({action,data:{}}) });
+      assert.equal(denied.status,401,'Synthetic anonymous POST status=' + denied.status);
     } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   }
   const admin = load('firebase-admin/app'); await Promise.all(admin.getApps().map(admin.deleteApp));

@@ -131,8 +131,16 @@ async function main() {
         assert.equal(name,'inventoryAuthority'); assert.equal(fn.serviceConfig.revision,'inventoryauthority-00004-dis');
         assert.deepEqual(pkg.dependencies, { 'firebase-admin': '^13.4.0', 'firebase-functions': '^6.4.0', sharp: '^0.34.3' });
         summary.stage = name + '-reconstruct-lock'; save();
-        run('npm',['install','--package-lock-only','--ignore-scripts','--no-audit','--no-fund'],baseline,isolation);
+        // Reuse the newly pinned, tested baseline retained by run 38315516630.
+        // Do not resolve semver again now that a reproducible baseline exists.
+        const pinned=path.join(out,'inventory-pinned-baseline.tar.gz');
+        cloud(['storage','cp',`gs://${BUCKET}/codex-release-recovery/appointment-finance/2c0c2ca5cdc4950602beb1150a2e556d6a132de0/inventoryAuthority-baseline.tar.gz#1791843367542523`,pinned,'--quiet']);
+        assert.equal(hash(fs.readFileSync(pinned)),'bf6d9c96ffe1199684615038a819570a026389426c5ee56c30e47528e07730fa');
+        safePaths(run('tar',['-tzf',pinned]).trim().split('\n'));
+        fs.writeFileSync(path.join(baseline,'package-lock.json'),run('tar',['-xOf',pinned,'./package-lock.json']));
+        assert.equal(hash(fs.readFileSync(path.join(baseline,'package-lock.json'))),'18d858951848a87ad027ce55097741233e958c0a8d4495c4fcff6e144afe9dca');
         assert.deepEqual(fs.readFileSync(path.join(baseline,'package.json')),pkgBytes,'Dependency declarations changed');
+        assert.equal(runtimeSourceHash(manifest(baseline)),'9f1e6e879ff7fbfff0c9382f5fd867a61894dc79fc12fba974391de4fd389c15','Pinned Inventory baseline differs');
       }
       validateLock(fs.readFileSync(path.join(baseline,'package-lock.json')),pkg);
       const before = manifest(baseline), candidate = path.join(out,name + '-candidate'); fs.cpSync(baseline,candidate,{recursive:true});

@@ -40,6 +40,10 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
       const missingExport = stderr.match(/Runtime export missing: ([a-zA-Z]+)/)?.[1];
       if (missingExport) safe.push('Runtime export missing: ' + missingExport);
       if (/Synthetic audit rejected a non-loopback connection/.test(stderr)) safe.push('Synthetic network isolation rejected a non-loopback connection');
+      const syntheticStatus=stderr.match(/Synthetic (?:OPTIONS|anonymous POST) status=\d+/)?.[0];
+      if(syntheticStatus) safe.push(syntheticStatus);
+      if(/Bucket name not specified or invalid/.test(stderr)) safe.push('Synthetic SDK bucket configuration missing');
+      safe.push('Isolated command exit=' + (error.status ?? error.code ?? 'unknown'));
       console.error(name + ': ' + safe.join('\n')); throw error;
     }
   };
