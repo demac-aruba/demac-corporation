@@ -1,6 +1,8 @@
 'use strict';
 // Owner approved PR575 sandbox deployment on 2026-10-12. No financial calls,
 // database clients, existing-function deployment, rules or secret-value reads.
+// Resume from current reviewed main after the owner's 18:35 confirmation that
+// runtime accessor bindings were applied. All source and deployment gates remain.
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');

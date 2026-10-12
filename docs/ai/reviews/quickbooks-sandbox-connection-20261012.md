@@ -101,3 +101,11 @@ No secret values, customer records or accounting APIs are read by the release wo
 The 12 backend tests passed again. Release script syntax and reviewed-source checks passed.
 Actual OAuth consent and company-name confirmation remain an owner browser step after the
 deployment; do not describe the company as connected before that step succeeds.
+
+### Runtime access correction and current-main retry
+
+The first release stopped at Secret Manager IAM assignment (403), before the Function was
+available. On 12 October at 18:35 Aruba time, the owner supplied Cloud Shell evidence that
+accessor bindings were applied to all three secrets. Retry from main including PR576's
+approved slot history rather than rolling the ERP back to the previous branch. The sandbox
+source, secret versions, create-only deployment and all verification gates are unchanged.
