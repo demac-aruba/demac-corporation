@@ -16,6 +16,7 @@ const scaling = resource => Object.fromEntries(Object.entries(resource?.metadata
   .map(([key, value]) => [key, /^\d+$/.test(String(value)) ? Number(value) : /^(automatic|manual)$/.test(value) ? value : safe(value)]));
 const errorFacts = error => ({ exitStatus: error.status || error.code || null,
   permissionDenied: /PERMISSION_DENIED|Permission denied|does not have permission|denied:|403/i.test(String(error.stderr || '')),
+  categories: ['SERVICE_DISABLED', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT', 'SERVICE_USAGE_DENIED', 'SECURITY_POLICY_VIOLATED', 'USER_PROJECT_DENIED'].filter(code => String(error.stderr || '').includes(code)),
   namedPermissions: [...new Set(String(error.stderr || '').match(/\b(?:logging|resourcemanager)\.[A-Za-z]+(?:\.[A-Za-z]+)+\b/g) || [])] });
 const result = { mode: 'read-only-config-inspection', expectedConfigHash: expected };
 async function main() {
@@ -66,6 +67,42 @@ try {
     const count = timestamps ? timestamps.split('\n').length : 0;
     result.logRead = { succeeded: true, from: '2026-10-12T21:31:00Z', observedAt: new Date().toISOString(), errorCount: count, completeWithinLimit: count < 1000 };
   } catch (error) { result.logRead = { succeeded: false, ...errorFacts(error) }; }
+  if (!result.logRead.succeeded) {
+    try {
+      const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      const response = await fetch('https://logging.googleapis.com/v2/entries:list?fields=entries(timestamp),nextPageToken', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourceNames: ['projects/demac-corporation'], pageSize: 1000,
+          filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="notifybookingreferenceupdate" AND timestamp>="2026-10-12T21:31:00Z" AND (severity>=ERROR OR httpRequest.status>=500)' }), signal: AbortSignal.timeout(30000) });
+      const data = await response.json();
+      result.logApiRead = { httpStatus: response.status, succeeded: response.ok };
+      if (response.ok) Object.assign(result.logApiRead, { errorCount: (data.entries || []).length, completeWithinLimit: !data.nextPageToken });
+      else Object.assign(result.logApiRead, { errorCode: data.error?.code, errorStatus: data.error?.status,
+        reasons: (data.error?.details || []).map(item => ({ reason: item.reason, domain: item.domain,
+          metadata: Object.fromEntries(Object.entries(item.metadata || {}).filter(([key]) => ['service', 'consumer', 'permission'].includes(key))) })) });
+    } catch (error) { result.logApiRead = { succeeded: false, ...errorFacts(error) }; }
+  }
+  // Inspect this function's administrative history only. Never emit arbitrary
+  // request/response bodies, environment values, principal identities or log text.
+  try {
+    const query = 'logName="projects/demac-corporation/logs/cloudaudit.googleapis.com%2Factivity" AND timestamp>="2026-10-01T00:00:00Z" AND (protoPayload.resourceName:"/services/notifybookingreferenceupdate" OR protoPayload.resourceName:"/functions/notifyBookingReferenceUpdate")';
+    const entries = cloud(['logging', 'read', query, '--project=demac-corporation', '--order=asc', '--limit=500', '--format=json']);
+    const extract = (value, prefix = '', found = []) => {
+      if (!value || typeof value !== 'object') return found;
+      if (value.metadata && typeof value.metadata === 'object') found.push({ path: prefix + '.metadata', scalingAnnotations: scaling(value) });
+      for (const [key, item] of Object.entries(value)) {
+        if (['maxInstanceCount', 'minInstanceCount', 'maxInstanceRequestConcurrency', 'containerConcurrency'].includes(key) && typeof item === 'number') found.push({ path: prefix + '.' + key, value: item });
+        if (key === 'scaling' && item && typeof item === 'object') found.push({ path: prefix + '.scaling', values: Object.fromEntries(Object.entries(item).filter(([k,v]) => ['minInstanceCount', 'maxInstanceCount', 'manualInstanceCount'].includes(k) && typeof v === 'number')) });
+        if (item && typeof item === 'object') extract(item, prefix + '.' + key, found);
+      }
+      return found;
+    };
+    result.scalingHistory = { succeeded: true, completeWithinLimit: entries.length < 500, entries: entries.map(entry => ({
+      timestamp: entry.timestamp, method: entry.protoPayload?.methodName,
+      statusCode: entry.protoPayload?.status?.code || 0, first: entry.operation?.first, last: entry.operation?.last,
+      request: extract(entry.protoPayload?.request, 'request'), response: extract(entry.protoPayload?.response, 'response'),
+    })) };
+  } catch (error) { result.scalingHistory = { succeeded: false, ...errorFacts(error) }; }
   result.complete = result.logRead.succeeded && result.logRead.errorCount === 0 && result.logRead.completeWithinLimit;
   if (!result.complete) process.exitCode = 1;
 } catch (error) { result.error = 'Read-only configuration inspection failed'; result.exitStatus = error.status || error.code; process.exitCode = 1; }
