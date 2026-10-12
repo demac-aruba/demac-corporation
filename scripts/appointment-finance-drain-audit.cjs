@@ -16,9 +16,11 @@ async function main(){
     const opResponse=await fetch('https://cloudfunctions.googleapis.com/v2/projects/demac-corporation/locations/us-central1/operations?pageSize=1000',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
     assert.equal(opResponse.status,200,'Operation contract read failed');
     const opPage=await opResponse.json();
-    report.operationContract=(opPage.operations||[]).filter(op=>Object.keys(TARGETS).some(name=>op.metadata?.target?.endsWith('/functions/'+name))).slice(0,8).map(op=>{
+    report.operationContract=(opPage.operations||[]).filter(op=>Object.keys(TARGETS).some(name=>op.metadata?.target?.endsWith('/functions/'+name))).slice(0,20).map(op=>{
       const request=op.metadata?.requestResource,response=op.response;
+      const source=value=>value?{keys:Object.keys(value),bucket:value.bucket,object:value.object,generation:value.generation,generationType:typeof value.generation}:null;
       return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,
+        createTime:op.metadata?.createTime,requestName:request?.name,requestKeys:Object.keys(request||{}),requestSource:source(request?.buildConfig?.source?.storageSource),responseSource:source(response?.buildConfig?.source?.storageSource),
         requestType:request?.['@type'],requestHasName:typeof request?.name==='string',requestHasFunction:typeof request?.function==='object',requestHasStorageSource:!!request?.buildConfig?.source?.storageSource,
         responseType:response?.['@type'],responseHasName:typeof response?.name==='string',responseHasRevision:typeof response?.serviceConfig?.revision==='string',responseHasStorageSource:!!response?.buildConfig?.source?.storageSource};
     });
@@ -28,7 +30,7 @@ async function main(){
       const serviceName=fn.serviceConfig.service.split('/').pop();assert.match(serviceName,/^[a-z0-9-]+$/);
       const svc=JSON.parse(run(['run','services','describe',serviceName,'--project=demac-corporation','--region=us-central1','--format=json']));
       const revisions=JSON.parse(run(['run','revisions','list','--service='+serviceName,'--limit=2','--sort-by=~metadata.creationTimestamp','--project=demac-corporation','--region=us-central1','--format=json']));
-      const item={name,current:fn.serviceConfig.revision,timeoutSeconds:fn.serviceConfig.timeoutSeconds,
+      const item={name,state:fn.state,current:fn.serviceConfig.revision,source:fn.buildConfig.source.storageSource,timeoutSeconds:fn.serviceConfig.timeoutSeconds,
         traffic:(svc.status?.traffic||[]).map(entry=>({revision:entry.revisionName,percent:entry.percent||0,tagged:Boolean(entry.tag)})),revisions:[]};
       for(const revision of revisions){
         const revisionName=revision.metadata.name;assert.match(revisionName,/^[a-z0-9-]+$/);
