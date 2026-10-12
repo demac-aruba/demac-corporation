@@ -81,6 +81,11 @@ jobs:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/booking-modal-evidence
         run: node apps/erp-next/scripts/booking-modal-browser.cjs
+      - name: Schedule slot history, booking availability and recovery
+        env:
+          SCHEDULING_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          SCHEDULING_TEST_OUTPUT: ${{ runner.temp }}/slot-history-evidence
+        run: node apps/erp-next/scripts/scheduling-slot-history-browser.cjs
       - name: Appointment detail layout, workflow parity and recovery
         env:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools

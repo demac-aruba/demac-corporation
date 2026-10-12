@@ -55,6 +55,9 @@ import { AfterHoursEmergencyDrawer } from './after-hours-emergency-panel';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
+import { historyForSlots, type SlotHistoryItem } from '../../lib/scheduling-slot-history';
+import { useScheduleHistory } from './use-schedule-history';
+import { SlotHistoryNote, SlotHistoryDialog } from './slot-history';
 import laneStyles from './live-scheduling-lane-actions.module.css';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -192,6 +195,8 @@ export function LiveSchedulingOverview() {
 
 function LiveSchedulingSession() {
   const { principal, refreshPrincipal } = useAuth();
+  const [selectedHistory, setSelectedHistory] = useState<SlotHistoryItem[] | null>(null);
+  const history = useScheduleHistory(() => { setSelectedHistory(null); void refreshPrincipal().catch(() => undefined); });
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
@@ -271,7 +276,7 @@ function LiveSchedulingSession() {
   const mountedRef = useRef(false);
   const refreshInFlight = useRef<{ key: string; sequence: number; promise: Promise<void> } | null>(null);
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = liveSchedulingInteractionActive({
+  const interactionActive = Boolean(selectedHistory) || liveSchedulingInteractionActive({
     selectedAppointmentId,
     bookingTarget,
     supportTarget,
@@ -335,12 +340,13 @@ function LiveSchedulingSession() {
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
     setManualRefreshing(true);
+    void history.refresh(true);
     try {
       await refresh(true);
     } finally {
       setManualRefreshing(false);
     }
-  }, [interactionActive, refresh]);
+  }, [interactionActive, refresh, history.refresh]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -771,6 +777,7 @@ function LiveSchedulingSession() {
       setAppointments((items) => items.map((item) => item.id === appointment.id ? projected.record : item));
       setPendingDragMove(null);
       setError('');
+      void history.refresh(true);
       setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       setMoveNotice(result.customerNotificationRecommended || pending.customerNotificationRecommended
         ? `Appointment moved to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}. Customer follow-up is recommended because the promised time changed.`
@@ -783,6 +790,7 @@ function LiveSchedulingSession() {
       }, 350);
     } catch (cause) {
       setPendingDragMove(null);
+      void history.refresh(true);
       setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} Refreshing the canonical agenda to verify the result.`);
       void refresh();
     } finally {
@@ -858,6 +866,10 @@ function LiveSchedulingSession() {
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
         </header>
+        <div className={styles.notice} role="status" data-schedule-history-status>
+          <span>{history.error || (history.loading ? 'Cargando historial de cancelaciones y cambios… La agenda sigue disponible.' : 'Historial de cancelaciones y cambios disponible · las notas no ocupan cupos.')}</span>
+          {history.error ? <button type="button" onClick={() => void history.refresh(true)} disabled={history.loading}>Reintentar historial</button> : null}
+        </div>
         <div
           ref={boardScrollRef}
           className={styles.boardScroll}
@@ -877,6 +889,8 @@ function LiveSchedulingSession() {
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
               const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState, activeJobs);
+              const vanHistory = history.items.filter(item => item.date === activeDay.dateKey && item.vanId === van.id);
+              const outsideSlotHistory = vanHistory.filter(item => !historyForSlots([item], vanSlots.map(slot => slot.start)).length);
               const crew = liveVanCrew(capacityState, van.id, activeDay.dateKey);
               const halfDay = liveVanHalfDaySchedule(capacityState, van.id, activeDay.dateKey);
               const operational = liveVanOperationallyAvailable(capacityState, van.id, activeDay.dateKey);
@@ -911,6 +925,13 @@ function LiveSchedulingSession() {
                     jobs={vanJobs}
                     vanId={van.id}
                     jobLinks={jobLinks}
+                    historyItems={vanHistory}
+                    historyDisabled={interactionActive}
+                    onOpenHistory={(items) => {
+                      if (interactionActive) return;
+                      if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
+                      setSelectedHistory(items);
+                    }}
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
                     canCreate={canManage && Boolean(capacityState)}
@@ -923,6 +944,7 @@ function LiveSchedulingSession() {
                     onArmMove={armMove}
                     onDropMove={dropMove}
                   />
+                  {outsideSlotHistory.length ? <div style={{ padding: 7 }}><SlotHistoryNote items={outsideSlotHistory} disabled={interactionActive} onOpen={setSelectedHistory} /></div> : null}
                   {!activeDay.isOpen ? <div className={styles.closedDay}>{activeDay.shiftLabel || 'Operationally closed.'}</div> : null}
                   <div className={laneStyles.laneAction}>
                     <button
@@ -970,7 +992,8 @@ function LiveSchedulingSession() {
         </nav> : null}
       </div>
 
-      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
+      {selectedHistory ? <SlotHistoryDialog items={selectedHistory} onClose={() => setSelectedHistory(null)} /> : null}
+      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} project={projectLabels.get(selectedAppointment.id)} canManage={canManage} onClose={() => setSelectedAppointmentId('')} onChanged={() => { void history.refresh(true); return refresh(); }} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer availableSlotStarts={capacityState ? displaySlotsForVan(activeDay, bookingTarget.vanId, capacityState, activeJobs)
         .filter(slot => slot.operational && !activeJobsForSlot(activeJobs.filter(job => job.vanId === bookingTarget.vanId), slot).length).map(slot => slot.start) : undefined} mode={bookingTarget.restDayOvertime ? 'rest_day_overtime' : 'standard'} target={bookingTarget} onSendSupport={canManage && Boolean(capacityState) && !bookingTarget.restDayOvertime && canPlanCoworkerSupport(bookingTarget.dateKey) ? () => openSupportAssignment(bookingTarget.vanId, bookingTarget.start, bookingTarget.end) : undefined} support={supportTarget ? { target: supportTarget, appointments, onCreated: handleCreatedSupport } : undefined} onClose={() => { setBookingTarget(null); setSupportTarget(null); }} onCreated={(booking) => { setSupportTarget(null); handleCreatedBooking(booking); }} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
@@ -984,6 +1007,9 @@ function VanScheduleSlots({
   jobs,
   vanId,
   jobLinks,
+  historyItems,
+  historyDisabled,
+  onOpenHistory,
   moveArmedJobId,
   moveBusy,
   canCreate,
@@ -1000,6 +1026,9 @@ function VanScheduleSlots({
   jobs: CalendarDispatchJob[];
   vanId: string;
   jobLinks: Map<string, JobLink>;
+  historyItems: SlotHistoryItem[];
+  historyDisabled: boolean;
+  onOpenHistory: (items: SlotHistoryItem[]) => void;
   moveArmedJobId: string;
   moveBusy: boolean;
   canCreate: boolean;
@@ -1022,6 +1051,7 @@ function VanScheduleSlots({
     if (firstAfternoon) rows.push(<div className={styles.lunchRow} data-schedule-lunch key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
     const active = activeJobsForSlot(jobs, slot);
+    const slotHistory = historyForSlots(historyItems, [slot.start]);
     const weeklyRestMoveTarget = Boolean(moveArmedJobId) && !moveBusy && !slot.operational
       && validDropTargets.has(liveMoveTargetKey(vanId, slot.start))
       && overtimeDropTargets.has(liveMoveTargetKey(vanId, slot.start));
@@ -1036,6 +1066,7 @@ function VanScheduleSlots({
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
         <div><strong style={{ color: canBookOvertime ? 'var(--warning)' : 'var(--muted)' }}>{canBookOvertime ? 'Weekly rest · overtime' : 'Not available'}</strong><span>{slot.offReason || 'Outside operating capacity'}</span></div>
         {canBookOvertime ? <button type="button" className={styles.secondary} style={{ color: 'var(--warning)' }} onClick={() => onCreateAppointment(vanId, slot.start, slot.end, true)}>BOOK OVERTIME</button> : <b style={{ color: 'var(--muted)' }}>OFF</b>}
+        <SlotHistoryNote items={slotHistory} disabled={historyDisabled} onOpen={onOpenHistory} />
       </div>);
       index += 1;
       continue;
@@ -1076,15 +1107,18 @@ function VanScheduleSlots({
           {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('support'); }}>SUPPORT</button> : null}
         </div> : <b>LIVE</b>}
         {createEnabled ? <button type="button" className={laneStyles.slotCardButton} aria-label={`Book ${vanId} at ${formatTime(slot.start)}`} onClick={() => runAvailableAction('card')} /> : null}
+        <SlotHistoryNote items={slotHistory} disabled={historyDisabled} onOpen={onOpenHistory} />
       </div>);
       index += 1;
       continue;
     }
 
     const span = activeSetSpan(jobs, slots, index);
+    const spanHistory = historyForSlots(historyItems, slots.slice(index, index + span).map(item => item.start));
+    const historyNote = spanHistory.length ? <SlotHistoryNote items={spanHistory} disabled={historyDisabled} onOpen={onOpenHistory} /> : null;
     const spanOutsideCapacity = slots.slice(index, index + span).some((spanSlot) => !spanSlot.operational);
     if (active.length > 1) {
-      rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} jobLinks={jobLinks} onOpenAppointment={onOpenAppointment} />);
+      rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} jobLinks={jobLinks} historyNote={historyNote} onOpenAppointment={onOpenAppointment} />);
       index += span;
       continue;
     }
@@ -1093,6 +1127,7 @@ function VanScheduleSlots({
     rows.push(<AppointmentBlock
       key={`${job.id}-${slot.start}`}
       job={job}
+      historyNote={historyNote}
       appointment={jobLinks.get(job.id)?.appointment}
       project={jobLinks.get(job.id)?.project}
       span={span}
@@ -1109,7 +1144,7 @@ function VanScheduleSlots({
   return <div className={styles.slotList} data-schedule-slots>{rows}</div>;
 }
 
-function AppointmentBlock({ job, appointment, project, span, crossesLunch, continuation = false, armed, outsideCapacity, onOpen, onArm }: {
+function AppointmentBlock({ job, appointment, project, span, crossesLunch, continuation = false, armed, outsideCapacity, historyNote, onOpen, onArm }: {
   job: CalendarDispatchJob;
   appointment?: BrowserAppointmentRecord;
   project?: SchedulingProjectLabel;
@@ -1118,6 +1153,7 @@ function AppointmentBlock({ job, appointment, project, span, crossesLunch, conti
   continuation?: boolean;
   armed: boolean;
   outsideCapacity: boolean;
+  historyNote: React.ReactNode;
   onOpen: () => void;
   onArm: () => void;
 }) {
@@ -1133,6 +1169,7 @@ function AppointmentBlock({ job, appointment, project, span, crossesLunch, conti
   };
   return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{
     minHeight,
+    gridTemplateRows: historyNote ? '1fr auto' : undefined,
     outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
     background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
   }}>
@@ -1177,12 +1214,14 @@ function AppointmentBlock({ job, appointment, project, span, crossesLunch, conti
         </div>
       </article>
     </div>
+    {historyNote}
   </div>;
 }
 
-function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
+function ConflictBlock({ jobs, span, jobLinks, historyNote, onOpenAppointment }: {
   jobs: CalendarDispatchJob[];
   span: number;
+  historyNote: React.ReactNode;
   jobLinks: Map<string, JobLink>;
   onOpenAppointment: (jobId: string) => void;
 }) {
@@ -1192,7 +1231,7 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
     return timeToMinutes(capacityEnd) > timeToMinutes(latest) ? capacityEnd : latest;
   }, liveJobCapacityEnd(jobs[0]));
   const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 86 + 34);
-  return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{ minHeight, outline: '1px solid var(--danger)' }}>
+  return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{ minHeight, gridTemplateRows: historyNote ? '1fr auto' : undefined, outline: '1px solid var(--danger)' }}>
     <div className={styles.slotTime}><strong>{formatTime(start)}</strong><span>{formatTime(end)}</span><span>Conflict</span></div>
     <div className={styles.slotJobs}>
       <div style={{ fontSize: 8, fontWeight: 800, color: 'var(--danger)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Capacity conflict · review both appointments</div>
@@ -1216,5 +1255,6 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       </article>;
       })}
     </div>
+    {historyNote}
   </div>;
 }
