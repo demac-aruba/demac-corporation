@@ -1,5 +1,6 @@
 const { FieldValue } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
+const { bookingMessageAddress } = require("./bookingLocationDisplay");
 const {
   DEFAULT_CLOSED_WEEKDAYS,
   DEFAULT_SEARCH_DAYS,
@@ -132,7 +133,7 @@ function createAppointmentNotificationService({ db } = {}) {
       String(recipient?.name || client.name || client.company || "Customer").trim(),
       formatAppointmentDate(order.date, languageCode),
       formatAppointmentTime(order.time, languageCode),
-      String(order.address || client.address || "").trim(),
+      bookingMessageAddress(order, client.address),
       await getServiceDescription(order, languageCode),
     ];
   }

@@ -9,6 +9,8 @@ const { createOfficeBookingAuthorityFacade } = require('./officeBookingAuthority
 const { createBookingAuthority } = require('./bookingAuthorityFirestore');
 const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
 const { resolveAppointmentRecipients } = require('./customerContactDirectory');
+const { createAppointmentNotificationService } = require('./appointmentNotificationService');
+const { renderVanWorkOrderText } = require('./technicianDailyScheduleService');
 const { createRegisterEquipmentSystemCommand } = require('./fieldOperationsEquipmentRegistration');
 const { createAttachExistingVisitAssetCommand } = require('./fieldOperationsVisitAssets');
 assertIsolated();
@@ -152,6 +154,30 @@ test('F/I/L: canonical booking commits location without equipment; missing dwell
   assert.equal(created.appointment.dwellingId,saved.ids[0]);assert.equal(created.appointment.locationSnapshot.accessContact.name,'Synthetic Access');
   for(const wo of created.workOrderIds) {assert.equal((await get(`workOrders/${wo}`)).dwellingId,saved.ids[0]);assert.equal((await get(`workOrders/${wo}`)).airConditionerCount,2);}
   assert.equal((await db.collection('equipmentSystems').get()).size,1);
+  const workOrderId = created.workOrderIds[0];
+  const persisted = await get(`workOrders/${workOrderId}`);
+  const frozenLocation = persisted.locationSnapshot;
+  assert.equal(frozenLocation.dwellingName, 'Apartment 1');
+  await db.doc(`properties/${propertyId}/dwellings/${saved.ids[0]}`).set({ name: 'RENAMED AFTER BOOKING' }, { merge: true });
+  const order = { ...persisted, id: workOrderId, whatsappNotificationsEnabled: true,
+    notificationRecipients: [{ id: 'synthetic-recipient', name: 'Synthetic only', whatsapp: '+2975600000', preferredLanguage: 'es', sendConfirmation: true, sendReminder: true }] };
+  const notifications = createAppointmentNotificationService({ db });
+  for (const method of ['queueConfirmationForOrder', 'queueReminderForOrder']) {
+    const input = { order, eventId: 'isolated-location-event', reason: 'isolated-location-audit' };
+    assert.equal((await notifications[method](input)).queued, true);
+    assert.equal((await notifications[method](input)).notifications[0].created, false);
+  }
+  const queued = await db.collection('whatsappOutboundQueue').get();
+  assert.equal(queued.size, 2);
+  for (const item of queued.docs) {
+    assert.match(item.data().text, /Apartment 1/);
+    assert.doesNotMatch(item.data().text, /RENAMED AFTER BOOKING|Synthetic Access|Synthetic Requester/);
+  }
+  const technicianText = renderVanWorkOrderText({ van: { name: 'Synthetic van' }, order: persisted,
+    appointment: { ...created.appointment, id: created.appointment.appointmentId }, property: { name: 'RENAMED AFTER BOOKING' }, client: { name: 'Synthetic only' }, sequence: 1 });
+  assert.match(technicianText, /Apartment 1/);
+  assert.doesNotMatch(technicianText, /RENAMED AFTER BOOKING/);
+  assert.deepEqual((await get(`workOrders/${workOrderId}`)).locationSnapshot, frozenLocation);
 });
 
 test('L: live facade authentication denies technician, invalid token and anonymous location reads/writes',async()=>{

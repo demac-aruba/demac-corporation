@@ -650,7 +650,10 @@ test('daily schedule bundles references after their own work text, chains the ne
   const firstOrder = { ...order, id: 'ORDER-ONE', appointmentId: 'APT-REF', time: '08:30' };
   const secondOrder = { ...order, id: 'ORDER-TWO', appointmentId: 'APT-NEXT', time: '14:30' };
   const db = createScheduleDb({ vans: [groupVan], workOrders: [firstOrder, secondOrder],
-    clients: [{ id: 'client-1', name: 'Synthetic Client' }], appointments: [{ id: 'APT-REF', visitReferences: {
+    clients: [{ id: 'client-1', name: 'Synthetic Client' }], appointments: [{ id: 'APT-REF', locationSnapshot: {
+      propertyId: 'property-1', dwellingId: 'synthetic-unit-4', dwellingName: 'Apartamento 4', dwellingCode: 'A-04',
+      locationLabel: 'Complejo de prueba · Apartamento 4',
+    }, visitReferences: {
       version: 1, notes: 'Kitchen access', location: { url: 'https://maps.google.com/?q=12,-70', label: 'Entrance' },
       files: [{ id: 'photo-001', kind: 'image', fileName: 'kitchen.jpg', mimeType: 'image/jpeg', storagePath: 'booking-references/office/photo-001', description: 'Drain connection' }],
     } }, { id: 'APT-NEXT' }] });
@@ -659,11 +662,42 @@ test('daily schedule bundles references after their own work text, chains the ne
   const queue = [...db.collections.whatsappOutboundQueue.values()];
   const first = queue.find(item => item.workOrderId === 'ORDER-ONE');
   assert.equal(first.type, 'booking-reference-bundle');
+  assert.match(first.messages[0].text, /\*Location:\* Complejo de prueba · Apartamento 4 · A-04/);
   assert.match(first.messages[0].text, /Kitchen access/); assert.match(first.messages[0].text, /maps.google.com/);
   assert.match(first.messages[1].text, /Drain connection/);
   const second = queue.find(item => item.workOrderId === 'ORDER-TWO');
+  assert.doesNotMatch(second.text || second.messages?.[0]?.text || '', /Apartamento 4|A-04/);
   assert.ok(second.dependsOnQueueId);
   const count = db.collections.whatsappOutboundQueue.size;
   await service.queueDay(dateKey);
   assert.equal(db.collections.whatsappOutboundQueue.size, count);
+});
+
+test('daily work messages preserve the saved apartment for normal, project and support work', () => {
+  const locationSnapshot = { propertyId: 'property-1', dwellingId: 'unit-4', dwellingName: 'Apartamento 4',
+    dwellingCode: 'A-04', locationLabel: 'Complejo de prueba · Apartamento 4' };
+  for (const extra of [{}, { projectId: 'synthetic-project' }, { appointmentAssignmentRole: 'support' }]) {
+    const message = renderVanWorkOrderText({ van: groupVan,
+      order: { ...order, ...extra, dwellingId: 'unit-4', locationSnapshot },
+      property: { name: 'Renamed complex', address: 'New catalog address' },
+      appointment: { id: order.appointmentId, locationSnapshot: { ...locationSnapshot, dwellingName: 'Neighbor 5',
+        dwellingCode: 'A-05', locationLabel: 'Wrong current name' } },
+      client: { name: 'Synthetic Client' }, sequence: 1 });
+    assert.match(message, /\*Location:\* Complejo de prueba · Apartamento 4 · A-04/);
+    assert.match(message, /\*Dirección:\* Caya G\. F\. Betico Croes 42/);
+    assert.doesNotMatch(message, /Neighbor 5|A-05|Renamed complex|New catalog address/);
+  }
+});
+
+test('support fallback uses only the linked appointment and legacy jobs keep their original property', () => {
+  const locationSnapshot = { propertyId: 'property-1', dwellingId: 'unit-4', dwellingName: 'Apartamento 4', dwellingCode: 'A-04' };
+  const render = (appointment, extra = {}) => renderVanWorkOrderText({ van: groupVan,
+    order: { ...order, appointmentAssignmentRole: 'support', ...extra },
+    property: { name: 'Synthetic complex', hasIndependentDwellings: true }, appointment,
+    client: { name: 'Synthetic Client' }, sequence: 1 });
+  assert.match(render({ id: order.appointmentId, locationSnapshot }), /\*Location:\* Apartamento 4 · A-04/);
+  assert.doesNotMatch(render({ id: 'other-appointment', locationSnapshot }), /Apartamento 4|A-04/);
+  assert.doesNotMatch(render({ id: order.appointmentId, locationSnapshot }, { dwellingId: 'unit-5' }), /Apartamento 4|A-04/);
+  assert.match(render({ id: order.appointmentId }), /\*Location:\* Synthetic complex/);
+  assert.doesNotMatch(render({ id: order.appointmentId }), /Apartamento 4|A-04/);
 });

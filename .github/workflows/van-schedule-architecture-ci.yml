@@ -22,6 +22,7 @@ on:
       - 'functions/technicianScheduleAvailability.test.js'
       - 'functions/technicianScheduleChangeService.js'
       - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/bookingLocationDisplay.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/technicianDailyScheduleCanonicalTime.test.js'
@@ -50,6 +51,7 @@ on:
       - 'functions/technicianScheduleAvailability.test.js'
       - 'functions/technicianScheduleChangeService.js'
       - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/bookingLocationDisplay.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/technicianDailyScheduleCanonicalTime.test.js'
@@ -92,7 +94,7 @@ jobs:
         run: npm --prefix apps/erp-next run typecheck
 
       - name: Install booking authority dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+        run: npm ci --prefix functions --no-audit --no-fund
 
       - name: Validate Booking Authority Van capacity and crew
         run: node --test functions/bookingCapacityAvailability.test.js functions/bookingCrewResolution.test.js functions/bookingAdhocSupport.test.js
