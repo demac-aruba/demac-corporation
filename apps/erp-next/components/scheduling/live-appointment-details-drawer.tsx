@@ -227,10 +227,11 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
           <button type="button" className={ui.close} disabled={blocked} aria-label="Cerrar cita" onClick={onClose}>×</button>
         </div>
       </header>
-      <div className={ui.context}>
+      <div className={`${ui.context} ${tab !== 'details' ? chargeStyles.financeContext : ''}`}>
         <div><ChargeIcon name="calendar"/><span>{formatDate(appointment.dateKey)}</span></div>
         <div><ChargeIcon name="clock"/><span>{formatTime(primary?.start)}–{formatTime(primaryCapacityEnd)}</span></div>
         <div><ChargeIcon name="van"/><span>{primary?.vanId?.replace('VAN-', 'Van ') || 'Sin van asignada'}</span></div>
+        {tab !== 'details' ? <div><ChargeIcon name="person"/><span>{appointment.customer}</span></div> : null}
       </div>
       <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita">{([{ id: 'details', label: 'Resumen', icon: 'clipboard' }, { id: 'charges', label: 'Importes y pagos', icon: 'receipt' }, { id: 'history', label: 'Historial', icon: 'history' }] as const).map(item => <button key={item.id} type="button" disabled={blocked || mode !== 'details'} aria-current={tab === item.id ? 'page' : undefined} className={tab === item.id ? chargeStyles.active : ''} onClick={() => { setMoreOpen(false); setTab(item.id); }}><ChargeIcon name={item.icon}/>{item.label}</button>)}</nav>
       <div className={ui.body}>
@@ -245,7 +246,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             </div>
           </section>
         </div> : null}
-        <div className={tab === 'details' ? ui.hidden : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged}/></div>
+        <div className={tab === 'details' ? ui.hidden : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
@@ -311,6 +312,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         </section> : null}
         </div>
       </div>
+      {tab !== 'details' ? <footer className={ui.footer}><span className={chargeStyles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span><button type="button" className={ui.button} disabled={blocked} onClick={onClose}>Cerrar</button></footer> : null}
       {tab === 'details' && mode === 'details' ? <footer className={ui.footer}>
         {!partialOutcome ? <details className={ui.more} open={moreOpen}><summary className={ui.button} aria-disabled={blocked} onClick={event => { event.preventDefault(); if (!blocked) setMoreOpen(!moreOpen); }}><ChargeIcon name="more"/>Más acciones<ChargeIcon name="chevron"/></summary><div className={ui.menu}>
           {canCorrectHistoricalCapacity ? <button type="button" disabled={blocked} onClick={() => begin('capacity')}>Corregir cupos pasados</button> : null}

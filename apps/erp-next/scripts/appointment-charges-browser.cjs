@@ -58,7 +58,7 @@ await page.getByLabel('BTU 1',{exact:true}).fill('12000');await page.getByLabel(
 await page.getByText('Afl. 270.00',{exact:true}).waitFor();assert.equal(writes.length,0,'Opening and quoting never write');
 await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('TR-TEST-100');
 await page.screenshot({path:path.join(evidence,`booking-${viewport.width}.png`),fullPage:true});
-await page.getByRole('button',{name:'Confirmar cita de prueba'}).click();await page.getByText('PROYECTADO ORIGINAL',{exact:true}).waitFor();
+await page.getByRole('button',{name:'Confirmar cita de prueba'}).click();await page.getByText('ESTIMADO ORIGINAL',{exact:true}).waitFor();
 assert.equal(db.read('appointments/apt').jobCharges.originalEstimate.totalCents,27000);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,10000);
 await page.screenshot({path:path.join(evidence,`appointment-${viewport.width}.png`),fullPage:true});
 await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.getByLabel('Precio unitario 2',{exact:true}).fill('250');await page.getByLabel('Motivo del precio 2',{exact:true}).fill('Cambio a limpieza profunda acordado');

@@ -24,9 +24,18 @@ export async function callOfficeBookingAuthority(action,data){
  window.__record.state.version++;return {success:true,state:window.__record.state};
 }`;
 const entry=`import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {LiveAppointmentDetailsDrawer} from './components/scheduling/live-appointment-details-drawer';import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';
-function Harness(){const [open,setOpen]=useState(true),[id,setId]=useState('APPOINTMENT-TEST'),[session,setSession]=useState(1);window.__select=setId;window.__session=()=>setSession(n=>n+1);return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}>{open?<LiveAppointmentDetailsDrawer key={session} appointment={{...${JSON.stringify(appointment)},id}} canManage onClose={()=>setOpen(false)} onChanged={()=>{}}/>:<p>Cita cerrada</p>}</div>}createRoot(document.getElementById('app')).render(<React.StrictMode><Harness/></React.StrictMode>);`;
+function Harness(){const [open,setOpen]=useState(true),[id,setId]=useState('APPOINTMENT-TEST'),[session,setSession]=useState(1);window.__select=setId;window.__session=()=>setSession(n=>n+1);return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}>{open?<LiveAppointmentDetailsDrawer key={session} appointment={{...${JSON.stringify(appointment)},id}} canManage={window.__canManage!==false} onClose={()=>setOpen(false)} onChanged={()=>{}}/>:<p>Cita cerrada</p>}</div>}createRoot(document.getElementById('app')).render(<React.StrictMode><Harness/></React.StrictMode>);`;
 const quote={lines:[{id:'line-1',label:'CheckUp de ejemplo',quantityMillis:1000,unitCents:15000,totalCents:15000,baseUnitCents:15000,pendingReason:'',manualPrice:false}],totalCents:15000,knownTotalCents:15000,currency:'AWG',capturedAt:'2026-10-10T12:00:00Z',quoteToken:'synthetic-quote'};
 const record={success:true,state:{schemaVersion:1,version:1,originalEstimate:quote,estimate:quote,final:null,receivedCents:0,paymentCount:0},history:[],payments:[],blocker:'',appointmentStatus:'confirmed',candidateEvidence:{fingerprint:'field-v1',records:[{id:'field',revisionNumber:1,lines:[{description:'Revisión de ejemplo',quantity:1,lineTotal:150}],blockers:[]}]}};
+// Synthetic final snapshot exercises agreed prices, changed scope, add-ons and voids.
+const premium=structuredClone(record);
+const work=(id,label,cents,btu)=>({...quote.lines[0],id,label,baseUnitCents:12500,unitCents:cents,totalCents:cents,btu});
+premium.state.originalEstimate={...quote,lines:[work('ac-1','Standard service',12500,12000),work('ac-2','Standard service',13500,18000)],totalCents:26000,knownTotalCents:26000};
+premium.state.estimate=structuredClone(premium.state.originalEstimate);
+premium.state.final={...quote,lines:[work('ac-1','Standard service',12500,12000),{...work('ac-2','Deep cleaning',23500,18000),manualPrice:true,reason:'Limpieza profunda autorizada'},work('addon','Tratamiento antibacterial',7000)],totalCents:43000,knownTotalCents:43000,note:'Se autorizó limpieza profunda y tratamiento antibacterial.'};
+premium.state.receivedCents=20000;premium.state.paymentCount=3;
+premium.payments=[{id:'p1',method:'transfer',amountCents:15000,status:'recorded',createdAt:'2026-10-10T10:00:00Z',receivedAt:'2026-10-10T10:00:00Z',createdByName:'Operador de prueba',reference:'REF-DEMO-01'},{id:'p2',method:'cash',amountCents:5000,status:'recorded',createdAt:'2026-10-10T11:00:00Z',receivedAt:'2026-10-10T11:00:00Z',createdByName:'Operador de prueba'},{id:'p3',method:'pos',amountCents:1000,status:'voided',createdAt:'2026-10-10T11:30:00Z',receivedAt:'2026-10-10T11:30:00Z',voidReason:'Referencia duplicada de prueba'}];
+premium.candidateEvidence={fingerprint:'field-v1',records:[]};
 const desktop={width:1440,height:1000};
 const tab=(page,name)=>page.getByRole('navigation',{name:'Secciones de la cita'}).getByRole('button',{name,exact:true});
 const finance=page=>page.locator('[data-charge-stage]');
@@ -84,6 +93,36 @@ async function main(){
   for(const error of ['', 'Synthetic permission denied'])await run(error?'prefetch-denial-keeps-overview-usable':'close-during-read',async page=>{
    await page.waitForFunction(()=>window.__reads.length===1);assert.equal(await page.getByRole('button',{name:'Editar cita',exact:true}).isEnabled(),true);assert.equal(await page.getByRole('button',{name:'Cerrar cita'}).isEnabled(),true);if(error){await tab(page,'Importes y pagos').click();await page.getByRole('alert').filter({hasText:error}).waitFor();await tab(page,'Resumen').click();}await page.getByRole('button',{name:'Cerrar cita'}).click();await page.getByText('Cita cerrada').waitFor();if(!error)await page.evaluate(()=>window.__release[0]());assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__holdReads:!error,__readError:error});
+  for(const viewport of [desktop,{width:1366,height:768},{width:390,height:844}])await run('premium-final-'+viewport.width,async page=>{
+   await openFinance(page);const text=await finance(page).innerText();
+   assert.match(text,/Importe final confirmado/);assert.doesNotMatch(text,/Trabajo completado/);assert.match(text,/2 pagos vigentes/);assert.match(text,/Anulado · Referencia duplicada de prueba/);
+   for(const value of ['Afl. 260.00','Afl. 430.00','Afl. 200.00','Afl. 230.00','+ Afl. 170.00','18,000 BTU','Servicio cambiado','Concepto añadido'])assert.ok(text.includes(value),value);
+   const row=page.getByRole('row').filter({hasText:'Deep cleaning'});assert.match(await row.innerText(),/235.00/);assert.doesNotMatch(await row.innerText(),/125.00/);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false);
+   await page.screenshot({path:path.join(artifacts,'premium-final-'+viewport.width+'.png'),fullPage:true});
+   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Corrección pendiente');
+   await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos'}).waitFor();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Corrección pendiente');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:premium},viewport);
+  await run('method-shortcuts-preserve-payment-draft',async page=>{
+   await openFinance(page);
+   for(const method of ['Efectivo','Transferencia','POS','SUAVE']){
+    await page.getByRole('button',{name:method,exact:true}).click();assert.equal(await page.getByRole('button',{name:method,exact:true}).getAttribute('aria-pressed'),'true');await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('25');
+    await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'25');assert.equal(await page.getByRole('button',{name:method,exact:true}).getAttribute('aria-pressed'),'true');await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+   }assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  });
+  for(const scenario of ['read-only','blocker','hold','cancelled'])await run('premium-restriction-'+scenario,async page=>{
+   await openFinance(page);if(scenario==='blocker'){assert.match(await finance(page).innerText(),/Pagos pendientes de conciliación/);assert.match(await finance(page).innerText(),/Por conciliar/);assert.doesNotMatch(await finance(page).innerText(),/0 pagos vigentes|✓ Pagado/);}assert.equal(await page.getByRole('button',{name:'Editar trabajos',exact:true}).isDisabled(),true);
+   for(const name of ['Efectivo','Transferencia','POS','SUAVE','Registrar pago'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),scenario!=='cancelled','Cancelled visits retain authorized outstanding-payment behavior');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__canManage:scenario!=='read-only',__record:{...premium,blocker:scenario==='blocker'?'Synthetic legacy blocker':'',appointmentStatus:scenario==='hold'?'temporary_hold':scenario==='cancelled'?'cancelled':'confirmed'}});
+  for(const scenario of ['unknown','zero','credit','empty','fractional','final-only'])await run('premium-amount-'+scenario,async page=>{
+   await openFinance(page);const text=await finance(page).innerText();
+   if(scenario==='final-only'){assert.match(text,/El importe final queda registrado en el historial/);assert.doesNotMatch(text,/El estimado original se conserva en el historial/);assert.doesNotMatch(text,/vs. estimado/);}
+   if(scenario==='unknown'){assert.match(text,/Por confirmar/);assert.doesNotMatch(text,/✓ Pagado/);assert.match(text,/BTU pendiente/);}
+   if(scenario==='zero'){assert.match(text,/Afl. 0.00/);assert.match(text,/Sin saldo pendiente/);assert.match(text,/✓ Pagado/);}
+   if(scenario==='credit'){assert.match(text,/SALDO A FAVOR/);assert.match(text,/Afl. 20.00/);assert.doesNotMatch(text,/✓ Pagado/);}
+   if(scenario==='empty'){assert.match(text,/Sin registrar/);assert.match(text,/todavía no tiene importes registrados/);assert.doesNotMatch(text,/✓ Pagado/);}
+   if(scenario==='fractional'){const row=page.getByRole('row').filter({hasText:'Hora adicional'});assert.match(await row.innerText(),/1.5/);assert.match(await row.innerText(),/45.00/);assert.match(await row.innerText(),/67.50/);}
+  },{__record:(()=>{const r=structuredClone(premium);if(scenario==='final-only')r.state.originalEstimate=null;if(scenario==='empty')r.state=null;if(scenario==='unknown'){r.state.final=null;r.state.estimate.totalCents=null;r.state.estimate.lines[0].unitCents=null;r.state.estimate.lines[0].totalCents=null;r.state.estimate.lines[0].pendingReason='BTU pendiente';}if(scenario==='zero'){r.state.final.totalCents=0;r.state.final.lines=[];r.state.receivedCents=0;r.payments=[];}if(scenario==='credit')r.state.receivedCents=45000;if(scenario==='fractional'){r.state.final.lines=[{...work('extra','Hora adicional',4500),quantityMillis:1500,totalCents:6750}];r.state.final.totalCents=6750;}return r;})()});
   fs.writeFileSync(path.join(artifacts,'results.json'),JSON.stringify({results,externalRequests:0,productionWrites:0},null,2));
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(output,{recursive:true,force:true});}
 }
