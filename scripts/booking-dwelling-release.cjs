@@ -119,7 +119,36 @@ async function main() {
     checkpoint('registry-auth');
     cloud(['auth', 'configure-docker', host, '--quiet']);
     checkpoint('read-immutable-image');
-    run('docker', ['pull', image]);
+    try { run('docker', ['pull', image]); }
+    catch (error) {
+      // Read-only provenance diagnostics. Never publish raw build logs,
+      // environment variables, cloud configuration or credential output.
+      const diagnostic = { revision: fn.serviceConfig.revision, image,
+        imageMissing: /manifest unknown|not found|name unknown/i.test(String(error.stderr || '')),
+        manifestMissing: /manifest unknown/i.test(String(error.stderr || '')),
+        missingCommand: error.code === 'ENOENT', build: fn.buildConfig.build || null };
+      const imageReference = value => typeof value === 'string' &&
+        /^[a-z0-9-]+-docker\.pkg\.dev\/demac-corporation\/[a-zA-Z0-9_./:@-]+$/.test(value) ? value : null;
+      diagnostic.revisionImages = (revision.spec?.containers || []).map(item => imageReference(item.image)).filter(Boolean);
+      const buildRef = fn.buildConfig.build?.match(/^projects\/[^/]+\/locations\/([^/]+)\/builds\/([a-f0-9-]+)$/);
+      if (buildRef) {
+        try {
+          const build = JSON.parse(cloud(['builds', 'describe', buildRef[2], '--project=' + PROJECT, '--region=' + buildRef[1], '--format=json']));
+          diagnostic.buildResult = { status: build.status, finishTime: build.finishTime,
+            images: (build.results?.images || []).map(item => ({ name: imageReference(item.name), digest: /^sha256:[a-f0-9]{64}$/.test(item.digest) ? item.digest : null })),
+            outputImages: (build.images || []).map(imageReference).filter(Boolean),
+            artifactsPresent: Boolean(build.artifacts), source: build.sourceProvenance?.resolvedStorageSource || null };
+        } catch { diagnostic.buildReadFailed = true; }
+      }
+      try {
+        const repo = fn.buildConfig.dockerRepository.match(/^projects\/[^/]+\/locations\/([^/]+)\/repositories\/([^/]+)$/);
+        assert.ok(repo, 'Unknown image repository');
+        const registry = JSON.parse(cloud(['artifacts', 'repositories', 'describe', repo[2], '--project=' + PROJECT, '--location=' + repo[1], '--format=json']));
+        diagnostic.cleanup = { dryRun: registry.cleanupPolicyDryRun, policies: registry.cleanupPolicies };
+      } catch { diagnostic.repositoryReadFailed = true; }
+      summary.recoveryDiagnostics = diagnostic; save();
+      throw error;
+    }
     checkpoint('inspect-image');
     const workingDir = run('docker', ['image', 'inspect', '--format={{.Config.WorkingDir}}', image]).trim();
     assert.ok(path.posix.isAbsolute(workingDir) && !workingDir.split('/').includes('..'), 'Unknown image work directory');
