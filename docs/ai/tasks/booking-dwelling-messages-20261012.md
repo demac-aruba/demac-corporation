@@ -1,5 +1,12 @@
 # Task: Preserve the selected apartment in booking communications
 
+## Current follow-up status — 2026-10-12
+- Application code is deployed; final production audit remains open. PR574 is unmerged.
+- Configuration-only recovery run 38313992739 completed the API operation, but maxInstanceCount still read 20. It failed verification and must not be rerun with stale revision/source leases.
+- A missing pre-update Function API field does not by itself prove different effective scaling. Extend read-only inspection to old/current Cloud Run revision scaling annotations, current service/template scaling and traffic. Do not change capacity based on the absent field alone.
+- Recheck Cloud Logging through a timestamp-only query and the caller's project testIamPermissions. This reads permissions and grants none. Permission denial remains a blocked audit, not evidence of zero errors.
+- Main has advanced since the previous release; any later publication needs a fresh integration and source/configuration check. This diagnostic branch does not deploy.
+
 ## Context
 - Owner Christian reported that confirmations, reminders and morning technician messages omit the booked apartment.
 - Owner authorized merge/deploy only after a technical and functional audit on 2026-10-12.

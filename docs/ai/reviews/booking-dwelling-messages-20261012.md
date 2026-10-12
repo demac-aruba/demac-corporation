@@ -1,5 +1,10 @@
 # Review: PR570 dwelling communication correction
 
+## Open production follow-up — 2026-10-12
+The previous attempted restoration failed: run 38313992739 completed the single-field API operation but the next read still showed maxInstanceCount=20. Run 38313989757 verified all five reviewed application sources and IAM policies; the final log query was denied. These failed gates remain open.
+
+Fresh Solo Maintainer Adversarial Review of the diagnostic-only extension: inspected all changed lines and the invoking task-branch workflow. Reads include prior/current revision annotations, service/template scaling and traffic, active account, caller permission introspection and log timestamps. The testIamPermissions POST grants nothing. No deployment, IAM mutation, database/messaging client or automatic recovery is present. Scaling values have a strict key/value allowlist; credentials, environment values and log bodies are never printed. Log denial, errors or result truncation keep the diagnostic incomplete. Node syntax, whitespace and existing release/configuration guards are required; live read-only evidence remains pending. Earlier spec-only comparison is insufficient to establish identical effective scaling, so no production capacity change is justified from that comparison alone.
+
 ## Review mode
 - [x] Solo Maintainer Adversarial Review
 - [ ] Independent Review
