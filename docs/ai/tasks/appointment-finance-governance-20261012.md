@@ -82,3 +82,18 @@ updated Legacy source is maintained as the operational fallback; no separate liv
 deployment has been identified or assumed. Existing catalog reads remain available.
 
 Final preparation run38318268340 at216dd676 completed193 baseline and234 candidate tests (427 total); Office baseline65/candidate91. All five real bootstrap/native smokes and private immutable archive checks passed. Summary artifact11777188590 SHA256546202bbf48e919dbd69baaa21a184c3f3de513a3880d0400e4d3973683997e6 is pinned in docs/ai/releases. Independent release-script review gave GO after22/22 tests. Read-only run38318399395 verified real request/response operation contracts; no remaining technical review blocker. Main12105b6d documentation/release-script update is preserved; application/function source trees are unchanged from4175285f outside this feature. Final exact-head CI and production verification remain required.
+
+The exact-head real Firestore gate found one obsolete pre-fence assertion at3b3863bb.
+Commit a8fa5a9a updates that assertion to require the complete canonical empty version1
+state and zero payments/events. It preserves the contention, renewal, late-release and
+read-without-write checks. The independent reviewer approved this stronger contract;
+local11/11 emulator cases and every GitHub workflow on a8fa5a9a passed.
+
+Preparation38319141879 repeats all427 baseline/candidate tests on a8fa5a9a and verifies
+all five immutable private recovery pairs. Artifact11778051399 has ZIP SHA256
+560c680659af396aa70bedb5ba20d61a770b9d752ba095bfcefdeb7df6f87a46; its complete safe
+summary supersedes216dd676 in docs/ai/releases. No runtime bytes changed in the test fix.
+ERP preview dpl_27jCEa2yZDGMkUqHRc8vQB2oThGq is READY at this source; protected
+/login returns200 and the expected Staff Login page. The following evidence-only commit
+must retain identical application/function/rules trees, pass final exact-head CI, and
+merge with [merge-only] before the reviewed controlled release branch is started.

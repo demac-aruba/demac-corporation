@@ -125,3 +125,14 @@ No failed or missing required check is waived. Shipped runtime bytes are unchang
 this validation-only correction.
 
 Final repeated preparation216dd676/run38318268340 passed427 assembled-source tests (193 baseline,234 candidate), including all65 Office baseline tests. All archives are privately retained and verified. Missing-test gate is resolved by execution, not waiver. The reviewer independently passed22/22 orchestration tests and issued technical GO. Read-only run38318399395/artifact11777613562 confirms the real Google metadata.requestResource and response are direct v2 Function objects with name/storageSource and published revision fields. Final CI and coordinated activation remain gates; no production deployment is claimed here.
+
+Final emulator gate on3b3863bb exposed one stale assertion expecting no jobCharges after
+a fresh lease. The reviewed fence deliberately initializes canonical empty version1.
+The a8fa5a9a test-only correction now asserts the entire empty state, returned version1,
+and zero payment/event documents; all concurrency/renewal/release and read-only checks
+remain. Reviewer: approved, no gate waiver. Local11/11 and all exact-head GitHub workflows
+passed. Preparation38319141879 on the same head repeats427 tests and all recovery/smoke
+checks; artifact11778051399 SHA256560c680659af396aa70bedb5ba20d61a770b9d752ba095bfcefdeb7df6f87a46
+supersedes the prior prepared evidence. READY preview dpl_27jCEa2yZDGMkUqHRc8vQB2oThGq
+serves the expected protected login with200. Final docs-only head CI, merge/source
+equivalence, coordinated production release and post-promotion verification remain.
