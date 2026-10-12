@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import {
   catalogItemType,
@@ -39,7 +39,9 @@ function durationLabel(item: CatalogItem) {
 }
 
 function pricingLabel(item: CatalogItem) {
-  return money(item.basePrice || 0);
+  if (item.pricingDefinition?.mode === 'quote') return 'Por cotizar';
+  if (item.pricingDefinition?.mode === 'tiered_btu') return 'Según BTU';
+  return typeof item.basePrice === 'number' ? money(item.basePrice) : 'Por cotizar';
 }
 
 function canEdit(principal: AuthPrincipal | null) {
@@ -73,26 +75,31 @@ export function ServiceCatalogWorkspace() {
   const [selectedId, setSelectedId] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingBase, setEditingBase] = useState<CatalogItem | undefined>();
+  const [draftId, setDraftId] = useState('');
   const [draft, setDraft] = useState<CatalogDraft>(() => draftFromCatalogItem());
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState('');
+  const readVersion = useRef(0);
 
   const refresh = async () => {
+    const version = ++readVersion.current;
     setLoading(true);
     setError('');
     try {
       const [actor, catalog] = await Promise.all([loadFirebasePrincipal(), listCanonicalCatalog()]);
+      if (readVersion.current !== version) return;
       setPrincipal(actor);
       setItems(catalog);
       setSelectedId((current) => current && catalog.some((item) => item.id === current) ? current : catalog[0]?.id ?? '');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The service catalog could not be loaded.');
+      if (readVersion.current === version) setError(cause instanceof Error ? cause.message : 'The service catalog could not be loaded.');
     } finally {
-      setLoading(false);
+      if (readVersion.current === version) setLoading(false);
     }
   };
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); return () => { ++readVersion.current; }; }, []);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -120,12 +127,15 @@ export function ServiceCatalogWorkspace() {
     next.serviceDefinition = type === 'Servicio' ? next.serviceDefinition : undefined;
     setDraft(next);
     setEditingId(null);
+    setEditingBase(undefined);
+    setDraftId(newCatalogItemId(type));
     setEditorError('');
     setEditorOpen(true);
   };
 
   const openEdit = (item: CatalogItem) => {
-    setDraft(draftFromCatalogItem(item));
+    try { setDraft(draftFromCatalogItem(item)); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Revisa la configuración de tarifa.'); return; }
+    setEditingBase(item);
     setEditingId(item.id);
     setEditorError('');
     setEditorOpen(true);
@@ -170,8 +180,8 @@ export function ServiceCatalogWorkspace() {
     setSaving(true);
     setEditorError('');
     try {
-      const existing = editingId ? items.find((item) => item.id === editingId) : undefined;
-      const id = editingId ?? newCatalogItemId(draft.itemType);
+      const existing = editingBase;
+      const id = editingId ?? draftId;
       const item = materializeCatalogDraft({
         id,
         draft,
@@ -180,6 +190,8 @@ export function ServiceCatalogWorkspace() {
         actorName: principal.displayName,
       });
       const saved = existing ? await updateCatalogItem(item) : await createCatalogItem(item);
+      ++readVersion.current;
+      setLoading(false);
       setItems((current) => [...current.filter((candidate) => candidate.id !== saved.id), saved]
         .sort((left, right) => `${catalogItemType(left)}-${left.name}`.localeCompare(`${catalogItemType(right)}-${right.name}`)));
       setSelectedId(saved.id);
@@ -197,7 +209,9 @@ export function ServiceCatalogWorkspace() {
     setSaving(true);
     setMessage('');
     try {
-      const saved = await setCatalogItemActive(item.id, item.active === false, principal.userId, principal.displayName);
+      const saved = await setCatalogItemActive(item, item.active === false);
+      ++readVersion.current;
+      setLoading(false);
       setItems((current) => current.map((candidate) => candidate.id === saved.id ? saved : candidate));
       setMessage(`${saved.name} is now ${saved.active === false ? 'inactive' : 'active'}.`);
     } catch (cause) {
@@ -296,10 +310,10 @@ export function ServiceCatalogWorkspace() {
         <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setEditorOpen(false); }}>
           <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label="Catalog editor">
             <header className={styles.drawerHeader}>
-              <div><div className={styles.eyebrow}>{editingId ? 'Edit canonical record' : 'New canonical record'}</div><h2>{editingId ? 'Edit catalog item' : 'Create catalog item'}</h2><p>Saving writes directly to the existing Firestore <code>services</code> collection. No parallel commercial catalog is created.</p></div>
+              <div><div className={styles.eyebrow}>{editingId ? 'Edit canonical record' : 'New canonical record'}</div><h2>{editingId ? 'Edit catalog item' : 'Create catalog item'}</h2><p>Los cambios se guardan con control de versión. Si otro operador modifica el artículo, tu borrador se conserva.</p></div>
               <button className={styles.close} type="button" disabled={saving} onClick={() => setEditorOpen(false)}>×</button>
             </header>
-            <div className={styles.drawerBody}>
+            <fieldset className={styles.drawerBody} disabled={saving} style={{ border: 0, margin: 0, minWidth: 0 }}>
               {editorError ? <div className={`${styles.notice} ${styles.error}`}>{editorError}</div> : null}
 
               <section className={styles.formSection}>
@@ -318,7 +332,7 @@ export function ServiceCatalogWorkspace() {
                 <header><strong>Sales</strong><span>For now, the catalog only needs the description and selling price. Accounting integration will be governed separately later.</span></header>
                 <label className={styles.field}><span>Description</span><textarea className={styles.textarea} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></label>
                 <div className={styles.grid2} style={{ marginTop: 9 }}>
-                  <label className={styles.field}><span>Price (AWG)</span><input className={styles.input} type="number" min="0" step="0.01" value={draft.basePrice} onChange={(event) => setDraft((current) => ({ ...current, basePrice: fieldNumber(event.target.value) }))} /><small>This is the selling price used by the catalog.</small></label>
+                  <label className={styles.field}><span>Price (AWG)</span><input className={styles.input} type="number" min="0" step="0.01" value={draft.basePrice} onChange={(event) => setDraft((current) => ({ ...current, basePrice: event.target.value }))} /><small>Vacío = por cotizar. Cero debe escribirse explícitamente.</small></label>
                   <label className={styles.field}><span>Income account</span><input className={styles.input} value={incomeAccountPlaceholder(draft.itemType)} disabled /><small>Reference only for now. It is not yet connected to accounting postings or a chart of accounts.</small></label>
                 </div>
               </section>
@@ -331,7 +345,7 @@ export function ServiceCatalogWorkspace() {
                   </div>
                 </section>
               ) : null}
-            </div>
+            </fieldset>
             <footer className={styles.drawerFooter}><button className={styles.button} type="button" disabled={saving} onClick={() => setEditorOpen(false)}>Cancel</button><button className={`${styles.button} ${styles.primary}`} type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save canonical item'}</button></footer>
           </aside>
         </div>

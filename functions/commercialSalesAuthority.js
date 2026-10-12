@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { canonicalMoney } = require('./servicePricingAuthority');
 const {
   INVENTORY_PRODUCT_STOCK_ERROR_CODES,
   PRODUCT_STOCK_OPERATIONS,
@@ -160,13 +161,13 @@ function actorFields(actor = {}) {
 }
 
 function productSnapshot(product = {}, id = "") {
-  const basePrice = Number(product.basePrice);
+  const basePrice = canonicalMoney(product.basePrice);
   return {
     id: cleanText(id || product.id, 160),
     name: cleanText(product.name, 220),
     category: cleanText(product.category, 160),
     sku: cleanText(product.sku, 120),
-    basePrice: Number.isFinite(basePrice) && basePrice >= 0 ? basePrice : null,
+    basePrice,
     currency: "Afl.",
   };
 }

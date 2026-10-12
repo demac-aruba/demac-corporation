@@ -1,4 +1,4 @@
-import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { callOfficeBookingAuthority } from './office-booking-authority';
 
 export type CatalogItemType = 'Servicio' | 'Producto';
 export type CatalogPricingMode = 'fixed' | 'per_unit' | 'tiered_btu' | 'quote';
@@ -31,7 +31,7 @@ export type CatalogItem = {
   name: string;
   itemType?: CatalogItemType;
   durationMinutes: number;
-  basePrice: number;
+  basePrice: number | null;
   category: string;
   description?: string;
   sku?: string;
@@ -39,6 +39,7 @@ export type CatalogItem = {
   featured?: boolean;
   pricingDefinition?: CatalogPricingDefinition;
   serviceDefinition?: ServiceDefinition;
+  catalogToken?: string;
   createdAt?: string;
   updatedAt?: string;
   createdById?: string;
@@ -55,7 +56,7 @@ export type CatalogDraft = {
   description: string;
   active: boolean;
   featured: boolean;
-  basePrice: number;
+  basePrice: string;
   pricingDefinition: CatalogPricingDefinition;
   serviceDefinition?: ServiceDefinition;
 };
@@ -87,53 +88,24 @@ export function catalogMigrationState(item: CatalogItem): CatalogMigrationState 
     : 'legacy_service';
 }
 
-function activeCanonicalBookingCode(item: CatalogItem) {
-  if (catalogItemType(item) !== 'Servicio' || item.active === false || catalogMigrationState(item) !== 'canonical') return '';
-  return bookingCodeFromName(item.serviceDefinition?.bookingCode ?? '');
+export function normalizedCatalogPricing(input?: Partial<CatalogPricingDefinition>): CatalogPricingDefinition {
+  if (!input) return { version: 1, mode: 'fixed', currency: 'AWG' };
+  if (input.version !== 1 || input.currency !== 'AWG' || !['fixed','per_unit','tiered_btu','quote'].includes(String(input.mode))) throw new Error('La configuración de tarifa requiere revisión; no se convertirá automáticamente.');
+  return structuredClone(input) as CatalogPricingDefinition;
 }
 
-function validateCatalogMutation(item: CatalogItem, catalog: CatalogItem[], existing?: CatalogItem) {
-  if (existing && catalogItemType(existing) !== catalogItemType(item)) {
-    throw new Error('Catalog item type cannot be changed after creation. Create a separate Service or Product record instead.');
-  }
-
-  const bookingCode = activeCanonicalBookingCode(item);
-  if (!bookingCode) return;
-  const conflict = catalog.find((candidate) => (
-    candidate.id !== item.id
-    && activeCanonicalBookingCode(candidate) === bookingCode
-  ));
-  if (conflict) {
-    throw new Error(`Booking code "${bookingCode}" is already used by active service "${conflict.name}". Each active canonical service must have a unique booking code.`);
-  }
-}
-
-export function normalizedCatalogPricing(input?: Partial<CatalogPricingDefinition>, basePrice = 0): CatalogPricingDefinition {
-  const mode: CatalogPricingMode = ['fixed', 'per_unit', 'tiered_btu', 'quote'].includes(String(input?.mode))
-    ? input!.mode as CatalogPricingMode
-    : 'fixed';
-  const tiers = mode === 'tiered_btu'
-    ? (input?.tiers ?? [])
-      .map((tier, index) => ({
-        id: compactText(tier.id) || `tier-${index + 1}`,
-        label: compactText(tier.label) || `Tier ${index + 1}`,
-        ...(Number.isFinite(Number(tier.minBtu)) ? { minBtu: Math.max(0, Math.round(Number(tier.minBtu))) } : {}),
-        ...(Number.isFinite(Number(tier.maxBtu)) ? { maxBtu: Math.max(0, Math.round(Number(tier.maxBtu))) } : {}),
-        amount: Math.max(0, Number(tier.amount) || 0),
-      }))
-      .filter((tier) => tier.amount >= 0)
-    : undefined;
-  return {
-    version: 1,
-    mode,
-    currency: 'AWG',
-    ...(tiers?.length ? { tiers } : {}),
-  };
+export function catalogDraftPrice(value: string): number | null {
+  if (!value.trim()) return null;
+  if (!/^\d+(?:[.,]\d{1,2})?$/.test(value.trim())) throw new Error('Escribe un precio con hasta dos decimales.');
+  const price = Number(value.trim().replace(',', '.'));
+  if (!Number.isFinite(price) || price > 1000000) throw new Error('Precio fuera del rango permitido.');
+  return price;
 }
 
 function normalizedServiceDefinition(input: ServiceDefinition | undefined, name: string): ServiceDefinition | undefined {
   if (!input) return undefined;
-  const duration = Math.max(30, Math.min(720, Math.round(Number(input.duration?.minutes || 60) / 15) * 15));
+  if (input.version !== 1) throw new Error('Esta versión de servicio requiere revisión; no se convertirá automáticamente.');
+  const duration = Math.max(30, Math.min(720, Math.round(Number(input.duration?.minutes || 60))));
   return {
     version: 1,
     bookingCode: bookingCodeFromName(input.bookingCode || name),
@@ -142,7 +114,7 @@ function normalizedServiceDefinition(input: ServiceDefinition | undefined, name:
 }
 
 export function legacyServiceDefinition(item: CatalogItem): ServiceDefinition {
-  const duration = Math.max(30, Math.round(Number(item.durationMinutes || 60) / 15) * 15);
+  const duration = Math.max(30, Math.round(Number(item.durationMinutes || 60)));
   return {
     version: 1,
     bookingCode: bookingCodeFromName(item.name) || `service_${item.id}`,
@@ -160,7 +132,7 @@ export function draftFromCatalogItem(item?: CatalogItem): CatalogDraft {
       description: '',
       active: true,
       featured: true,
-      basePrice: 0,
+      basePrice: '',
       pricingDefinition: { version: 1, mode: 'fixed', currency: 'AWG' },
       serviceDefinition: {
         version: 1,
@@ -178,8 +150,8 @@ export function draftFromCatalogItem(item?: CatalogItem): CatalogDraft {
     description: item.description ?? '',
     active: item.active !== false,
     featured: type === 'Servicio' ? item.featured !== false : false,
-    basePrice: Math.max(0, Number(item.basePrice || 0)),
-    pricingDefinition: normalizedCatalogPricing(item.pricingDefinition, item.basePrice),
+    basePrice: typeof item.basePrice === 'number' && Number.isFinite(item.basePrice) ? String(item.basePrice) : '',
+    pricingDefinition: normalizedCatalogPricing(item.pricingDefinition),
     serviceDefinition: type === 'Servicio'
       ? normalizedServiceDefinition(item.serviceDefinition ?? legacyServiceDefinition(item), item.name)
       : undefined,
@@ -199,18 +171,18 @@ export function materializeCatalogDraft(args: {
   const serviceDefinition = type === 'Servicio'
     ? normalizedServiceDefinition(args.draft.serviceDefinition, args.draft.name)
     : undefined;
-  const pricingDefinition = normalizedCatalogPricing(args.draft.pricingDefinition, args.draft.basePrice);
+  const pricingDefinition = normalizedCatalogPricing(args.draft.pricingDefinition);
   return {
     ...args.existing,
     id: args.id,
     name: compactText(args.draft.name),
     itemType: type,
     category: compactText(args.draft.category) || type,
-    sku: compactText(args.draft.sku) || undefined,
-    description: compactText(args.draft.description) || undefined,
+    sku: compactText(args.draft.sku),
+    description: compactText(args.draft.description),
     active: args.draft.active,
     featured: type === 'Servicio' ? args.draft.featured : false,
-    basePrice: Math.max(0, Number(args.draft.basePrice || 0)),
+    basePrice: catalogDraftPrice(args.draft.basePrice),
     durationMinutes: serviceDefinition?.duration.minutes ?? 0,
     pricingDefinition,
     serviceDefinition,
@@ -224,39 +196,32 @@ export function materializeCatalogDraft(args: {
 }
 
 export async function listCanonicalCatalog() {
-  const items = await listFirestoreCollection<CatalogItem>('services');
+  const items: CatalogItem[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { items: CatalogItem[]; nextCursor: string | null } = await callOfficeBookingAuthority('list_managed_catalog', { cursor });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
   return [...items].sort((left, right) => {
     const type = catalogItemType(left).localeCompare(catalogItemType(right));
     return type || left.name.localeCompare(right.name);
   });
 }
 
-export async function createCatalogItem(item: CatalogItem) {
-  const catalog = await listCanonicalCatalog();
-  validateCatalogMutation(item, catalog);
-  return saveFirestoreDocument('services', item);
+async function saveCatalogItem(item: CatalogItem, expectedToken: string | null, patch: Partial<CatalogItem> = item) {
+  const result = await callOfficeBookingAuthority<{ success: true; item: CatalogItem | null }>('save_catalog_item', { id: item.id, expectedToken, patch });
+  if (!result.item) throw new Error('El artículo fue eliminado después de guardarse. Actualiza el catálogo.');
+  return result.item;
 }
-
-export async function updateCatalogItem(item: CatalogItem) {
-  const catalog = await listCanonicalCatalog();
-  const existing = catalog.find((candidate) => candidate.id === item.id);
-  if (!existing) throw new Error(`Catalog item ${item.id} no longer exists.`);
-  validateCatalogMutation(item, catalog, existing);
-  const { id, ...changes } = item;
-  return updateFirestoreDocument<CatalogItem>('services', id, changes);
+export function createCatalogItem(item: CatalogItem) { return saveCatalogItem(item, null); }
+export function updateCatalogItem(item: CatalogItem) {
+  if (!item.catalogToken) throw new Error('Recarga el catálogo y vuelve a abrir el artículo.');
+  return saveCatalogItem(item, item.catalogToken);
 }
-
-export async function setCatalogItemActive(id: string, active: boolean, actorId: string, actorName: string) {
-  const catalog = await listCanonicalCatalog();
-  const existing = catalog.find((candidate) => candidate.id === id);
-  if (!existing) throw new Error(`Catalog item ${id} no longer exists.`);
-  validateCatalogMutation({ ...existing, active }, catalog, existing);
-  return updateFirestoreDocument<CatalogItem>('services', id, {
-    active,
-    updatedAt: new Date().toISOString(),
-    updatedById: actorId,
-    updatedByName: actorName,
-  });
+export function setCatalogItemActive(item: CatalogItem, active: boolean) {
+  if (!item.catalogToken) throw new Error('Recarga el catálogo y vuelve a abrir el artículo.');
+  return saveCatalogItem(item, item.catalogToken, { active });
 }
 
 export function newCatalogItemId(type: CatalogItemType) {

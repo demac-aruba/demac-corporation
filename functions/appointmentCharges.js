@@ -6,9 +6,10 @@ const crypto = require('node:crypto');
 const { companyMatrixPrice, resolveServicePriceSnapshot, PRICING_RULE_KINDS } = require('./servicePricingAuthority');
 const { projectBillingCandidate } = require('./fieldOperationsBillingCandidates');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+const { EDIT_ACTIONS, editingRef, assertEditing, changeEditing } = require('./appointmentChargeEditing');
 const SOURCE = 'appointment-operational';
 const ACTIONS = new Set(['list_charge_services', 'quote_appointment_charges', 'get_appointment_charges', 'save_appointment_estimate',
-  'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment']);
+  'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment', ...EDIT_ACTIONS]);
 const WRITERS = new Set(['admin', 'owner', 'super_admin', 'superadmin', 'supervisor', 'operations', 'office', 'operator', 'office_operator', 'finance', 'accounting', 'accountant']);
 const METHODS = new Set(['cash', 'transfer', 'pos', 'suave']);
 const MAX_CENTS = 100000000;
@@ -76,36 +77,46 @@ async function actorFor(get, db, uid, write = true) {
   if (profile?.active !== true || !(WRITERS.has(role) || (!write && role === 'auditor'))) fail('permission_denied', 'Se requiere una cuenta de oficina o contabilidad activa.', 403);
   return { id: uid, name: clean(profile.name || profile.displayName, 180), role };
 }
-async function quoteLines({ db, get, lines, now }) {
+async function quoteLines({ db, get, lines, now, previous }) {
   const rules = await get(db.collection('businessSettings').doc('company-service-pricing-rules'));
   const pricingSettings = rules.exists ? rules.data() : null;
   const result = [];
   for (const line of lines) {
+    const saved = previous?.lines?.find(item => item.id === line.id && (item.serviceId || '') === line.serviceId
+      && (item.presetId || '') === line.presetId && (item.workLineId || '') === line.workLineId && (item.btu ?? null) === line.btu);
+    if (saved && Number.isSafeInteger(saved.unitCents) && saved.unitCents >= 0) {
+      if (line.overrideCents !== null && line.overrideCents !== saved.unitCents) fail('charge_managed_price', 'Selecciona el servicio realizado y sus BTU; el precio no se modifica directamente.');
+      result.push({ ...line, label: saved.label, baseUnitCents: saved.baseUnitCents ?? saved.unitCents, unitCents: saved.unitCents,
+        totalCents: Math.round(saved.unitCents * line.quantityMillis / 1000), pricingVersion: saved.pricingVersion || '',
+        pendingReason: '', manualPrice: Boolean(saved.manualPrice), retainedPrice: true, reason: saved.reason || '' });
+      continue;
+    }
     let base = null, label = line.label, pendingReason = '', pricingVersion = '';
     try {
       if (line.serviceId) {
         const snapshot = await get(db.collection('services').doc(line.serviceId));
         if (!snapshot.exists || snapshot.data().active === false) fail('charge_catalog', 'El servicio seleccionado no está activo.');
         const service = { ...snapshot.data(), id: line.serviceId };
-        label ||= clean(service.name, 220);
+        label = clean(service.name || service.label || line.serviceId, 220);
         if (['fixed', 'per_unit', undefined].includes(service.pricingDefinition?.mode) && !PRICING_RULE_KINDS.has(service.pricingRuleKind)
           && (service.basePrice === null || service.basePrice === '')) throw Object.assign(new Error('Precio base no configurado.'), { code: 'service_pricing_not_configured' });
         base = resolveServicePriceSnapshot({ service, pricingSettings, btu: line.btu, capturedAt: now.toISOString() });
       } else if (PRICING_RULE_KINDS.has(line.presetId)) {
         // These three exact Scheduling kinds explicitly refer to the governed
         // company BTU matrix, not a guessed catalog product or label match.
+        label = { standard_service: 'Standard service', deep_cleaning: 'Deep cleaning', standard_installation: 'Instalación estándar back to back' }[line.presetId];
         base = companyMatrixPrice({ service: { bookingCode: line.presetId }, pricingSettings, btu: line.btu });
-      } else pendingReason = 'Selecciona un servicio del catálogo o ingresa un precio con motivo.';
+      } else pendingReason = 'Selecciona el servicio o producto realizado; su tarifa se calcula automáticamente.';
     } catch (error) {
       if (!String(error.code || '').startsWith('service_pricing_')) throw error;
-      pendingReason = line.btu ? 'Tarifa no configurada; ingresa un precio autorizado con motivo.' : 'BTU o tarifa por confirmar.';
+      pendingReason = line.btu ? 'Tarifa no configurada; requiere completar el catálogo.' : 'BTU o tarifa por confirmar.';
     }
     if (!label) fail('charge_label', 'Cada concepto necesita una descripción.');
     const baseUnitCents = base ? decimal(base.unitPrice.toFixed(2), 2, MAX_CENTS, 'Precio base') : null;
     pricingVersion = base?.pricingVersion || '';
     const changed = line.overrideCents !== null && line.overrideCents !== baseUnitCents;
-    if (changed && !line.reason) fail('charge_override_reason', 'Explica el precio manual o ajuste de cada concepto.');
-    const unitCents = line.overrideCents ?? baseUnitCents;
+    if (changed) fail('charge_managed_price', 'Selecciona el servicio realizado y sus BTU; el precio no se modifica directamente.');
+    const unitCents = baseUnitCents;
     result.push({ ...line, label, baseUnitCents, unitCents, totalCents: unitCents === null ? null : Math.round(unitCents * line.quantityMillis / 1000),
       pricingVersion, pendingReason: unitCents === null ? pendingReason : '', manualPrice: changed });
   }
@@ -232,10 +243,24 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       }).sort((a,b) => a.name.localeCompare(b.name)) };
     }
     if (action === 'quote_appointment_charges') {
+      if (data.appointmentId) return db.runTransaction(async transaction => {
+        const get = ref => transaction.get(ref);
+        await actorFor(get, db, uid, false);
+        const snapshot = await get(db.collection('appointments').doc(id(data.appointmentId, 'Cita')));
+        if (!snapshot.exists) fail('not_found', 'La cita ya no existe.', 404);
+        const state = validateState(snapshot.data().jobCharges);
+        if (data.expectedVersion !== state.version) fail('charge_conflict', 'Los importes cambiaron. Revisa los datos actuales; tu borrador se conserva.', 409);
+        return { success: true, quote: await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: state.final || state.estimate }) };
+      });
       return { success: true, quote: await quoteLines({ db, get: ref => ref.get(), lines: inputLines(data.lines), now }) };
     }
     const appointmentId = id(data.appointmentId, 'Cita');
     const ref = db.collection('appointments').doc(appointmentId);
+    if (EDIT_ACTIONS.has(action)) return db.runTransaction(async transaction => {
+      const actor = await actorFor(value => transaction.get(value), db, uid);
+      if (!(await transaction.get(ref)).exists) fail('not_found', 'La cita ya no existe.', 404);
+      return changeEditing({ db, transaction, appointmentId, action, actor, sessionId: data.editSessionId, token: data.editToken, now: clock() });
+    });
     if (readOnly) {
       return db.runTransaction(async transaction => {
       const get = ref => transaction.get(ref);
@@ -268,6 +293,8 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
         if (replay.data().fingerprint !== fingerprint) fail('idempotency_conflict', 'La solicitud ya se usó con otros datos.', 409);
         return { success: true, replayed: true, state: appointment.jobCharges || null };
       }
+      const edit = await get(editingRef(db, appointmentId));
+      assertEditing(edit.exists ? edit.data() : null, actor, data.editSessionId, data.editToken, clock());
       if (!Number.isSafeInteger(data.expectedVersion) || data.expectedVersion !== current.version) fail('charge_conflict', 'Otro operador actualizó los importes. Recarga antes de guardar.', 409);
       if (!appointment.customerId || !appointment.propertyId) fail('charge_relationship', 'La cita necesita cliente y propiedad canónicos.', 409);
       const payments = await paymentRecords(db, get, appointmentId);
@@ -280,7 +307,7 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       if (action === 'save_appointment_estimate' || action === 'finalize_appointment_charges') {
         if (['cancelled','canceled'].includes(appointment.status)) fail('charge_cancelled', 'La cita está cancelada; conserva sus importes e historial.', 409);
         if (action === 'save_appointment_estimate' && current.final) fail('charge_final_exists', 'El monto final ya está confirmado; usa una corrección de cierre con motivo.', 409);
-        const quote = await quoteLines({ db, get, lines: inputLines(data.lines), now });
+        const quote = await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: current.final || current.estimate });
         assertQuote(quote, data.quoteToken);
         const note = clean(data.note, 1000);
         if ((current.originalEstimate || current.estimate || current.final) && !note) fail('charge_change_reason', 'Explica el cambio respecto al importe anterior.');

@@ -32,7 +32,7 @@ export function bookingChargeDraft(seeds: ChargeLineInput[], draft: ChargeDraft 
   return { lines, quoteToken: JSON.stringify(lines) === JSON.stringify(draft?.lines) ? draft?.quoteToken : undefined,
     note: draft?.note || '', payment: draft?.payment || null };
 }
-export function quoteAppointmentCharges(lines: ChargeLineInput[]) { return callOfficeBookingAuthority<{ success: true; quote: ChargeQuote }>('quote_appointment_charges', { lines }); }
+export function quoteAppointmentCharges(lines: ChargeLineInput[], context?: { appointmentId: string; expectedVersion: number }) { return callOfficeBookingAuthority<{ success: true; quote: ChargeQuote }>('quote_appointment_charges', { lines, ...context }); }
 export function getAppointmentCharges(appointmentId: string) { return callOfficeBookingAuthority<ChargeRecord>('get_appointment_charges', { appointmentId }); }
 export function mutateAppointmentCharges(action: string, data: Record<string, unknown>) { return callOfficeBookingAuthority<{ success: true; state: ChargeState; replayed?: boolean }>(action, data, 20_000); }
 export function newChargeRequestId() { return `charge-${crypto.randomUUID()}`; }

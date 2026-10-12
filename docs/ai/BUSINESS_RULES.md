@@ -318,9 +318,19 @@ Production activation remains separately owner-approved through the server-side 
 - `OPS-SCHED-CHARGES-001` — Owner request and deployment authorization 2026-10-10.
   Preserve the original projection, separately record current projection/final amount,
   and record actual office-reported receipts by cash, transfer, POS or SUAVE against
-  the canonical appointment. Exact BTU/catalog tariffs or reasoned manual prices apply.
-- Unknown prices remain pending; explicit zero is allowed with supporting pricing/reason.
+  the canonical appointment. Owner clarification 2026-10-12: new or changed concepts
+  resolve the selected actual service/product and exact BTU through canonical tariffs.
+  Operators cannot directly override a line price or describe one matrix service as another.
+  Existing snapshot unit prices and labels, including historical manual agreements, are retained
+  while service/BTU/work-line identity remains unchanged; quantity changes use that unit price.
+- Unknown prices remain pending; explicit zero requires a configured zero tariff (or an existing
+  historical snapshot). Opening an old appointment never backfills missing financial values.
   Final scope review permits an outstanding balance and never marks Field/attendance complete.
+- Opening Importes y pagos reserves its appointment for one active financial writer/session,
+  with a server-owned 90-second renewable lease. Other operators read with the holder name;
+  closing/leaving releases the lease and expiry recovers disconnects. Prefetch and audit history
+  never acquire. New writes require ownership plus expected version inside the transaction.
+  A freshly authorized exact retry of an already committed operation remains resolvable after expiry.
 - Split payments, immutable receipt identity, exact replay, expected-version conflicts,
   dated actor audit and reasoned voids are mandatory. Voids do not execute refunds.
 - Existing financial records are not imported or overwritten. Field candidate evidence
@@ -330,3 +340,10 @@ Production activation remains separately owner-approved through the server-side 
 ## Booking Spots and workload support
 
 - `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.
+
+## Catalog maintenance candidate (2026-10-12)
+
+- `OPS-CATALOG-001` — Existing services/products remain canonical. Empty price is unpriced, explicit zero is free; customer/Inventory/reservation consumers must preserve that distinction.
+- Catalog writers preserve a frozen observed version; stale edits fail with the draft retained. Fresh current role and exact replay are server-enforced. Existing unknown fields and creation metadata survive updates.
+- Booking-code uniqueness follows actual legacy booking resolution. Delete retains private audit/identity and rejects linked work, Field interventions/sales or stock. Deleted IDs cannot be reused.
+- No bulk rewrite/backfill is implied. Direct-write closure requires verified backend, ERP, Legacy and old-session cutover plus forward recovery. See the finance governance task/review.

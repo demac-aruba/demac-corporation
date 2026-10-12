@@ -20,7 +20,7 @@ export type InventoryItem = {
   category: string;
   unit: string;
   sellable: boolean;
-  price?: number;
+  price?: number | null;
   cost?: number;
   active: boolean;
   balances: Record<string, InventoryBalance>;

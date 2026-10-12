@@ -298,7 +298,9 @@ export interface ServiceType {
   name: string;
   itemType?: CatalogItemType;
   durationMinutes: number;
-  basePrice: number;
+  basePrice: number | null;
+  catalogToken?: string;
+  serviceDefinition?: { version: number; bookingCode: string; duration: { minutes: number }; };
   category: string;
   description?: string;
   sku?: string;

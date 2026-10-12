@@ -1,4 +1,5 @@
 const { referenceMessageParts } = require('./bookingVisitReferences');
+const { bookingLocationLabel } = require('./bookingLocationDisplay');
 const { arubaDateParts, resolveAssignment } = require("./bookingSchedulingPrimitives");
 const { resolveCanonicalVanId } = require("./bookingVanIdentity");
 const {
@@ -132,13 +133,15 @@ function renderAdhocPrimaryVanText({
   supportOrder,
   client,
   property,
+  appointment,
   supportCrew,
   staffById,
 }) {
   const supportName = text(supportVan?.name || supportVan?.id) || "Van de apoyo";
   const supportTeam = crewLabel(supportCrew, staffById);
   const customer = text(client?.name || client?.company || supportOrder.clientName) || "Cliente";
-  const location = text(property?.name || supportOrder.address || property?.address || property?.addressRaw) || "Ubicación del trabajo";
+  const location = bookingLocationLabel(supportOrder, appointment)
+    || text(property?.name || supportOrder.address || property?.address || property?.addressRaw) || "Ubicación del trabajo";
   const end = text(supportOrder.appointmentEndTime);
   const reason = text(supportOrder.supportReason || supportOrder.technicianInstructions);
   const primaryName = text(primaryVan?.name || primaryVan?.id) || "Van principal";
@@ -275,6 +278,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       supportOrder: currentOrder,
       client,
       property,
+      appointment,
       supportCrew,
       staffById: day.staffById,
     });

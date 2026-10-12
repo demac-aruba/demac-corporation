@@ -847,3 +847,12 @@ test("Inventory Authority HTTP boundary requires Firebase authentication", async
   assert.equal(response.status, 401);
   assert.equal(response.body.error.code, "unauthenticated");
 });
+
+test('inventory prices remain unknown for unpriced records while zero stays explicit', async () => {
+  for(const value of [null,undefined,'',' ',0,125]) {
+    const seed=productSeed();
+    if(value===undefined) delete seed.services['prod-12k'].basePrice; else seed.services['prod-12k'].basePrice=value;
+    const result=await apiFor(makeDb(seed)).getSnapshot();
+    assert.equal(result.items.find(item=>item.id==='prod-12k').price,typeof value==='number'?value:null);
+  }
+});

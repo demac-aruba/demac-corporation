@@ -406,11 +406,11 @@ test('invalid reference claim rejects appointment and capacity writes together',
 
 const { TransactionalFirestore } = require('./test-support/transactionalFirestore');
 function chargedBookingFixture() {
-  return authorityFixture({ Database: TransactionalFirestore, seed: { 'users/office': { role: 'office', active: true, name: 'Synthetic office' } } });
+  return authorityFixture({ Database: TransactionalFirestore, seed: { 'services/synthetic': { name: 'Synthetic service', active: true, basePrice: 125 }, 'users/office': { role: 'office', active: true, name: 'Synthetic office' } } });
 }
 async function chargedRequest(authority, changes = {}) {
   const availability = await authority.checkAvailability({ request: baseRequest(), context: { inboundMessageId: 'charged-offer-id' } });
-  return { offerId: availability.offer.id, offerVersion: availability.offer.version, optionId: 'opt-1', idempotencyKey: 'charged-booking-request', actor: { source: 'office-scheduling', id: 'office' }, context: { charges: { lines: [{ id: 'work', label: 'Synthetic service', quantity: 2, unitPrice: '125', reason: 'Agreed price' }], payment: { method: 'cash', amount: '100' } } }, ...changes };
+  return { offerId: availability.offer.id, offerVersion: availability.offer.version, optionId: 'opt-1', idempotencyKey: 'charged-booking-request', actor: { source: 'office-scheduling', id: 'office' }, context: { charges: { lines: [{ id: 'work', label: 'Synthetic service', quantity: 2, serviceId: 'synthetic' }], payment: { method: 'cash', amount: '100' } } }, ...changes };
 }
 test('ordinary appointment, initial estimate and receipt commit together and exact replay never doubles deposit', async () => {
   const { db, authority } = chargedBookingFixture(); const request = await chargedRequest(authority);

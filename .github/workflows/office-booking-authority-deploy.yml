@@ -10,6 +10,19 @@ on:
       - 'functions/bookingRestDayOvertime.js'
       - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
+      - 'functions/appointmentChargeEditing*'
+      - 'functions/serviceCatalogEditing*'
+      - 'functions/catalogPriceCompatibility*'
+      - 'functions/commercialSalesAuthority*'
+      - 'functions/demacCustomerSalesTools.js'
+      - 'functions/inventoryAuthority*'
+      - 'firestore.rules'
+      - 'apps/erp-next/lib/service-catalog.ts'
+      - 'apps/erp-next/components/service-catalog-workspace.tsx'
+      - 'apps/erp-next/scripts/service-catalog-browser.cjs'
+      - 'src/screens/CatalogScreen.tsx'
+      - 'src/state/AppState.tsx'
+      - 'src/services/officeBookingAuthority.ts'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -27,6 +40,7 @@ on:
       - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/vanScheduleCommunicationAuthority.js'
       - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/bookingLocationDisplay.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/whatsappTransactionalService.js'
@@ -66,6 +80,7 @@ on:
       - 'functions/bookingCapacityAvailability.test.js'
       - 'functions/index.js'
       - 'functions/package.json'
+      - 'functions/package-lock.json'
       - '.github/workflows/office-booking-authority-deploy.yml'
   push:
     branches:
@@ -78,6 +93,19 @@ on:
       - 'functions/bookingRestDayOvertime.js'
       - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
+      - 'functions/appointmentChargeEditing*'
+      - 'functions/serviceCatalogEditing*'
+      - 'functions/catalogPriceCompatibility*'
+      - 'functions/commercialSalesAuthority*'
+      - 'functions/demacCustomerSalesTools.js'
+      - 'functions/inventoryAuthority*'
+      - 'firestore.rules'
+      - 'apps/erp-next/lib/service-catalog.ts'
+      - 'apps/erp-next/components/service-catalog-workspace.tsx'
+      - 'apps/erp-next/scripts/service-catalog-browser.cjs'
+      - 'src/screens/CatalogScreen.tsx'
+      - 'src/state/AppState.tsx'
+      - 'src/services/officeBookingAuthority.ts'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -95,6 +123,7 @@ on:
       - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/vanScheduleCommunicationAuthority.js'
       - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/bookingLocationDisplay.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/whatsappTransactionalService.js'
@@ -134,6 +163,7 @@ on:
       - 'functions/bookingCapacityAvailability.test.js'
       - 'functions/index.js'
       - 'functions/package.json'
+      - 'functions/package-lock.json'
       - '.github/workflows/office-booking-authority-deploy.yml'
   workflow_dispatch:
 
@@ -158,7 +188,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+        run: npm ci --prefix functions --no-audit --no-fund
 
       - name: Validate Office Booking Authority boundary
         shell: bash
@@ -236,22 +266,25 @@ jobs:
           java-version: '21'
       - name: Install isolated verification tools and app dependencies
         run: |
-          npm install --prefix functions --no-audit --no-fund
+          npm ci --prefix functions --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           npm install --prefix apps/erp-next --no-audit --no-fund
-          npm install --prefix "$RUNNER_TEMP/charge-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0
+          npm install --prefix "$RUNNER_TEMP/charge-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
           "$RUNNER_TEMP/charge-tools/node_modules/.bin/playwright" install --with-deps chromium
       - name: Financial authority and integration regressions
         run: |
-          node --test functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
+          node --test functions/serviceCatalogEditing.test.js functions/catalogPriceCompatibility.test.js functions/commercialSalesAuthority.test.js functions/inventoryAuthority.test.js functions/appointmentChargeEditing.test.js functions/demacServicePricingRules.test.js functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
           node --check scripts/appointment-charges-project-deploy.cjs
           node --test scripts/appointment-charges-project-deploy.test.cjs
           node --test scripts/appointment-charges-project-compat.test.cjs
           npm run typecheck --prefix apps/erp-next
       - name: Real Firestore transaction and authorization checks
+        env:
+          CATALOG_RULES_TEST_TOOLS: ${{ runner.temp }}/charge-tools
         run: >-
           "$RUNNER_TEMP/charge-tools/node_modules/.bin/firebase" emulators:exec
           --only firestore --project demo-demac-charges --config firebase.appointment-charges-test.json
-          'node --test functions/appointmentCharges.emulator.test.cjs'
+          'node --test --test-concurrency=1 functions/appointmentCharges.emulator.test.cjs functions/serviceCatalogEditing.emulator.test.cjs'
       - name: Real component browser flows and visual evidence
         env:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/charge-tools
@@ -259,6 +292,7 @@ jobs:
         run: |
           node apps/erp-next/scripts/booking-modal-browser.cjs
           node apps/erp-next/scripts/appointment-charges-browser.cjs
+          node apps/erp-next/scripts/service-catalog-browser.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -275,7 +309,7 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - run: npm ci --prefix functions --ignore-scripts --no-audit --no-fund
       - name: Verify existing booking and Field workflows
         run: |
           npm run test:booking-authority --prefix functions
@@ -334,6 +368,7 @@ jobs:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
         run: |
           set -euo pipefail
+          test -s functions/package-lock.json
           gcloud functions deploy officeBookingAuthority \
             --project=demac-corporation \
             --gen2 \

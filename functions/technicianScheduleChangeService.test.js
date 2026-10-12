@@ -27,14 +27,17 @@ test('same-day and support reference bundles retain their version and cannot ret
   const { createTechnicianScheduleChangeService } = require('./technicianScheduleChangeService');
   const { createVanScheduleCommunicationAuthority } = require('./vanScheduleCommunicationAuthority');
   for (const support of [false, true]) {
-    const order = { ...base, id: 'WO-AUDIT', appointmentId: 'APT-AUDIT', clientId: 'synthetic-client',
+    const order = { ...base, id: 'WO-AUDIT', appointmentId: 'APT-AUDIT', clientId: 'synthetic-client', propertyId: 'synthetic-property',
       ...(support ? { vanId: 'VAN-2', appointmentAssignmentRole: 'support', supportAssignmentKind: 'adhoc_rescue', primaryWorkOrderId: 'WO-PRIMARY', primaryVanId: 'VAN-1' } : {}) };
     const db = new ReferenceDb({
       'vans/VAN-1': { active: true, whatsappScheduleGroupJid: '120000000000000001@g.us' },
       'vans/VAN-2': { active: true, whatsappScheduleGroupJid: '120000000000000002@g.us' },
       'workOrders/WO-AUDIT': order,
       'workOrders/WO-PRIMARY': { ...base, id: 'WO-PRIMARY', appointmentId: 'APT-AUDIT', clientId: 'synthetic-client' },
-      'appointments/APT-AUDIT': { status: 'confirmed', visitReferences: { version: 2, files: [
+      'appointments/APT-AUDIT': { status: 'confirmed', locationSnapshot: {
+        propertyId: 'synthetic-property', dwellingId: 'unit-4', dwellingName: 'Apartamento 4', dwellingCode: 'A-04',
+        locationLabel: 'Complejo de prueba · Apartamento 4',
+      }, visitReferences: { version: 2, files: [
         { id: 'synthetic-photo', fileName: 'test.jpg', kind: 'image', mimeType: 'image/jpeg', storagePath: 'booking-references/synthetic/synthetic-photo' },
       ] } },
       'clients/synthetic-client': { name: 'SYNTHETIC ONLY' },
@@ -43,6 +46,11 @@ test('same-day and support reference bundles retain their version and cannot ret
     if (support) await service.queueAdhocSupportChange({ order, eventId: 'synthetic-support-event' });
     else await service.queueSameDayChange({ order, eventId: 'synthetic-change-event' });
     const [key, queued] = [...db.records.entries()].find(([path, value]) => path.startsWith('whatsappOutboundQueue/') && value.type === 'booking-reference-bundle');
+    assert.match(queued.messages[0].text, /Complejo de prueba · Apartamento 4 · A-04/);
+    if (support) {
+      const primaryAlert = [...db.records.entries()].find(([path, value]) => path.startsWith('whatsappOutboundQueue/') && value.type !== 'booking-reference-bundle')[1];
+      assert.match(primaryAlert.text, /\*Ubicación:\* Complejo de prueba · Apartamento 4 · A-04/);
+    }
     assert.equal(queued.referencesVersion, 2, 'Producer must capture the immutable reference version');
     db.records.set(key, { ...queued, status: 'failed', messageIndex: 1, sentMessageIds: ['synthetic-sent'], partAttempts: 3 });
     const retry = () => createVanScheduleCommunicationAuthority({ db }).execute({ action: 'retry_van_schedule_delivery', data: { dateKey: order.date, vanId: order.vanId }, identity: { uid: 'synthetic-office' } });

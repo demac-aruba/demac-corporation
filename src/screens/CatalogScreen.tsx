@@ -1,3 +1,4 @@
+import { createOfficeBookingRequestId } from '../services/officeBookingAuthority';
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';
@@ -55,6 +56,8 @@ export function CatalogScreen() {
     removeCatalogItem,
     saveCommercialProductStock,
     dataError,
+    catalogLoading,
+    catalogError,
     refreshOperationalData,
   } = useAppState();
   const [query, setQuery] = useState('');
@@ -62,6 +65,8 @@ export function CatalogScreen() {
   const [selectedId, setSelectedId] = useState(services[0]?.id ?? '');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingBase, setEditingBase] = useState<ServiceType | null>(null);
+  const [draftId, setDraftId] = useState('');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -93,20 +98,25 @@ export function CatalogScreen() {
     : null;
 
   const openNew = (itemType: CatalogItemType = 'Servicio') => {
+    if (catalogLoading || catalogError) return;
     setEditingId(null);
+    setEditingBase(null);
+    setDraftId(createOfficeBookingRequestId('service'));
     setForm({ ...emptyForm, itemType, category: itemType === 'Servicio' ? 'Servicio' : 'Producto', durationSlots: itemType === 'Servicio' ? '1' : '0', featured: itemType === 'Servicio' });
     setMessage('');
     setShowForm(true);
   };
 
   const openEdit = (item: ServiceType) => {
+    if (catalogLoading || catalogError) return;
     const itemType = normalizeType(item);
     setEditingId(item.id);
+    setEditingBase(item);
     setForm({
       itemType,
       name: item.name,
       category: item.category,
-      price: String(item.basePrice),
+      price: typeof item.basePrice === 'number' ? String(item.basePrice) : '',
       durationSlots: itemType === 'Servicio' ? String(slotsFor(item)) : '0',
       description: item.description ?? '',
       sku: item.sku ?? '',
@@ -129,23 +139,28 @@ export function CatalogScreen() {
   };
 
   const saveItem = async () => {
+    if (saving) return;
     const name = form.name.trim();
-    const price = Number(form.price.replace(',', '.'));
+    const rawPrice = form.price.trim().replace(',', '.');
+    const price = rawPrice ? Number(rawPrice) : null;
     const slotCount = form.itemType === 'Servicio' ? Number(form.durationSlots) : 0;
     if (!name) return setMessage('Escribe el nombre del artículo.');
-    if (!Number.isFinite(price) || price < 0) return setMessage('Escribe un precio válido.');
+    if (rawPrice && (!/^\d+(?:\.\d{1,2})?$/.test(rawPrice) || !Number.isFinite(price) || Number(price) > 1000000)) return setMessage('Escribe un precio válido con hasta dos decimales.');
     if (form.itemType === 'Servicio' && ![1, 2, 3].includes(slotCount)) return setMessage('Selecciona una duración de 1, 2 o 3 cupos.');
 
     const now = new Date().toISOString();
+    const durationMinutes = form.itemType === 'Servicio' ? editingBase && form.durationSlots === String(slotsFor(editingBase)) ? editingBase.durationMinutes : slotCount * 60 : 0;
     const item: ServiceType = {
-      id: editingId ?? `service-${Date.now()}`,
+      id: editingId ?? draftId,
+      catalogToken: editingBase?.catalogToken,
       itemType: form.itemType,
       name,
       category: form.category.trim() || form.itemType,
       basePrice: price,
-      durationMinutes: form.itemType === 'Servicio' ? slotCount * 60 : 0,
-      description: form.description.trim() || undefined,
-      sku: form.sku.trim() || undefined,
+      durationMinutes,
+      ...(editingBase?.serviceDefinition ? { serviceDefinition: { ...editingBase.serviceDefinition, duration: { ...editingBase.serviceDefinition.duration, minutes: durationMinutes } } } : {}),
+      description: form.description.trim(),
+      sku: form.sku.trim(),
       featured: form.itemType === 'Servicio' ? form.featured : false,
       active: form.active,
       createdAt: editingId ? services.find((entry) => entry.id === editingId)?.createdAt : now,
@@ -186,12 +201,12 @@ export function CatalogScreen() {
   };
 
   const toggleActive = async (item: ServiceType) => {
-    const result = await updateCatalogItem(item.id, { active: item.active === false, updatedAt: new Date().toISOString() });
+    const result = await updateCatalogItem(item.id, { active: item.active === false, catalogToken: item.catalogToken, updatedAt: new Date().toISOString() });
     if (!result.ok) setMessage(result.message ?? 'No se pudo actualizar.');
   };
 
   const removeItem = async (item: ServiceType) => {
-    const result = await removeCatalogItem(item.id);
+    const result = await removeCatalogItem(item.id, item.catalogToken);
     if (!result.ok) {
       setMessage(result.message ?? 'No se pudo eliminar.');
       return;
@@ -201,6 +216,8 @@ export function CatalogScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
+      {catalogLoading ? <Text>Cargando catálogo…</Text> : null}
+      {catalogError ? <View style={styles.errorBanner}><Text style={styles.errorText}>No se pudo actualizar el catálogo: {catalogError}. Se conserva la última lectura.</Text><Button label="Reintentar catálogo" onPress={() => void refreshOperationalData()} /></View> : null}
       {dataError ? (
         <View style={styles.errorBanner}>
           <View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudo sincronizar el catálogo</Text><Text style={styles.errorText}>{dataError}</Text></View>
@@ -237,7 +254,7 @@ export function CatalogScreen() {
               <Pressable key={item.id} onPress={() => setSelectedId(item.id)} style={[styles.itemRow, active && styles.itemRowActive]}>
                 <View style={styles.itemIcon}><Text style={styles.itemIconText}>{type === 'Servicio' ? '🔧' : '▦'}</Text></View>
                 <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.name}</Text><Text style={styles.itemMeta}>{type} · {item.category}{type === 'Servicio' ? ` · ${slotsFor(item)} cupo${slotsFor(item) > 1 ? 's' : ''}` : itemAvailable === null ? ' · Stock sin verificar' : ` · ${itemAvailable} disponible${itemAvailable === 1 ? '' : 's'}`}</Text></View>
-                <View style={styles.itemRight}><Text style={styles.itemPrice}>{formatMoney(item.basePrice)}</Text><Pill label={item.active === false ? 'Inactivo' : 'Activo'} tone={item.active === false ? 'neutral' : 'success'} /></View>
+                <View style={styles.itemRight}><Text style={styles.itemPrice}>{typeof item.basePrice === 'number' ? formatMoney(item.basePrice) : 'Por cotizar'}</Text><Pill label={item.active === false ? 'Inactivo' : 'Activo'} tone={item.active === false ? 'neutral' : 'success'} /></View>
               </Pressable>
             );
           }) : <EmptyState icon="🔎" title="Sin resultados" message="Agrega el primer servicio o producto, o cambia los filtros de búsqueda." />}
@@ -251,7 +268,7 @@ export function CatalogScreen() {
                 <Pill label={selected.active === false ? 'Inactivo' : 'Activo'} tone={selected.active === false ? 'neutral' : 'success'} />
               </View>
               <View style={styles.infoGrid}>
-                <Info label="Precio base" value={formatMoney(selected.basePrice)} />
+                <Info label="Precio base" value={typeof selected.basePrice === 'number' ? formatMoney(selected.basePrice) : 'Por cotizar'} />
                 <Info label="Duración" value={normalizeType(selected) === 'Servicio' ? `${slotsFor(selected)} hora${slotsFor(selected) > 1 ? 's' : ''} / ${slotsFor(selected)} cupo${slotsFor(selected) > 1 ? 's' : ''}` : 'No aplica'} />
                 <Info label="En agenda" value={normalizeType(selected) === 'Servicio' ? (selected.featured ? 'Servicio común' : 'Disponible por búsqueda') : 'No aparece'} />
                 <Info label="Código / SKU" value={selected.sku || 'No registrado'} />
@@ -293,15 +310,15 @@ export function CatalogScreen() {
         <ScrollView>
           {message ? <View style={styles.formError}><Text style={styles.formErrorText}>{message}</Text></View> : null}
           <Text style={styles.fieldLabel}>Tipo</Text>
-          <View style={styles.optionRow}><Choice label="Servicio" active={form.itemType === 'Servicio'} onPress={() => setForm({ ...form, itemType: 'Servicio', category: form.category === 'Producto' ? 'Servicio' : form.category, durationSlots: form.durationSlots === '0' ? '1' : form.durationSlots })} /><Choice label="Producto" active={form.itemType === 'Producto'} onPress={() => setForm({ ...form, itemType: 'Producto', category: form.category === 'Servicio' ? 'Producto' : form.category, durationSlots: '0', featured: false })} /></View>
-          <Input label="Nombre" value={form.name} onChangeText={(name) => setForm({ ...form, name })} placeholder="Ej. Servicio estándar 18,000 BTU" />
-          <Input label="Categoría" value={form.category} onChangeText={(category) => setForm({ ...form, category })} placeholder="Servicio, instalación, diagnóstico…" />
-          <Input label="Precio base (Afl.)" value={form.price} onChangeText={(price) => setForm({ ...form, price })} keyboardType="decimal-pad" placeholder="0.00" />
-          {form.itemType === 'Servicio' ? <><Text style={styles.fieldLabel}>Duración en agenda</Text><View style={styles.optionRow}>{['1', '2', '3'].map((slots) => <Choice key={slots} label={`${slots} hora${slots === '1' ? '' : 's'} · ${slots} cupo${slots === '1' ? '' : 's'}`} active={form.durationSlots === slots} onPress={() => setForm({ ...form, durationSlots: slots })} />)}</View><Text style={styles.helperText}>Cada cupo representa una hora. La agenda bloqueará automáticamente los cupos consecutivos.</Text></> : null}
-          <Input label="Código / SKU (opcional)" value={form.sku} onChangeText={(sku) => setForm({ ...form, sku })} />
-          <Input label="Descripción" value={form.description} onChangeText={(description) => setForm({ ...form, description })} multiline placeholder="Información relevante para la oficina o el técnico…" />
-          {form.itemType === 'Servicio' ? <><Text style={styles.fieldLabel}>Visibilidad en la agenda</Text><View style={styles.optionRow}><Choice label="Servicio común" active={form.featured} onPress={() => setForm({ ...form, featured: true })} /><Choice label="Solo por búsqueda" active={!form.featured} onPress={() => setForm({ ...form, featured: false })} /></View></> : null}
-          <Text style={styles.fieldLabel}>Estado</Text><View style={styles.optionRow}><Choice label="Activo" active={form.active} onPress={() => setForm({ ...form, active: true })} /><Choice label="Inactivo" active={!form.active} onPress={() => setForm({ ...form, active: false })} /></View>
+          <View style={styles.optionRow}><Choice disabled={saving || Boolean(editingId)} label="Servicio" active={form.itemType === 'Servicio'} onPress={() => setForm({ ...form, itemType: 'Servicio', category: form.category === 'Producto' ? 'Servicio' : form.category, durationSlots: form.durationSlots === '0' ? '1' : form.durationSlots })} /><Choice disabled={saving || Boolean(editingId)} label="Producto" active={form.itemType === 'Producto'} onPress={() => setForm({ ...form, itemType: 'Producto', category: form.category === 'Servicio' ? 'Producto' : form.category, durationSlots: '0', featured: false })} /></View>
+          <Input editable={!saving} label="Nombre" value={form.name} onChangeText={(name) => setForm({ ...form, name })} placeholder="Ej. Servicio estándar 18,000 BTU" />
+          <Input editable={!saving} label="Categoría" value={form.category} onChangeText={(category) => setForm({ ...form, category })} placeholder="Servicio, instalación, diagnóstico…" />
+          <Input editable={!saving} label="Precio base (Afl.)" value={form.price} onChangeText={(price) => setForm({ ...form, price })} keyboardType="decimal-pad" placeholder="Por cotizar" />
+          {form.itemType === 'Servicio' ? <><Text style={styles.fieldLabel}>Duración en agenda</Text><View style={styles.optionRow}>{['1', '2', '3'].map((slots) => <Choice disabled={saving} key={slots} label={`${slots} hora${slots === '1' ? '' : 's'} · ${slots} cupo${slots === '1' ? '' : 's'}`} active={form.durationSlots === slots} onPress={() => setForm({ ...form, durationSlots: slots })} />)}</View><Text style={styles.helperText}>Cada cupo representa una hora. La agenda bloqueará automáticamente los cupos consecutivos.</Text></> : null}
+          <Input editable={!saving} label="Código / SKU (opcional)" value={form.sku} onChangeText={(sku) => setForm({ ...form, sku })} />
+          <Input editable={!saving} label="Descripción" value={form.description} onChangeText={(description) => setForm({ ...form, description })} multiline placeholder="Información relevante para la oficina o el técnico…" />
+          {form.itemType === 'Servicio' ? <><Text style={styles.fieldLabel}>Visibilidad en la agenda</Text><View style={styles.optionRow}><Choice disabled={saving} label="Servicio común" active={form.featured} onPress={() => setForm({ ...form, featured: true })} /><Choice disabled={saving} label="Solo por búsqueda" active={!form.featured} onPress={() => setForm({ ...form, featured: false })} /></View></> : null}
+          <Text style={styles.fieldLabel}>Estado</Text><View style={styles.optionRow}><Choice disabled={saving} label="Activo" active={form.active} onPress={() => setForm({ ...form, active: true })} /><Choice disabled={saving} label="Inactivo" active={!form.active} onPress={() => setForm({ ...form, active: false })} /></View>
           <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowForm(false)} /><Button label={saving ? 'Guardando…' : 'Guardar artículo'} disabled={saving} onPress={() => void saveItem()} /></View>
         </ScrollView>
       </AppModal>
@@ -324,8 +341,8 @@ export function CatalogScreen() {
   );
 }
 
-function Choice({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return <Pressable onPress={onPress} style={[styles.choice, active && styles.choiceActive]}><Text style={[styles.choiceText, active && styles.choiceTextActive]}>{label}</Text></Pressable>;
+function Choice({ label, active, onPress, disabled }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
+  return <Pressable disabled={disabled} onPress={onPress} style={[styles.choice, active && styles.choiceActive]}><Text style={[styles.choiceText, active && styles.choiceTextActive]}>{label}</Text></Pressable>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {

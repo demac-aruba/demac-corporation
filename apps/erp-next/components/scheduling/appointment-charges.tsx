@@ -9,11 +9,12 @@ import styles from './appointment-charges.module.css';
 import { useAppointmentCharges } from './use-appointment-charges';
 import { ChargeLineSummary, ChargeOverviewMetrics } from './appointment-charge-overview';
 import { ChargeCatalogPicker } from './charge-catalog-picker';
+import { useChargeEditSession } from './use-charge-edit-session';
 
 const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', transfer: 'bank', pos: 'card', suave: 'phone' };
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', receivedAt: new Date().toISOString(), note: '' });
-function useQuote(lines: ChargeLineInput[], revision = 0) {
+function useQuote(lines: ChargeLineInput[], revision = 0, appointmentId?: string, expectedVersion?: number) {
   const [quote, setQuote] = useState<ChargeQuote | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(false);
   const signature = JSON.stringify(lines);
   useEffect(() => {
@@ -21,13 +22,13 @@ function useQuote(lines: ChargeLineInput[], revision = 0) {
     setQuote(null); setError('');
     if (!lines.length) { setLoading(false); return; }
     setLoading(true);
-    const timer = window.setTimeout(() => { void quoteAppointmentCharges(JSON.parse(signature)).then(result => {
+    const timer = window.setTimeout(() => { void quoteAppointmentCharges(JSON.parse(signature), appointmentId ? { appointmentId, expectedVersion: expectedVersion ?? 0 } : undefined).then(result => {
       if (active) setQuote(result.quote);
     }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'No se pudo consultar el precio.'); }).finally(() => { if (active) setLoading(false); }); }, 300);
     return () => { active = false; window.clearTimeout(timer); };
   // The serialized immutable input prevents stale quote responses from replacing edits.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, revision]);
+  }, [signature, revision, appointmentId, expectedVersion]);
   return { quote, error, loading };
 }
 export function ChargeNotice({ children }: { children: React.ReactNode }) { return <div className={styles.notice}><ChargeIcon name="info"/><div>{children}</div></div>; }
@@ -40,6 +41,7 @@ function PaymentFields({ value, onChange, disabled = false }: { value: PaymentIn
   </fieldset>;
 }
 function LinesEditor({ lines, onChange, quote, disabled, preserveWork = false }: { lines: ChargeLineInput[]; onChange: (lines: ChargeLineInput[]) => void; quote: ChargeQuote | null; disabled: boolean; preserveWork?: boolean }) {
+  const governedServices = [{ id: 'standard_service', name: 'Standard service' }, { id: 'deep_cleaning', name: 'Deep cleaning' }, { id: 'standard_installation', name: 'Instalación estándar back to back' }];
   const [services, setServices] = useState<ChargeCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState(''), [catalogLoading, setCatalogLoading] = useState(true), [catalogRevision, setCatalogRevision] = useState(0);
   useEffect(() => { let active = true; setCatalogLoading(true); setCatalogError(''); void listChargeServices().then(result => { if (active) setServices(result.services); }).catch(() => { if (active) setCatalogError('No se pudo cargar el catálogo. Tus conceptos y precios se conservan.'); }).finally(() => { if (active) setCatalogLoading(false); }); return () => { active = false; }; }, [catalogRevision]);
@@ -47,15 +49,18 @@ function LinesEditor({ lines, onChange, quote, disabled, preserveWork = false }:
   return <fieldset disabled={disabled} style={{ margin: 0, padding: 0, border: 0, minWidth: 0 }}>
     {catalogError ? <ChargeNotice>{catalogError}</ChargeNotice> : null}
     {lines.map((line, index) => { const priced = quote?.lines.find(item => item.id === line.id); return <div className={styles.line} key={line.id}>
-      <div className={styles.lineHeader}>{preserveWork && line.workLineId ? <strong>{line.label}</strong> : <input aria-label={`Concepto ${index + 1}`} maxLength={220} value={line.label} onChange={event => change(line.id, { label: event.target.value })} placeholder="Servicio, reparación o adicional"/>}{!(preserveWork && line.workLineId) ? <button type="button" aria-label={`Eliminar concepto ${index + 1}`} onClick={() => onChange(lines.filter(item => item.id !== line.id))}>Eliminar</button> : null}</div>
-      <ChargeCatalogPicker items={services} selectedId={line.serviceId} index={index + 1} loading={catalogLoading} error={catalogError} disabled={disabled} fallbackLabel={line.presetId ? 'Volver a tarifa del trabajo / BTU' : 'Ingresar precio manual'} onRetry={() => setCatalogRevision(value => value + 1)} onSelect={item => {
+      <div className={styles.lineHeader}><strong aria-label={`Concepto ${index + 1}`}>{line.label || 'Nuevo servicio o adicional'}</strong>{!(preserveWork && line.workLineId) ? <button type="button" aria-label={`Eliminar concepto ${index + 1}`} onClick={() => onChange(lines.filter(item => item.id !== line.id))}>Eliminar</button> : null}</div>
+      {!preserveWork ? <label>Servicio realizado<select aria-label={`Servicio realizado ${index + 1}`} value={!line.serviceId && governedServices.some(item => item.id === line.presetId) ? line.presetId : ''} onChange={event => {
+        const selected = governedServices.find(item => item.id === event.target.value);
+        change(line.id, { presetId: selected?.id || '', serviceId: '', label: selected?.name || '', unitPrice: '', reason: '' });
+      }}><option value="">Producto u otro servicio del catálogo</option>{governedServices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
+      <ChargeCatalogPicker items={services} selectedId={line.serviceId} index={index + 1} loading={catalogLoading} error={catalogError} disabled={disabled} fallbackLabel={line.presetId ? 'Volver a tarifa del trabajo / BTU' : 'Dejar concepto por cotizar'} onRetry={() => setCatalogRevision(value => value + 1)} onSelect={item => {
         if ((item?.id || '') === (line.serviceId || '')) return;
-        change(line.id, { serviceId: item?.id || '', unitPrice: '', reason: '', ...(item && !(preserveWork && line.workLineId) ? { label: item.name } : {}) });
+        change(line.id, { serviceId: item?.id || '', unitPrice: '', reason: '', ...(!(preserveWork && line.workLineId) ? { label: item?.name || governedServices.find(service => service.id === line.presetId)?.name || line.label } : {}) });
       }}/>
-      <div className={styles.lineFields}><label>BTU<input aria-label={`BTU ${index + 1}`} inputMode="numeric" value={line.btu || ''} onChange={event => change(line.id, { btu: event.target.value, unitPrice: '', reason: '' })} placeholder="Por confirmar"/></label><label>Cantidad<input aria-label={`Cantidad ${index + 1}`} inputMode="decimal" value={line.quantity} disabled={preserveWork && Boolean(line.workLineId)} onChange={event => change(line.id, { quantity: event.target.value })}/></label><div><span className={styles.muted}>Precio base</span><small>{chargeMoney(priced?.baseUnitCents)}</small></div><label>Precio / unidad (Afl.)<input aria-label={`Precio unitario ${index + 1}`} inputMode="decimal" value={line.unitPrice ?? ''} onChange={event => change(line.id, { unitPrice: event.target.value, reason: '' })} placeholder={priced?.baseUnitCents == null ? 'Por cotizar' : (priced.baseUnitCents / 100).toFixed(2)}/></label></div>
-      {line.unitPrice !== undefined && line.unitPrice !== '' && line.unitPrice !== null ? <label className={styles.reason}>Motivo del precio / ajuste<input aria-label={`Motivo del precio ${index + 1}`} value={line.reason || ''} maxLength={700} onChange={event => change(line.id, { reason: event.target.value })} placeholder="Cambio de alcance, tiempo extra o precio acordado"/></label> : null}
+      <div className={styles.lineFields}><label>BTU<input aria-label={`BTU ${index + 1}`} inputMode="numeric" value={line.btu || ''} onChange={event => change(line.id, { btu: event.target.value, unitPrice: '', reason: '' })} placeholder="Por confirmar"/></label><label>Cantidad<input aria-label={`Cantidad ${index + 1}`} inputMode="decimal" value={line.quantity} disabled={preserveWork && Boolean(line.workLineId)} onChange={event => change(line.id, { quantity: event.target.value })}/></label><div><span className={styles.muted}>Tarifa por unidad</span><strong aria-label={`Precio unitario ${index + 1}`}>{chargeMoney(priced?.unitCents)}</strong><small>Según servicio y BTU</small></div></div>
       {preserveWork && line.workLineId && Number.isInteger(Number(line.quantity)) && Number(line.quantity) > 1 && lines.length + Number(line.quantity) - 1 <= 60 ? <button type="button" className={styles.link} onClick={() => onChange(lines.flatMap(item => item.id === line.id ? Array.from({ length: Number(line.quantity) }, (_, unit) => ({ ...line, id: `${line.id}-unit-${unit + 1}`, quantity: 1 })) : [item]))}>Separar equipos por BTU</button> : null}
-      <div className={styles.summary}><span className={styles.muted}>{priced?.pendingReason || (priced?.manualPrice ? 'Precio ingresado por oficina' : 'Precio configurado en DEMAC')}</span><strong>{chargeMoney(priced?.totalCents)}</strong></div>
+      <div className={styles.summary}><span className={styles.muted}>{priced?.pendingReason || (priced?.manualPrice ? 'Precio conservado del registro anterior' : 'Tarifa configurada en DEMAC')}</span><strong>{chargeMoney(priced?.totalCents)}</strong></div>
     </div>; })}
     <button type="button" className={styles.link} disabled={lines.length >= 60} onClick={() => onChange([...lines, { id: `extra-${crypto.randomUUID()}`, label: '', quantity: 1, unitPrice: '', reason: '' }])}><ChargeIcon name="plus"/>Añadir concepto / adicional</button>
   </fieldset>;
@@ -100,15 +105,16 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   const [pending, setPending] = useState<{ action: string; data: Record<string,unknown> } | null>(null);
   const inFlight = useRef(false);
   const [quoteRevision, setQuoteRevision] = useState(0);
-  const { quote, error: quoteError, loading: quoting } = useQuote(editing ? lines : [], quoteRevision);
+  const { quote, error: quoteError, loading: quoting } = useQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
   const { record, error: readError, loading, updatedAt, reload: read } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending));
+  const editSession = useChargeEditSession(appointmentId, canManage && active && !showHistory && Boolean(record) && !record?.blocker);
   const reload = () => { setQuoteRevision(value => value + 1); return read(); };
   useEffect(() => { onBusyChange(busy || Boolean(pending)); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
   const state = record?.state;
   const estimate = state?.estimate;
   const amount = state?.final?.totalCents ?? estimate?.totalCents;
   const balance = amount == null ? null : amount - (state?.receivedCents || 0);
-  const blocked = !canManage || Boolean(record?.blocker) || busy || Boolean(pending) || loading || Boolean(readError);
+  const blocked = !canManage || !editSession.owned || Boolean(record?.blocker) || busy || Boolean(pending) || loading || Boolean(readError);
   const version = state?.version || 0;
   const editingConflict = Boolean(editing) && editingVersion !== version;
   const paymentConflict = Boolean(payment) && paymentVersion !== version;
@@ -127,10 +133,15 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
       setError(cause instanceof Error ? cause.message : 'No se confirmó el resultado. Reintenta la misma operación.');
     } finally { inFlight.current = false; setBusy(false); }
   };
-  const save = (action: string, values: Record<string,unknown>) => { void perform({ action, data: { ...values, appointmentId, expectedVersion: action === 'record_appointment_payment' ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } }); };
+  const save = (action: string, values: Record<string,unknown>) => {
+    const lease = editSession.credentials();
+    if (!lease) { setError('Recupera el acceso de edición antes de guardar. Tu borrador se conserva.'); return; }
+    void perform({ action, data: { ...values, ...lease, appointmentId, expectedVersion: action === 'record_appointment_payment' ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } });
+  };
   const startPayment = (method: PaymentMethod = 'cash') => { setPaymentVersion(version); setPayment({ ...newPayment(), method }); setSuccess(''); };
   if (loading && !record) return <ChargesSkeleton/>;
   return <div className={`${styles.workspace} ${!editing && !showHistory ? styles.overview : ''}`} aria-busy={loading} data-charge-stage={editing === 'final' ? 'final' : 'appointment'}>
+    {canManage && active && !showHistory && record && !record.blocker ? <ChargeNotice><span role="status">{editSession.message}</span>{!editSession.owned && !editSession.loading ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => { void read(); editSession.retry(); }}>Recuperar acceso de edición</button> : null}</ChargeNotice> : null}
     {readError ? <div role="alert" className={styles.error}>{record ? 'No se pudieron actualizar los importes. Los datos visibles corresponden a la última consulta; vuelve a actualizar antes de guardar. ' : ''}{readError}</div> : null}
     {editingConflict || paymentConflict ? <div role="alert" className={styles.error}>Los importes cambiaron desde que abriste el formulario. Conservamos tu borrador: vuelve atrás o cancela y revisa los datos actualizados antes de iniciar otro registro.</div> : null}
     {error ? <div role="alert" className={styles.error}>{error}</div> : null}{success ? <div role="status" className={styles.success}><ChargeIcon name="check"/>{success}</div> : null}

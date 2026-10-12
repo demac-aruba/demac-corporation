@@ -283,8 +283,9 @@ service cloud.firestore {
 
     match /services/{serviceId} {
       allow read: if activeStaff();
-      allow create, update: if operationsRole();
-      allow delete: if adminOrSupervisor();
+      // Office facade checks current role, exact snapshot version, identity claims
+      // and append-only audit. Direct writes could bypass those guards.
+      allow write: if false;
     }
 
     match /commercialProductStock/{productId} {

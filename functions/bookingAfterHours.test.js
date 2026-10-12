@@ -581,8 +581,8 @@ test('after-hours references are included at the initial atomic appointment writ
 
 test('emergency booking saves charges and deposit atomically without completing attendance or Field work', async () => {
   const { TransactionalFirestore } = require('./test-support/transactionalFirestore');
-  const { db, authority } = fixture({ 'users/office-1': { active: true, role: 'office' } }, CLOCK, TransactionalFirestore);
-  const request = input({ actor: { id: 'office-1', source: 'office-scheduling' }, charges: { lines: [{ id: 'emergency', label: 'Synthetic emergency', quantity: 1, unitPrice: '250', reason: 'Office quote' }], payment: { amount: '100', method: 'cash' } } });
+  const { db, authority } = fixture({ 'services/emergency': { name: 'Synthetic emergency', active: true, basePrice: 250 }, 'users/office-1': { active: true, role: 'office' } }, CLOCK, TransactionalFirestore);
+  const request = input({ actor: { id: 'office-1', source: 'office-scheduling' }, charges: { lines: [{ id: 'emergency', label: 'Synthetic emergency', quantity: 1, serviceId: 'emergency' }], payment: { amount: '100', method: 'cash' } } });
   const result = await authority.createEmergency(request); const replay = await authority.createEmergency(request);
   const appointment = db.read(`appointments/${result.appointmentId}`);
   assert.equal(appointment.jobCharges.estimate.totalCents, 25000); assert.equal(appointment.jobCharges.receivedCents, 10000);

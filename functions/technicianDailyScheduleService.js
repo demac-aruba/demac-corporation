@@ -1,4 +1,5 @@
 const { referenceMessageParts } = require('./bookingVisitReferences');
+const { bookingLocationLabel } = require('./bookingLocationDisplay');
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
 const { endTimeFromOccupiedSlots } = require("./bookingCapacityAvailability");
 const { AFTERNOON_SLOTS, isHalfDay, occupiedSlots } = require("./bookingSchedulingPrimitives");
@@ -342,7 +343,7 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const access = propertyAccessInstructions(property);
   const district = geographicDistrict(property);
   const zone = geographicZone(property);
-  const locationName = propertyLocationName(property);
+  const locationName = bookingLocationLabel(order, appointment) || propertyLocationName(property);
   const vanLabel = normalizedText(van.name || van.id) || "Van";
   const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
   const header = [`*DEMAC · ${headerLabel}*`, `*Trabajo ${sequence} · ${formatScheduleDate(order.date)}*`];
