@@ -1,0 +1,347 @@
+{
+  "sourceSha": "a8fa5a9acb61c400b02c077d30726475566d60cd",
+  "mode": "prepare-and-retain-private-recovery",
+  "stage": "complete",
+  "functions": [
+    {
+      "name": "officeBookingAuthority",
+      "beforeRevision": "officebookingauthority-00084-vak",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791844438804991",
+        "object": "officeBookingAuthority/function-source.zip"
+      },
+      "originalSourceHash": "744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190",
+      "reconstructed": false,
+      "historicalDependencyEquivalence": "original lock preserved",
+      "configHash": "1f3068bd669b1ffdd17ef79f170546722a42131d2949a0566852f929d95e6e39",
+      "iamHash": "6ea6e4e297bf9c84cb0dd0386bb594b16b49cb13448749e5f7e28ed2086997a3",
+      "changed": [
+        "appointmentChargeEditing.js",
+        "appointmentCharges.js",
+        "officeBookingAuthorityFacade.js",
+        "serviceCatalogEditing.js",
+        "servicePricingAuthority.js"
+      ],
+      "runtimeGraph": {
+        "reachableModules": 152,
+        "repositoryPricingFixtureReachable": false
+      },
+      "testFixtures": [
+        "demacServicePricingRules.js"
+      ],
+      "baselineResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          65
+        ],
+        "testsPassed": 65,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          91
+        ],
+        "testsPassed": 91,
+        "runtimeSmokePassed": true
+      },
+      "archives": [
+        {
+          "label": "baseline",
+          "sha256": "480c79d1630d7edcec3b0298c329f1d83053cf75aa799409ed3aa14012b192ad",
+          "manifestHash": "744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/officeBookingAuthority-baseline.tar.gz",
+          "generation": "1791845628491000",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        },
+        {
+          "label": "candidate",
+          "sha256": "4973b8f5711b767909e3c7e71f5b0f825f17ec356091b60b9412560fa12cbc8e",
+          "manifestHash": "38e152b4ca9ed1134e19e6fd9164af92b03d5e26cf4b171cf08fd106fab7e7d7",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/officeBookingAuthority-candidate.tar.gz",
+          "generation": "1791845645328331",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        }
+      ]
+    },
+    {
+      "name": "inventoryAuthority",
+      "beforeRevision": "inventoryauthority-00004-dis",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1788215232822379",
+        "object": "inventoryAuthority/function-source.zip"
+      },
+      "originalSourceHash": "d0863be9a354923b0cb3cea752ec263f6ec296f979602b28e5676df7eb2b65ff",
+      "reconstructed": true,
+      "historicalDependencyEquivalence": "unknown; newly pinned baseline",
+      "configHash": "ec192d698305b29856b91f3d796362b168fddb01e47e0208ab298275fc8a4fb1",
+      "iamHash": "8fd29f58dd2ad12a9e95e971238386f0ca87fc92a5623ee1765e808be7fa457b",
+      "changed": [
+        "inventoryAuthority.js",
+        "servicePricingAuthority.js"
+      ],
+      "runtimeGraph": {
+        "reachableModules": 70,
+        "repositoryPricingFixtureReachable": false
+      },
+      "testFixtures": [],
+      "baselineResult": {
+        "dependencyLockSha256": "18d858951848a87ad027ce55097741233e958c0a8d4495c4fcff6e144afe9dca",
+        "cleanInstall": true,
+        "testCounts": [
+          25
+        ],
+        "testsPassed": 25,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "18d858951848a87ad027ce55097741233e958c0a8d4495c4fcff6e144afe9dca",
+        "cleanInstall": true,
+        "testCounts": [
+          36
+        ],
+        "testsPassed": 36,
+        "runtimeSmokePassed": true
+      },
+      "archives": [
+        {
+          "label": "baseline",
+          "sha256": "bf6d9c96ffe1199684615038a819570a026389426c5ee56c30e47528e07730fa",
+          "manifestHash": "9f1e6e879ff7fbfff0c9382f5fd867a61894dc79fc12fba974391de4fd389c15",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/inventoryAuthority-baseline.tar.gz",
+          "generation": "1791845674267009",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        },
+        {
+          "label": "candidate",
+          "sha256": "ca184f0d68089b5cb8f5f8c87430a9896d12db6b88e0d7552e02a63c6eb97f9c",
+          "manifestHash": "69cdfda9c0e07418b709d7f0667c0cddc86567c2b414b3a8bcbb9726d63e11d4",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/inventoryAuthority-candidate.tar.gz",
+          "generation": "1791845690524289",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        }
+      ]
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "beforeRevision": "fieldoperationsauthority-00008-goz",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791672075422069",
+        "object": "fieldOperationsAuthority/function-source.zip"
+      },
+      "originalSourceHash": "dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d",
+      "reconstructed": false,
+      "historicalDependencyEquivalence": "original lock preserved",
+      "configHash": "f93dca60910368f8eb3b1851bd3a2e422525f6a323a330a5dd5e10a1d3e9db73",
+      "iamHash": "3f996ca189b48432985f05ff73ce9269bede4de9abf65eac765f52273260de9f",
+      "changed": [
+        "servicePricingAuthority.js"
+      ],
+      "runtimeGraph": {
+        "reachableModules": 149,
+        "repositoryPricingFixtureReachable": false
+      },
+      "testFixtures": [],
+      "baselineResult": {
+        "dependencyLockSha256": "1561768b8894ce88e3a9d5609b969d449409e788795d7dcc739d4bf479c8a268",
+        "cleanInstall": true,
+        "testCounts": [
+          17
+        ],
+        "testsPassed": 17,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "1561768b8894ce88e3a9d5609b969d449409e788795d7dcc739d4bf479c8a268",
+        "cleanInstall": true,
+        "testCounts": [
+          17
+        ],
+        "testsPassed": 17,
+        "runtimeSmokePassed": true
+      },
+      "archives": [
+        {
+          "label": "baseline",
+          "sha256": "14734fba4591b5a05c4d20691e4e8a06c29e64590209ef0963dc9760764b938d",
+          "manifestHash": "dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/fieldOperationsAuthority-baseline.tar.gz",
+          "generation": "1791845719423197",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        },
+        {
+          "label": "candidate",
+          "sha256": "19e6ce24e4de4af30c9df20dfb10eed0b60d2d00edfb91ae163a37a825fefff4",
+          "manifestHash": "c0c8b3a20560abb6d0a10860b8c7a17c3ac287f25d1b4568990bfd40d7cc9765",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/fieldOperationsAuthority-candidate.tar.gz",
+          "generation": "1791845735747281",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "beforeRevision": "processcustomeragentinbound-00054-bav",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657179928828",
+        "object": "processCustomerAgentInbound/function-source.zip"
+      },
+      "originalSourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+      "reconstructed": false,
+      "historicalDependencyEquivalence": "original lock preserved",
+      "configHash": "d85475935de56693f12d0a5e05d5a5383fd40e488052bd897cd613fc5082a1f7",
+      "iamHash": "de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac",
+      "changed": [
+        "commercialSalesAuthority.js",
+        "demacCustomerSalesTools.js",
+        "servicePricingAuthority.js"
+      ],
+      "runtimeGraph": {
+        "reachableModules": 142,
+        "repositoryPricingFixtureReachable": false
+      },
+      "testFixtures": [],
+      "baselineResult": {
+        "dependencyLockSha256": "49854ddf17786e3c80fc1426634d7e941da69cf6680f5f43f336e05ef1c003e0",
+        "cleanInstall": true,
+        "testCounts": [
+          43
+        ],
+        "testsPassed": 43,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "49854ddf17786e3c80fc1426634d7e941da69cf6680f5f43f336e05ef1c003e0",
+        "cleanInstall": true,
+        "testCounts": [
+          45
+        ],
+        "testsPassed": 45,
+        "runtimeSmokePassed": true
+      },
+      "archives": [
+        {
+          "label": "baseline",
+          "sha256": "2bfef78d584460f0ba95566fa9d5bc54e4ba331c1ef86eba269c37307127503e",
+          "manifestHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentInbound-baseline.tar.gz",
+          "generation": "1791845764097971",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        },
+        {
+          "label": "candidate",
+          "sha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+          "manifestHash": "7bd175d53f6b7db37db4b6ac64bc662d0cc1fe412f256055dc377eb7cd4c5b82",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentInbound-candidate.tar.gz",
+          "generation": "1791845780576895",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "beforeRevision": "processcustomeragentreactivation-00054-juj",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657228411844",
+        "object": "processCustomerAgentReactivation/function-source.zip"
+      },
+      "originalSourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+      "reconstructed": false,
+      "historicalDependencyEquivalence": "original lock preserved",
+      "configHash": "5b809eee9a6801e917d30c7972f35f851770d45278dde002c41aa79709bbd40b",
+      "iamHash": "de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac",
+      "changed": [
+        "commercialSalesAuthority.js",
+        "demacCustomerSalesTools.js",
+        "servicePricingAuthority.js"
+      ],
+      "runtimeGraph": {
+        "reachableModules": 142,
+        "repositoryPricingFixtureReachable": false
+      },
+      "testFixtures": [],
+      "baselineResult": {
+        "dependencyLockSha256": "49854ddf17786e3c80fc1426634d7e941da69cf6680f5f43f336e05ef1c003e0",
+        "cleanInstall": true,
+        "testCounts": [
+          43
+        ],
+        "testsPassed": 43,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "49854ddf17786e3c80fc1426634d7e941da69cf6680f5f43f336e05ef1c003e0",
+        "cleanInstall": true,
+        "testCounts": [
+          45
+        ],
+        "testsPassed": 45,
+        "runtimeSmokePassed": true
+      },
+      "archives": [
+        {
+          "label": "baseline",
+          "sha256": "2bfef78d584460f0ba95566fa9d5bc54e4ba331c1ef86eba269c37307127503e",
+          "manifestHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentReactivation-baseline.tar.gz",
+          "generation": "1791845806365192",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        },
+        {
+          "label": "candidate",
+          "sha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+          "manifestHash": "7bd175d53f6b7db37db4b6ac64bc662d0cc1fe412f256055dc377eb7cd4c5b82",
+          "extractionVerified": true,
+          "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentReactivation-candidate.tar.gz",
+          "generation": "1791845823520545",
+          "privateRetained": true,
+          "anonymousAccessDenied": true,
+          "reused": false
+        }
+      ]
+    }
+  ],
+  "recoveryBucketPolicyHash": "4876bae9c1a90e4022bf020b03ce7f7e0b0b536039e8e756243e54fba09dcad7",
+  "recoveryBucketConfigHash": "44b3cfc28b39972a4a2a8b6eae46c9beaa4e31439cf163b0fbb7a79bdb034968",
+  "inheritedPrivacy": {
+    "mode": "complete-ancestry-iam",
+    "levels": 1,
+    "policyHashes": [
+      "67a64f42ea2124c21220ea55179c677bb746cfe02dbac425b0b6e4c67c15f37b"
+    ]
+  }
+}

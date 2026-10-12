@@ -1,5 +1,6 @@
+import { listManagedCatalog, saveManagedCatalogItem, deleteManagedCatalogItem } from '../services/officeBookingAuthority';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   demoClients,
   demoEquipment,
@@ -79,6 +80,8 @@ type AppStateValue = {
   authLoading: boolean;
   dataLoading: boolean;
   dataError: string | null;
+  catalogLoading: boolean;
+  catalogError: string | null;
   lastSyncedAt: string | null;
   login: (email: string, password: string) => LoginResult;
   loginDemo: (email: string) => OperationResult;
@@ -92,7 +95,7 @@ type AppStateValue = {
   removeProperty: (id: string) => Promise<OperationResult>;
   addCatalogItem: (item: ServiceType) => Promise<OperationResult>;
   updateCatalogItem: (id: string, changes: Partial<ServiceType>) => Promise<OperationResult>;
-  removeCatalogItem: (id: string) => Promise<OperationResult>;
+  removeCatalogItem: (id: string, expectedToken?: string) => Promise<OperationResult>;
   saveCommercialProductStock: (productId: string, onHand: number) => Promise<OperationResult>;
   addWorkOrder: (order: WorkOrder) => Promise<OperationResult>;
   updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => Promise<OperationResult>;
@@ -181,15 +184,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const catalogReadVersion = useRef(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const acceptCatalogMutation = () => {
+    ++catalogReadVersion.current;
+    setCatalogLoading(false);
+    setCatalogError(null);
+  };
 
   const refreshOperationalData = useCallback(async (showLoader = true) => {
     if (showLoader) setDataLoading(true);
+    setCatalogLoading(true);
+    setCatalogError(null);
+    const catalogRead = ++catalogReadVersion.current;
+    // Catalog transport failure must not hold customer/property/work-order reads.
+    void listManagedCatalog<ServiceType>().then((catalog) => { if (catalogRead === catalogReadVersion.current) setServices(sortCatalog(catalog)); })
+      .catch((cause) => { if (catalogRead === catalogReadVersion.current) setCatalogError(friendlyDataError(cause)); })
+      .finally(() => { if (catalogRead === catalogReadVersion.current) setCatalogLoading(false); });
     try {
-      const [remoteClients, remoteProperties, remoteServices, remoteCommercialStock, remoteWorkOrders, remoteEvidence, remoteUnits, remoteWhatsappMessages] = await Promise.all([
+      const [remoteClients, remoteProperties, remoteCommercialStock, remoteWorkOrders, remoteEvidence, remoteUnits, remoteWhatsappMessages] = await Promise.all([
         listFirestoreCollection<Client>('clients'),
         listFirestoreCollection<Property>('properties'),
-        listFirestoreCollection<ServiceType>('services'),
         listFirestoreCollection<CommercialProductStock>('commercialProductStock'),
         listFirestoreCollection<WorkOrder>('workOrders'),
         listFirestoreCollection<WorkOrderEvidence>('workOrderEvidence'),
@@ -198,7 +215,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ]);
       setClients(sortClients(remoteClients));
       setProperties(sortProperties(remoteProperties));
-      setServices(sortCatalog(remoteServices));
       setCommercialProductStock(sortCommercialProductStock(remoteCommercialStock));
       setWorkOrders(sortWorkOrders(remoteWorkOrders));
       setWorkOrderEvidence([...remoteEvidence].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)));
@@ -271,7 +287,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (active) setAuthLoading(false);
       }
     })();
-    return () => { active = false; };
+    return () => { active = false; ++catalogReadVersion.current; };
   }, [refreshOperationalData]);
 
   useEffect(() => {
@@ -289,6 +305,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [clients, properties, services, commercialProductStock, workOrders, workOrderEvidence, workOrderUnits, inventory, invoices, localHydrated, currentUser?.authProvider]);
 
   const restoreDemoData = () => {
+    ++catalogReadVersion.current;
+    setCatalogLoading(false);
+    setCatalogError(null);
     setClients(demoClients);
     setProperties(demoProperties);
     setServices(normalizedDemoServices);
@@ -512,8 +531,9 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
       return { ok: true };
     }
     try {
-      await saveFirestoreDocument('services', item);
-      setServices((previous) => sortCatalog([item, ...previous.filter((service) => service.id !== item.id)]));
+      const saved = await saveManagedCatalogItem<ServiceType>(item.id, null, item);
+      acceptCatalogMutation();
+      setServices((previous) => sortCatalog([saved, ...previous.filter((service) => service.id !== item.id)]));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
       return { ok: true };
@@ -533,8 +553,11 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
       return { ok: true };
     }
     try {
-      await saveFirestoreDocument('services', updated);
-      setServices((previous) => sortCatalog(previous.map((service) => service.id === id ? updated : service)));
+      const expectedToken = changes.catalogToken;
+      if (!expectedToken) throw new Error('Recarga el catálogo y vuelve a abrir el artículo.');
+      const saved = await saveManagedCatalogItem<ServiceType>(id, expectedToken, changes);
+      acceptCatalogMutation();
+      setServices((previous) => sortCatalog(previous.map((service) => service.id === id ? saved : service)));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
       return { ok: true };
@@ -545,7 +568,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     }
   };
 
-  const removeCatalogItem = async (id: string): Promise<OperationResult> => {
+  const removeCatalogItem = async (id: string, expectedToken?: string): Promise<OperationResult> => {
     if (workOrders.some((order) => order.serviceId === id)) {
       return { ok: false, message: 'Este servicio tiene trabajos vinculados. Desactívalo en vez de eliminarlo.' };
     }
@@ -554,7 +577,9 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
       return { ok: true };
     }
     try {
-      await deleteFirestoreDocument('services', id);
+      if (!expectedToken) throw new Error('Recarga el catálogo antes de eliminar el artículo.');
+      await deleteManagedCatalogItem(id, expectedToken);
+      acceptCatalogMutation();
       setServices((previous) => previous.filter((service) => service.id !== id));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
@@ -770,6 +795,8 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     authLoading,
     dataLoading,
     dataError,
+    catalogLoading,
+    catalogError,
     lastSyncedAt,
     login,
     loginDemo,
@@ -812,6 +839,8 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     authLoading,
     dataLoading,
     dataError,
+    catalogLoading,
+    catalogError,
     lastSyncedAt,
     refreshOperationalData,
   ]);

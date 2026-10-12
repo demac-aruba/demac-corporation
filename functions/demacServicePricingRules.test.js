@@ -26,16 +26,17 @@ test("standard split service prices match DEMAC rules", () => {
   assert.equal(DEFAULT_SERVICE_PRICING_RULES.standardServiceSplit.find((item) => item.btu === 36000).priceType, "regular");
 });
 
-test("deep cleaning is 195 through 24k and 225 at 36k", () => {
+test("deep cleaning is 195 through 24k and owner-approved 250 at 36k", () => {
   for (const btu of [9000, 12000, 18000, 24000]) {
     assert.equal(DEFAULT_SERVICE_PRICING_RULES.deepCleaningSplit.find((item) => item.btu === btu).price, 195);
   }
-  assert.equal(DEFAULT_SERVICE_PRICING_RULES.deepCleaningSplit.find((item) => item.btu === 36000).price, 225);
+  assert.equal(DEFAULT_SERVICE_PRICING_RULES.deepCleaningSplit.find((item) => item.btu === 36000).price, 250);
 });
 
 test("Adina standard installation prices and durations match the approved matrix", () => {
   const expected = new Map([
-    [12000, [200, 120]],
+    [9000, [225, 120]],
+    [12000, [225, 120]],
     [18000, [225, 120]],
     [24000, [250, 120]],
     [36000, [300, 180]],

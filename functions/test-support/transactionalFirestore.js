@@ -7,11 +7,12 @@ class Snapshot {
   data() { return clone(this.value); }
 }
 class Query {
-  constructor(db, path, filters = [], count = Infinity, sort = null) { Object.assign(this, { db, path, filters, count, sort }); }
+  constructor(db, path, filters = [], count = Infinity, sort = null, cursor = null) { Object.assign(this, { db, path, filters, count, sort, cursor }); }
   doc(id) { return new Ref(this.db, `${this.path}/${id}`); }
   where(field, operator, value) { return new Query(this.db, this.path, [...this.filters, [field, operator, value]], this.count, this.sort); }
   limit(count) { return new Query(this.db, this.path, this.filters, count, this.sort); }
   orderBy(field, direction) { return new Query(this.db, this.path, this.filters, this.count, [field, direction]); }
+  startAfter(cursor) { return new Query(this.db, this.path, this.filters, this.count, this.sort, cursor); }
   snapshot(store) {
     let docs = [...store].filter(([path, value]) => path.startsWith(`${this.path}/`) && path.split('/').length === this.path.split('/').length + 1 && this.filters.every(([field, operator, match]) => {
       if (operator === '==') return value[field] === match;
@@ -19,7 +20,8 @@ class Query {
       if (operator === '<=') return value[field] <= match;
       throw Error('Unsupported test query');
     })).map(([path, value]) => new Snapshot(path, value));
-    if (this.sort) { const [field, direction] = this.sort; docs.sort((a,b) => String(a.data()[field]).localeCompare(String(b.data()[field])) * (direction === 'desc' ? -1 : 1)); }
+    if (this.sort) { const [field, direction] = this.sort; docs.sort((a,b) => String(field === '__name__' ? a.id : a.data()[field]).localeCompare(String(field === '__name__' ? b.id : b.data()[field])) * (direction === 'desc' ? -1 : 1)); }
+    if (this.cursor) docs = docs.filter(doc => doc.id.localeCompare(this.cursor) > 0);
     docs = docs.slice(0, this.count); return { docs, empty: !docs.length, size: docs.length };
   }
   async get() { return this.snapshot(this.db.store); }

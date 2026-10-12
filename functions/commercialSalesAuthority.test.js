@@ -197,6 +197,16 @@ test("reservation updates the exact location and writes deterministic linked mov
   assert.equal(movement.sourceLocationId, "WH-MAIN");
 });
 
+test('reservation snapshots preserve unpriced products and explicit zero', async () => {
+  for (const value of [null,undefined,'',' ',0,125]) {
+    const db = new FakeDb(seed());
+    const product = db.map('services').get('p12');
+    if(value === undefined) delete product.basePrice; else product.basePrice = value;
+    const result = await authority(db).createReservation(reservationArgs({ quantity: 1 }));
+    assert.equal(result.reservation.product.basePrice, typeof value === 'number' ? value : null);
+  }
+});
+
 test("an active canonical Van can be the exact reservation source", async () => {
   const db = new FakeDb(seed());
   const result = await authority(db).createReservation(reservationArgs({ sourceLocationId: "VAN-1" }));

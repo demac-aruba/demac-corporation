@@ -32,9 +32,12 @@ export function bookingChargeDraft(seeds: ChargeLineInput[], draft: ChargeDraft 
   return { lines, quoteToken: JSON.stringify(lines) === JSON.stringify(draft?.lines) ? draft?.quoteToken : undefined,
     note: draft?.note || '', payment: draft?.payment || null };
 }
-export function quoteAppointmentCharges(lines: ChargeLineInput[]) { return callOfficeBookingAuthority<{ success: true; quote: ChargeQuote }>('quote_appointment_charges', { lines }); }
+export function quoteAppointmentCharges(lines: ChargeLineInput[], context?: { appointmentId: string; expectedVersion: number }) { return callOfficeBookingAuthority<{ success: true; quote: ChargeQuote }>('quote_appointment_charges', { lines, ...context }); }
 export function getAppointmentCharges(appointmentId: string) { return callOfficeBookingAuthority<ChargeRecord>('get_appointment_charges', { appointmentId }); }
 export function mutateAppointmentCharges(action: string, data: Record<string, unknown>) { return callOfficeBookingAuthority<{ success: true; state: ChargeState; replayed?: boolean }>(action, data, 20_000); }
 export function newChargeRequestId() { return `charge-${crypto.randomUUID()}`; }
 
-export function listChargeServices() { return callOfficeBookingAuthority<{ success: true; services: { id: string; name: string }[] }>('list_charge_services', {}); }
+// Optional metadata keeps clients compatible with the previous read response.
+// Prices always come from quoteAppointmentCharges, never from this search list.
+export type ChargeCatalogItem = { id: string; name: string; itemType?: 'Servicio' | 'Producto'; description?: string; category?: string; sku?: string; durationMinutes?: number | null };
+export function listChargeServices() { return callOfficeBookingAuthority<{ success: true; services: ChargeCatalogItem[] }>('list_charge_services', {}); }

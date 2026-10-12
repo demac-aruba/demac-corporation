@@ -138,3 +138,23 @@ export async function createOfficeAppointment(input: OfficeCreateAppointmentInpu
 export async function getOfficeAppointment(appointmentId: string) {
   return callOfficeBookingAuthority<{ success: true; appointmentId: string; appointment: Record<string, unknown> }>('get_appointment', { appointmentId });
 }
+
+
+export async function listManagedCatalog<T extends { id: string }>() {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { items: T[]; nextCursor: string | null } = await callOfficeBookingAuthority('list_managed_catalog', { cursor });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return items;
+}
+export async function saveManagedCatalogItem<T extends { id: string }>(id: string, expectedToken: string | null, patch: Partial<T>) {
+  const result = await callOfficeBookingAuthority<{ success: true; item: T | null }>('save_catalog_item', { id, expectedToken, patch });
+  if (!result.item) throw new Error('El artículo fue eliminado después de guardarse. Actualiza el catálogo.');
+  return result.item;
+}
+export async function deleteManagedCatalogItem(id: string, expectedToken: string) {
+  return callOfficeBookingAuthority('delete_catalog_item', { id, expectedToken });
+}

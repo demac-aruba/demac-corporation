@@ -4,7 +4,7 @@ const PRICING_RULE_KINDS = new Set(['standard_service', 'deep_cleaning', 'standa
 const MATRIX_BOOKING_CODE_PATTERNS = Object.freeze({
   standard_service: /^(?:standard_service|(?:9k|12k|18k|24k|36k)_standard(?:_service)?)$/,
   deep_cleaning: /^(?:deep_cleaning|(?:9k|12k|18k|24k|36k)_deep_cleaning)$/,
-  standard_installation: /^(?:standard_installation|(?:12k|18k|24k|36k)_standard_installation)$/,
+  standard_installation: /^(?:standard_installation|(?:9k|12k|18k|24k|36k)_standard_installation)$/,
 });
 
 function text(value, limit = 1000) {
@@ -181,6 +181,7 @@ function resolveServicePriceSnapshot({ service, pricingSettings, btu, capturedAt
 module.exports.MATRIX_BOOKING_CODE_PATTERNS = MATRIX_BOOKING_CODE_PATTERNS;
 module.exports.PRICING_RULE_KINDS = PRICING_RULE_KINDS;
 module.exports.canonicalBtu = canonicalBtu;
+module.exports.canonicalMoney = canonicalMoney;
 module.exports.catalogPrice = catalogPrice;
 module.exports.companyMatrixPrice = companyMatrixPrice;
 module.exports.explicitPricingRuleKind = explicitPricingRuleKind;

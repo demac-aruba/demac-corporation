@@ -36,7 +36,7 @@ provider callbacks, and cached projections are never authority by themselves.
 | Explicit daily attendance/payroll exception | `employeeTimesheets`, interpreted against the canonical resolved employee schedule | Authorized payroll-sensitive Employees/Payroll flows | Deterministic employee/date ID, schedule-derived overtime, classified partial missing-time segments, schedule snapshot, actor/time audit, payroll-only Firestore access |
 | Manual employee bonus inputs | Existing `employeePayrollSettings/{owner}.payrollAdjustments` array; Legacy contract retained | Payroll-authorized Employees/Bonuses; Finance consumes the same entries | Canonical/unique legacy identity resolution, 27–26 period, explicit Afl. amount and concept, stable request ID, version-checked field patch, cancellation audit; existing payroll-only Firestore rules. Monetary bonuses never alter hours or calculate statutory payroll |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped driver/helper/optional third helper; no simultaneous dated assignment; does not rewrite regular crew ownership |
-| Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
+| Commercial Product / Service catalog | `services`, with candidate Office facade write commands | Existing admin/office/supervisor roles; admin/supervisor deletion | Snapshot CAS, fresh authorization, exact retry/audit, booking-code claims and retired-ID protection; direct-write closure requires coordinated cutover |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
 | Material / consumable stock | `warehouseInventory`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable item/location identity, reconciliation and audit |
 | Tool catalog | `toolCatalog` | Authorized catalog and warehouse flows | One canonical Tool catalog; no location-specific duplicate catalogs |
@@ -160,3 +160,14 @@ The existing `payments` collection holds office-recorded appointment receipts wi
 `source = appointment-operational`. They are operational evidence, not a parallel
 accounting ledger, official invoice or bank reconciliation. QBO's authority is unchanged.
 See [the decision](adrs/appointment-operational-charges-20261010.md).
+
+
+### Appointment editing coordination (candidate 2026-10-12)
+
+The existing Office facade owns private `appointments/{id}/chargeEditing/current`
+coordination. It is not another finance authority or ledger. User + per-activation session +
+generation token + server expiry fence each new mutation; `jobCharges.version` still
+protects drafts. Direct client access remains denied by the existing fallback rules.
+Frontend and backend must be released/recovered together; see
+[the decision](adrs/appointment-finance-governance-20261012.md). No production activation
+is implied by this document. Catalog governance uses the same facade and canonical services, with private coordination/audit subcollections; production activation requires the documented ERP/Legacy/rules and consumer cutover.

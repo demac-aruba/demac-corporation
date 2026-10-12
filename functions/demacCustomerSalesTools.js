@@ -1,3 +1,4 @@
+const { canonicalMoney } = require('./servicePricingAuthority');
 const {
   cleanText,
   normalizeText,
@@ -72,14 +73,14 @@ function matchesProductQuery(item, query) {
 }
 
 function customerProduct(item = {}) {
-  const basePrice = Number(item.basePrice);
+  const basePrice = canonicalMoney(item.basePrice);
   return {
     id: cleanText(item.id, 160),
     name: cleanText(item.name, 220),
     category: cleanText(item.category, 160),
     sku: cleanText(item.sku, 120),
     description: cleanText(item.description, 1_000),
-    basePrice: Number.isFinite(basePrice) && basePrice >= 0 ? basePrice : null,
+    basePrice,
     currency: "Afl.",
     stockTrackedByCatalog: false,
     stockVerificationRequired: true,

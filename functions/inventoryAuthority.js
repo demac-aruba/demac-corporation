@@ -1,3 +1,4 @@
+const { canonicalMoney } = require('./servicePricingAuthority');
 const crypto = require("node:crypto");
 const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
@@ -230,7 +231,7 @@ function normalizedStockItems(products, stocks, materials) {
   const productItems = products.filter(productIsCanonicalProduct).map((product) => ({
     id: product.id, itemKind: "product", name: cleanText(product.name, 240) || product.id,
     sku: cleanText(product.sku, 120), category: cleanText(product.category, 160) || "Product",
-    unit: "unit", sellable: true, price: Math.max(0, Number(product.basePrice) || 0),
+    unit: "unit", sellable: true, price: canonicalMoney(product.basePrice),
     active: product.active !== false, balances: productBalanceMap(stockByProduct.get(product.id) || {}),
   }));
   const materialItems = materials.map((item) => ({

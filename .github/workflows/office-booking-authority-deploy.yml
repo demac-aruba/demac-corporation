@@ -10,6 +10,19 @@ on:
       - 'functions/bookingRestDayOvertime.js'
       - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
+      - 'functions/appointmentChargeEditing*'
+      - 'functions/serviceCatalogEditing*'
+      - 'functions/catalogPriceCompatibility*'
+      - 'functions/commercialSalesAuthority*'
+      - 'functions/demacCustomerSalesTools.js'
+      - 'functions/inventoryAuthority*'
+      - 'firestore.rules'
+      - 'apps/erp-next/lib/service-catalog.ts'
+      - 'apps/erp-next/components/service-catalog-workspace.tsx'
+      - 'apps/erp-next/scripts/service-catalog-browser.cjs'
+      - 'src/screens/CatalogScreen.tsx'
+      - 'src/state/AppState.tsx'
+      - 'src/services/officeBookingAuthority.ts'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -81,6 +94,19 @@ on:
       - 'functions/bookingRestDayOvertime.js'
       - 'functions/fieldOperationsAuthorityCore.js'
       - 'functions/projectCommercialGuard.js'
+      - 'functions/appointmentChargeEditing*'
+      - 'functions/serviceCatalogEditing*'
+      - 'functions/catalogPriceCompatibility*'
+      - 'functions/commercialSalesAuthority*'
+      - 'functions/demacCustomerSalesTools.js'
+      - 'functions/inventoryAuthority*'
+      - 'firestore.rules'
+      - 'apps/erp-next/lib/service-catalog.ts'
+      - 'apps/erp-next/components/service-catalog-workspace.tsx'
+      - 'apps/erp-next/scripts/service-catalog-browser.cjs'
+      - 'src/screens/CatalogScreen.tsx'
+      - 'src/state/AppState.tsx'
+      - 'src/services/officeBookingAuthority.ts'
       - 'functions/appointmentCharges*'
       - 'functions/test-support/transactionalFirestore.js'
       - 'functions/servicePricingAuthority*'
@@ -243,28 +269,34 @@ jobs:
       - name: Install isolated verification tools and app dependencies
         run: |
           npm ci --prefix functions --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           npm install --prefix apps/erp-next --no-audit --no-fund
-          npm install --prefix "$RUNNER_TEMP/charge-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0
+          npm install --prefix "$RUNNER_TEMP/charge-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
           "$RUNNER_TEMP/charge-tools/node_modules/.bin/playwright" install --with-deps chromium
       - name: Financial authority and integration regressions
         run: |
-          node --test functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
+          node --test functions/serviceCatalogEditing.test.js functions/catalogPriceCompatibility.test.js functions/commercialSalesAuthority.test.js functions/inventoryAuthority.test.js functions/appointmentChargeEditing.test.js functions/demacServicePricingRules.test.js functions/appointmentCharges.test.js functions/bookingAuthorityFirestore.test.js functions/bookingAfterHours.test.js functions/servicePricingAuthority.test.js functions/bookingProjectHistoricalCapacity.test.js functions/projectRecords.test.js functions/projectOperatorBooking.test.js
           node --check scripts/appointment-charges-project-deploy.cjs
           node --test scripts/appointment-charges-project-deploy.test.cjs
           node --test scripts/appointment-charges-project-compat.test.cjs
+          node --test scripts/appointment-finance-release-audit.test.cjs scripts/appointment-finance-tariff-plan.test.cjs
           npm run typecheck --prefix apps/erp-next
       - name: Real Firestore transaction and authorization checks
+        env:
+          CATALOG_RULES_TEST_TOOLS: ${{ runner.temp }}/charge-tools
         run: >-
           "$RUNNER_TEMP/charge-tools/node_modules/.bin/firebase" emulators:exec
           --only firestore --project demo-demac-charges --config firebase.appointment-charges-test.json
-          'node --test functions/appointmentCharges.emulator.test.cjs'
+          'node --test --test-concurrency=1 functions/appointmentCharges.emulator.test.cjs functions/serviceCatalogEditing.emulator.test.cjs'
       - name: Real component browser flows and visual evidence
         env:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/charge-tools
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/charge-evidence
         run: |
           node apps/erp-next/scripts/booking-modal-browser.cjs
+          node apps/erp-next/scripts/appointment-finance-cutover-browser.cjs
           node apps/erp-next/scripts/appointment-charges-browser.cjs
+          node apps/erp-next/scripts/service-catalog-browser.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,0 +1,41 @@
+name: Prepare appointment finance runtime recovery
+on:
+  push:
+    branches: [fix/appointment-finance-release-20261012]
+    paths:
+      - '.github/workflows/appointment-finance-prepare.yml'
+      - 'scripts/appointment-finance-prepare*'
+      - 'scripts/appointment-finance-runtime-smoke.cjs'
+      - 'scripts/booking-dwelling-candidate-validation.cjs'
+      - 'functions/**'
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --test scripts/appointment-finance-prepare.test.cjs scripts/appointment-finance-release-audit.test.cjs scripts/appointment-finance-tariff-plan.test.cjs
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Validate deployed baselines and candidates; retain private recovery only
+        run: node scripts/appointment-finance-prepare.cjs --retain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appointment-finance-preparation-summary
+          path: ${{ runner.temp }}/finance-preparation/summary.json
+          retention-days: 90
+          if-no-files-found: error

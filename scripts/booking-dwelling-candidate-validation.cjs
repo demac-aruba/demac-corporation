@@ -23,7 +23,7 @@ function validateLock(content, manifest) {
   for (const name of Object.keys(manifest.dependencies)) assert.ok(lock.packages['node_modules/' + name], 'Missing direct dependency');
   return lock;
 }
-function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused }) {
+function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, smokeScript = 'booking-dwelling-runtime-smoke.cjs', testFixtures = [] }) {
   const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   validateLock(lockBytes, pkg);
@@ -40,6 +40,10 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
       const missingExport = stderr.match(/Runtime export missing: ([a-zA-Z]+)/)?.[1];
       if (missingExport) safe.push('Runtime export missing: ' + missingExport);
       if (/Synthetic audit rejected a non-loopback connection/.test(stderr)) safe.push('Synthetic network isolation rejected a non-loopback connection');
+      const syntheticStatus=stderr.match(/Synthetic (?:OPTIONS|anonymous POST) status=\d+/)?.[0];
+      if(syntheticStatus) safe.push(syntheticStatus);
+      if(/Bucket name not specified or invalid/.test(stderr)) safe.push('Synthetic SDK bucket configuration missing');
+      safe.push('Isolated command exit=' + (error.status ?? error.code ?? 'unknown'));
       console.error(name + ': ' + safe.join('\n')); throw error;
     }
   };
@@ -56,6 +60,8 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
     if (reconstruct) fs.copyFileSync(path.join(root, 'functions/propertyLocations.emulator.test.cjs'), path.join(validation, 'propertyLocations.emulator.test.cjs'));
   }
+  for (const file of testFixtures) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
+  for (const file of selectedTests) assert.ok(fs.existsSync(path.join(validation,file)), 'Missing required selected test: ' + file);
   fs.symlinkSync(path.join(dependencies, 'node_modules'), path.join(validation, 'node_modules'), 'dir');
   const networkGuard = path.join(root, 'scripts/booking-dwelling-test-network.cjs');
   const testEnv = { ...env, NODE_OPTIONS: '--require=' + networkGuard };
@@ -83,7 +89,13 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     const command = [process.execPath, '--require', networkGuard, '--test', path.join(validation, 'propertyLocations.emulator.test.cjs')].map(value => "'" + value.replace(/'/g, "'\\''") + "'").join(' ');
     pass(run('npx', ['--yes', 'firebase-tools@15.30.0', 'emulators:exec', '--only', 'firestore', '--project', 'demo-demac-dwellings', '--config', path.join(root, 'firebase.dwellings-preview.json'), command], root, emulatorEnv));
   } else pass(run(process.execPath, ['--test', ...selectedTests], validation, testEnv));
-  const smoke = run(process.execPath, [path.join(root, 'scripts/booking-dwelling-runtime-smoke.cjs'), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
+  // Fixtures serve synthetic tests only. Restore exact shipped bytes before the
+  // actual entrypoint/bootstrap smoke test so no fixture repairs its runtime.
+  for (const file of testFixtures) {
+    if (fs.existsSync(path.join(source,file))) fs.copyFileSync(path.join(source,file),path.join(validation,file));
+    else fs.unlinkSync(path.join(validation,file));
+  }
+  const smoke = run(process.execPath, [path.join(root, 'scripts', smokeScript), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
   assert.match(smoke, /PASS: real bootstrap/);
   fs.rmSync(validation, { recursive: true });
   return { dependencyLockSha256: digest, cleanInstall: true, testCounts: counts, testsPassed: counts.reduce((a, b) => a + b, 0), runtimeSmokePassed: true };

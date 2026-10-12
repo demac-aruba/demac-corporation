@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const { TransactionalFirestore } = require('./test-support/transactionalFirestore');
 const { createAppointmentCharges, prepareInitialCharges, chargeFingerprint, inputLines, paymentInput } = require('./appointmentCharges');
 const NOW = new Date('2026-10-10T14:00:00Z');
-const manual = (amount = '125.00', more = {}) => ({ id: 'service-1', label: 'Servicio de prueba', quantity: 1, unitPrice: amount, reason: 'Precio acordado', ...more });
+const priced = (amount = '125.00', more = {}) => ({ id: 'service-1', label: 'Servicio de prueba', quantity: 1, ...(amount !== '' ? { serviceId: `test-price-${Number(amount)}` } : {}), ...more });
+const fixturePrices = Object.fromEntries([0, 0.1, 10, 20, 45, 55, 125, 200, 250, 270, 300, 497.5].map(price => [`services/test-price-${price}`, { name: `Servicio sintético ${price}`, active: true, basePrice: price }]));
 const cash = (amount = '100.00', more = {}) => ({ amount, method: 'cash', ...more });
 const office = { source: 'office-scheduling', id: 'office' };
 function fixture(seed = {}) {
@@ -14,11 +15,13 @@ function fixture(seed = {}) {
     'workOrders/wo': { status: 'Confirmada', scheduledSlots: 2 },
     'businessSettings/company-service-pricing-rules': { version: 1, standardServiceSplit: [{ btu: 12000, price: 125 }, { btu: 18000, price: 145 }] },
     'services/fixed': { name: 'Chequeo', active: true, basePrice: 55 },
+    ...fixturePrices,
+    'appointments/apt/chargeEditing/current': { ownerId: 'office', ownerName: 'Oficina sintética', sessionId: 'fixture-session-0000000001', token: 'fixture-token', expiresAtMs: NOW.getTime() + 90000 },
     ...seed,
   });
   const service = createAppointmentCharges({ db, clock: () => NOW });
   let serial = 0;
-  const call = (action, data = {}, uid = 'office') => service.execute({ action, uid, data: { appointmentId: 'apt', expectedVersion: db.read('appointments/apt')?.jobCharges?.version || 0, requestId: `test-request-${++serial}`, ...data } });
+  const call = (action, data = {}, uid = 'office') => service.execute({ action, uid, data: { appointmentId: 'apt', editSessionId: 'fixture-session-0000000001', editToken: 'fixture-token', expectedVersion: db.read('appointments/apt')?.jobCharges?.version || 0, requestId: `test-request-${++serial}`, ...data } });
   return { db, call, service };
 }
 const rejectsCode = async (promise, code) => assert.rejects(promise, error => error.code === code);
@@ -30,52 +33,66 @@ test('opening a legacy appointment is read-only, preserves missing financial dat
 });
 test('governed prices use exact BTU and explicit catalog; unknown price stays null, never zero', async () => {
   const { call } = fixture();
-  const q = await call('quote_appointment_charges', { lines: [manual('', { presetId: 'standard_service', btu: 12000 }), manual('', { id: 'two', presetId: 'standard_service', btu: 18000 })] });
+  const q = await call('quote_appointment_charges', { lines: [priced('', { presetId: 'standard_service', btu: 12000 }), priced('', { id: 'two', presetId: 'standard_service', btu: 18000 })] });
   assert.equal(q.quote.totalCents, 27000);
-  const pending = await call('quote_appointment_charges', { lines: [manual('', { presetId: 'standard_service' })] });
+  const pending = await call('quote_appointment_charges', { lines: [priced('', { presetId: 'standard_service' })] });
   assert.equal(pending.quote.totalCents, null);
-  const fixed = await call('quote_appointment_charges', { lines: [manual('', { serviceId: 'fixed' })] });
+  const fixed = await call('quote_appointment_charges', { lines: [priced('', { serviceId: 'fixed' })] });
   assert.equal(fixed.quote.totalCents, 5500);
 });
 test('null, empty and missing catalogue prices remain unpriced; legitimate zero remains zero', async () => {
   for (const basePrice of [null, '', ' ', [], {}, undefined, false, 0]) {
     const { call } = fixture({ 'services/fixed': { name: 'Test', active: true, basePrice } });
-    const { quote } = await call('quote_appointment_charges', { lines: [manual('', { serviceId: 'fixed' })] });
+    const { quote } = await call('quote_appointment_charges', { lines: [priced('', { serviceId: 'fixed' })] });
     assert.equal(quote.totalCents, basePrice === 0 ? 0 : null);
   }
 });
-test('manual overrides require reason and inactive catalogue cannot be selected', async () => {
+test('all canonical matrix declarations price a catalog service without a fixed base price', async () => {
+  for (const declaration of [
+    { pricingRuleKind: 'standard_service' },
+    { pricingDefinition: { ruleKind: 'standard_service' } },
+    { serviceDefinition: { pricingRuleKind: 'standard_service' } },
+    { serviceDefinition: { bookingCode: 'standard_service' } },
+    { bookingCode: '12k_standard_service' },
+  ]) for (const basePrice of [null, '', undefined]) {
+    const { call } = fixture({ 'services/matrix': { name: 'Standard service', active: true, basePrice, ...declaration } });
+    const { quote } = await call('quote_appointment_charges', { lines: [priced('', { serviceId: 'matrix', btu: 12000 })] });
+    assert.equal(quote.totalCents, 12500);
+    assert.equal(quote.lines[0].label, 'Standard service');
+  }
+});
+test('arbitrary prices are rejected even with a reason and inactive catalogue cannot be selected', async () => {
   const { call } = fixture({ 'services/inactive': { name: 'Old', active: false, basePrice: 50 } });
-  await rejectsCode(call('quote_appointment_charges', { lines: [manual('55', { reason: '' })] }), 'charge_override_reason');
-  await rejectsCode(call('quote_appointment_charges', { lines: [manual('', { serviceId: 'inactive' })] }), 'charge_catalog');
-  const result = await call('list_charge_services'); assert.deepEqual(result.services, [{ id: 'fixed', name: 'Chequeo' }]);
+  await rejectsCode(call('quote_appointment_charges', { lines: [priced('125', { unitPrice: '55', reason: 'Operator cannot override' })] }), 'charge_managed_price');
+  await rejectsCode(call('quote_appointment_charges', { lines: [priced('', { serviceId: 'inactive' })] }), 'charge_catalog');
+  const result = await call('list_charge_services'); assert.deepEqual(result.services.filter(({id}) => !id.startsWith('test-price-')).map(({id,name}) => ({id,name})), [{ id: 'fixed', name: 'Chequeo' }]);
 });
 test('exact cents and fractional time avoid floating drift; invalid money is rejected', async () => {
   const { call } = fixture();
-  const { quote } = await call('quote_appointment_charges', { lines: [manual('45', { quantity: 1.5 }), manual('0.10', { id: 'tiny', quantity: 3 })] });
+  const { quote } = await call('quote_appointment_charges', { lines: [priced('45', { quantity: 1.5 }), priced('0.10', { id: 'tiny', quantity: 3 })] });
   assert.equal(quote.totalCents, 6780);
   for (const amount of [-1, '1.001', '1e3', 'NaN', true, null, 'Infinity', '1000000.01']) assert.throws(() => paymentInput(cash(amount), NOW));
-  assert.throws(() => inputLines([manual('10'), manual('20')]), /identidad/);
+  assert.throws(() => inputLines([priced('10'), priced('20')]), /identidad/);
 });
 test('immutable original estimate; final supports additions, extra time and pending balance without Field/capacity mutation', async () => {
   const { db, call } = fixture(); const order = db.read('workOrders/wo'), initial = db.read('appointments/apt');
-  await call('save_appointment_estimate', { lines: [manual('270')] });
+  await call('save_appointment_estimate', { lines: [priced('270')] });
   const original = db.read('appointments/apt').jobCharges.originalEstimate;
-  await call('save_appointment_estimate', { lines: [manual('300')], note: 'Nuevo alcance' });
-  await call('finalize_appointment_charges', { lines: [manual('125'), manual('250', { id: 'second' }), manual('55', { id: 'extra' }), manual('45', { id: 'time', quantity: 1.5 })], note: 'Trabajo y adicionales revisados', scopeReviewed: true });
+  await call('save_appointment_estimate', { lines: [priced('300')], note: 'Nuevo alcance' });
+  await call('finalize_appointment_charges', { lines: [priced('125'), priced('250', { id: 'second' }), priced('55', { id: 'extra' }), priced('45', { id: 'time', quantity: 1.5 })], note: 'Trabajo y adicionales revisados', scopeReviewed: true });
   const apt = db.read('appointments/apt'); assert.equal(apt.jobCharges.final.totalCents, 49750); assert.equal(apt.jobCharges.receivedCents, 0);
   assert.deepEqual(apt.jobCharges.originalEstimate, original); assert.deepEqual(db.read('workOrders/wo'), order);
   const { jobCharges, ...operational } = apt; assert.deepEqual(operational, initial);
 });
-test('finalization rejects incomplete price or scope review; zero final is valid with explicit reason', async () => {
+test('finalization rejects incomplete price or scope review; explicit zero-price catalog service is valid', async () => {
   const { call } = fixture();
-  await rejectsCode(call('finalize_appointment_charges', { lines: [manual('')], scopeReviewed: true }), 'charge_unpriced');
-  await rejectsCode(call('finalize_appointment_charges', { lines: [manual('0')] }), 'charge_scope');
-  const result = await call('finalize_appointment_charges', { lines: [manual('0')], scopeReviewed: true }); assert.equal(result.state.final.totalCents, 0);
+  await rejectsCode(call('finalize_appointment_charges', { lines: [priced('')], scopeReviewed: true }), 'charge_unpriced');
+  await rejectsCode(call('finalize_appointment_charges', { lines: [priced('0')] }), 'charge_scope');
+  const result = await call('finalize_appointment_charges', { lines: [priced('0')], scopeReviewed: true }); assert.equal(result.state.final.totalCents, 0);
 });
 test('all four split methods total exactly, void preserves receipt and audit, credits stay visible', async () => {
   const { db, call } = fixture();
-  await call('finalize_appointment_charges', { lines: [manual('497.50')], scopeReviewed: true });
+  await call('finalize_appointment_charges', { lines: [priced('497.50')], scopeReviewed: true });
   let last;
   for (const [method, amount] of [['transfer','100'],['cash','200'],['pos','150'],['suave','47.50']]) last = await call('record_appointment_payment', { payment: cash(amount, { method, reference: `${method}-ref` }) });
   assert.equal(last.state.receivedCents, 49750);
@@ -134,7 +151,7 @@ test('missing/inactive/technician accounts cannot read or write; auditors read o
   await rejectsCode(call('record_appointment_payment', request), 'permission_denied');
 });
 test('quote price/version change is rejected before any write; retry refreshed quote succeeds', async () => {
-  const { call, db } = fixture(); const lines = [manual('', { presetId: 'standard_service', btu: 12000 })];
+  const { call, db } = fixture(); const lines = [priced('', { presetId: 'standard_service', btu: 12000 })];
   const { quote } = await call('quote_appointment_charges', { lines });
   db.write('businessSettings/company-service-pricing-rules', { version: 2, standardServiceSplit: [{ btu: 12000, price: 150 }] });
   await rejectsCode(call('save_appointment_estimate', { lines, quoteToken: quote.quoteToken }), 'charge_quote_changed');
@@ -145,13 +162,13 @@ test('quote price/version change is rejected before any write; retry refreshed q
 test('holds cannot take money/final amount; canceled appointments retain payment correction capability', async () => {
   const { call, db } = fixture(); db.write('appointments/apt', { ...db.read('appointments/apt'), status: 'temporary_hold' });
   await rejectsCode(call('record_appointment_payment', { payment: cash() }), 'payment_hold');
-  await rejectsCode(call('finalize_appointment_charges', { lines: [manual()], scopeReviewed: true }), 'charge_hold');
+  await rejectsCode(call('finalize_appointment_charges', { lines: [priced()], scopeReviewed: true }), 'charge_hold');
   db.write('appointments/apt', { ...db.read('appointments/apt'), status: 'cancelled' });
-  await rejectsCode(call('save_appointment_estimate', { lines: [manual()] }), 'charge_cancelled');
+  await rejectsCode(call('save_appointment_estimate', { lines: [priced()] }), 'charge_cancelled');
   await call('record_appointment_payment', { payment: cash() }); assert.equal(db.read('appointments/apt').status, 'cancelled');
 });
 test('initial booking preparation is atomic, optional, stable and authorizes current account inside transaction', async () => {
-  const { db } = fixture(); const input = { lines: [manual()], payment: cash() };
+  const { db } = fixture(); const input = { lines: [priced()], payment: cash() };
   assert.equal(chargeFingerprint(input), chargeFingerprint(structuredClone(input)));
   const before = [...db.store];
   await assert.rejects(db.runTransaction(async transaction => { const commit = await prepareInitialCharges({ db, transaction, input, actor: office, appointmentId: 'apt', appointment: db.read('appointments/apt'), now: NOW }); commit.write(); throw Error('Synthetic failure'); }));
@@ -162,20 +179,20 @@ test('initial booking preparation is atomic, optional, stable and authorizes cur
 });
 test('canonical accounting role can manage; corrections of final-only legacy amount always require a reason', async () => {
   const { call } = fixture({ 'users/office': { active: true, role: 'accounting' } });
-  await call('finalize_appointment_charges', { lines: [manual('200')], scopeReviewed: true });
-  await rejectsCode(call('finalize_appointment_charges', { lines: [manual('250')], scopeReviewed: true }), 'charge_change_reason');
-  await call('finalize_appointment_charges', { lines: [manual('250')], scopeReviewed: true, note: 'Corrección documentada' });
+  await call('finalize_appointment_charges', { lines: [priced('200')], scopeReviewed: true });
+  await rejectsCode(call('finalize_appointment_charges', { lines: [priced('250')], scopeReviewed: true }), 'charge_change_reason');
+  await call('finalize_appointment_charges', { lines: [priced('250')], scopeReviewed: true, note: 'Corrección documentada' });
 });
 test('Field billing candidates cannot be silently billed a second time', async () => {
   const { call } = fixture({ 'fieldBillingCandidates/review': { appointmentId: 'apt', workOrderId: 'wo', status: 'ready' } });
-  await rejectsCode(call('finalize_appointment_charges', { lines: [manual('200')], scopeReviewed: true }), 'charge_reconciliation');
+  await rejectsCode(call('finalize_appointment_charges', { lines: [priced('200')], scopeReviewed: true }), 'charge_reconciliation');
 });
 test('reviewed Field evidence can be explicitly reconciled without duplicating lines or changing Field', async () => {
   const candidate = { id: 'candidate', fieldAuthorityVersion: 1, visitId: 'visit', sourceDecisionRequestId: 'review-request', createdByUserId: 'office', createdAt: NOW.toISOString(), version: 1, appointmentId: 'apt', workOrderId: 'wo', clientId: 'customer', propertyId: 'property', officeReviewId: 'review', officeReviewRevisionId: 'revision', revisionNumber: 1, status: 'ready_for_billing_review', invoiceLineIds: [], lines: [{ sourceType: 'intervention', sourceId: 'intervention', catalogItemId: 'fixed', description: 'Servicio', quantity: 1, unitPrice: 125, lineTotal: 125, currency: 'AWG' }] };
   const { db, call } = fixture({ 'fieldBillingCandidates/candidate': candidate });
   await call('record_appointment_payment', { payment: cash() });
   const view = await call('get_appointment_charges'); assert.equal(view.blocker, '');
-  const input = { lines: [manual('125')], scopeReviewed: true, note: 'Incluye el servicio de Field' };
+  const input = { lines: [priced('125')], scopeReviewed: true, note: 'Incluye el servicio de Field' };
   await rejectsCode(call('finalize_appointment_charges', input), 'charge_field_review');
   await call('finalize_appointment_charges', { ...input, candidateReviewed: true, candidateFingerprint: view.candidateEvidence.fingerprint });
   assert.equal(db.read('appointments/apt').jobCharges.final.totalCents, 12500);
@@ -187,5 +204,89 @@ test('historical Project guard detects final-only charges and voided financial h
   const { assertNoLinkedCommercialEvidence } = require('./projectCommercialGuard');
   for (const jobCharges of [{ final: { totalCents: 0 }, paymentCount: 0, receivedCents: 0 }, { final: null, paymentCount: 1, receivedCents: 0 }]) {
     await assert.rejects(assertNoLinkedCommercialEvidence({ appointment: { jobCharges }, order: {} }), /commercial or payroll evidence/);
+  }
+});
+
+test('catalog search exposes bounded commercial metadata only, preserves identity and never mutates records', async () => {
+  const {db,call}=fixture({
+    'services/product': {name:'Refrigerante de prueba',itemType:'Producto',sku:'GAS-DEMO',category:'Refrigerantes',description:'Aplicación por libra',durationMinutes:60,basePrice:55,unitCost:12,supplierToken:'never-expose',stock:500,active:true},
+    'services/canonical': {name:'Servicio de prueba',description:'a'.repeat(900),category:'b'.repeat(180),sku:'c'.repeat(180),durationMinutes:30,serviceDefinition:{duration:{minutes:90}},active:true},
+    'services/hidden': {name:'Inactivo',active:false},
+    'users/auditor': {active:true,role:'auditor'},'users/technician':{active:true,role:'technician'},
+  });
+  const before=[...db.store];
+  const result=await call('list_charge_services',{},'auditor');
+  const product=result.services.find(item=>item.id==='product'), service=result.services.find(item=>item.id==='canonical');
+  assert.deepEqual(product,{id:'product',name:'Refrigerante de prueba',itemType:'Producto',description:'Aplicación por libra',category:'Refrigerantes',sku:'GAS-DEMO',durationMinutes:null});
+  assert.equal(service.itemType,'Servicio');assert.equal(service.durationMinutes,90);assert.equal(service.description.length,600);assert.equal(service.category.length,120);assert.equal(service.sku.length,120);
+  assert.equal(result.services.some(item=>item.id==='hidden'),false);
+  await rejectsCode(call('list_charge_services',{},'technician'),'permission_denied');
+  assert.deepEqual([...db.store],before);
+  const {quote}=await call('quote_appointment_charges',{lines:[priced('',{serviceId:'product',label:'Refrigerante de prueba',quantity:1.5})]});
+  assert.equal(quote.totalCents,8250);assert.deepEqual([...db.store],before);
+});
+
+
+test('all fifteen approved service/BTU tariffs resolve and the server prevents misleading matrix labels', async () => {
+  const { DEFAULT_SERVICE_PRICING_RULES } = require('./demacServicePricingRules');
+  const { call } = fixture({ 'businessSettings/company-service-pricing-rules': DEFAULT_SERVICE_PRICING_RULES });
+  const btus = [9000, 12000, 18000, 24000, 36000];
+  for (const [presetId, prices, label] of [
+    ['standard_service', [100,125,135,145,175], 'Standard service'],
+    ['deep_cleaning', [195,195,195,195,250], 'Deep cleaning'],
+    ['standard_installation', [225,225,225,250,300], 'Instalación estándar back to back'],
+  ]) {
+    for (const [i,btu] of btus.entries()) {
+      const { quote } = await call('quote_appointment_charges', { lines: [priced('', { presetId, btu, label: 'Forged description' })] });
+      assert.equal(quote.totalCents, prices[i] * 100); assert.equal(quote.lines[0].label, label);
+    }
+  }
+});
+test('existing snapshots keep agreed unit price after catalog change or retirement; quantity uses that same unit', async () => {
+  const { call, db } = fixture();
+  await call('save_appointment_estimate', { lines: [priced('', { serviceId: 'fixed' })] });
+  const original = db.read('appointments/apt').jobCharges.originalEstimate;
+  db.write('services/fixed', { name: 'Renamed', active: false, basePrice: 99 });
+  const { quote } = await call('quote_appointment_charges', { lines: [priced('', { serviceId: 'fixed', quantity: 2 })] });
+  assert.equal(quote.totalCents, 11000); assert.equal(quote.lines[0].label, 'Chequeo');
+  await call('finalize_appointment_charges', { lines: [priced('', { serviceId: 'fixed', quantity: 2 })], scopeReviewed: true, note: 'Two units confirmed', quoteToken: quote.quoteToken });
+  assert.deepEqual(db.read('appointments/apt').jobCharges.originalEstimate, original);
+  await rejectsCode(call('quote_appointment_charges', { lines: [priced('', { id: 'new', serviceId: 'fixed' })] }), 'charge_catalog');
+  await rejectsCode(call('quote_appointment_charges', { lines: [priced('', { serviceId: 'fixed', unitPrice: '99' })] }), 'charge_managed_price');
+});
+test('changing service or BTU replaces the charge and resolves current tariff without rewriting original work', async () => {
+  const { DEFAULT_SERVICE_PRICING_RULES } = require('./demacServicePricingRules');
+  const { call, db } = fixture({ 'businessSettings/company-service-pricing-rules': DEFAULT_SERVICE_PRICING_RULES });
+  const line = priced('', { workLineId: 'original-work', presetId: 'standard_service', btu: 12000 });
+  await call('save_appointment_estimate', { lines: [line] });
+  const original = db.read('appointments/apt').jobCharges.originalEstimate;
+  const deep = { ...line, presetId: 'deep_cleaning' };
+  const { quote } = await call('quote_appointment_charges', { lines: [deep] });
+  assert.equal(quote.totalCents, 19500); assert.equal(quote.lines.length, 1);
+  await rejectsCode(call('quote_appointment_charges', { lines: [{ ...deep, unitPrice: '125' }] }), 'charge_managed_price');
+  const large = { ...deep, btu: 36000 };
+  assert.equal((await call('quote_appointment_charges', { lines: [large] })).quote.totalCents, 25000);
+  await call('finalize_appointment_charges', { lines: [large], scopeReviewed: true, note: 'Real service and equipment confirmed' });
+  const state = db.read('appointments/apt').jobCharges;
+  assert.deepEqual(state.originalEstimate, original); assert.equal(state.final.lines.length, 1);
+  assert.equal(state.final.lines[0].workLineId, 'original-work'); assert.equal(state.final.totalCents, 25000);
+});
+test('stale quote context and historical manual prices cannot authorize a new arbitrary-price line', async () => {
+  const { call, db } = fixture();
+  await call('save_appointment_estimate', { lines: [priced('125')] });
+  const apt = db.read('appointments/apt'); apt.jobCharges.estimate.lines[0] = { ...apt.jobCharges.estimate.lines[0], serviceId: '', unitCents: 11250, manualPrice: true, reason: 'Historical approved amount' }; db.write('appointments/apt', apt);
+  const old = priced('', { unitPrice: '112.50' });
+  const { quote } = await call('quote_appointment_charges', { lines: [old] });
+  assert.equal(quote.totalCents, 11250); assert.equal(quote.lines[0].manualPrice, true);
+  await rejectsCode(call('quote_appointment_charges', { lines: [old], expectedVersion: 0 }), 'charge_conflict');
+  await rejectsCode(call('quote_appointment_charges', { lines: [{ ...old, id: 'copied' }] }), 'charge_managed_price');
+});
+
+
+test('legacy catalog descriptions also come from the server when name is absent', async () => {
+  for (const [data,label] of [[{label:'Legacy standard service'},'Legacy standard service'],[{},'fixed']]) {
+    const {call}=fixture({'services/fixed':{...data,active:true,basePrice:125}});
+    const {quote}=await call('quote_appointment_charges',{lines:[priced('',{serviceId:'fixed',label:'Forged deep cleaning'})]});
+    assert.equal(quote.lines[0].label,label);assert.equal(quote.totalCents,12500);
   }
 });

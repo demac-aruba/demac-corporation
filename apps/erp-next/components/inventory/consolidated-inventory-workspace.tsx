@@ -101,7 +101,8 @@ function arubaDateKey() {
 function quantity(value: number) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value);
 }
-function money(value: number) {
+function money(value: number | null) {
+  if (value === null) return 'Por cotizar';
   return `Afl. ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)}`;
 }
 function toolExpectedQuantity(asset: InventoryToolAsset) {
@@ -444,7 +445,8 @@ export function ConsolidatedInventoryWorkspace() {
       const records = items.filter((item) => item.itemKind === kind);
       const onHand = records.reduce((sum, item) => sum + Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.onHand || 0), 0), 0);
       const reserved = records.reduce((sum, item) => sum + Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.reserved || 0), 0), 0);
-      const value = records.reduce((sum, item) => {
+      const value = records.reduce<number | null>((sum, item) => {
+        if (sum === null || (kind === 'product' && item.price == null && Object.values(item.balances || {}).some(row => row.onHand > 0))) return null;
         const unitValue = kind === 'product' ? Number(item.price || 0) : Number(item.cost || 0);
         return sum + unitValue * Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.onHand || 0), 0);
       }, 0);
@@ -1025,7 +1027,8 @@ export function ConsolidatedInventoryWorkspace() {
       const value = balance(item, locationId);
       return value.minimum > 0 && available(value) <= 0;
     }).length;
-    const stockValue = locationItems.reduce((sum, item) => {
+    const stockValue = locationItems.reduce<number | null>((sum, item) => {
+      if (sum === null || (item.itemKind === 'product' && item.price == null && balance(item, locationId).onHand > 0)) return null;
       const unitValue = item.itemKind === 'product' ? Number(item.price || 0) : Number(item.cost || 0);
       return sum + unitValue * Number(balance(item, locationId).onHand || 0);
     }, 0);

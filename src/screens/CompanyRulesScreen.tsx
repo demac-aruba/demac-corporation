@@ -95,10 +95,11 @@ const DEFAULT_PRICING_RULES: CompanyServicePricingRules = {
     { btu: 12000, price: 195, durationMinutes: 120 },
     { btu: 18000, price: 195, durationMinutes: 120 },
     { btu: 24000, price: 195, durationMinutes: 120 },
-    { btu: 36000, price: 225, durationMinutes: 120 },
+    { btu: 36000, price: 250, durationMinutes: 120 },
   ],
   standardInstallationAdinaDemac: [
-    { btu: 12000, price: 200, durationMinutes: 120, priceType: 'special' },
+    { btu: 9000, price: 225, durationMinutes: 120, priceType: 'special' },
+    { btu: 12000, price: 225, durationMinutes: 120, priceType: 'special' },
     { btu: 18000, price: 225, durationMinutes: 120, priceType: 'special' },
     { btu: 24000, price: 250, durationMinutes: 120, priceType: 'special' },
     { btu: 36000, price: 300, durationMinutes: 180, priceType: 'special' },
