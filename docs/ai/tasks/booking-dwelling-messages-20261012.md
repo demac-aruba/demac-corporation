@@ -36,3 +36,16 @@
 - Full isolated property/dwelling editor, concurrency, canonical booking persistence, saved-location message preparation and deny-role tests.
 - Current-main CI includes payment compatibility and browser checks; no failing gate may be waived.
 - Live pre/post checks are configuration/source inspection, scheduler inspection and actual-domain OPTIONS/anonymous-denial probes, never a real booking or WhatsApp send.
+
+## Approved reconstruction — 2026-10-12 continuation
+The owner explicitly approved preparing an isolated reproducible rebuild after exact-lock recovery failed. This authorizes a reviewed dependency-baseline change, not a claim that lost dependency versions were recovered. Original failed evidence remains recorded in PR570 (runs 38299836829, 38303702626, 38304100608).
+
+- Limit missing-lock reconstruction to officeBookingAuthority revision officebookingauthority-00082-dov with the reviewed original dependency declarations. Other functions keep their own deployed package/lock.
+- Commit the new complete npm lock; use npm ci; keep firebase-admin/functions on their existing major lines. npm audit found high advisories in old sharp/nodemailer: use sharp 0.35.5 and nodemailer 10.0.16 for reconstruction. Sharp's Node >=20.9 requirement is compatible with production Node22; the code uses ordinary RGB/RGBA JPEG/PNG operations, not removed sharp APIs.
+- Remaining audit entries derive from uuid's v3/v5/v6 caller-supplied-buffer advisory. Inspected google-gax, gaxios and teeny-request consumers use v4() without a supplied buffer. Do not introduce an unrelated Firebase major upgrade solely to suppress the report. Record residual advisory evidence explicitly.
+- Install from each candidate's exact lock, never the runner's unrelated node_modules. Test deployed-original source and patched source separately, with credentials removed, demo project/loopback endpoints and a test-process network guard. For reconstructed Office, require original booking/communication/Office regression suites and persisted-booking Firestore scenarios for both versions.
+- Smoke-load actual bootstrap under Node22, verify all five exports, native image transforms, local JSON-only mail rendering, HTTP CORS and anonymous denial. No transport delivery.
+- Reverse the bounded patch and prove its file manifest equals the tested baseline. Archive baseline and candidate packages before any production deployment; retain those known-repository source/public-lock artifacts in GitHub for 90 days. No cloud configuration, credentials, customer records or queue exports enter artifacts.
+- Re-run preparation on the release branch; require successful artifact upload and matching baseline/candidate/configuration/source hashes for ALL five targets before the first write. Check both runtime and build configuration, IAM, schedules and source identity.
+- Reversion uses the tested baseline package and the same bounded source-only command. For Office it restores prior application behavior with the reviewed new dependency baseline; it cannot restore unknown/deleted dependency versions. Operational data is never restored, deleted or rewritten by rollback.
+- Future Office deployments must include the committed lock; transactional/Office/Van validation uses npm ci. Existing [merge-only] barriers and all tests remain enforced.

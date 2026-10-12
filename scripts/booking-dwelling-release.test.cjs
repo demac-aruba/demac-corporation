@@ -2,6 +2,47 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
+const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
+const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+test('build identity, environment and runtime policy remain protected while source/build IDs may change', () => {
+  const { releaseConfig } = require('./booking-dwelling-release.cjs');
+  const fn = { buildConfig: { runtime: 'nodejs22', entryPoint: 'officeBookingAuthority', source: { before: true }, build: 'before', serviceAccount: 'synthetic-builder', environmentVariables: { MODE: 'synthetic' }, automaticUpdatePolicy: {} }, serviceConfig: {} };
+  assert.deepEqual(releaseConfig(fn), releaseConfig({ ...fn, buildConfig: { ...fn.buildConfig, source: { after: true }, build: 'after' } }));
+  for (const key of ['serviceAccount', 'environmentVariables', 'automaticUpdatePolicy']) {
+    assert.notDeepEqual(releaseConfig(fn), releaseConfig({ ...fn, buildConfig: { ...fn.buildConfig, [key]: 'changed' } }));
+  }
+});
+test('reconstruction cannot silently cover another function, revision or dependency change', () => {
+  const original = { 'firebase-admin': '^13.4.0', 'firebase-functions': '^6.4.0', sharp: '^0.34.3', nodemailer: '10.0.1' };
+  const reviewed = { ...original, sharp: '0.35.5', nodemailer: '10.0.16' };
+  const check = (name = 'officeBookingAuthority', revision = 'officebookingauthority-00082-dov', before = original, after = reviewed) => authorizeReconstruction(name, revision, before, original, after);
+  check(); assert.throws(() => check('fieldOperationsAuthority')); assert.throws(() => check(undefined, 'other-revision'));
+  assert.throws(() => check(undefined, undefined, { ...original, extra: '1.0.0' }));
+  assert.throws(() => check(undefined, undefined, original, { ...reviewed, 'firebase-admin': '^14' }));
+});
+test('all five packages and rollback evidence must match before publication', () => {
+  const functions = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'].map(name => ({ name,
+    beforeRevision: name + '-revision', originalManifestHash: 'original', baselineManifestHash: 'baseline', candidateManifestHash: 'candidate', configHash: 'config', iamHash: 'iam',
+    rollbackSourceVerified: true, baselineResult: { runtimeSmokePassed: true }, candidateResult: { runtimeSmokePassed: true } }));
+  const prepared = { stage: 'complete', sourceSha: 'reviewed', functions };
+  verifyPreparedRelease(prepared, structuredClone(prepared));
+  for (const field of ['candidateManifestHash', 'baselineManifestHash', 'beforeRevision', 'configHash', 'iamHash']) {
+    const changed = structuredClone(prepared); changed.functions[4][field] = 'changed';
+    assert.throws(() => verifyPreparedRelease(prepared, changed));
+  }
+  assert.throws(() => verifyPreparedRelease(prepared, { ...prepared, functions: functions.slice(0, 4) }));
+  assert.throws(() => verifyPreparedRelease({ ...prepared, stage: 'failed' }, prepared));
+});
+test('dependency locks reject unpinned transitive modules and credential-bearing registries', () => {
+  const manifest = { dependencies: { example: '1.0.0' } };
+  const lock = { lockfileVersion: 3, packages: { '': { dependencies: manifest.dependencies }, 'node_modules/example': {
+    version: '1.0.0', integrity: 'sha512-YWJjZA==', resolved: 'https://registry.npmjs.org/example/-/example-1.0.0.tgz' } } };
+  validateLock(JSON.stringify(lock), manifest);
+  for (const mutation of [p => delete p.integrity, p => p.resolved = 'https://secret@registry.npmjs.org/package.tgz', p => p.resolved = 'https://unreviewed.invalid/package.tgz', p => p.link = true]) {
+    const changed = structuredClone(lock); mutation(changed.packages['node_modules/example']);
+    assert.throws(() => validateLock(JSON.stringify(changed), manifest));
+  }
+});
 test('source archives reject traversal and absolute paths', () => {
   safePaths(['bootstrap.js', 'data/vocabulary.json']);
   for (const file of ['/etc/passwd', '../outside', 'a/../../outside', 'a\\..\\outside']) assert.throws(() => safePaths([file]));

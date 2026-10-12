@@ -34,3 +34,10 @@ Full PR diff, canonical location creation/snapshot, Work Order projection, notif
 - [x] Pending integrated CI and read-only live-source audit
 
 Runtime artifact records before/after versions, source hashes, configuration/IAM preservation, scheduler and actual-domain boundary results. Deployment is blocked until critical evidence passes. Rollback preserves all operational customer/cita/queue records; see task recovery plan.
+
+## Reconstruction review continuation
+Owner approved the proposed isolated rebuild and recovery preparation after being told that exact prior dependency preservation is impossible with the accessible artifacts. The earlier runtime gate remains failed historically; resolution now requires the explicitly approved reconstruction checks, not waiver of that gate.
+
+Implementation pending verification: fixed dependency lock; security-compatible sharp/nodemailer updates; per-source clean installs; original/candidate full Office regression and emulator checks; real runtime/bootstrap/HTTP/native smoke; reverse-patch equality; recovery artifacts uploaded before first write; all-five prepared-manifest comparison; unchanged build/runtime/IAM/scheduler boundaries. Publication remains blocked until these checks pass and a fresh adversarial review is recorded.
+
+No independent agent review was performed. Actual WhatsApp delivery and real customer writes remain outside verification by owner instruction.

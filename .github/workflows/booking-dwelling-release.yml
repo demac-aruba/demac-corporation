@@ -18,7 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - run: npm ci --prefix functions --ignore-scripts --no-audit --no-fund
       - name: Syntax, message, lifecycle, references and release-safety gates
         run: |
           npm run validate:firebase --prefix functions
@@ -47,20 +47,34 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci --prefix functions --ignore-scripts --no-audit --no-fund
       - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Read-only live-source and configuration audit
-        if: github.ref == 'refs/heads/fix/booking-dwelling-messages'
+      - name: Read-only baseline, candidate and recovery audit
         run: node scripts/booking-dwelling-release.cjs
-      - name: Owner-approved source-only release of merged code
+      - uses: actions/upload-artifact@v4
+        id: recovery
+        with:
+          name: dwelling-reviewed-recovery-and-candidate
+          path: ${{ runner.temp }}/dwelling-release/packages
+          retention-days: 90
+          if-no-files-found: error
+      - name: Owner-approved source and dependency release of merged code
         if: github.ref == 'refs/heads/release/booking-dwelling-messages-20261012'
+        env:
+          RECOVERY_ARTIFACT_ID: ${{ steps.recovery.outputs.artifact-id }}
         run: node scripts/booking-dwelling-release.cjs --deploy
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dwelling-release-evidence
-          path: ${{ runner.temp }}/dwelling-release/summary.json
+          path: |
+            ${{ runner.temp }}/dwelling-release/summary.json
+            ${{ runner.temp }}/dwelling-release-publish/summary.json
           if-no-files-found: error

@@ -31,6 +31,7 @@ on:
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'functions/package-lock.json'
       - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   push:
     branches:
@@ -64,6 +65,7 @@ on:
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'functions/package-lock.json'
   workflow_dispatch:
     inputs:
       deploy_to_production:
@@ -103,7 +105,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+        run: npm ci --prefix functions --no-audit --no-fund
 
       - name: Validate transactional WhatsApp boundary
         shell: bash
@@ -153,7 +155,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+        run: npm ci --prefix functions --no-audit --no-fund
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
