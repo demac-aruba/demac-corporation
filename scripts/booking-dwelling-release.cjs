@@ -75,7 +75,7 @@ function verifyPreparedRelease(prepared, current) {
   assert.deepEqual(current.functions.map(item => item.name).sort(), [...FUNCTIONS].sort());
   for (const item of current.functions) {
     const audited = prepared.functions.find(entry => entry.name === item.name);
-    for (const key of ['beforeRevision', 'originalManifestHash', 'baselineManifestHash', 'candidateManifestHash', 'configHash', 'iamHash']) {
+    for (const key of ['beforeRevision', 'originalManifestHash', 'baselineManifestHash', 'candidateManifestHash', 'baselineArchiveSha256', 'candidateArchiveSha256', 'configHash', 'iamHash']) {
       assert.ok(item[key], 'Missing prepared evidence: ' + key);
       assert.equal(item[key], audited[key], 'Prepared recovery/candidate differs: ' + key);
     }
@@ -228,14 +228,21 @@ async function main() {
       }
       assert.deepEqual(sourceManifest(restored), baselineManifest, 'Rollback source differs from tested baseline');
       fs.rmSync(restored, { recursive: true });
+      const archiveHashes = {};
       for (const [label, directory] of [['baseline', baseline], ['candidate', stage]]) {
-        run('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', '-czf', path.join(bundleDir, name + '-' + label + '.tar.gz'), '-C', directory, '.']);
+        const archive = path.join(bundleDir, name + '-' + label + '.tar.gz');
+        run('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', '-czf', archive, '-C', directory, '.']);
+        const extracted = directory + '-archive-verification'; fs.mkdirSync(extracted);
+        run('tar', ['-xzf', archive, '-C', extracted]);
+        assert.deepEqual(sourceManifest(extracted), label === 'baseline' ? baselineManifest : candidate, 'Recovery/archive round trip differs');
+        fs.rmSync(extracted, { recursive: true });
+        archiveHashes[label + 'ArchiveSha256'] = hash(fs.readFileSync(archive));
       }
       const recoveredLock = reconstructed ? { source: 'owner-approved-reconstruction', sha256: original['package-lock.json'], previousVersionsUnknown: true } : null;
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
         configHash: configs[name], iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
-        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), baselineResult, candidateResult, rollbackSourceVerified: true,
+        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
         alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': baseline ' + baselineResult.testsPassed + ' tests; candidate ' + candidateResult.testsPassed + ' tests; runtime and recovery verified');
     }

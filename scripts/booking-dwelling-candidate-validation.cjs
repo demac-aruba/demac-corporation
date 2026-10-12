@@ -37,6 +37,8 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
       const code = stderr.match(/npm error code ([A-Z0-9_]+)/)?.[1];
       if (code) safe.push('npm failure code: ' + code);
       if (/Cannot find module/.test(stderr)) safe.push('Runtime dependency missing');
+      const missingExport = stderr.match(/Runtime export missing: ([a-zA-Z]+)/)?.[1];
+      if (missingExport) safe.push('Runtime export missing: ' + missingExport);
       if (/Synthetic audit rejected a non-loopback connection/.test(stderr)) safe.push('Synthetic network isolation rejected a non-loopback connection');
       console.error(name + ': ' + safe.join('\n')); throw error;
     }
@@ -77,7 +79,7 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     const command = [process.execPath, '--require', networkGuard, '--test', path.join(validation, 'propertyLocations.emulator.test.cjs')].map(value => "'" + value.replace(/'/g, "'\\''") + "'").join(' ');
     pass(run('npx', ['--yes', 'firebase-tools@15.30.0', 'emulators:exec', '--only', 'firestore', '--project', 'demo-demac-dwellings', '--config', path.join(root, 'firebase.dwellings-preview.json'), command], root, emulatorEnv));
   } else pass(run(process.execPath, ['--test', ...selectedTests], validation, testEnv));
-  const smoke = run(process.execPath, [path.join(root, 'scripts/booking-dwelling-runtime-smoke.cjs'), validation], validation, testEnv);
+  const smoke = run(process.execPath, [path.join(root, 'scripts/booking-dwelling-runtime-smoke.cjs'), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
   assert.match(smoke, /PASS: real bootstrap/);
   fs.rmSync(validation, { recursive: true });
   return { dependencyLockSha256: digest, cleanInstall: true, testCounts: counts, testsPassed: counts.reduce((a, b) => a + b, 0), runtimeSmokePassed: true };

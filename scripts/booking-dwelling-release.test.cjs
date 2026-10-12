@@ -4,6 +4,21 @@ const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+test('historical runtime smoke requires its deployed entry point and rejects a missing target', () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dwelling-historical-smoke-'));
+  try {
+    fs.writeFileSync(path.join(root, 'package.json'), '{"dependencies":{}}');
+    fs.writeFileSync(path.join(root, 'bootstrap.js'), 'exports.sendDailyAppointmentReminders = () => {};');
+    fs.mkdirSync(path.join(root, 'node_modules/firebase-admin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'node_modules/firebase-admin/app.js'), 'exports.getApps = () => []; exports.deleteApp = () => {};');
+    const script = path.join(__dirname, 'booking-dwelling-runtime-smoke.cjs');
+    const run = name => spawnSync(process.execPath, [script, root, name], { encoding: 'utf8' });
+    assert.equal(run('sendDailyAppointmentReminders').status, 0);
+    assert.notEqual(run('sendDailyTechnicianSchedules').status, 0);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
 test('each deployed entry point changes only the message producers it executes', () => {
   const { sourceFilesForFunction } = require('./booking-dwelling-release.cjs');
   assert.deepEqual(sourceFilesForFunction('sendDailyAppointmentReminders'), ['appointmentNotificationService.js']);
@@ -29,11 +44,11 @@ test('reconstruction cannot silently cover another function, revision or depende
 });
 test('all five packages and rollback evidence must match before publication', () => {
   const functions = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'].map(name => ({ name,
-    beforeRevision: name + '-revision', originalManifestHash: 'original', baselineManifestHash: 'baseline', candidateManifestHash: 'candidate', configHash: 'config', iamHash: 'iam',
+    beforeRevision: name + '-revision', originalManifestHash: 'original', baselineManifestHash: 'baseline', candidateManifestHash: 'candidate', baselineArchiveSha256: 'baseline-archive', candidateArchiveSha256: 'candidate-archive', configHash: 'config', iamHash: 'iam',
     rollbackSourceVerified: true, baselineResult: { runtimeSmokePassed: true }, candidateResult: { runtimeSmokePassed: true } }));
   const prepared = { stage: 'complete', sourceSha: 'reviewed', functions };
   verifyPreparedRelease(prepared, structuredClone(prepared));
-  for (const field of ['candidateManifestHash', 'baselineManifestHash', 'beforeRevision', 'configHash', 'iamHash']) {
+  for (const field of ['candidateManifestHash', 'baselineManifestHash', 'candidateArchiveSha256', 'baselineArchiveSha256', 'beforeRevision', 'configHash', 'iamHash']) {
     const changed = structuredClone(prepared); changed.functions[4][field] = 'changed';
     assert.throws(() => verifyPreparedRelease(prepared, changed));
   }
