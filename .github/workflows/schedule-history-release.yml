@@ -1,0 +1,61 @@
+name: Schedule history bounded release
+on:
+  push:
+    branches: [feature/schedule-slot-history, release/schedule-slot-history-20261012]
+permissions:
+  contents: read
+jobs:
+  release-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/schedule-history-release.cjs && node --test scripts/schedule-history-release.test.cjs
+  actual-source-audit-and-release:
+    needs: release-safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Audit current Office source, patched source and recovery
+        run: node scripts/schedule-history-release.cjs
+      - uses: actions/upload-artifact@v4
+        id: recovery
+        with:
+          name: schedule-history-recovery-and-candidate
+          path: ${{ runner.temp }}/schedule-history-release/packages
+          retention-days: 90
+          if-no-files-found: error
+      - name: Publish owner-approved merged read action only
+        if: github.ref == 'refs/heads/release/schedule-slot-history-20261012'
+        env:
+          RECOVERY_ARTIFACT_ID: ${{ steps.recovery.outputs.artifact-id }}
+        run: node scripts/schedule-history-release.cjs --deploy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schedule-history-release-evidence
+          path: |
+            ${{ runner.temp }}/schedule-history-release/summary.json
+            ${{ runner.temp }}/schedule-history-release-publish/summary.json
+          if-no-files-found: error

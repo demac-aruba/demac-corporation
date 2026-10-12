@@ -81,7 +81,41 @@ a claim of deployment or production integration verification.
 
 Not deployed. Owner concept/merge/deploy approval remains required by AGENTS.md.
 Before release, reconcile current main and parallel #572/#574, wait for required CI,
-and deploy the additive read action with the frontend through the existing approved
-release process. An old backend gives an explicit history-load error while the
+and deploy the additive read action with the frontend through the bounded
+release process below. An old backend gives an explicit history-load error while the
 operational board remains usable. Frontend rollback removes notes; no data rollback
 or migration is necessary.
+
+### Owner-approved publication preparation, 12 October
+
+Owner explicitly approved merge and deploy in this conversation. All nine original
+PR checks passed. Current main remains `0dc09f3`. The live frontend on the verified
+`demac-aruba.com` project is deployment `dpl_56YCZgumwiVymoskkt79Shb13ycW`, source
+`e304c05e51322bfc21e20aa85aefa5e7325d43cf`; its entire ERP Next subtree equals main.
+Thus the reviewed frontend retains the published payments overview. PR572 and
+PR574 remain open and are excluded.
+
+Release inspection found that a normal main push also runs the generic WhatsApp
+deployment, queue migration and Van-group realignment. Those are outside this
+request. Merge with `[merge-only]`, then use `schedule-history-release.yml` on the
+dedicated release branch. It downloads the current versioned Office bundle,
+requires the exact previously audited running application manifest, and applies
+only the reviewed `officeBookingAuthority.js` hunk plus `bookingScheduleHistory.js`.
+All other source files, dependencies, configuration and IAM remain byte/hash bound.
+No other function, scheduler, data migration or message operation is invoked.
+
+This release adapter received a separate Solo Maintainer Adversarial Review
+(not independent): challenged stale source/main, concurrent publication, patch
+scope, secret exclusion, live-client isolation, uploaded recovery, reversible patch,
+archive extraction and final published-source/configuration/IAM proof. The baseline
+and candidate run the existing Office, lifecycle, communications and saved-booking
+emulator suites from the actual deployed bundle, plus the new read tests and real
+history emulator. Unknown runtime source blocks release instead of replacement.
+No dependency reconstruction is authorized or implemented by this adapter.
+
+The earlier PR574 logging/scaling finding concerns another function and remains
+unresolved in that PR; this release does not attempt to repair it or claim its audit
+passed. No production authenticated booking or message send is needed for this
+read-only feature. Recovery is the uploaded tested Office baseline; restore only
+if its revision/configuration lease is still valid. Frontend publication follows
+successful backend verification and uses the exact reviewed merged source.
