@@ -29,7 +29,7 @@ export async function callOfficeBookingAuthority(action,data){
   if(window.__leaseHold&&action==='acquire_appointment_charge_edit')await new Promise(resolve=>window.__leaseRelease=resolve);
   if(window.__leaseError)throw Error('Synthetic lease unavailable');
   const mine=!window.__leaseOther&&action!=='release_appointment_charge_edit';
-  return {success:true,edit:{held:true,mine,ownerName:mine?'Operador de prueba':'Scarlet de prueba',token:mine?'synthetic-lease':undefined,serverTime:new Date().toISOString(),expiresAt:window.__badExpiry?'invalid':new Date(Date.now()+(window.__leaseTtl||90000)).toISOString(),ttlMs:window.__leaseTtl||90000}};
+  return {success:true,edit:{held:true,mine,ownerName:mine?'Operador de prueba':'Scarlet de prueba',token:mine?'synthetic-lease':undefined,financialVersion:window.__leaseVersion||window.__record.state?.version||1,serverTime:new Date().toISOString(),expiresAt:window.__badExpiry?'invalid':new Date(Date.now()+(window.__leaseTtl||90000)).toISOString(),ttlMs:window.__leaseTtl||90000}};
  }
  if(action==='list_charge_services'){window.__catalogReads=(window.__catalogReads||0)+1;if(window.__catalogHold)await new Promise(resolve=>window.__catalogRelease=resolve);if(window.__catalogError)throw Error('Synthetic catalog read failed');return {success:true,services:structuredClone(window.__catalogItems||[])};}
  window.__writes.push({action,data:structuredClone(data)});
@@ -143,6 +143,21 @@ async function main(){
    if(scenario==='fractional'){const row=page.getByRole('row').filter({hasText:'Hora adicional'});assert.match(await row.innerText(),/1.5/);assert.match(await row.innerText(),/45.00/);assert.match(await row.innerText(),/67.50/);}
   },{__record:(()=>{const r=structuredClone(premium);if(scenario==='final-only')r.state.originalEstimate=null;if(scenario==='empty')r.state=null;if(scenario==='unknown'){r.state.final=null;r.state.estimate.totalCents=null;r.state.estimate.lines[0].unitCents=null;r.state.estimate.lines[0].totalCents=null;r.state.estimate.lines[0].pendingReason='BTU pendiente';}if(scenario==='zero'){r.state.final.totalCents=0;r.state.final.lines=[];r.state.receivedCents=0;r.payments=[];}if(scenario==='credit')r.state.receivedCents=45000;if(scenario==='fractional'){r.state.final.lines=[{...work('extra','Hora adicional',4500),quantityMillis:1500,totalCents:6750}];r.state.final.totalCents=6750;}return r;})()});
 
+  await run('lease-fence-discards-stale-prefetch-and-preserves-expired-draft',async page=>{
+   await page.waitForFunction(()=>window.__reads.length===1);await loaded(page);
+   await page.evaluate(()=>{window.__holdReads=true;window.__leaseVersion=2;});
+   await focus(page);await tab(page,'Importes y pagos').click();await page.waitForFunction(()=>window.__reads.length===2&&window.__leaseCalls?.length>0);
+   assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
+   await page.evaluate(()=>{window.__record.state.version=2;window.__release[1]();});
+   await page.waitForFunction(()=>window.__reads.length===3);
+   assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
+   await page.evaluate(()=>{window.__holdReads=false;window.__release[2]();});
+   await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('42');
+   await tab(page,'Resumen').click();await page.evaluate(()=>{window.__record.state.version=3;window.__leaseVersion=3;});await tab(page,'Importes y pagos').click();
+   await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();
+   assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'42');
+   assert.equal(await page.getByRole('button',{name:'Guardar pago',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  });
   await run('lease-other-operator-read-only-and-recovery-preserves-draft',async page=>{
    await openFinance(page);await page.getByText(/Scarlet de prueba está editando/).waitFor();
    assert.equal(await page.getByRole('button',{name:'Editar trabajos',exact:true}).isDisabled(),true);

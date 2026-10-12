@@ -23,7 +23,8 @@ test('two operators or two tabs of the same operator receive exactly one lease; 
     assert.equal(results.filter(r => r.edit.mine).length, 1);
     const denied = results.find(r => !r.edit.mine); assert.ok(denied.edit.ownerName); assert.equal(denied.edit.token, undefined);
     assert.equal((await acquire(B, secondUid, 'b')).edit.mine, true, 'Different visits of the same customer stay independent');
-    assert.equal(db.read('appointments/a').jobCharges, undefined);
+    assert.equal(db.read('appointments/a').jobCharges.version, 1, 'Exactly one fresh financial fence');
+    assert.equal(db.read('appointments/a').jobCharges.receivedCents, 0);
   }
 });
 test('only active financial writers can acquire or renew; missing appointments create no coordination data', async () => {
@@ -52,11 +53,41 @@ test('all new financial writes require ownership; committed exact retry survives
   const { db, call, acquire, advance } = fixture();
   for (const action of ['save_appointment_estimate', 'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment'])
     await assert.rejects(call(action, { requestId: 'no-session-request', expectedVersion: 0 }), e => e.code === 'charge_edit_lost');
-  const token = (await acquire()).edit.token;
-  const data = { editToken: token, requestId: 'single-payment-request', expectedVersion: 0, payment: { method: 'cash', amount: '10' } };
+  const { token, financialVersion } = (await acquire()).edit;
+  const data = { editToken: token, requestId: 'single-payment-request', expectedVersion: financialVersion, payment: { method: 'cash', amount: '10' } };
   await assert.rejects(call('record_appointment_payment', data, 'herlin'), e => e.code === 'charge_edit_lost');
   await call('record_appointment_payment', data); advance(EDIT_TTL_MS + 1); await acquire(B, 'herlin');
   const retry = await call('record_appointment_payment', data); assert.equal(retry.replayed, true); assert.equal(retry.state.receivedCents, 1000);
   assert.equal([...db.store.keys()].filter(p => p.startsWith('payments/')).length, 1);
   await assert.rejects(call('record_appointment_payment', { ...data, requestId: 'new-payment-request', expectedVersion: 1 }), e => e.code === 'charge_edit_lost');
+});
+
+test('fresh grant fences only the concurrency version; retries, renewal, denial and release preserve financial evidence', async () => {
+  const { db, call, acquire, advance } = fixture();
+  const state = { schemaVersion: 1, version: 8, originalEstimate: { preserved: 'original' }, estimate: { preserved: 'current' }, final: null, receivedCents: 12345, paymentCount: 2, updatedAt: 'historical', updatedBy: 'historical', extension: { untouched: true } };
+  db.write('appointments/a', { ...db.read('appointments/a'), jobCharges: state });
+  db.write('payments/existing', { immutableEvidence: true });
+  db.write('appointments/a/chargeEvents/existing', { immutableEvidence: true });
+  const before = db.read('appointments/a'), evidence = [...db.store].filter(([p]) => p.includes('payments/') || p.includes('chargeEvents/'));
+  const first = (await acquire()).edit;
+  assert.equal(first.financialVersion, 9);
+  assert.deepEqual(db.read('appointments/a'), { ...before, jobCharges: { ...state, version: 9 } });
+  assert.equal((await acquire()).edit.token, first.token);
+  assert.equal((await call('renew_appointment_charge_edit', { editToken: first.token })).edit.financialVersion, 9);
+  assert.equal((await acquire(B, 'herlin')).edit.mine, false);
+  await call('release_appointment_charge_edit', { editToken: 'wrong' });
+  assert.equal(db.read('appointments/a').jobCharges.version, 9);
+  await call('release_appointment_charge_edit', { editToken: first.token });
+  assert.equal(db.read('appointments/a').jobCharges.version, 9);
+  assert.equal((await acquire()).edit.financialVersion, 10);
+  advance(EDIT_TTL_MS + 1);
+  assert.equal((await acquire()).edit.financialVersion, 11);
+  assert.deepEqual([...db.store].filter(([p]) => p.includes('payments/') || p.includes('chargeEvents/')), evidence);
+  assert.deepEqual(db.read('appointments/a'), { ...before, jobCharges: { ...state, version: 11 } });
+});
+test('new grant rejects unsafe version and corrupt history atomically', async () => {
+  for (const state of [{ schemaVersion: 1, version: Number.MAX_SAFE_INTEGER, receivedCents: 0, paymentCount: 0 }, { version: 1 }]) {
+    const { db, acquire } = fixture(); db.write('appointments/a', { ...db.read('appointments/a'), jobCharges: state });
+    const before = [...db.store]; await assert.rejects(acquire(), e => e.code === 'charge_state'); assert.deepEqual([...db.store], before);
+  }
 });

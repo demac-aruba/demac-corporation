@@ -256,8 +256,16 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
     const ref = db.collection('appointments').doc(appointmentId);
     if (EDIT_ACTIONS.has(action)) return db.runTransaction(async transaction => {
       const actor = await actorFor(value => transaction.get(value), db, uid);
-      if (!(await transaction.get(ref)).exists) fail('not_found', 'La cita ya no existe.', 404);
-      return changeEditing({ db, transaction, appointmentId, action, actor, sessionId: data.editSessionId, token: data.editToken, now: clock() });
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) fail('not_found', 'La cita ya no existe.', 404);
+      return changeEditing({ db, transaction, appointmentId, action, actor, sessionId: data.editSessionId, token: data.editToken, now: clock(),
+        fenceVersion: () => {
+          const current = validateState(snapshot.data().jobCharges);
+          if (current.version >= Number.MAX_SAFE_INTEGER) fail('charge_state', 'El historial requiere revisión de contabilidad.', 409);
+          const version = current.version + 1;
+          transaction.update(ref, { jobCharges: { ...current, version } });
+          return version;
+        } });
     });
     if (readOnly) {
       return db.runTransaction(async transaction => {

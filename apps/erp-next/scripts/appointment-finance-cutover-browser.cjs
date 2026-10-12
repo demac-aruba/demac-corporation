@@ -59,6 +59,41 @@ async function main() {
   const beforeRetry = [...db.store]; const retry = await call(paid);
   assert.equal(retry.status, 200); assert.equal(retry.body.replayed, true); assert.deepEqual([...db.store], beforeRetry);
   const requests = [], directWrites = [], results = [{ name: 'old-committed-payment-exact-retry', status: 'PASS' }];
+  // Race the ACTUAL archived handler against the new lease, under synthetic MVCC.
+  for (const action of ['save_appointment_estimate', 'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment']) {
+    for (const leaseFirst of [false, true]) {
+      const raceDb = new TransactionalFirestore(Object.fromEntries(db.store));
+      const old = previousCharges({ db: raceDb });
+      const modern = createOfficeBookingAuthorityFacade({ db: raceDb, verifyIdToken: async uid => ({ uid }) });
+      const before = raceDb.read('appointments/apt').jobCharges;
+      const data = { appointmentId: 'apt', requestId: 'cutover-race-request', expectedVersion: before.version,
+        lines, quoteToken: quote.quote.quoteToken, note: 'Synthetic reviewed correction', scopeReviewed: true,
+        payment: { method: 'cash', amount: '7' }, paymentId: [...raceDb.store.keys()].find(p => p.startsWith('payments/')).split('/')[1], reason: 'Synthetic correction' };
+      const acquire = () => modern.handle({ method: 'POST', headers: { authorization: 'Bearer office' }, body: { action: 'acquire_appointment_charge_edit', data: { appointmentId: 'apt', editSessionId: 'race-session-0000000000001' } } });
+      if (leaseFirst) {
+        const transact = raceDb.runTransaction.bind(raceDb);
+        let paused, resume, pause = true;
+        const reached = new Promise(resolve => { paused = resolve; }), gate = new Promise(resolve => { resume = resolve; });
+        raceDb.runTransaction = fn => transact(async tx => { const value = await fn(tx); if (pause) { pause = false; paused(); await gate; } return value; });
+        const pending = old.execute({ uid: 'office', action, data });
+        const rejection = assert.rejects(pending, error => error.code === 'charge_conflict');
+        await reached; const lease = await acquire(); assert.equal(lease.status, 200);
+        const afterLease = structuredClone([...raceDb.store]); resume(); await rejection;
+        assert.deepEqual([...raceDb.store], afterLease, 'Old transaction cannot mutate any evidence after the lease');
+        assert.deepEqual(raceDb.read('appointments/apt').jobCharges, { ...before, version: before.version + 1 });
+      } else {
+        await old.execute({ uid: 'office', action, data });
+        const committed = raceDb.read('appointments/apt').jobCharges;
+        const lease = await acquire(); assert.equal(lease.body.edit.financialVersion, committed.version + 1);
+        assert.deepEqual(raceDb.read('appointments/apt').jobCharges, { ...committed, version: committed.version + 1 });
+        const afterLease = structuredClone([...raceDb.store]);
+        assert.equal((await old.execute({ uid: 'office', action, data })).replayed, true);
+        assert.deepEqual([...raceDb.store], afterLease, 'Exact committed retry creates no duplicate');
+      }
+      results.push({ name: `old-inflight-${action}-${leaseFirst ? 'lease-wins' : 'payment-wins'}`, status: 'PASS' });
+    }
+  }
+
   const server = http.createServer(async (req, res) => { try {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/authority') { let raw = ''; for await (const part of req) raw += part; const input = JSON.parse(raw); requests.push(input); const result = await modernApi.handle({ method: 'POST', headers: req.headers, body: input }); res.statusCode = result.status; res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify(result.body)); }

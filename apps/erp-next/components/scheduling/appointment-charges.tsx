@@ -106,8 +106,8 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   const inFlight = useRef(false);
   const [quoteRevision, setQuoteRevision] = useState(0);
   const { quote, error: quoteError, loading: quoting } = useQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
-  const { record, error: readError, loading, updatedAt, reload: read } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending));
-  const editSession = useChargeEditSession(appointmentId, canManage && active && !showHistory && Boolean(record) && !record?.blocker);
+  const { record, error: readError, loading, updatedAt, reload: read, ensureVersion } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending));
+  const editSession = useChargeEditSession(appointmentId, canManage && active && !showHistory && Boolean(record) && !record?.blocker, ensureVersion);
   const reload = () => { setQuoteRevision(value => value + 1); return read(); };
   useEffect(() => { onBusyChange(busy || Boolean(pending)); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
   const state = record?.state;

@@ -10,7 +10,7 @@ const REVALIDATE_AFTER_MS = 30_000;
 // LiveSchedulingOverview keys its subtree by principal ID/active/capabilities; the
 // drawer keys the workspace by appointment ID, also clearing drafts on owner change.
 export function useAppointmentCharges(appointmentId: string, active: boolean, suspended: boolean) {
-  const owner = useMemo(() => ({ alive: false, updatedAt: 0, flight: null as Promise<boolean> | null }), [appointmentId]);
+  const owner = useMemo(() => ({ alive: false, updatedAt: 0, version: -1, flight: null as Promise<boolean> | null }), [appointmentId]);
   const [snapshot, setSnapshot] = useState({ owner, record: null as ChargeRecord | null, error: '', loading: true, updatedAt: 0 });
   const reload = useCallback((): Promise<boolean> => {
     if (owner.flight) return owner.flight;
@@ -19,6 +19,7 @@ export function useAppointmentCharges(appointmentId: string, active: boolean, su
     owner.flight = getAppointmentCharges(appointmentId).then(record => {
       if (!owner.alive) return false;
       owner.updatedAt = Date.now();
+      owner.version = record.state?.version || 0;
       setSnapshot({ owner, record, error: '', loading: false, updatedAt: owner.updatedAt });
       return true;
     }).catch(cause => {
@@ -27,6 +28,15 @@ export function useAppointmentCharges(appointmentId: string, active: boolean, su
     }).finally(() => { owner.flight = null; });
     return owner.flight;
   }, [appointmentId, owner]);
+
+  const ensureVersion = useCallback(async (minimum: number): Promise<boolean> => {
+    // A pre-acquisition flight may contain the old version. Complete that flight
+    // before requesting a fresh snapshot; never silently rebase an open draft.
+    if (owner.flight) await owner.flight;
+    if (!owner.alive) return false;
+    if (owner.version >= minimum) return true;
+    return await reload() && owner.version >= minimum;
+  }, [owner, reload]);
 
   useEffect(() => {
     owner.alive = true;
@@ -49,5 +59,5 @@ export function useAppointmentCharges(appointmentId: string, active: boolean, su
     };
   }, [active, suspended, owner, reload]);
 
-  return { ...(snapshot.owner === owner ? snapshot : { record: null, error: '', loading: true, updatedAt: 0 }), reload };
+  return { ...(snapshot.owner === owner ? snapshot : { record: null, error: '', loading: true, updatedAt: 0 }), reload, ensureVersion };
 }

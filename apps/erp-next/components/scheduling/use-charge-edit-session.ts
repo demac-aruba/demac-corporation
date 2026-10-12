@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callOfficeBookingAuthority } from '../../lib/office-booking-authority';
 
-type Lease = { held: boolean; mine: boolean; ownerName: string; expiresAt: string | null; serverTime: string; ttlMs: number; token?: string };
+type Lease = { held: boolean; mine: boolean; ownerName: string; expiresAt: string | null; serverTime: string; ttlMs: number; token?: string; financialVersion?: number };
 type Controller = { appointmentId: string; sessionId: string; token: string; alive: boolean; owned: boolean; deadline: number; running: boolean; retry?: () => void; timer?: number; expiry?: number };
 type State = { controller: Controller | null; owned: boolean; loading: boolean; message: string };
 
 // Never acquires during the drawer's background prefetch. Each activation gets
 // a distinct session, so delayed cleanup cannot release a later activation.
-export function useChargeEditSession(appointmentId: string, enabled: boolean) {
+export function useChargeEditSession(appointmentId: string, enabled: boolean, ensureVersion: (minimum: number) => Promise<boolean>) {
   const current = useRef<Controller | null>(null);
   const [state, setState] = useState<State>({ controller: null, owned: false, loading: false, message: '' });
   const retry = useCallback(() => current.current?.retry?.(), []);
@@ -29,7 +29,7 @@ export function useChargeEditSession(appointmentId: string, enabled: boolean) {
     const request = async (renew: boolean) => {
       if (!owner.alive || owner.running) return;
       owner.running = true;
-      if (!renew) setState({ controller: owner, owned: false, loading: true, message: 'Comprobando acceso de edición…' });
+      if (!renew) { owner.owned = false; setState({ controller: owner, owned: false, loading: true, message: 'Comprobando acceso de edición…' }); }
       const started = performance.now();
       try {
         const result = await callOfficeBookingAuthority<{ success: true; edit: Lease }>(renew ? 'renew_appointment_charge_edit' : 'acquire_appointment_charge_edit', payload());
@@ -44,6 +44,9 @@ export function useChargeEditSession(appointmentId: string, enabled: boolean) {
         // Subtract round-trip time rather than trusting the workstation clock.
         const expiryTime = Date.parse(edit.expiresAt);
         if (!Number.isFinite(expiryTime)) throw Error('El servidor no confirmó el vencimiento del acceso de edición.');
+        if (!Number.isSafeInteger(edit.financialVersion) || edit.financialVersion! < 1) throw Error('Actualiza el ERP: el servidor no confirmó la versión protegida.');
+        if (!renew && !await ensureVersion(edit.financialVersion!)) throw Error('No se pudieron actualizar los importes protegidos. Tu borrador se conserva.');
+        if (!owner.alive) { release(); return; }
         owner.deadline = started + expiryTime - Date.parse(edit.serverTime) - 1000;
         if (owner.deadline <= performance.now()) throw Error('No se pudo renovar a tiempo el acceso de edición.');
         owner.owned = true;
@@ -74,7 +77,7 @@ export function useChargeEditSession(appointmentId: string, enabled: boolean) {
       if (current.current === owner) current.current = null;
       release();
     };
-  }, [appointmentId, enabled]);
+  }, [appointmentId, enabled, ensureVersion]);
   const credentials = useCallback(() => {
     const owner = current.current;
     if (!owner || !owner.alive || !owner.owned || owner.deadline <= performance.now()) return null;
