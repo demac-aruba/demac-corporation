@@ -98,8 +98,6 @@ async function quoteLines({ db, get, lines, now, previous }) {
         if (!snapshot.exists || snapshot.data().active === false) fail('charge_catalog', 'El servicio seleccionado no está activo.');
         const service = { ...snapshot.data(), id: line.serviceId };
         label = clean(service.name || service.label || line.serviceId, 220);
-        if (['fixed', 'per_unit', undefined].includes(service.pricingDefinition?.mode) && !PRICING_RULE_KINDS.has(service.pricingRuleKind)
-          && (service.basePrice === null || service.basePrice === '')) throw Object.assign(new Error('Precio base no configurado.'), { code: 'service_pricing_not_configured' });
         base = resolveServicePriceSnapshot({ service, pricingSettings, btu: line.btu, capturedAt: now.toISOString() });
       } else if (PRICING_RULE_KINDS.has(line.presetId)) {
         // These three exact Scheduling kinds explicitly refer to the governed

@@ -23,7 +23,7 @@ function validateLock(content, manifest) {
   for (const name of Object.keys(manifest.dependencies)) assert.ok(lock.packages['node_modules/' + name], 'Missing direct dependency');
   return lock;
 }
-function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused }) {
+function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, smokeScript = 'booking-dwelling-runtime-smoke.cjs' }) {
   const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   validateLock(lockBytes, pkg);
@@ -79,7 +79,7 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     const command = [process.execPath, '--require', networkGuard, '--test', path.join(validation, 'propertyLocations.emulator.test.cjs')].map(value => "'" + value.replace(/'/g, "'\\''") + "'").join(' ');
     pass(run('npx', ['--yes', 'firebase-tools@15.30.0', 'emulators:exec', '--only', 'firestore', '--project', 'demo-demac-dwellings', '--config', path.join(root, 'firebase.dwellings-preview.json'), command], root, emulatorEnv));
   } else pass(run(process.execPath, ['--test', ...selectedTests], validation, testEnv));
-  const smoke = run(process.execPath, [path.join(root, 'scripts/booking-dwelling-runtime-smoke.cjs'), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
+  const smoke = run(process.execPath, [path.join(root, 'scripts', smokeScript), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
   assert.match(smoke, /PASS: real bootstrap/);
   fs.rmSync(validation, { recursive: true });
   return { dependencyLockSha256: digest, cleanInstall: true, testCounts: counts, testsPassed: counts.reduce((a, b) => a + b, 0), runtimeSmokePassed: true };
