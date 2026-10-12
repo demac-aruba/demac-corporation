@@ -4,6 +4,19 @@ const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+test('published source tolerates only absent packaging metadata and rejects application drift or added files', () => {
+  const { verifyPublishedSource, runtimeSourceHash } = require('./booking-dwelling-release.cjs');
+  const candidate = { '.gitignore': 'ignore', 'bootstrap.js': 'code', 'package-lock.json': 'lock' };
+  const published = { 'bootstrap.js': 'code', 'package-lock.json': 'lock' };
+  assert.deepEqual(verifyPublishedSource(candidate, published), ['.gitignore']);
+  assert.deepEqual(verifyPublishedSource(candidate, candidate), []);
+  assert.equal(runtimeSourceHash(candidate), runtimeSourceHash(published));
+  assert.throws(() => verifyPublishedSource(candidate, { ...published, '.gitignore': 'changed' }));
+  assert.throws(() => verifyPublishedSource(candidate, { ...published, 'bootstrap.js': 'changed' }));
+  assert.throws(() => verifyPublishedSource(candidate, { 'bootstrap.js': 'code' }));
+  assert.throws(() => verifyPublishedSource(candidate, { ...published, 'injected.js': 'unexpected' }));
+  assert.notEqual(runtimeSourceHash(published), runtimeSourceHash({ ...published, 'package-lock.json': 'changed' }));
+});
 test('historical runtime smoke requires its deployed entry point and rejects a missing target', () => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const { spawnSync } = require('node:child_process');

@@ -12,6 +12,16 @@ const BASE = '1e9b4568a461367ee4aa8cff25ef34ebc73f19c9';
 const RELEASE = 'release/booking-dwelling-messages-20261012';
 const FILES = ['appointmentNotificationService.js', 'technicianDailyScheduleService.js', 'technicianScheduleChangeService.js'];
 const HELPER = 'bookingLocationDisplay.js';
+// SHA256 of every candidate file except top-level packaging controls, calculated
+// from verified recovery artifact 11774320564 (run 38308594583). Resume must keep
+// the exact application/dependency source already audited before first rollout.
+const REVIEWED_RUNTIME_HASHES = {
+  officeBookingAuthority: '12336022f661ad3f652b985085850bb85d3ddd212651063b4bedf1d6bb260141',
+  queueAppointmentConfirmation: '0b7c0e962c35c7ba7114fd1b92052cd1b949ee727d978520088fdd91d599fd51',
+  sendDailyAppointmentReminders: '074987067b86431758182e737a3659ab800a295d10f8db91c60347ab306d05ac',
+  sendDailyTechnicianSchedules: '9ed6d1bb89cc4dd748e043374d5fc9af4951fd13a57f17aa6a8a804c82350f61',
+  notifyBookingReferenceUpdate: '9ed6d1bb89cc4dd748e043374d5fc9af4951fd13a57f17aa6a8a804c82350f61',
+};
 const FUNCTIONS = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'];
 const TESTS = ['appointmentNotificationService.test.js', 'technicianDailyScheduleService.test.js', 'technicianScheduleChangeService.test.js'];
 function sourceFilesForFunction(name) {
@@ -22,6 +32,20 @@ function sourceFilesForFunction(name) {
 }
 const stable = value => value && typeof value === 'object' ? Array.isArray(value) ? value.map(stable) : Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const hash = value => crypto.createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(stable(value))).digest('hex');
+const runtimeSourceHash = manifest => hash(Object.fromEntries(Object.entries(manifest).filter(([file]) => !['.gitignore', '.gcloudignore'].includes(file))));
+function verifyPublishedSource(candidate, published) {
+  const omittedPackagingFiles = [];
+  for (const [file, digest] of Object.entries(candidate)) {
+    if (file === '.gcloudignore') continue;
+    // gcloud's generated ignore file excludes .gitignore itself. Allow absence,
+    // but require the reviewed bytes if the publisher includes it.
+    if (file === '.gitignore' && !Object.hasOwn(published, file)) { omittedPackagingFiles.push(file); continue; }
+    assert.equal(published[file], digest, 'Published source differs: ' + file);
+  }
+  for (const file of Object.keys(published)) assert.ok(Object.hasOwn(candidate, file) || file === '.gcloudignore', 'Unexpected published file: ' + file);
+  assert.equal(runtimeSourceHash(published), runtimeSourceHash(candidate), 'Published application manifest differs');
+  return omittedPackagingFiles;
+}
 const releaseConfig = fn => ({ ...canonicalFunctionConfig(fn), build: Object.fromEntries(Object.entries(fn.buildConfig).filter(([key]) => !['build', 'source', 'sourceProvenance', 'sourceToken'].includes(key))) });
 function safePaths(files) {
   assert.ok(files.length > 0, 'Empty source archive');
@@ -214,13 +238,14 @@ async function main() {
       }
       const baseline = stage + '-baseline'; fs.cpSync(stage, baseline, { recursive: true });
       checkpoint('test-baseline');
-      const baselineResult = validateCandidate({ source: baseline, root, out, env: isolatedTestEnv(process.env), candidate: alreadyApplied, reconstruct: reconstructed, name: name + '-baseline', selectedTests });
+      const baselineResult = validateCandidate({ source: baseline, root, out, env: isolatedTestEnv(process.env), candidate: alreadyApplied, reconstruct: name === 'officeBookingAuthority', name: name + '-baseline', selectedTests });
       const baselineManifest = sourceManifest(baseline);
       if (!alreadyApplied) run('git', ['apply', '-p2', patchPath], stage);
       fs.writeFileSync(path.join(stage, HELPER), helper);
       const candidate = sourceManifest(stage); const changed = verifyDelta(original, candidate, hash(helper));
+      assert.equal(runtimeSourceHash(candidate), REVIEWED_RUNTIME_HASHES[name], 'Candidate differs from original reviewed recovery artifact: ' + name);
       checkpoint('test-candidate');
-      const candidateResult = validateCandidate({ source: stage, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: reconstructed, name: name + '-candidate', selectedTests });
+      const candidateResult = validateCandidate({ source: stage, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: name === 'officeBookingAuthority', name: name + '-candidate', selectedTests });
       const restored = stage + '-restored'; fs.cpSync(stage, restored, { recursive: true });
       if (!alreadyApplied) {
         run('git', ['apply', '--reverse', '-p2', patchPath], restored);
@@ -242,7 +267,7 @@ async function main() {
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
         configHash: configs[name], iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
-        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
+        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), reviewedRuntimeHash: runtimeSourceHash(candidate), originalRecoveryArtifactId: '11774320564', ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
         alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': baseline ' + baselineResult.testsPassed + ' tests; candidate ' + candidateResult.testsPassed + ' tests; runtime and recovery verified');
     }
@@ -264,10 +289,8 @@ async function main() {
       const after = describe(name); assert.equal(after.state, 'ACTIVE');
       assert.equal(configHash(after), configs[name], 'Runtime configuration changed'); assert.equal(iamHash(after), policies[name], 'IAM changed');
       const published = download(after, stage + '-published');
-      for (const [file, digest] of Object.entries(candidates[name])) {
-        if (file !== '.gcloudignore') assert.equal(published[file], digest, 'Published source differs: ' + file);
-      }
-      Object.assign(summary.functions.find(item => item.name === name), { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, configPreserved: true, iamPreserved: true }); save();
+      const omittedPackagingFiles = verifyPublishedSource(candidates[name], published);
+      Object.assign(summary.functions.find(item => item.name === name), { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, iamPreserved: true }); save();
     }
     for (const [name, digest] of Object.entries(schedules)) assert.equal(schedulerHash(scheduler(name)), digest, 'Scheduler changed');
     await boundaries(); sourceGate(); summary.stage = 'complete'; summary.schedulersPreserved = true; summary.actualDomainBoundariesPassed = true; save();
@@ -289,5 +312,5 @@ async function main() {
     if (summary.failureCategories.length) console.error('Failure categories: ' + summary.failureCategories.join(', '));
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction, verifyPublishedSource, runtimeSourceHash };
 if (require.main === module) main();
