@@ -19,14 +19,14 @@ async function main(){
     report.operationContract=(opPage.operations||[]).filter(op=>Object.keys(TARGETS).some(name=>op.metadata?.target?.endsWith('/functions/'+name))).slice(0,20).map(op=>{
       const request=op.metadata?.requestResource,response=op.response;
       const source=value=>value?{keys:Object.keys(value),bucket:value.bucket,object:value.object,generation:value.generation,generationType:typeof value.generation}:null;
-      return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,errorMessage:op.error?.message,
+      return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,errorCategory:op.error?(/zip: not a valid zip file/.test(op.error.message||'')?'invalid_zip':'unspecified'):null,
         createTime:op.metadata?.createTime,requestName:request?.name,requestKeys:Object.keys(request||{}),requestSource:source(request?.buildConfig?.source?.storageSource),responseSource:source(response?.buildConfig?.source?.storageSource),
         requestResolvedSource:source(request?.buildConfig?.sourceProvenance?.resolvedStorageSource),responseResolvedSource:source(response?.buildConfig?.sourceProvenance?.resolvedStorageSource),
         requestType:request?.['@type'],requestHasName:typeof request?.name==='string',requestHasFunction:typeof request?.function==='object',requestHasStorageSource:!!request?.buildConfig?.source?.storageSource,
         responseType:response?.['@type'],responseHasName:typeof response?.name==='string',responseHasRevision:typeof response?.serviceConfig?.revision==='string',responseHasStorageSource:!!response?.buildConfig?.source?.storageSource};
     });
     assert.ok(report.operationContract.length,'No scoped operation contract available');save();
-    const accepted=report.operationContract.find(op=>op.name==='projects/demac-corporation/locations/us-central1/operations/operation-1791846706644-65dacd2710786-4b7439cc-86abee4f');
+    const accepted=report.operationContract.find(op=>op.name==='projects/demac-corporation/locations/us-central1/operations/operation-1791847676710-65dad0c430e35-2b6c089f-1389e63c');
     if(accepted){
       const src=accepted.requestSource;assert.equal(src.bucket,'gcf-v2-sources-1053571783393-us-central1');assert.equal(src.object,'inventoryAuthority/function-source.zip');assert.match(src.generation,/^\d+$/);
       const local=path.join(process.env.RUNNER_TEMP,'accepted-source.archive');
