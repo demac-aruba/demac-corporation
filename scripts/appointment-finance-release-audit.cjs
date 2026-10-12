@@ -70,6 +70,19 @@ async function main() {
     report.tariffs.allMatch = report.tariffs.rows.every(row => row.matchesApproved);
     // Only the approved 15 numeric rates are disclosed; never the full settings.
     save(); console.log('Saved tariff audit: ' + report.tariffs.rows.filter(row => row.matchesApproved).length + '/15 match');
+    report.stage='firestore-rules'; save();
+    const rulesGet=async resource=>{
+      const result=await fetch('https://firebaserules.googleapis.com/v1/' + resource,{headers:{Authorization:'Bearer ' + token},signal:AbortSignal.timeout(20000)});
+      assert.equal(result.status,200,'Active rules read failed'); return result.json();
+    };
+    const rulesRelease=await rulesGet(`projects/${PROJECT}/releases/cloud.firestore`);
+    assert.ok(rulesRelease.rulesetName?.startsWith(`projects/${PROJECT}/rulesets/`));
+    const ruleset=await rulesGet(rulesRelease.rulesetName);
+    assert.equal(ruleset.source?.files?.length,1,'Unreviewed rules file structure');
+    const rulesSource=ruleset.source.files[0];
+    const baseRules=run('git',['show','0dc09f3167150ed775018a6f257542961b21cddf:firestore.rules']);
+    report.firestoreRules={rulesetName:rulesRelease.rulesetName,updateTime:rulesRelease.updateTime,sourceHash:hash(rulesSource.content),matchesReviewedBase:hash(rulesSource.content)===hash(baseRules),candidateHash:hash(fs.readFileSync('firestore.rules'))};
+    assert.equal(report.firestoreRules.matchesReviewedBase,true,'Active rules differ from reviewed baseline'); save();
     for (const name of TARGETS) {
       report.stage = 'source-' + name; save();
       const fn = JSON.parse(run('gcloud', ['functions', 'describe', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--format=json']));
