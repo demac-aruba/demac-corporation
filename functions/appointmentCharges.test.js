@@ -48,7 +48,7 @@ test('manual overrides require reason and inactive catalogue cannot be selected'
   const { call } = fixture({ 'services/inactive': { name: 'Old', active: false, basePrice: 50 } });
   await rejectsCode(call('quote_appointment_charges', { lines: [manual('55', { reason: '' })] }), 'charge_override_reason');
   await rejectsCode(call('quote_appointment_charges', { lines: [manual('', { serviceId: 'inactive' })] }), 'charge_catalog');
-  const result = await call('list_charge_services'); assert.deepEqual(result.services, [{ id: 'fixed', name: 'Chequeo' }]);
+  const result = await call('list_charge_services'); assert.deepEqual(result.services.map(({id,name}) => ({id,name})), [{ id: 'fixed', name: 'Chequeo' }]);
 });
 test('exact cents and fractional time avoid floating drift; invalid money is rejected', async () => {
   const { call } = fixture();
@@ -188,4 +188,23 @@ test('historical Project guard detects final-only charges and voided financial h
   for (const jobCharges of [{ final: { totalCents: 0 }, paymentCount: 0, receivedCents: 0 }, { final: null, paymentCount: 1, receivedCents: 0 }]) {
     await assert.rejects(assertNoLinkedCommercialEvidence({ appointment: { jobCharges }, order: {} }), /commercial or payroll evidence/);
   }
+});
+
+test('catalog search exposes bounded commercial metadata only, preserves identity and never mutates records', async () => {
+  const {db,call}=fixture({
+    'services/product': {name:'Refrigerante de prueba',itemType:'Producto',sku:'GAS-DEMO',category:'Refrigerantes',description:'Aplicación por libra',durationMinutes:60,basePrice:55,unitCost:12,supplierToken:'never-expose',stock:500,active:true},
+    'services/canonical': {name:'Servicio de prueba',description:'a'.repeat(900),category:'b'.repeat(180),sku:'c'.repeat(180),durationMinutes:30,serviceDefinition:{duration:{minutes:90}},active:true},
+    'services/hidden': {name:'Inactivo',active:false},
+    'users/auditor': {active:true,role:'auditor'},'users/technician':{active:true,role:'technician'},
+  });
+  const before=[...db.store];
+  const result=await call('list_charge_services',{},'auditor');
+  const product=result.services.find(item=>item.id==='product'), service=result.services.find(item=>item.id==='canonical');
+  assert.deepEqual(product,{id:'product',name:'Refrigerante de prueba',itemType:'Producto',description:'Aplicación por libra',category:'Refrigerantes',sku:'GAS-DEMO',durationMinutes:null});
+  assert.equal(service.itemType,'Servicio');assert.equal(service.durationMinutes,90);assert.equal(service.description.length,600);assert.equal(service.category.length,120);assert.equal(service.sku.length,120);
+  assert.equal(result.services.some(item=>item.id==='hidden'),false);
+  await rejectsCode(call('list_charge_services',{},'technician'),'permission_denied');
+  assert.deepEqual([...db.store],before);
+  const {quote}=await call('quote_appointment_charges',{lines:[manual('',{serviceId:'product',label:'Refrigerante de prueba',quantity:1.5})]});
+  assert.equal(quote.totalCents,8250);assert.deepEqual([...db.store],before);
 });

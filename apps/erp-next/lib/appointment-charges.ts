@@ -37,4 +37,7 @@ export function getAppointmentCharges(appointmentId: string) { return callOffice
 export function mutateAppointmentCharges(action: string, data: Record<string, unknown>) { return callOfficeBookingAuthority<{ success: true; state: ChargeState; replayed?: boolean }>(action, data, 20_000); }
 export function newChargeRequestId() { return `charge-${crypto.randomUUID()}`; }
 
-export function listChargeServices() { return callOfficeBookingAuthority<{ success: true; services: { id: string; name: string }[] }>('list_charge_services', {}); }
+// Optional metadata keeps clients compatible with the previous read response.
+// Prices always come from quoteAppointmentCharges, never from this search list.
+export type ChargeCatalogItem = { id: string; name: string; itemType?: 'Servicio' | 'Producto'; description?: string; category?: string; sku?: string; durationMinutes?: number | null };
+export function listChargeServices() { return callOfficeBookingAuthority<{ success: true; services: ChargeCatalogItem[] }>('list_charge_services', {}); }

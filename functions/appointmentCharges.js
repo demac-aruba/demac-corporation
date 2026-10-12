@@ -221,7 +221,15 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
     if (action === 'list_charge_services') {
       const services = await db.collection('services').limit(1001).get();
       if (services.docs.length > 1000) fail('charge_catalog_limit', 'El catálogo requiere una búsqueda específica.', 409);
-      return { success: true, services: services.docs.filter(doc => doc.data().active !== false).map(doc => ({ id: doc.id, name: clean(doc.data().name || doc.data().label || doc.id, 220) })).sort((a,b) => a.name.localeCompare(b.name)) };
+      return { success: true, services: services.docs.filter(doc => doc.data().active !== false).map(doc => {
+        const item = doc.data(), itemType = item.itemType === 'Producto' ? 'Producto' : 'Servicio';
+        const duration = item.serviceDefinition?.duration?.minutes ?? item.durationMinutes;
+        // Search metadata only. The existing quote authority resolves the current
+        // tariff after selection; never return cost, stock or internal fields.
+        return { id: doc.id, name: clean(item.name || item.label || doc.id, 220), itemType,
+          description: clean(item.description, 600), category: clean(item.category, 120), sku: clean(item.sku, 120),
+          durationMinutes: itemType === 'Servicio' && Number.isSafeInteger(duration) && duration > 0 ? duration : null };
+      }).sort((a,b) => a.name.localeCompare(b.name)) };
     }
     if (action === 'quote_appointment_charges') {
       return { success: true, quote: await quoteLines({ db, get: ref => ref.get(), lines: inputLines(data.lines), now }) };

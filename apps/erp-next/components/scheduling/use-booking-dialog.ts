@@ -39,6 +39,9 @@ export function useBookingDialog(onClose: () => void, blocked: boolean, active =
         }
         // A nested editor owns Escape; the agenda separately defers while this layer exists.
         if (childDialog()) return;
+        // A focused, open inline picker consumes Escape before the whole booking.
+        // Pending writes above still retain the existing modal close lock.
+        if (event.target instanceof Element && event.target.closest('[data-booking-escape-layer]')) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         current.current.onClose();

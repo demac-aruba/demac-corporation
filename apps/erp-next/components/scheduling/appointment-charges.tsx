@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
 import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, mutateAppointmentCharges, newChargeRequestId,
-  paymentMethods, listChargeServices, quoteAppointmentCharges, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
+  paymentMethods, listChargeServices, quoteAppointmentCharges, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod, type ChargeCatalogItem } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
 import { useAppointmentCharges } from './use-appointment-charges';
 import { ChargeLineSummary, ChargeOverviewMetrics } from './appointment-charge-overview';
+import { ChargeCatalogPicker } from './charge-catalog-picker';
 
 const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', transfer: 'bank', pos: 'card', suave: 'phone' };
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -39,15 +40,18 @@ function PaymentFields({ value, onChange, disabled = false }: { value: PaymentIn
   </fieldset>;
 }
 function LinesEditor({ lines, onChange, quote, disabled, preserveWork = false }: { lines: ChargeLineInput[]; onChange: (lines: ChargeLineInput[]) => void; quote: ChargeQuote | null; disabled: boolean; preserveWork?: boolean }) {
-  const [services, setServices] = useState<{ id: string; name: string }[]>([]);
-  const [catalogError, setCatalogError] = useState('');
-  useEffect(() => { let active = true; void listChargeServices().then(result => { if (active) setServices(result.services); }).catch(() => { if (active) setCatalogError('No se pudo cargar el catálogo. Puedes ingresar un precio con motivo.'); }); return () => { active = false; }; }, []);
+  const [services, setServices] = useState<ChargeCatalogItem[]>([]);
+  const [catalogError, setCatalogError] = useState(''), [catalogLoading, setCatalogLoading] = useState(true), [catalogRevision, setCatalogRevision] = useState(0);
+  useEffect(() => { let active = true; setCatalogLoading(true); setCatalogError(''); void listChargeServices().then(result => { if (active) setServices(result.services); }).catch(() => { if (active) setCatalogError('No se pudo cargar el catálogo. Tus conceptos y precios se conservan.'); }).finally(() => { if (active) setCatalogLoading(false); }); return () => { active = false; }; }, [catalogRevision]);
   const change = (id: string, patch: Partial<ChargeLineInput>) => onChange(lines.map(line => line.id === id ? { ...line, ...patch } : line));
   return <fieldset disabled={disabled} style={{ margin: 0, padding: 0, border: 0, minWidth: 0 }}>
     {catalogError ? <ChargeNotice>{catalogError}</ChargeNotice> : null}
     {lines.map((line, index) => { const priced = quote?.lines.find(item => item.id === line.id); return <div className={styles.line} key={line.id}>
       <div className={styles.lineHeader}>{preserveWork && line.workLineId ? <strong>{line.label}</strong> : <input aria-label={`Concepto ${index + 1}`} maxLength={220} value={line.label} onChange={event => change(line.id, { label: event.target.value })} placeholder="Servicio, reparación o adicional"/>}{!(preserveWork && line.workLineId) ? <button type="button" aria-label={`Eliminar concepto ${index + 1}`} onClick={() => onChange(lines.filter(item => item.id !== line.id))}>Eliminar</button> : null}</div>
-      <label className={styles.catalog}>Tarifa del catálogo<select aria-label={`Tarifa del catálogo ${index + 1}`} value={line.serviceId || ''} onChange={event => change(line.id, { serviceId: event.target.value, unitPrice: '', reason: '' })}><option value="">{line.presetId ? 'Tarifa según el trabajo / BTU' : 'Precio manual con motivo'}</option>{line.serviceId && !services.some(service => service.id === line.serviceId) ? <option value={line.serviceId}>Servicio seleccionado</option> : null}{services.map(service => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label>
+      <ChargeCatalogPicker items={services} selectedId={line.serviceId} index={index + 1} loading={catalogLoading} error={catalogError} disabled={disabled} fallbackLabel={line.presetId ? 'Volver a tarifa del trabajo / BTU' : 'Ingresar precio manual'} onRetry={() => setCatalogRevision(value => value + 1)} onSelect={item => {
+        if ((item?.id || '') === (line.serviceId || '')) return;
+        change(line.id, { serviceId: item?.id || '', unitPrice: '', reason: '', ...(item && !(preserveWork && line.workLineId) ? { label: item.name } : {}) });
+      }}/>
       <div className={styles.lineFields}><label>BTU<input aria-label={`BTU ${index + 1}`} inputMode="numeric" value={line.btu || ''} onChange={event => change(line.id, { btu: event.target.value, unitPrice: '', reason: '' })} placeholder="Por confirmar"/></label><label>Cantidad<input aria-label={`Cantidad ${index + 1}`} inputMode="decimal" value={line.quantity} disabled={preserveWork && Boolean(line.workLineId)} onChange={event => change(line.id, { quantity: event.target.value })}/></label><div><span className={styles.muted}>Precio base</span><small>{chargeMoney(priced?.baseUnitCents)}</small></div><label>Precio / unidad (Afl.)<input aria-label={`Precio unitario ${index + 1}`} inputMode="decimal" value={line.unitPrice ?? ''} onChange={event => change(line.id, { unitPrice: event.target.value, reason: '' })} placeholder={priced?.baseUnitCents == null ? 'Por cotizar' : (priced.baseUnitCents / 100).toFixed(2)}/></label></div>
       {line.unitPrice !== undefined && line.unitPrice !== '' && line.unitPrice !== null ? <label className={styles.reason}>Motivo del precio / ajuste<input aria-label={`Motivo del precio ${index + 1}`} value={line.reason || ''} maxLength={700} onChange={event => change(line.id, { reason: event.target.value })} placeholder="Cambio de alcance, tiempo extra o precio acordado"/></label> : null}
       {preserveWork && line.workLineId && Number.isInteger(Number(line.quantity)) && Number(line.quantity) > 1 && lines.length + Number(line.quantity) - 1 <= 60 ? <button type="button" className={styles.link} onClick={() => onChange(lines.flatMap(item => item.id === line.id ? Array.from({ length: Number(line.quantity) }, (_, unit) => ({ ...line, id: `${line.id}-unit-${unit + 1}`, quantity: 1 })) : [item]))}>Separar equipos por BTU</button> : null}
