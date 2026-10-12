@@ -1,7 +1,8 @@
-# QuickBooks sandbox connection — prepared, not activated
+# QuickBooks sandbox connection and read-only reports
 
-This is the first connection step for issue #385. It does not sync accounting or enable
-ChatGPT access. No actual company is connected by this code delivery.
+The initial connection was deployed and the owner verified the sandbox authorization
+on 2026-10-12 at 18:58 Aruba. The report extension is described below. Neither phase
+syncs accounting nor enables ChatGPT access; the real DEMAC company is not connected.
 
 ## Intuit setup
 
@@ -12,8 +13,7 @@ app's redirect URI configuration register this exact proposed Firebase callback:
 https://us-central1-demac-corporation.cloudfunctions.net/quickbooksSandbox/callback
 ```
 
-This route is implemented in the feature branch; it will not respond until the Function is
-approved and deployed. It is not the OAuth Playground redirect. Leave webhooks unconfigured
+This is the deployed sandbox callback. It is not the OAuth Playground redirect. Leave webhooks unconfigured
 for this phase. Request accounting only; do not add the payment OAuth scope.
 
 The operator screenshot identifies **Advanced Sandbox Company US c251**, realm
@@ -68,7 +68,8 @@ it in an isolated preview; preview calls are intentionally blocked.
 
 Do not label the integration live or the real DEMAC company connected until that actual
 round trip has been observed. Stored metadata is a historical verification, not a health
-probe. Access-token refresh and long-term revocation handling are not implemented here.
+probe. The report extension renews access on demand and asks for reauthorization after
+revocation or an uncertain refresh. Stored status alone still does not probe access.
 
 ## Recovery and follow-up
 
@@ -95,3 +96,27 @@ probe. Access-token refresh and long-term revocation handling are not implemente
 - [Intuit OAuth JavaScript client](https://github.com/intuit/oauth-jsclient) — official OAuth endpoints and flow.
 - [Intuit PHP SDK CompanyInfo fixture](https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/master/src/Utility.Test/XmlObjectSerializerTest.php) — entity `Id` differs from realm.
 - [Intuit sandbox documentation](https://developer.intuit.com/app/developer/qbo/docs/develop/sandboxes) — test company environment.
+
+## Read-only report extension
+
+After the report extension is deployed, the existing authorized card shows
+**Informes de prueba · solo lectura**. Choose a report, dates and basis, then
+**Consultar informe de prueba**. Use the same report, dates and basis in the Intuit
+sandbox to compare values and totals. P&L is a range; Balance Sheet and Accounts
+Receivable use the cutoff date. Reports retain their source currency (the US sandbox
+is not evidence for DEMAC currency/tax configuration).
+
+No report is fetched automatically. Grants renew when needed for a manual query;
+there is no unattended scheduler. Wait five seconds between requests. If asked, use
+**Volver a autorizar sandbox**. That is also the safe recovery for unknown refresh
+outcomes; never copy tokens or manually replay an exchange. The initial authorized
+grant works without a data migration.
+
+The release updates only the exact existing sandbox Function revision after checking
+its previous source and configuration. It does not create/modify accounting entries,
+read customer appointments, bulk-deploy other Functions, or grant new permissions.
+
+Acceptance still needed with the owner: compare all three reports to the sandbox UI,
+repeat a query after access expiry, cancel/retry authorization, and verify recovery.
+Automated synthetic evidence and deployment verification are not a substitute for
+those real-provider checks.

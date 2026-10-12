@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: node --test functions/quickbooksSandbox.test.js
+      - run: node --test functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
       - run: node scripts/quickbooks-sandbox-release.cjs --check
   deploy:
     if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-qbo-sandbox]')
@@ -53,5 +53,5 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
-      - name: Create only QuickBooks sandbox and verify public boundaries
+      - name: Update only the reviewed sandbox revision and verify public boundaries
         run: node scripts/quickbooks-sandbox-release.cjs --deploy

@@ -1,18 +1,18 @@
 'use strict';
-// Owner approved PR575 sandbox deployment on 2026-10-12. No financial calls,
-// database clients, existing-function deployment, rules or secret-value reads.
-// Resume from current reviewed main after the owner's 18:35 confirmation that
-// runtime accessor bindings were applied. All source and deployment gates remain.
+// Bounded continuation of the owner-approved sandbox connection, 2026-10-12.
+// Release verification makes no authenticated provider or database calls.
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const PROJECT = 'demac-corporation';
 const NAME = 'quickbooksSandbox';
-const REVIEWED = '25e180899879344b52493d82aa3d8547ef05a2de';
+const REVIEWED = '4f1f6b5a058f1aa6d1bf33397c9852867e2ddb36';
+const PREVIOUS_SOURCE = '25e180899879344b52493d82aa3d8547ef05a2de';
+const PREVIOUS_REVISION = 'quickbookssandbox-00001-jec';
 const ORIGIN = 'https://demac-aruba.com';
 const REALM = '9341458478454738';
-const FILES = ['quickbooksSandbox.js', 'quickbooksSandboxHttp.js', 'quickbooksSandboxService.js', 'package-lock.json'];
+const FILES = ['quickbooksSandbox.js', 'quickbooksSandboxHttp.js', 'quickbooksSandboxService.js', 'quickbooksSandboxReports.js', 'package-lock.json'];
 const SECRETS = ['QBO_SANDBOX_CLIENT_ID', 'QBO_SANDBOX_CLIENT_SECRET', 'QBO_SANDBOX_TOKEN_KEY'];
 const run = (command, args, options = {}) => execFileSync(command, args, {
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024, ...options });
@@ -43,7 +43,7 @@ function prepare() {
   fs.mkdirSync(stage, { recursive: true });
   for (const file of FILES) fs.copyFileSync('functions/' + file, path.join(stage, file));
   const manifest = sourceCheck();
-  // Discovery can see ONLY the new HTTP function, never existing ERP triggers.
+  // Discovery can see ONLY the sandbox HTTP function, never operational ERP triggers.
   fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ ...manifest, main: 'quickbooksSandbox.js', scripts: {} }, null, 2));
   fs.writeFileSync(path.join(stage, '.env.' + PROJECT),
     `QBO_SANDBOX_ENABLED=true\nQBO_SANDBOX_REALM_ID=${REALM}\nQBO_SANDBOX_RETURN_URL=${ORIGIN}/integrations/\n`);
@@ -78,41 +78,53 @@ async function boundaries() {
 async function deploy() {
   releaseCheck(); summary.stage = 'metadata-preflight';
   const before = inventory();
-  assert.ok(!before.some(fn => fn.name.endsWith('/' + NAME)), 'Function already exists; stop for source/config review');
+  const previous = cloud(['functions', 'describe', NAME, '--region=us-central1', '--gen2']);
+  assert.equal(previous.serviceConfig?.revision, PREVIOUS_REVISION, 'Sandbox revision changed; review before updating');
+  verifyConfiguration(previous);
+  verifyPublishedSource(previous, PREVIOUS_SOURCE, FILES.filter(file => file !== 'quickbooksSandboxReports.js'));
   for (const secret of SECRETS) {
     const version = cloud(['secrets', 'versions', 'describe', '1', '--secret=' + secret]);
     assert.equal(version.state, 'ENABLED', 'Secret version must be enabled: ' + secret);
   }
-  releaseCheck(); summary.stage = 'create-single-function';
+  releaseCheck(); summary.stage = 'update-single-sandbox-function';
   run(path.join(process.env.RUNNER_TEMP, 'qbo-release-tools/node_modules/.bin/firebase'), [
     'deploy', '--only', 'functions:' + NAME, '--project', PROJECT,
     '--config', path.join(process.env.RUNNER_TEMP, 'qbo-sandbox-firebase.json'), '--non-interactive'],
   { cwd: process.env.RUNNER_TEMP });
   summary.stage = 'verify-function';
   const fn = cloud(['functions', 'describe', NAME, '--region=us-central1', '--gen2']);
+  verifyConfiguration(fn);
+  assert.deepEqual({ ...fn.serviceConfig, revision: null }, { ...previous.serviceConfig, revision: null },
+    'Sandbox runtime configuration changed; review before proceeding');
+  verifyPublishedSource(fn, REVIEWED, FILES);
+  summary.publishedSourceVerified = true;
+  summary.revision = fn.serviceConfig.revision;
+  const after = inventory().filter(f => !f.name.endsWith('/' + NAME));
+  assert.deepEqual(after, before.filter(f => !f.name.endsWith('/' + NAME)), 'Another function changed during release; inspect concurrent deployment');
+  summary.existingFunctionsUnchanged = true;
+  await boundaries(); summary.stage = 'complete';
+}
+function verifyConfiguration(fn) {
   assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22');
   assert.equal(fn.buildConfig.entryPoint, NAME); assert.equal(fn.serviceConfig.maxInstanceCount, 10);
+  assert.equal(fn.serviceConfig.timeoutSeconds, 60);
   assert.ok(!fn.eventTrigger, 'No financial or operational event trigger allowed');
   assert.equal(fn.serviceConfig.environmentVariables.QBO_SANDBOX_ENABLED, 'true');
   assert.equal(fn.serviceConfig.environmentVariables.QBO_SANDBOX_REALM_ID, REALM);
   assert.equal(fn.serviceConfig.environmentVariables.QBO_SANDBOX_RETURN_URL, ORIGIN + '/integrations/');
   assert.deepEqual(fn.serviceConfig.secretEnvironmentVariables.map(s => s.key).sort(), [...SECRETS].sort());
   for (const secret of fn.serviceConfig.secretEnvironmentVariables) assert.equal(String(secret.version), '1');
+}
+function verifyPublishedSource(fn, source, files) {
   const storage = fn.buildConfig.source.storageSource;
   assert.ok(storage?.bucket && storage?.object, 'Published source reference missing');
   const archive = path.join(process.env.RUNNER_TEMP, 'qbo-published-source.zip');
   run('gcloud', ['storage', 'cp', `gs://${storage.bucket}/${storage.object}${storage.generation ? '#' + storage.generation : ''}`,
     archive, '--project=' + PROJECT, '--quiet']);
   try {
-    for (const file of FILES) assert.equal(run('unzip', ['-p', archive, file]),
-      fs.readFileSync('functions/' + file, 'utf8'), 'Published source mismatch: ' + file);
+    for (const file of files) assert.equal(run('unzip', ['-p', archive, file]),
+      run('git', ['show', source + ':functions/' + file]), 'Published source mismatch: ' + file);
   } finally { fs.unlinkSync(archive); }
-  summary.publishedSourceVerified = true;
-  summary.revision = fn.serviceConfig.revision;
-  const after = inventory().filter(f => !f.name.endsWith('/' + NAME));
-  assert.deepEqual(after, before, 'Existing function changed during release; inspect concurrent deployment');
-  summary.existingFunctionsUnchanged = true;
-  await boundaries(); summary.stage = 'complete';
 }
 (async () => {
   const mode = process.argv[2];

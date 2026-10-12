@@ -33,6 +33,12 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true, ...(process.env.QBO_TEST_CHROMIUM ? { executablePath: process.env.QBO_TEST_CHROMIUM } : {}) });
   const results = [];
+  const reportRows = [{ kind: 'heading', depth: 0, values: ['Ingresos', ''] },
+    { kind: 'data', depth: 1, values: ['Servicio sintético', '1234.50'] }, { kind: 'total', depth: 0, values: ['Total ingresos', '1234.50'] }];
+  let reportResult = { environment: 'sandbox', syncEnabled: false, realmId: '1234567890123456', companyName: 'Synthetic Advanced Sandbox',
+    fetchedAt: '2026-10-12T22:00:00Z', request: { report: 'ProfitAndLoss' },
+    report: { name: 'ProfitAndLoss', currency: 'USD', basis: 'Accrual', startPeriod: '2026-10-01', endPeriod: '2026-10-12',
+      noData: false, columns: [{ title: 'Concepto', type: 'Account' }, { title: 'Total', type: 'Money' }], rows: reportRows } };
   try {
     for (const width of [1280, 375]) {
       const context = await browser.newContext({ viewport: { width, height: 900 } });
@@ -43,7 +49,7 @@ async function main() {
       await page.route('**/*', async route => {
         const url = route.request().url();
         if (url.startsWith(origin)) return route.continue();
-        if (url === 'https://us-central1-demo-qbo-browser.cloudfunctions.net/quickbooksSandbox') return route.fulfill({ json: result,
+        if (url === 'https://us-central1-demo-qbo-browser.cloudfunctions.net/quickbooksSandbox') return route.fulfill({ json: route.request().method() === 'POST' ? reportResult : result,
           headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
         blocked.push(url); return route.abort();
       });
@@ -58,14 +64,24 @@ async function main() {
       result.connection = { realmId: '1234567890123456', companyName: 'Synthetic Advanced Sandbox', country: 'US', verifiedAt: '2026-10-12T21:30:00Z', connectedAt: '2026-10-12T21:30:00Z' };
       await page.getByRole('button', { name: 'Consultar estado / reintentar' }).click();
       await page.getByText('Sandbox autorizado', { exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Consultar informe de prueba' }).click();
+      await page.getByRole('region', { name: 'Resultado de QuickBooks', exact: true }).waitFor();
+      assert.equal(await page.getByRole('cell', { name: '1234.50', exact: true }).count(), 2);
       await page.screenshot({ path: path.join(output, `authorized-${width}.png`), fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'No horizontal overflow');
+      await page.getByLabel('Informe', { exact: true }).selectOption('AgedReceivables');
+      assert.equal(await page.getByRole('region', { name: 'Resultado de QuickBooks', exact: true }).count(), 0, 'Changing filters clears old figures');
+      assert.equal(await page.getByLabel('Base contable').isDisabled(), true);
+      reportResult = { ...reportResult, report: { ...reportResult.report, noData: true, rows: [] } };
+      await page.getByRole('button', { name: 'Consultar informe de prueba' }).click();
+      await page.getByText('QuickBooks indica que no hay datos para esta consulta.').waitFor();
+      reportResult = { ...reportResult, report: { ...reportResult.report, noData: false, rows: reportRows } };
       await page.addInitScript(() => { window.testRole = 'finance'; });
       await page.reload();
       await page.getByText('Solo el propietario o un administrador puede gestionar esta conexión.').waitFor();
       assert.equal(await page.getByRole('button', { name: /Conectar sandbox|Volver a autorizar/ }).count(), 0);
       assert.deepEqual(failures, []); assert.deepEqual(blocked, []);
-      results.push({ width, result: 'PASS', states: ['unconfigured', 'ready', 'verified', 'unauthorized'] });
+      results.push({ width, result: 'PASS', states: ['unconfigured', 'ready', 'verified', 'report', 'filter-change', 'no-data', 'unauthorized'] });
       await context.close();
     }
   } finally {
