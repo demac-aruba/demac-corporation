@@ -52,7 +52,10 @@ const token=results[index].body.edit.token;
 const denied=await call('acquire_appointment_charge_edit',{editSessionId:'same-user-second-tab-0001'},uid);assert.equal(denied.body.edit.mine,false);assert.equal(denied.body.edit.token,undefined);
 await call('release_appointment_charge_edit',{...session,editToken:'stale-token'},uid);
 assert.equal((await call('renew_appointment_charge_edit',{...session,editToken:token},uid)).status,200);
-assert.equal((await db.doc('appointments/apt').get()).data().jobCharges,undefined);
+assert.deepEqual((await db.doc('appointments/apt').get()).data().jobCharges,{schemaVersion:1,version:1,originalEstimate:null,estimate:null,final:null,receivedCents:0,paymentCount:0});
+assert.equal(results.find(result=>result.body.edit.mine).body.edit.financialVersion,1,'Exactly one fresh grant increments the concurrency version');
+assert.equal((await db.collection('payments').get()).size,0);
+assert.equal((await db.doc('appointments/apt').collection('chargeEvents').get()).size,0);
 });
 test('real Firestore rejects expired edit but returns an already committed exact receipt retry',async()=>{
 const request=pay('expiry-replay');assert.equal((await call('record_appointment_payment',request)).status,200);
