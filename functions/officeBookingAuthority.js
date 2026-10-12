@@ -50,6 +50,7 @@ const OFFICE_BOOKING_ROLES = Object.freeze([
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
   LIST_APPOINTMENT_ATTRIBUTION: "list_appointment_attribution",
+  LIST_SCHEDULE_HISTORY: "list_schedule_history",
   LIST_CONTACT_DIRECTORY: "list_contact_directory",
   GET_APPOINTMENT_COMMUNICATION: "get_appointment_communication",
   UPDATE_APPOINTMENT_COMMUNICATION: "update_appointment_communication",
@@ -1190,6 +1191,10 @@ function createOfficeBookingApi({
     }
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
+    if (action === OFFICE_BOOKING_ACTIONS.LIST_SCHEDULE_HISTORY) {
+      requireOfficeRole(identity?.role);
+      return require('./bookingScheduleHistory').listScheduleHistory({ db, data });
+    }
     if (action === OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY) return listContactDirectory(data);
     if (action === OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT_COMMUNICATION) return appointmentCommunication(data);
     if (action === OFFICE_BOOKING_ACTIONS.UPDATE_APPOINTMENT_COMMUNICATION) return updateAppointmentCommunication(data, identity);
