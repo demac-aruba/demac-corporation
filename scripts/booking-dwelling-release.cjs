@@ -14,6 +14,12 @@ const FILES = ['appointmentNotificationService.js', 'technicianDailyScheduleServ
 const HELPER = 'bookingLocationDisplay.js';
 const FUNCTIONS = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'];
 const TESTS = ['appointmentNotificationService.test.js', 'technicianDailyScheduleService.test.js', 'technicianScheduleChangeService.test.js'];
+function sourceFilesForFunction(name) {
+  assert.ok(FUNCTIONS.includes(name));
+  if (name === 'sendDailyAppointmentReminders') return [FILES[0]];
+  if (['sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'].includes(name)) return [FILES[1]];
+  return FILES;
+}
 const stable = value => value && typeof value === 'object' ? Array.isArray(value) ? value.map(stable) : Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const hash = value => crypto.createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(stable(value))).digest('hex');
 const releaseConfig = fn => ({ ...canonicalFunctionConfig(fn), build: Object.fromEntries(Object.entries(fn.buildConfig).filter(([key]) => !['build', 'source', 'sourceProvenance', 'sourceToken'].includes(key))) });
@@ -150,8 +156,6 @@ async function main() {
   }
   try {
     sourceGate(); summary.sourceSha = process.env.GITHUB_SHA; save();
-    const patch = run('git', ['diff', '--binary', BASE, 'HEAD', '--', ...FILES.map(file => 'functions/' + file)]);
-    const patchPath = path.join(out, 'reviewed.patch'); fs.writeFileSync(patchPath, patch);
     const helper = fs.readFileSync(path.join(root, 'functions', HELPER));
     const before = {}, candidates = {}, configs = {}, policies = {}, schedules = {};
     const bundleDir = path.join(out, 'packages'); fs.mkdirSync(bundleDir);
@@ -167,10 +171,17 @@ async function main() {
     await boundaries();
     for (const name of FUNCTIONS) {
       summary.stage = 'audit-' + name; save();
+      const checkpoint = label => { summary.stage = 'audit-' + name + '-' + label; save(); };
+      const selectedFiles = sourceFilesForFunction(name);
+      const selectedTests = selectedFiles.map(file => file.replace('.js', '.test.js'));
+      const patch = run('git', ['diff', '--binary', BASE, 'HEAD', '--', ...selectedFiles.map(file => 'functions/' + file)]);
+      const patchPath = path.join(out, name + '.patch'); fs.writeFileSync(patchPath, patch);
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
       before[name] = fn; configs[name] = configHash(fn); policies[name] = iamHash(fn);
+      checkpoint('download-source');
       const stage = path.join(out, name); const original = download(fn, stage);
       const livePackage = JSON.parse(fs.readFileSync(path.join(stage, 'package.json')));
+      checkpoint('verify-package-provenance');
       git(['cat-file', '-e', git(['hash-object', path.join(stage, 'package.json')]) + '^{blob}']);
       const originalManifestHash = hash(original);
       const reconstructed = !original['package-lock.json'];
@@ -189,10 +200,12 @@ async function main() {
       for (const file of Object.keys(original)) {
         assert.ok(!/(^|\/)\.env(?:\.|$)|\.(?:pem|key)$|(?:credential|service-account)\.json$/i.test(file), 'Private file cannot enter a recovery artifact');
         if (['package.json', 'package-lock.json', '.gcloudignore'].includes(file)) continue;
+        checkpoint('source-provenance-' + file.replace(/[^a-zA-Z0-9_.-]/g, '_'));
         const object = git(['hash-object', path.join(stage, file)]);
         git(['cat-file', '-e', object + '^{blob}']);
       }
       let alreadyApplied = false;
+      checkpoint('verify-reviewed-patch');
       try { run('git', ['apply', '--check', '-p2', patchPath], stage); }
       catch {
         run('git', ['apply', '--reverse', '--check', '-p2', patchPath], stage);
@@ -200,12 +213,14 @@ async function main() {
         alreadyApplied = true;
       }
       const baseline = stage + '-baseline'; fs.cpSync(stage, baseline, { recursive: true });
-      const baselineResult = validateCandidate({ source: baseline, root, out, env: isolatedTestEnv(process.env), candidate: alreadyApplied, reconstruct: reconstructed, name: name + '-baseline' });
+      checkpoint('test-baseline');
+      const baselineResult = validateCandidate({ source: baseline, root, out, env: isolatedTestEnv(process.env), candidate: alreadyApplied, reconstruct: reconstructed, name: name + '-baseline', selectedTests });
       const baselineManifest = sourceManifest(baseline);
       if (!alreadyApplied) run('git', ['apply', '-p2', patchPath], stage);
       fs.writeFileSync(path.join(stage, HELPER), helper);
       const candidate = sourceManifest(stage); const changed = verifyDelta(original, candidate, hash(helper));
-      const candidateResult = validateCandidate({ source: stage, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: reconstructed, name: name + '-candidate' });
+      checkpoint('test-candidate');
+      const candidateResult = validateCandidate({ source: stage, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: reconstructed, name: name + '-candidate', selectedTests });
       const restored = stage + '-restored'; fs.cpSync(stage, restored, { recursive: true });
       if (!alreadyApplied) {
         run('git', ['apply', '--reverse', '-p2', patchPath], restored);
@@ -267,5 +282,5 @@ async function main() {
     if (summary.failureCategories.length) console.error('Failure categories: ' + summary.failureCategories.join(', '));
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction };
 if (require.main === module) main();

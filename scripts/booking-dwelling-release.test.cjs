@@ -4,6 +4,13 @@ const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+test('each deployed entry point changes only the message producers it executes', () => {
+  const { sourceFilesForFunction } = require('./booking-dwelling-release.cjs');
+  assert.deepEqual(sourceFilesForFunction('sendDailyAppointmentReminders'), ['appointmentNotificationService.js']);
+  for (const name of ['sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate']) assert.deepEqual(sourceFilesForFunction(name), ['technicianDailyScheduleService.js']);
+  for (const name of ['officeBookingAuthority', 'queueAppointmentConfirmation']) assert.equal(sourceFilesForFunction(name).length, 3);
+  assert.throws(() => sourceFilesForFunction('unapproved'));
+});
 test('build identity, environment and runtime policy remain protected while source/build IDs may change', () => {
   const { releaseConfig } = require('./booking-dwelling-release.cjs');
   const fn = { buildConfig: { runtime: 'nodejs22', entryPoint: 'officeBookingAuthority', source: { before: true }, build: 'before', serviceAccount: 'synthetic-builder', environmentVariables: { MODE: 'synthetic' }, automaticUpdatePolicy: {} }, serviceConfig: {} };

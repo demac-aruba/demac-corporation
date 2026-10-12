@@ -23,7 +23,7 @@ function validateLock(content, manifest) {
   for (const name of Object.keys(manifest.dependencies)) assert.ok(lock.packages['node_modules/' + name], 'Missing direct dependency');
   return lock;
 }
-function validateCandidate({ source, root, out, env, candidate, reconstruct, name }) {
+function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused }) {
   const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   validateLock(lockBytes, pkg);
@@ -33,6 +33,11 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     try { return execFileSync(command, args, { cwd, env: isolated, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 40 * 1024 * 1024 }); }
     catch (error) {
       const safe = String(error.stdout || '').split('\n').filter(line => /not ok|error:|Expected|actual:|expected:|fail |Error:|Cannot find module|SyntaxError/.test(line));
+      const stderr = String(error.stderr || '');
+      const code = stderr.match(/npm error code ([A-Z0-9_]+)/)?.[1];
+      if (code) safe.push('npm failure code: ' + code);
+      if (/Cannot find module/.test(stderr)) safe.push('Runtime dependency missing');
+      if (/Synthetic audit rejected a non-loopback connection/.test(stderr)) safe.push('Synthetic network isolation rejected a non-loopback connection');
       console.error(name + ': ' + safe.join('\n')); throw error;
     }
   };
@@ -45,7 +50,7 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
   }
   const validation = source + '-test'; fs.cpSync(source, validation, { recursive: true });
   if (candidate) {
-    for (const file of focused) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
+    for (const file of selectedTests) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
     fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
     if (reconstruct) fs.copyFileSync(path.join(root, 'functions/propertyLocations.emulator.test.cjs'), path.join(validation, 'propertyLocations.emulator.test.cjs'));
   }
@@ -71,7 +76,7 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     assert.ok(fs.existsSync(path.join(validation, 'propertyLocations.emulator.test.cjs')), 'Missing saved-booking emulator suite');
     const command = [process.execPath, '--require', networkGuard, '--test', path.join(validation, 'propertyLocations.emulator.test.cjs')].map(value => "'" + value.replace(/'/g, "'\\''") + "'").join(' ');
     pass(run('npx', ['--yes', 'firebase-tools@15.30.0', 'emulators:exec', '--only', 'firestore', '--project', 'demo-demac-dwellings', '--config', path.join(root, 'firebase.dwellings-preview.json'), command], root, emulatorEnv));
-  } else pass(run(process.execPath, ['--test', ...focused], validation, testEnv));
+  } else pass(run(process.execPath, ['--test', ...selectedTests], validation, testEnv));
   const smoke = run(process.execPath, [path.join(root, 'scripts/booking-dwelling-runtime-smoke.cjs'), validation], validation, testEnv);
   assert.match(smoke, /PASS: real bootstrap/);
   fs.rmSync(validation, { recursive: true });
