@@ -85,7 +85,7 @@ try {
   // Inspect this function's administrative history only. Never emit arbitrary
   // request/response bodies, environment values, principal identities or log text.
   try {
-    const query = 'logName="projects/demac-corporation/logs/cloudaudit.googleapis.com%2Factivity" AND timestamp>="2026-10-01T00:00:00Z" AND (protoPayload.resourceName:"/services/notifybookingreferenceupdate" OR protoPayload.resourceName:"/functions/notifyBookingReferenceUpdate")';
+    const query = '(logName="projects/demac-corporation/logs/cloudaudit.googleapis.com%2Factivity" OR logName="projects/demac-corporation/logs/cloudaudit.googleapis.com%2Fsystem_event") AND timestamp>="2026-10-01T00:00:00Z" AND (protoPayload.resourceName:"/services/notifybookingreferenceupdate" OR protoPayload.resourceName:"/functions/notifyBookingReferenceUpdate")';
     const entries = cloud(['logging', 'read', query, '--project=demac-corporation', '--order=asc', '--limit=500', '--format=json']);
     const extract = (value, prefix = '', found = []) => {
       if (!value || typeof value !== 'object') return found;
@@ -100,10 +100,38 @@ try {
     result.scalingHistory = { succeeded: true, completeWithinLimit: entries.length < 500, entries: entries.map(entry => ({
       timestamp: entry.timestamp, method: entry.protoPayload?.methodName,
       statusCode: entry.protoPayload?.status?.code || 0, first: entry.operation?.first, last: entry.operation?.last,
+      requestKeys: Object.keys(entry.protoPayload?.request || {}), responseKeys: Object.keys(entry.protoPayload?.response || {}),
       request: extract(entry.protoPayload?.request, 'request'), response: extract(entry.protoPayload?.response, 'response'),
+      metadata: extract(entry.protoPayload?.metadata, 'metadata'),
     })) };
+    // One historical resource only; absence or denied access is not treated as proof.
+    try {
+      const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      const url = new URL('https://cloudasset.googleapis.com/v1/projects/demac-corporation:batchGetAssetsHistory');
+      url.searchParams.set('assetNames', '//run.googleapis.com/projects/demac-corporation/locations/us-central1/services/notifybookingreferenceupdate');
+      url.searchParams.set('contentType', 'RESOURCE');
+      url.searchParams.set('readTimeWindow.startTime', '2026-10-07T17:20:00Z');
+      url.searchParams.set('readTimeWindow.endTime', '2026-10-12T21:31:00Z');
+      const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(30000) });
+      const data = await response.json();
+      result.assetHistory = { httpStatus: response.status, succeeded: response.ok };
+      if (response.ok) result.assetHistory.assets = (data.assets || []).map(item => ({ window: item.window, deleted: item.deleted,
+        updateTime: item.asset?.updateTime, scaling: extract(item.asset?.resource?.data, 'resource') }));
+      else Object.assign(result.assetHistory, { errorCode: data.error?.code, errorStatus: data.error?.status,
+        reasons: (data.error?.details || []).map(item => ({ reason: item.reason, domain: item.domain,
+          metadata: Object.fromEntries(Object.entries(item.metadata || {}).filter(([key]) => ['service', 'consumer', 'permission'].includes(key))) })) });
+    } catch (error) { result.assetHistory = { succeeded: false, ...errorFacts(error) }; }
   } catch (error) { result.scalingHistory = { succeeded: false, ...errorFacts(error) }; }
-  result.complete = result.logRead.succeeded && result.logRead.errorCount === 0 && result.logRead.completeWithinLimit;
+  try {
+    const names = ['officebookingauthority', 'queueappointmentconfirmation', 'senddailyappointmentreminders', 'senddailytechnicianschedules', 'notifybookingreferenceupdate'];
+    const query = 'resource.type="cloud_run_revision" AND resource.labels.service_name=(' + names.map(name => '"' + name + '"').join(' OR ') + ') AND timestamp>="2026-10-12T21:10:00Z" AND (severity>=ERROR OR httpRequest.status>=500)';
+    const timestamps = execFileSync('gcloud', ['logging', 'read', query, '--project=demac-corporation', '--limit=1000', '--format=value(timestamp)'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const count = timestamps ? timestamps.split('\n').length : 0;
+    result.allFunctionLogRead = { succeeded: true, services: names, from: '2026-10-12T21:10:00Z', observedAt: new Date().toISOString(), errorCount: count, completeWithinLimit: count < 1000 };
+  } catch (error) { result.allFunctionLogRead = { succeeded: false, ...errorFacts(error) }; }
+  result.complete = result.logRead.succeeded && result.logRead.errorCount === 0 && result.logRead.completeWithinLimit
+    && result.allFunctionLogRead.succeeded && result.allFunctionLogRead.errorCount === 0 && result.allFunctionLogRead.completeWithinLimit
+    && result.scalingHistory.succeeded && result.scalingHistory.completeWithinLimit;
   if (!result.complete) process.exitCode = 1;
 } catch (error) { result.error = 'Read-only configuration inspection failed'; result.exitStatus = error.status || error.code; process.exitCode = 1; }
 fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'dwelling-config-inspection.json'), JSON.stringify(result, null, 2));
