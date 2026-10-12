@@ -1,0 +1,42 @@
+name: Appointment finance read-only release audit
+on:
+  push:
+    branches: [fix/appointment-finance-release-20261012]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --test scripts/appointment-finance-release-audit.test.cjs
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Inspect 15 rates and affected deployed source without writes
+        run: node scripts/appointment-finance-release-audit.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appointment-finance-release-audit
+          path: ${{ runner.temp }}/finance-release-audit/summary.json
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: appointment-finance-verified-source-recovery
+          path: ${{ runner.temp }}/finance-release-audit/packages
+          retention-days: 90
+          if-no-files-found: error
