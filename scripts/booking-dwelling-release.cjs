@@ -22,6 +22,20 @@ const REVIEWED_RUNTIME_HASHES = {
   sendDailyTechnicianSchedules: '9ed6d1bb89cc4dd748e043374d5fc9af4951fd13a57f17aa6a8a804c82350f61',
   notifyBookingReferenceUpdate: '9ed6d1bb89cc4dd748e043374d5fc9af4951fd13a57f17aa6a8a804c82350f61',
 };
+const ORIGINAL_CONFIG_HASHES = {
+  officeBookingAuthority: '1f3068bd669b1ffdd17ef79f170546722a42131d2949a0566852f929d95e6e39',
+  queueAppointmentConfirmation: '8b7f2699c512d05c5939c324a176875c5b7f5189936ceb20216468769feed90e',
+  sendDailyAppointmentReminders: '3d720df0ee9baecc52a41bde4aff9017229564af91acd247b1b6ba89cb234a9c',
+  sendDailyTechnicianSchedules: 'b7b7339fb02024d49d7e3eb04ab148a9361964b229ec849f3abaf023617694fc',
+  notifyBookingReferenceUpdate: '956adcd5f88a66e4c349347e5f6fe667b59cf2b25d9bec73c440f646511af662',
+};
+const ORIGINAL_IAM_HASHES = {
+  officeBookingAuthority: '6ea6e4e297bf9c84cb0dd0386bb594b16b49cb13448749e5f7e28ed2086997a3',
+  queueAppointmentConfirmation: 'de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac',
+  sendDailyAppointmentReminders: '0a9f0f0cf9920bbd720502038841bb01d91ee7786857a4ca7fb8af813490fe63',
+  sendDailyTechnicianSchedules: '1e84322e6e8cbecc8235e7ba418fded5f83ca5653acce8375881231d349e0eb9',
+  notifyBookingReferenceUpdate: 'de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac',
+};
 const FUNCTIONS = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'];
 const TESTS = ['appointmentNotificationService.test.js', 'technicianDailyScheduleService.test.js', 'technicianScheduleChangeService.test.js'];
 function sourceFilesForFunction(name) {
@@ -47,6 +61,18 @@ function verifyPublishedSource(candidate, published) {
   return omittedPackagingFiles;
 }
 const releaseConfig = fn => ({ ...canonicalFunctionConfig(fn), build: Object.fromEntries(Object.entries(fn.buildConfig).filter(([key]) => !['build', 'source', 'sourceProvenance', 'sourceToken'].includes(key))) });
+const configHash = fn => hash(releaseConfig(fn));
+function retryRestorationPlan(name, fn, expectedHash) {
+  const observedRetryPolicy = fn.eventTrigger?.retryPolicy || null;
+  if (configHash(fn) === expectedHash) return { required: false, observedRetryPolicy };
+  assert.equal(name, 'notifyBookingReferenceUpdate', 'Unapproved original configuration drift');
+  assert.equal(observedRetryPolicy, 'RETRY_POLICY_DO_NOT_RETRY', 'Unexpected retry-policy drift');
+  const restored = { ...fn, eventTrigger: { ...fn.eventTrigger, retryPolicy: 'RETRY_POLICY_RETRY' } };
+  // This is a restoration only if changing this one field reproduces the exact
+  // complete build/runtime/trigger hash saved before the original rollout.
+  assert.equal(configHash(restored), expectedHash, 'Configuration differs beyond the known retry-policy restoration');
+  return { required: true, observedRetryPolicy, intendedRetryPolicy: 'RETRY_POLICY_RETRY' };
+}
 function safePaths(files) {
   assert.ok(files.length > 0, 'Empty source archive');
   for (const file of files) assert.ok(!path.posix.isAbsolute(file) && !file.includes('\\') && !file.split('/').includes('..'), 'Unsafe source archive path');
@@ -54,7 +80,8 @@ function safePaths(files) {
 function deployArgs(name, stage) {
   assert.ok(FUNCTIONS.includes(name), 'Unapproved function');
   assert.ok(path.isAbsolute(stage), 'Absolute stage required');
-  return ['functions', 'deploy', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--source=' + stage, '--quiet', '--format=value(state)'];
+  return ['functions', 'deploy', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--source=' + stage,
+    ...(name === 'notifyBookingReferenceUpdate' ? ['--retry'] : []), '--quiet', '--format=value(state)'];
 }
 function sourceManifest(root) {
   const result = {};
@@ -99,10 +126,11 @@ function verifyPreparedRelease(prepared, current) {
   assert.deepEqual(current.functions.map(item => item.name).sort(), [...FUNCTIONS].sort());
   for (const item of current.functions) {
     const audited = prepared.functions.find(entry => entry.name === item.name);
-    for (const key of ['beforeRevision', 'originalManifestHash', 'baselineManifestHash', 'candidateManifestHash', 'baselineArchiveSha256', 'candidateArchiveSha256', 'configHash', 'iamHash']) {
+    for (const key of ['beforeRevision', 'originalManifestHash', 'baselineManifestHash', 'candidateManifestHash', 'baselineArchiveSha256', 'candidateArchiveSha256', 'configHash', 'targetConfigHash', 'iamHash']) {
       assert.ok(item[key], 'Missing prepared evidence: ' + key);
       assert.equal(item[key], audited[key], 'Prepared recovery/candidate differs: ' + key);
     }
+    assert.deepEqual(item.retryRestoration, audited.retryRestoration, 'Prepared retry restoration differs');
     assert.equal(audited.rollbackSourceVerified, true);
     assert.equal(audited.baselineResult.runtimeSmokePassed, true);
     assert.equal(audited.candidateResult.runtimeSmokePassed, true);
@@ -137,7 +165,6 @@ async function main() {
   const git = args => run('git', args).trim();
   const cloud = args => run('gcloud', args);
   const describe = name => JSON.parse(cloud(['functions', 'describe', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--format=json']));
-  const configHash = fn => hash(releaseConfig(fn));
   const iamHash = fn => hash(JSON.parse(cloud(['run', 'services', 'get-iam-policy', fn.serviceConfig.service.split('/').pop(), '--project=' + PROJECT, '--region=us-central1', '--format=json'])));
   const scheduler = name => JSON.parse(cloud(['scheduler', 'jobs', 'describe', 'firebase-schedule-' + name + '-us-central1', '--project=' + PROJECT, '--location=us-central1', '--format=json']));
   const schedulerHash = job => hash(Object.fromEntries(['schedule', 'timeZone', 'state', 'httpTarget', 'retryConfig', 'attemptDeadline'].map(key => [key, job[key]])));
@@ -202,6 +229,9 @@ async function main() {
       const patchPath = path.join(out, name + '.patch'); fs.writeFileSync(patchPath, patch);
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
       before[name] = fn; configs[name] = configHash(fn); policies[name] = iamHash(fn);
+      const retryRestoration = retryRestorationPlan(name, fn, ORIGINAL_CONFIG_HASHES[name]);
+      assert.equal(policies[name], ORIGINAL_IAM_HASHES[name], 'Original IAM changed: ' + name);
+      if (retryRestoration.required) console.log(name + ': confirmed sole configuration drift is retry policy; exact original hash requires restoration');
       checkpoint('download-source');
       const stage = path.join(out, name); const original = download(fn, stage);
       const livePackage = JSON.parse(fs.readFileSync(path.join(stage, 'package.json')));
@@ -266,7 +296,7 @@ async function main() {
       const recoveredLock = reconstructed ? { source: 'owner-approved-reconstruction', sha256: original['package-lock.json'], previousVersionsUnknown: true } : null;
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
-        configHash: configs[name], iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
+        configHash: configs[name], targetConfigHash: ORIGINAL_CONFIG_HASHES[name], retryRestoration, iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
         originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), reviewedRuntimeHash: runtimeSourceHash(candidate), originalRecoveryArtifactId: '11774320564', ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
         alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': baseline ' + baselineResult.testsPassed + ' tests; candidate ' + candidateResult.testsPassed + ' tests; runtime and recovery verified');
@@ -278,6 +308,15 @@ async function main() {
       assert.equal(configHash(fresh), configs[name], 'Concurrent config change'); assert.equal(iamHash(fresh), policies[name], 'Concurrent IAM change');
     };
     sourceGate(); for (const name of FUNCTIONS) unchanged(name);
+    const retryWindowAudit = () => {
+      // Read timestamps only, never request bodies, customer data or log text.
+      const query = 'resource.type="cloud_run_revision" AND resource.labels.service_name="notifybookingreferenceupdate" AND timestamp>="2026-10-12T21:31:00Z" AND (severity>=ERROR OR httpRequest.status>=500)';
+      const values = cloud(['logging', 'read', query, '--project=' + PROJECT, '--limit=1000', '--format=value(timestamp)']).trim();
+      const errorCount = values ? values.split('\n').length : 0;
+      return { from: '2026-10-12T21:31:00Z', observedAt: new Date().toISOString(), observedErrorCount: errorCount, completeWithinLimit: errorCount < 1000 };
+    };
+    summary.retryWindowAudit = retryWindowAudit(); save();
+    assert.equal(summary.retryWindowAudit.observedErrorCount, 0, 'Reference-update errors in retry-policy window require investigation; no automatic replay');
     // Check every prepared package before the first production write.
     if (deploy) verifyPreparedRelease(prepared, summary);
     if (deploy) for (const name of FUNCTIONS) {
@@ -285,15 +324,21 @@ async function main() {
       const stage = path.join(out, name);
       assert.deepEqual(sourceManifest(stage), candidates[name], 'Staged source changed after audit');
       console.log('Deploying reviewed source and approved dependency baseline: ' + name);
-      if (!summary.functions.find(item => item.name === name).alreadyApplied) cloud(deployArgs(name, stage));
+      const reviewed = summary.functions.find(item => item.name === name);
+      if (!reviewed.alreadyApplied || reviewed.retryRestoration.required) cloud(deployArgs(name, stage));
       const after = describe(name); assert.equal(after.state, 'ACTIVE');
-      assert.equal(configHash(after), configs[name], 'Runtime configuration changed'); assert.equal(iamHash(after), policies[name], 'IAM changed');
+      assert.equal(configHash(after), ORIGINAL_CONFIG_HASHES[name], 'Original runtime configuration not preserved/restored'); assert.equal(iamHash(after), ORIGINAL_IAM_HASHES[name], 'Original IAM changed');
       const published = download(after, stage + '-published');
       const omittedPackagingFiles = verifyPublishedSource(candidates[name], published);
-      Object.assign(summary.functions.find(item => item.name === name), { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, iamPreserved: true }); save();
+      Object.assign(reviewed, { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, retryPolicyRestored: reviewed.retryRestoration.required, iamPreserved: true }); save();
     }
     for (const [name, digest] of Object.entries(schedules)) assert.equal(schedulerHash(scheduler(name)), digest, 'Scheduler changed');
-    await boundaries(); sourceGate(); summary.stage = 'complete'; summary.schedulersPreserved = true; summary.actualDomainBoundariesPassed = true; save();
+    await boundaries(); sourceGate();
+    if (deploy) {
+      summary.retryWindowAudit = retryWindowAudit(); save();
+      assert.equal(summary.retryWindowAudit.observedErrorCount, 0, 'Reference-update errors in retry-policy window require investigation; no automatic replay');
+    }
+    summary.stage = 'complete'; summary.schedulersPreserved = true; summary.actualDomainBoundariesPassed = true; save();
     fs.copyFileSync(path.join(out, 'summary.json'), path.join(bundleDir, 'manifest.json'));
     console.log('PASS: ' + summary.mode + '; no customer data, queue, group or scheduler mutations.');
   } catch (error) {
@@ -312,5 +357,5 @@ async function main() {
     if (summary.failureCategories.length) console.error('Failure categories: ' + summary.failureCategories.join(', '));
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction, verifyPublishedSource, runtimeSourceHash };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction, verifyPublishedSource, runtimeSourceHash, configHash, retryRestorationPlan };
 if (require.main === module) main();
