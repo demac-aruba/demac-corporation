@@ -61,10 +61,12 @@ async function main() {
   try {
     const token = run('gcloud', ['auth', 'print-access-token']).trim();
     const response = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/businessSettings/company-service-pricing-rules`, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
-    assert.equal(response.status, 200, 'Pricing settings read failed (HTTP ' + response.status + ')');
-    const doc = await response.json();
+    assert.ok([200, 404].includes(response.status), 'Pricing settings read failed (HTTP ' + response.status + ')');
+    const payload = await response.json();
+    if (response.status === 404) assert.equal(payload.error?.status, 'NOT_FOUND', 'Unexpected missing-document response');
+    const doc = response.status === 404 ? { fields: {} } : payload;
     const fields = Object.fromEntries(Object.entries(doc.fields || {}).map(([key, value]) => [key, decode(value)]));
-    report.tariffs = { updateTime: doc.updateTime, documentHash: hash(doc.fields), rows: auditTariffs(fields) };
+    report.tariffs = { exists: response.status === 200, updateTime: doc.updateTime || null, documentHash: hash(doc.fields), rows: auditTariffs(fields) };
     report.tariffs.allMatch = report.tariffs.rows.every(row => row.matchesApproved);
     // Only the approved 15 numeric rates are disclosed; never the full settings.
     save(); console.log('Saved tariff audit: ' + report.tariffs.rows.filter(row => row.matchesApproved).length + '/15 match');
