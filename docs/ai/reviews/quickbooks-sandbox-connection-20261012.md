@@ -75,3 +75,29 @@ setup-only scope; owner: DEMAC integration maintainer / business owner.
 
 Human approval is still required by `AGENTS.md` before credential/secret changes and
 production deployment. Neither this self-review nor passing tests grants that authority.
+
+## Approved sandbox release addendum — 12 October 2026
+
+The owner explicitly approved merge and deployment at 18:14 Aruba time, conditioned on
+preserving real customer data and making no accounting changes in QuickBooks. Screenshots
+confirm the three named secrets were created in `demac-corporation`; values were not read.
+The prior paragraph records the original review state, not an outstanding approval request.
+
+A separate release pass verified the reviewed service still calls only the OAuth token
+endpoint and sandbox CompanyInfo GET. Writes stay in the private connection/audit record.
+The actual ERP domain maps to `demac-corporation-web`. Its published frontend tree equals
+the baseline frontend tree, so this release retains the published payment/booking UI.
+GitHub ERP CI, legacy validation and both Vercel preview builds passed for the original head.
+
+The added release workflow uses pinned actions, tests before cloud authentication, and a
+temporary package exporting only `quickbooksSandbox`. It requires the reviewed source,
+current main, existing enabled secret versions, and an absent target Function. Deployment
+selects only that Function. It verifies published source, sandbox settings, secret versions,
+unchanged existing Function revisions, rejected anonymous requests, CORS and invalid callback.
+The merge uses `[merge-only]` to suppress existing unrelated deployment jobs while leaving
+their validation gates running, plus `[deploy-qbo-sandbox]` to select this authorized release.
+No secret values, customer records or accounting APIs are read by the release workflow.
+
+The 12 backend tests passed again. Release script syntax and reviewed-source checks passed.
+Actual OAuth consent and company-name confirmation remain an owner browser step after the
+deployment; do not describe the company as connected before that step succeeds.
