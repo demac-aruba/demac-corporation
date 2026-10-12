@@ -38,7 +38,8 @@ function bookingLocationLabel(order, appointment) {
 }
 
 function bookingMessageAddress(order, fallbackAddress = '') {
-  const address = text(order?.address) || text(fallbackAddress);
+  // Preserve the existing notification address coercion for legacy records.
+  const address = String(order?.address || fallbackAddress || '').trim();
   const label = bookingLocationLabel(order);
   return label ? distinctParts([address, label]) : address;
 }

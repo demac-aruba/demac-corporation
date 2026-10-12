@@ -26,13 +26,13 @@
 - Generic WhatsApp deployment also runs unrelated queue/group migrations: DO NOT use it for this release.
 - Merge with [merge-only], then create the dedicated release/booking-dwelling-messages-20261012 branch at the exact reviewed PR head already contained in main.
 - Dedicated release authenticates with the existing scoped GitHub service account. Patch the actual deployed source for five existing functions only: officeBookingAuthority, queueAppointmentConfirmation, sendDailyAppointmentReminders, sendDailyTechnicianSchedules and notifyBookingReferenceUpdate.
-- Preserve live dependency locks, unrelated source, runtime/secret bindings, IAM and both schedule definitions. Verify source after deployment.
+- Preserve live dependency locks except the explicitly approved Office reconstruction below; preserve unrelated source, runtime/secret bindings, IAM and both schedule definitions. Verify source after deployment.
 - Before any write, audit all five live candidates and run isolated tests on each actual source plus patch. Stop on unknown source, drift, failed gates or boundaries.
 - Record each prior revision and versioned source archive. Recovery redeploys the saved prior source for the affected function using the same source-only command; never restores/deletes a database or edits queue/history. Mixed old/new format during rollout is compatible.
 - Already queued/sent messages remain unchanged. This release affects newly prepared eligible messages.
 
 ## Verification
-- Syntax validation, 239 Booking tests, 132 communication tests and 8 release/configuration safety tests.
+- Syntax validation, 239 Booking tests, 133 communication tests and 14 release/configuration safety tests for the final source.
 - Full isolated property/dwelling editor, concurrency, canonical booking persistence, saved-location message preparation and deny-role tests.
 - Current-main CI includes payment compatibility and browser checks; no failing gate may be waived.
 - Live pre/post checks are configuration/source inspection, scheduler inspection and actual-domain OPTIONS/anonymous-denial probes, never a real booking or WhatsApp send.
@@ -44,8 +44,11 @@ The owner explicitly approved preparing an isolated reproducible rebuild after e
 - Commit the new complete npm lock; use npm ci; keep firebase-admin/functions on their existing major lines. npm audit found high advisories in old sharp/nodemailer: use sharp 0.35.5 and nodemailer 10.0.16 for reconstruction. Sharp's Node >=20.9 requirement is compatible with production Node22; the code uses ordinary RGB/RGBA JPEG/PNG operations, not removed sharp APIs.
 - Remaining audit entries derive from uuid's v3/v5/v6 caller-supplied-buffer advisory. Inspected google-gax, gaxios and teeny-request consumers use v4() without a supplied buffer. Do not introduce an unrelated Firebase major upgrade solely to suppress the report. Record residual advisory evidence explicitly.
 - Install from each candidate's exact lock, never the runner's unrelated node_modules. Test deployed-original source and patched source separately, with credentials removed, demo project/loopback endpoints and a test-process network guard. For reconstructed Office, require original booking/communication/Office regression suites and persisted-booking Firestore scenarios for both versions.
-- Smoke-load actual bootstrap under Node22, verify all five exports, native image transforms, local JSON-only mail rendering, HTTP CORS and anonymous denial. No transport delivery.
+- Smoke-load each actual bootstrap under Node22 and verify its deployed export (all five across their respective archives), declared native image/mail dependencies, and Office HTTP CORS/anonymous denial. No transport delivery.
 - Reverse the bounded patch and prove its file manifest equals the tested baseline. Archive baseline and candidate packages before any production deployment; retain those known-repository source/public-lock artifacts in GitHub for 90 days. No cloud configuration, credentials, customer records or queue exports enter artifacts.
 - Re-run preparation on the release branch; require successful artifact upload and matching baseline/candidate/configuration/source hashes for ALL five targets before the first write. Check both runtime and build configuration, IAM, schedules and source identity.
 - Reversion uses the tested baseline package and the same bounded source-only command. For Office it restores prior application behavior with the reviewed new dependency baseline; it cannot restore unknown/deleted dependency versions. Operational data is never restored, deleted or rewritten by rollback.
 - Future Office deployments must include the committed lock; transactional/Office/Van validation uses npm ci. Existing [merge-only] barriers and all tests remain enforced.
+
+## Completed prepublication evidence
+Read-only run 38307339610 passed the five original/candidate runtime audits, source recovery equality, deterministic archive extraction and production configuration/scheduler/domain checks. Recovery packages were uploaded as artifact 11773306089 before any deployment. The final legacy-address compatibility regression and integrated CI must pass on the exact merge head; release preparation repeats the five audits and uploads a fresh recovery artifact before publication. See the review record and subsequent PR570 status for final commit/run/deployment evidence.

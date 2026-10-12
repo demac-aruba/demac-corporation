@@ -17,10 +17,11 @@ Full PR diff, canonical location creation/snapshot, Work Order projection, notif
 | Medium integration risk | main advanced to payment overview PR571. | Integrated current main without conflict; CI on the combined source required. |
 | Medium deployment drift risk | Functions may run different dependency/source generations; replacing all source from main can silently introduce unrelated backend behavior. | Download versioned live source, apply only reviewed text hunks + pure helper, preserve lock and every other file; test the candidate from each actual archive. Unknown/conflicting patches block release. |
 
-| High release risk | The read-only Office source audit found no package-lock.json in its deployed source archive. A floating dependency rebuild would be unverified. | Release remains blocked until the exact lock is recovered from the immutable image serving the current revision and validated; never generate a replacement from version ranges. |
+| High release risk | Office source had no lock and its immutable image/cache could not be recovered. | Original exact-recovery gate failed; owner subsequently authorized a new fixed dependency baseline, with original/candidate regression and verified recovery archives. This does not recover the lost versions. |
+| Compatibility | The new helper initially accepted only string addresses, unlike the previous notification coercion. | Preserve the original coercion and fallback, with queued confirmation/reminder regression cases for numeric and blank legacy addresses. |
 
 ## Verification and invariants
-- Local syntax gate passed; 239 booking/lifecycle/reference tests and 132 transactional tests passed; release/config canonicalization tests: 8 passed.
+- Local syntax gate passed; 239 booking/lifecycle/reference tests, 133 transactional tests and 14 release/configuration tests cover the final implementation. Node22 CI must confirm the final head before merge.
 - Shared formatter is pure, selects four display fields and performs no reads/writes/network calls. 50,000 local formatting iterations: maximum batch average 0.00397 ms/message; this is a microbenchmark, not a production latency claim.
 - No frontend requests, rendering, loading state or save path added. Existing asynchronous queue/background dispatch and authoritative success/error state remain intact.
 - Snapshot precedence and absence cases, exact retries, language/recipient preservation, private-field omission, neighboring-unit/other-appointment rejection and support/reference sequence tested.
@@ -30,14 +31,18 @@ Full PR diff, canonical location creation/snapshot, Work Order projection, notif
 
 ## Decision
 - [ ] Pass
-- [ ] Pass with recorded follow-up
-- [x] Pending integrated CI and read-only live-source audit
+- [x] Pass with recorded follow-up: exact final-head CI and repeated release preparation remain mandatory publication gates
+- [ ] Pending technical review
 
 Runtime artifact records before/after versions, source hashes, configuration/IAM preservation, scheduler and actual-domain boundary results. Deployment is blocked until critical evidence passes. Rollback preserves all operational customer/cita/queue records; see task recovery plan.
 
 ## Reconstruction review continuation
 Owner approved the proposed isolated rebuild and recovery preparation after being told that exact prior dependency preservation is impossible with the accessible artifacts. The earlier runtime gate remains failed historically; resolution now requires the explicitly approved reconstruction checks, not waiver of that gate.
 
-Implementation pending verification: fixed dependency lock; security-compatible sharp/nodemailer updates; per-source clean installs; original/candidate full Office regression and emulator checks; real runtime/bootstrap/HTTP/native smoke; reverse-patch equality; recovery artifacts uploaded before first write; all-five prepared-manifest comparison; unchanged build/runtime/IAM/scheduler boundaries. Publication remains blocked until these checks pass and a fresh adversarial review is recorded.
+Verified reconstruction audit: run 38307339610 on b9d3fdf302a1d3bffaac4e8d0f60f244d051475e passed on Node22. Original/candidate counts: Office 503/514, confirmation 47/58, reminder 6/15, daily technician 28/30, reference updates 28/30. These are executions across distinct live-source bundles, not a count of unique test cases. All five bootstraps, dependency installs, reverse-patch equality and archive extraction comparisons passed. Recovery artifact 11773306089 was successfully uploaded; evidence artifact 11773291023 records source/configuration/IAM hashes, preserved schedulers and real-domain boundaries. No production deployment occurred in that audit.
+
+Fresh separate adversarial self-review completed after reconstruction: inspected the full source/workflow/test diff, actual-source patch scope, linked-appointment identity, null/mismatch/legacy behavior, privacy allowlist, recipients and exact retry keys, test isolation, all-five pre-write validation, expected-head/main leases, archive integrity and partial-rollout recovery. Each historical bundle is required to export its own deployed function; all five are checked across their respective bundles. No application workflow is duplicated. The numeric-address finding above was resolved and locally verified; the final head must repeat CI and all five source audits before publication.
+
+Residual evidence/limits: npm audit reports zero high/critical and nine moderate entries deriving from the uuid v3/v5/v6 supplied-buffer advisory; inspected consumers use v4() without a buffer. This is a recorded dependency advisory, not a claim that the dependency tree has no findings. Office recovery restores the prior application code with the new tested lock, not the unavailable old dependencies. Managed buildpack/OS identity is outside the application lock. No authenticated production booking or external WhatsApp send was exercised; isolated persistence/message preparation and non-destructive live probes are the permitted evidence. No material unresolved code finding remains; failed final CI, source drift or deployment verification still blocks completion.
 
 No independent agent review was performed. Actual WhatsApp delivery and real customer writes remain outside verification by owner instruction.

@@ -34,6 +34,25 @@ test('saved dwelling label uses only destination fields and never assigns a lega
     locationLabel: 'Dirección de prueba 10 · Apartamento 4' } }), 'Dirección de prueba 10 · Apartamento 4 · A-04');
 });
 
+test('legacy addresses keep the existing coercion and fallback in prepared notifications', async () => {
+  for (const [address, fallback, expected] of [[123, 'Billing address', '123'], ['', 456, '456'], ['   ', 'Billing address', '']]) {
+    const order = { id: 'legacy-order', clientId: 'legacy-client', status: 'Confirmada',
+      date: '2026-10-13', time: '08:30', address, problem: 'Standard Service',
+      notificationRecipients: [{ id: 'selected', whatsapp: '+2975600000', sendConfirmation: true, sendReminder: true }] };
+    const db = new ReferenceDb({ 'clients/legacy-client': { name: 'Synthetic owner', address: fallback },
+      'workOrders/legacy-order': order,
+      'businessSettings/whatsapp': { transactionalProvider: 'meta', phoneNumberId: '1234567890' } });
+    const notifications = createAppointmentNotificationService({ db });
+    for (const method of ['queueConfirmationForOrder', 'queueReminderForOrder']) {
+      await notifications[method]({ order, eventId: 'legacy-test', reason: 'test-only' });
+    }
+    const queue = [...db.records.entries()].filter(([key]) => key.startsWith('whatsappOutboundQueue/')).map(([, value]) => value);
+    assert.equal(queue.length, 2);
+    for (const message of queue) assert.equal(message.bodyParameters[3], expected);
+    assert.equal(bookingMessageAddress(order, fallback), expected);
+  }
+});
+
 for (const provider of ['wacli', 'meta']) {
   for (const language of ['es', 'en', 'nl', 'pap']) {
     test(`${provider}/${language}: confirmation and reminder retain the booked apartment, recipients and exact retries`, async () => {
