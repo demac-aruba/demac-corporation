@@ -1,11 +1,22 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { safePaths, deployArgs, verifyDelta, validateRecoveredLock } = require('./booking-dwelling-release.cjs');
+const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 test('source archives reject traversal and absolute paths', () => {
   safePaths(['bootstrap.js', 'data/vocabulary.json']);
   for (const file of ['/etc/passwd', '../outside', 'a/../../outside', 'a\\..\\outside']) assert.throws(() => safePaths([file]));
   assert.throws(() => safePaths([]));
+});
+test('runtime source tests cannot inherit production credentials or persistence endpoints', () => {
+  const env = isolatedTestEnv({ GOOGLE_APPLICATION_CREDENTIALS: '/synthetic/credential.json', GOOGLE_GHA_CREDS_PATH: '/synthetic/credential.json',
+    CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '/synthetic/credential.json', FIREBASE_CONFIG: '{}', GCLOUD_PROJECT: 'production', PATH: '/bin' });
+  assert.equal(env.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, undefined);
+  assert.equal(env.GOOGLE_GHA_CREDS_PATH, undefined);
+  assert.equal(env.FIREBASE_CONFIG, undefined);
+  assert.equal(env.GCLOUD_PROJECT, 'demo-demac-dwelling-runtime');
+  assert.equal(env.FIRESTORE_EMULATOR_HOST, '127.0.0.1:1');
+  assert.equal(env.PATH, '/bin');
 });
 test('a recovered image lock must pin the deployed direct dependencies with package integrity', () => {
   const manifest = { dependencies: { 'synthetic-package': '^1.0.0' } };

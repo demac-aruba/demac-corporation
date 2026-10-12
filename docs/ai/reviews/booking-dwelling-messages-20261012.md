@@ -20,7 +20,7 @@ Full PR diff, canonical location creation/snapshot, Work Order projection, notif
 | High release risk | The read-only Office source audit found no package-lock.json in its deployed source archive. A floating dependency rebuild would be unverified. | Release remains blocked until the exact lock is recovered from the immutable image serving the current revision and validated; never generate a replacement from version ranges. |
 
 ## Verification and invariants
-- Local syntax gate passed; 239 booking/lifecycle/reference tests and 132 transactional tests passed; release/config canonicalization tests: 7 passed.
+- Local syntax gate passed; 239 booking/lifecycle/reference tests and 132 transactional tests passed; release/config canonicalization tests: 8 passed.
 - Shared formatter is pure, selects four display fields and performs no reads/writes/network calls. 50,000 local formatting iterations: maximum batch average 0.00397 ms/message; this is a microbenchmark, not a production latency claim.
 - No frontend requests, rendering, loading state or save path added. Existing asynchronous queue/background dispatch and authoritative success/error state remain intact.
 - Snapshot precedence and absence cases, exact retries, language/recipient preservation, private-field omission, neighboring-unit/other-appointment rejection and support/reference sequence tested.
@@ -31,6 +31,6 @@ Full PR diff, canonical location creation/snapshot, Work Order projection, notif
 ## Decision
 - [ ] Pass
 - [ ] Pass with recorded follow-up
-- [x] Pending final emulator, integrated CI and read-only live-source audit
+- [x] Pending integrated CI and read-only live-source audit
 
 Runtime artifact records before/after versions, source hashes, configuration/IAM preservation, scheduler and actual-domain boundary results. Deployment is blocked until critical evidence passes. Rollback preserves all operational customer/cita/queue records; see task recovery plan.

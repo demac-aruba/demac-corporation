@@ -54,6 +54,15 @@ function validateRecoveredLock(content, manifest) {
   }
   return lock;
 }
+function isolatedTestEnv(source) {
+  const env = { ...source };
+  for (const key of Object.keys(env)) if (/CREDENTIAL|GOOGLE_GHA_CREDS|FIREBASE_CONFIG/.test(key)) delete env[key];
+  for (const key of ['GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT', 'CLOUDSDK_CORE_PROJECT', 'CLOUDSDK_PROJECT', 'GCP_PROJECT']) env[key] = 'demo-demac-dwelling-runtime';
+  // All tested persistence uses in-memory doubles. An accidental SDK call must
+  // fail against loopback, never discover a production endpoint or credential.
+  for (const key of ['FIRESTORE_EMULATOR_HOST', 'FIREBASE_AUTH_EMULATOR_HOST', 'FIREBASE_STORAGE_EMULATOR_HOST']) env[key] = '127.0.0.1:1';
+  return env;
+}
 async function main() {
   const deploy = process.argv.includes('--deploy');
   const root = process.cwd();
@@ -99,20 +108,28 @@ async function main() {
   const recoverLock = (fn, stage, manifest) => {
     // Never generate a new lock from floating ranges. Copy the existing one
     // from the immutable image serving this exact Cloud Run revision.
+    const auditStage = summary.stage;
+    const checkpoint = label => { summary.stage = auditStage + '-' + label; save(); };
+    checkpoint('describe-running-revision');
     const revision = JSON.parse(cloud(['run', 'revisions', 'describe', fn.serviceConfig.revision,
       '--project=' + PROJECT, '--region=us-central1', '--format=json']));
     const image = revision.status?.imageDigest;
     assert.ok(typeof image === 'string' && image.includes('/' + PROJECT + '/') && /@sha256:[a-f0-9]{64}$/.test(image), 'Immutable production image required');
     const host = image.split('/')[0]; assert.ok(host.endsWith('-docker.pkg.dev'), 'Unexpected image registry');
+    checkpoint('registry-auth');
     cloud(['auth', 'configure-docker', host, '--quiet']);
+    checkpoint('read-immutable-image');
     run('docker', ['pull', image]);
+    checkpoint('inspect-image');
     const workingDir = run('docker', ['image', 'inspect', '--format={{.Config.WorkingDir}}', image]).trim();
     assert.ok(path.posix.isAbsolute(workingDir) && !workingDir.split('/').includes('..'), 'Unknown image work directory');
     const container = run('docker', ['create', '--entrypoint=/bin/false', image]).trim();
     try {
+      checkpoint('copy-existing-lock');
       run('docker', ['cp', container + ':' + path.posix.join(workingDir, 'package-lock.json'), path.join(stage, 'package-lock.json')]);
       const content = fs.readFileSync(path.join(stage, 'package-lock.json'), 'utf8');
       validateRecoveredLock(content, manifest);
+      summary.stage = auditStage; save();
       return { image, sha256: hash(content), source: 'immutable-running-image' };
     } finally { run('docker', ['rm', container]); }
   };
@@ -163,7 +180,15 @@ async function main() {
       for (const file of TESTS) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
       fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
       fs.symlinkSync(path.join(root, 'functions/node_modules'), path.join(validation, 'node_modules'), 'dir');
-      const tests = run(process.execPath, ['--test', ...TESTS], validation);
+      let tests;
+      try {
+        tests = execFileSync(process.execPath, ['--test', ...TESTS], { cwd: validation, env: isolatedTestEnv(process.env),
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 20 * 1024 * 1024 });
+      } catch (error) {
+        // Only synthetic test output; never cloud stderr or configuration.
+        console.error(String(error.stdout || '').split('\n').filter(line => /not ok|error:|Expected|actual:|expected:|fail /.test(line)).join('\n'));
+        throw error;
+      }
       assert.match(tests, /(?:#|ℹ) fail 0/); fs.rmSync(validation, { recursive: true });
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
@@ -198,9 +223,18 @@ async function main() {
   } catch (error) {
     summary.error = error.code === 'ERR_ASSERTION' ? String(error.message).split('\n')[0] : 'Command failed during ' + summary.stage;
     summary.exitStatus = error.status || error.code || null; save();
+    const diagnostic = String(error.stderr || '');
+    summary.failureCategories = [
+      ['permission-denied', /PERMISSION_DENIED|Permission denied|does not have permission|denied:|403/i],
+      ['not-found', /NOT_FOUND|not found|No such file|Could not find|404/i],
+      ['invalid-command', /unrecognized arguments|Invalid resource|invalid choice/i],
+      ['registry-authentication', /unauthorized|authentication required|Unauthenticated/i],
+    ].filter(([, pattern]) => pattern.test(diagnostic)).map(([label]) => label);
+    save();
     // Cloud output/configuration can contain secrets. Emit only the safe stage.
     console.error(summary.error); process.exitCode = 1;
+    if (summary.failureCategories.length) console.error('Failure categories: ' + summary.failureCategories.join(', '));
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv };
 if (require.main === module) main();
