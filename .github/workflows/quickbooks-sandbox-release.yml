@@ -1,0 +1,57 @@
+name: QuickBooks sandbox release
+on:
+  pull_request:
+    paths:
+      - 'functions/quickbooksSandbox*.js'
+      - 'scripts/quickbooks-sandbox-release.cjs'
+      - '.github/workflows/quickbooks-sandbox-release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'functions/quickbooksSandbox*.js'
+      - 'scripts/quickbooks-sandbox-release.cjs'
+      - '.github/workflows/quickbooks-sandbox-release.yml'
+permissions:
+  contents: read
+concurrency:
+  group: quickbooks-sandbox-release
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --test functions/quickbooksSandbox.test.js
+      - run: node scripts/quickbooks-sandbox-release.cjs --check
+  deploy:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-qbo-sandbox]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Prepare reviewed isolated Function package
+        run: |
+          node scripts/quickbooks-sandbox-release.cjs --prepare
+          npm ci --prefix "$RUNNER_TEMP/qbo-sandbox-source" --ignore-scripts --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/qbo-release-tools" --ignore-scripts --no-audit --no-fund firebase-tools@15.30.0
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      - name: Create only QuickBooks sandbox and verify public boundaries
+        run: node scripts/quickbooks-sandbox-release.cjs --deploy

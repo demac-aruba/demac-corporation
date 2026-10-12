@@ -76,3 +76,27 @@ archive. Preparation now also checks this reachability in every downloaded bundl
 The same run verified effective recovery privacy through the complete project
 ancestry (one project, no parent), plus bucket IAM and uniform access. No recovery
 objects or production behavior were changed before the failed baseline test.
+
+
+### Verified preparation and final cutover fence
+
+- Run38316064795 (fdf145a8) completed all five actual-source baselines/candidates:
+  188 baseline and226 candidate tests, real Node22 bootstrap/native/CORS/auth smoke,
+  original dependency locks preserved where available, and private immutable recovery
+  packages verified by generation, SHA and download/extraction. Inventory retains its
+  explicitly reconstructed pinned baseline; historical dependency equivalence remains
+  unknown. No production behavior or tariffs changed in preparation.
+- Active Firestore rules source matches reviewed baseline2ed66f4d. Monitoring read-only
+  run38316568330 showed missing superseded-revision series, which is not evidence of
+  zero instances. The monetary exclusivity race therefore uses a deterministic fence.
+- Actual previous handler was raced against fresh grants for all four financial commands,
+  both commit orders:18 total previous/current-client cutover cases pass, with no duplicate
+  exact retries. Current browser suite36/36 passes, including stale-prefetch and draft
+  preservation. Independent reviewer reproduced13 focused and36 browser cases and found
+  no fence/handshake/notification blocker. Versions now include grants, not just events.
+- Main advanced to4175285f with separately approved QuickBooks and slot-history changes.
+  They were merged intact. The next preparation pins the newly published Office history
+  bundle744a4c40 and exercises its history action in both baseline and candidate;
+  source-only overlays preserve all other deployed code and original dependencies.
+- Activation remains gated on refreshed retained packages, final exact-head CI,
+  independent release-script review, current source/config/IAM and coordinated promotion.

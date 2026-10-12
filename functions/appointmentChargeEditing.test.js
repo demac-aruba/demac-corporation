@@ -91,3 +91,10 @@ test('new grant rejects unsafe version and corrupt history atomically', async ()
     const before = [...db.store]; await assert.rejects(acquire(), e => e.code === 'charge_state'); assert.deepEqual([...db.store], before);
   }
 });
+
+test('lease fence is neutral to the actual appointment notification trigger', async () => {
+  const { notifyReferenceUpdate } = require('./bookingVisitReferencesHttp');
+  const { db, acquire } = fixture(); const before = db.read('appointments/a'); await acquire();
+  const unavailable = new Proxy({}, { get() { throw Error('Lease acquisition must not read or write notification state'); } });
+  await notifyReferenceUpdate({ db: unavailable, before, after: db.read('appointments/a'), appointmentId: 'a' });
+});

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
-      group: appointment-finance-private-preparation
+      group: field-operations-authority-production
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6

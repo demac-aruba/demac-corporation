@@ -29,6 +29,7 @@ on:
       - 'apps/erp-next/**/appointment-charge*'
       - 'firebase.appointment-charges-test.json'
       - 'functions/officeBookingAuthority.js'
+      - 'functions/bookingScheduleHistory*'
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityPartialWrapper.js'
       - 'functions/officeBookingAuthorityFacadeProject.test.js'
@@ -112,6 +113,7 @@ on:
       - 'apps/erp-next/**/appointment-charge*'
       - 'firebase.appointment-charges-test.json'
       - 'functions/officeBookingAuthority.js'
+      - 'functions/bookingScheduleHistory*'
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityPartialWrapper.js'
       - 'functions/officeBookingAuthorityFacadeProject.test.js'
@@ -237,7 +239,7 @@ jobs:
           node --test functions/bookingAuthoritySchedulingEngine.test.js
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
-          node --test functions/officeBookingAuthority.test.js
+          node --test functions/officeBookingAuthority.test.js functions/bookingScheduleHistory.test.js
           node --test functions/projectOperatorBooking.test.js
           node --test functions/officeBookingAuthorityFacadeProject.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js
           node --test functions/officeBookingAuthorityCommunication.test.js

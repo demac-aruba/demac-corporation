@@ -26,3 +26,21 @@ Blank catalog prices are null (unpriced); only explicit zero is free. Customer p
 ## Verification and rollout
 
 See task and review evidence. Production release remains blocked by effective tariff verification, all-consumer runtime/recovery checks and coordinated client cutover. PR #570 supplied an owner-approved reconstructed dependency baseline, but its resumed publication failed and actual live state still requires verification. Validate a coordinated frontend/backend release and forward recovery against fixed dependencies first. Old frontend clients fail closed on new monetary writes and need reload; do not claim an uninterrupted rollout until the compatibility plan is tested. Reverting only the frontend is insufficient. Preserve every financial/operational document during recovery; coordination may expire naturally.
+
+
+### Cutover race and concurrency revision
+
+Independent review reproduced an old financial transaction that commits after a new
+lease is granted. Each fresh grant now atomically increments `jobCharges.version`
+alongside the private lease, making that old transaction retry and reject its stale
+expected version. Existing amounts, originals, final values, receipts and charge events
+are preserved exactly. Missing state becomes the canonical empty schema; this is not
+an estimate, receipt or monetary event. Financial version is a concurrency revision,
+not a count of financial events. Renewal, denied acquisition, same-token retries and
+release do not increment it.
+
+The grant returns its protected version. The client waits for any older read flight
+and, if needed, reads again before enabling monetary controls. Existing drafts retain
+their original expected version and display a conflict on reacquisition; they are never
+silently rebased. Exact committed retries remain valid without duplicate writes.
+The actual appointment notification trigger ignores the version-only change.
