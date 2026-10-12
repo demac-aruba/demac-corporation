@@ -56,7 +56,7 @@ async function main() {
   assert.equal(run('git', ['rev-parse', 'HEAD']).trim(), process.env.GITHUB_SHA);
   const out = path.join(process.env.RUNNER_TEMP, 'finance-release-audit');
   const packages = path.join(out, 'packages'); fs.mkdirSync(packages, { recursive: true });
-  const report = { sourceSha: process.env.GITHUB_SHA, mode: 'read-only', project: PROJECT, stage: 'tariffs', functions: [] };
+  const report = { sourceSha: process.env.GITHUB_SHA, mode: 'read-only', project: PROJECT, stage: 'tariffs', functions: [], recoveryBuckets: [] };
   const save = () => fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(report, null, 2));
   try {
     const token = run('gcloud', ['auth', 'print-access-token']).trim();
@@ -76,6 +76,15 @@ async function main() {
       assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.entryPoint, name);
       const source = fn.buildConfig.source.storageSource;
       assert.ok(source.bucket && source.object && source.generation, 'Versioned source required');
+      if (!report.recoveryBuckets.some(item => item.name === source.bucket)) {
+        const bucket = JSON.parse(run('gcloud', ['storage', 'buckets', 'describe', 'gs://' + source.bucket, '--format=json']));
+        const policy = JSON.parse(run('gcloud', ['storage', 'buckets', 'get-iam-policy', 'gs://' + source.bucket, '--format=json']));
+        const publicGrant = (policy.bindings || []).some(binding => (binding.members || []).some(member => ['allUsers', 'allAuthenticatedUsers'].includes(member)));
+        report.recoveryBuckets.push({ name: source.bucket, uniformBucketLevelAccess: bucket.uniform_bucket_level_access ?? bucket.iamConfiguration?.uniformBucketLevelAccess?.enabled ?? null,
+          publicAccessPrevention: bucket.public_access_prevention ?? bucket.iamConfiguration?.publicAccessPrevention ?? null,
+          publicGrant, policyHash: hash(policy), lifecycle: bucket.lifecycle_config || bucket.lifecycle || null });
+        save();
+      }
       const directory = path.join(out, name), zip = directory + '.zip';
       run('gcloud', ['storage', 'cp', `gs://${source.bucket}/${source.object}#${source.generation}`, zip, '--quiet']);
       safePaths(run('unzip', ['-Z1', zip]).trim().split('\n'));
@@ -93,8 +102,16 @@ async function main() {
       const pkg = JSON.parse(fs.readFileSync(path.join(directory, 'package.json')));
       const lockPresent = Object.hasOwn(files, 'package-lock.json');
       if (lockPresent) validateLock(fs.readFileSync(path.join(directory, 'package-lock.json')), pkg);
-      let runtimeImage = null;
+      let runtimeImage = null, buildEvidence = null;
       if (!lockPresent) {
+        const buildName = fn.buildConfig.build;
+        assert.match(buildName || '', /^projects\/[a-zA-Z0-9_-]+\/locations\/[a-z0-9-]+\/builds\/[a-zA-Z0-9-]+$/);
+        const segments = buildName.split('/');
+        try {
+          const build = JSON.parse(run('gcloud', ['builds', 'describe', segments[5], '--project=' + PROJECT, '--region=' + segments[3], '--format=json']));
+          buildEvidence = { available: true, name: buildName, status: build.status, createTime: build.createTime, finishTime: build.finishTime,
+            images: (build.results?.images || []).map(item => ({ name: item.name, digest: item.digest })) };
+        } catch { buildEvidence = { available: false, name: buildName }; }
         const revision = JSON.parse(run('gcloud', ['run', 'revisions', 'describe', fn.serviceConfig.revision, '--project=' + PROJECT, '--region=us-central1', '--format=json']));
         const image = revision.status?.imageDigest || revision.spec?.containers?.[0]?.image;
         assert.ok(image && !image.includes('://') && image.includes('@sha256:'), 'Immutable runtime image required');
@@ -116,7 +133,7 @@ async function main() {
       assert.deepEqual(fresh.buildConfig.source, fn.buildConfig.source, 'Source changed during read-only inspection');
       assert.equal(hash(releaseConfig(fresh)), hash(releaseConfig(fn)), 'Configuration changed during inspection');
       report.functions.push({ name, revision: fn.serviceConfig.revision, state: fn.state, runtime: fn.buildConfig.runtime,
-        source, configHash: hash(releaseConfig(fn)), iamHash: hash(policy), sourceHash: runtimeSourceHash(files), lockPresent, runtimeImage,
+        source, configHash: hash(releaseConfig(fn)), iamHash: hash(policy), sourceHash: runtimeSourceHash(files), lockPresent, runtimeImage, buildEvidence,
         archiveHash: unknownFiles.length ? null : hash(fs.readFileSync(archive)), archiveVerified: !unknownFiles.length, unknownFiles,
         relevantFiles: Object.fromEntries(['appointmentCharges.js', 'serviceCatalogEditing.js', 'appointmentChargeEditing.js', 'servicePricingAuthority.js', 'inventoryAuthority.js', 'commercialSalesAuthority.js', 'demacCustomerSalesTools.js'].filter(file => files[file]).map(file => [file, files[file]])),
         files });
