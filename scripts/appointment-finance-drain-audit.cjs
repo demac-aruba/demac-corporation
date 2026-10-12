@@ -13,6 +13,16 @@ async function main(){
   const report={sourceSha:process.env.GITHUB_SHA,mode:'read-only',functions:[],stage:'probe'};
   const save=()=>fs.writeFileSync(out,JSON.stringify(report,null,2));
   try{
+    const opResponse=await fetch('https://cloudfunctions.googleapis.com/v2/projects/demac-corporation/locations/us-central1/operations?pageSize=1000',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
+    assert.equal(opResponse.status,200,'Operation contract read failed');
+    const opPage=await opResponse.json();
+    report.operationContract=(opPage.operations||[]).filter(op=>Object.keys(TARGETS).some(name=>op.metadata?.target?.endsWith('/functions/'+name))).slice(0,8).map(op=>{
+      const request=op.metadata?.requestResource,response=op.response;
+      return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,
+        requestType:request?.['@type'],requestHasName:typeof request?.name==='string',requestHasFunction:typeof request?.function==='object',requestHasStorageSource:!!request?.buildConfig?.source?.storageSource,
+        responseType:response?.['@type'],responseHasName:typeof response?.name==='string',responseHasRevision:typeof response?.serviceConfig?.revision==='string',responseHasStorageSource:!!response?.buildConfig?.source?.storageSource};
+    });
+    assert.ok(report.operationContract.length,'No scoped operation contract available');save();
     for(const name of Object.keys(TARGETS)){
       const fn=JSON.parse(run(['functions','describe',name,'--gen2','--project=demac-corporation','--region=us-central1','--format=json']));
       const serviceName=fn.serviceConfig.service.split('/').pop();assert.match(serviceName,/^[a-z0-9-]+$/);
