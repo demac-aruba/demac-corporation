@@ -140,9 +140,10 @@ copied ZIP SHA matches, and Inventory is ACTIVE00005-nup with100% traffic. Other
 services remain on baseline. The initial differing field was not captured; no specific
 missing-field cause is asserted. Evidence is pinned in appointment-finance-zip-operation-20261012.json.
 
-The bounded correction reads the same accepted operation up to six times at5seconds
-before requiring the unchanged provenance gate. It never repeats PATCH or accepts a
-different operation identity. Safe presence flags are now retained. Reviewer independently
+The correction reads the same accepted operation to completion using the existing
+bounded30-minute/90-read loop before requiring the unchanged provenance gate. It never
+repeats PATCH or accepts a different operation identity or function target. Safe presence
+flags are now retained. Reviewer independently
 passed30/30 and reproduced the provenance check using the real completed operation,
 then gave GO after CI. Resume must verify Inventory source/config/IAM/traffic and skip
 its already-proven update; remaining functions, tariffs, rules and UI are still pending.

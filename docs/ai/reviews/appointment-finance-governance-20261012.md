@@ -178,8 +178,9 @@ Inventory ACTIVE00005-nup with100% traffic. Other consumers remain baseline, and
 tariffs/rules/UI activation occurred. We cannot identify the initial differing field
 because it was not retained; the safe summary now captures presence flags.
 
-The follow-up reads only the accepted operation identity, at most six times5seconds,
-then requires the original exact-source/provenance checks. Wrong bytes, another operation,
+The follow-up reads only the accepted operation identity to completion using the existing
+bounded90-read/30-minute loop, then requires the original exact-source/provenance checks.
+This does not assume Google's complete metadata will appear within30seconds. Wrong bytes, another operation,
 or absent proof still fail and no PATCH is repeated. Independent reviewer passed30/30,
 syntax and the predicate against real completed-operation evidence; GO after exact CI.
 The next run must prove Inventory's current configuration/IAM/source/traffic and reuse
