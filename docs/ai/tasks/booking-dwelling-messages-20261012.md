@@ -1,11 +1,12 @@
 # Task: Preserve the selected apartment in booking communications
 
 ## Current follow-up status — 2026-10-12
-- Application code is deployed; final production audit remains open. PR574 is unmerged.
-- Configuration-only recovery run 38313992739 completed the API operation, but maxInstanceCount still read 20. It failed verification and must not be rerun with stale revision/source leases.
-- A missing pre-update Function API field does not by itself prove different effective scaling. Extend read-only inspection to old/current Cloud Run revision scaling annotations, current service/template scaling and traffic. Do not change capacity based on the absent field alone.
-- Recheck Cloud Logging through a timestamp-only query and the caller's project testIamPermissions. This reads permissions and grants none. Permission denial remains a blocked audit, not evidence of zero errors.
-- Main has advanced since the previous release; any later publication needs a fresh integration and source/configuration check. This diagnostic branch does not deploy.
+- Application code is deployed; PR574 closes verification without another production configuration change.
+- Owner granted Logs Viewer. Run 38318804526 read all five service error logs from 21:10 through 22:50 UTC: zero matching ERROR/HTTP5xx entries, no truncation. No customer log payloads were exported.
+- System Event /InternalServices.CreateInternalService at 2026-10-07T17:27:15.905174Z proves the service already had run.googleapis.com/maxScale=20 and concurrency80. The current service has the same cap; the new explicit revision cap20 does not lower effective capacity. The earlier absent Function API field alone led to an incorrect restoration hypothesis. Failed recovery run38313992739 remains failed; its unmerged rollback workflow is retired because its premise was disproved.
+- Full original Function configuration still matches after removing that one representational field. Accept that difference only with exact original creation evidence, matching service scaling, runtime except image, concurrency and single-revision traffic. All other drift remains blocking.
+- Preserve approved PR576 Office revision00084-vak: verified artifact11777131701 changes exactly bookingScheduleHistory.js and officeBookingAuthority.js from the original reviewed bundle; all communication/dependency files are unchanged. Pin its full current manifest744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190. Its successful release is38317054702; current-source tests must repeat.
+- Integrate main12105b6 (QuickBooks and slot history) without changing application files. Merge audit tooling with [merge-only] after exact-head CI/current-source checks. No new deployment, IAM grant, data write or message is needed to close this follow-up.
 
 ## Context
 - Owner Christian reported that confirmations, reminders and morning technician messages omit the booked apartment.

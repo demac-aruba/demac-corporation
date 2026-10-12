@@ -4,15 +4,14 @@ const assert = require('node:assert/strict');
 const { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { authorizeReconstruction, verifyPreparedRelease } = require('./booking-dwelling-release.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
-test('scaling restoration is allowed only when the sole added field reproduces the original full configuration', () => {
+test('an added maximum cannot be accepted without history and every other configuration field must match', () => {
   const { configHash, configurationRestorationPlan } = require('./booking-dwelling-release.cjs');
   const original = { buildConfig: { runtime: 'nodejs22', entryPoint: 'notifyBookingReferenceUpdate' }, serviceConfig: { memory: '256M' },
     eventTrigger: { eventType: 'updated', retryPolicy: 'RETRY_POLICY_RETRY' } };
   const expected = configHash(original);
   assert.equal(configurationRestorationPlan('notifyBookingReferenceUpdate', original, expected).required, false);
   const changed = { ...original, serviceConfig: { ...original.serviceConfig, maxInstanceCount: 20 } };
-  assert.deepEqual(configurationRestorationPlan('notifyBookingReferenceUpdate', changed, expected), {
-    required: true, field: 'serviceConfig.maxInstanceCount', observedMaxInstances: 20, restoreUnspecified: true });
+  assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', changed, expected), /Historical service scaling evidence required/);
   assert.throws(() => configurationRestorationPlan('queueAppointmentConfirmation', changed, expected));
   assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', { ...changed, serviceConfig: { ...changed.serviceConfig, memory: '512M' } }, expected));
   assert.throws(() => configurationRestorationPlan('notifyBookingReferenceUpdate', { ...changed, serviceConfig: { ...changed.serviceConfig, maxInstanceCount: 100 } }, expected));
@@ -120,7 +119,7 @@ test('a recovered image lock must pin the deployed direct dependencies with pack
 test('deployment is limited to approved source targets and preserves the existing reference-update retry and scaling policies', () => {
   for (const name of ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate']) {
     const args = deployArgs(name, '/tmp/reviewed-source');
-    assert.deepEqual(args, ['functions', 'deploy', name, '--project=demac-corporation', '--region=us-central1', '--gen2', '--source=/tmp/reviewed-source', ...(name === 'notifyBookingReferenceUpdate' ? ['--retry', '--clear-max-instances'] : []), '--quiet', '--format=value(state)']);
+    assert.deepEqual(args, ['functions', 'deploy', name, '--project=demac-corporation', '--region=us-central1', '--gen2', '--source=/tmp/reviewed-source', '--quiet', '--format=value(state)']);
   }
   assert.throws(() => deployArgs('projectAuthority', '/tmp/source'));
   assert.throws(() => deployArgs('officeBookingAuthority', 'relative'));

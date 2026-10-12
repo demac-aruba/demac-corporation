@@ -1,8 +1,9 @@
 import { FirebaseAdapterStatus } from '@/components/firebase/firebase-adapter-status';
+import { QuickBooksSandboxStatusCard } from '@/components/firebase/quickbooks-sandbox-status';
 import { integrationHealth } from '@/lib/system-governance';
 
 export default function IntegrationsPage() {
-  const remainingIntegrations = integrationHealth.filter((integration) => integration.name !== 'Firebase');
+  const remainingIntegrations = integrationHealth.filter((integration) => !['Firebase', 'QuickBooks Online'].includes(integration.name));
 
   return (
     <div className="sg-stack">
@@ -10,6 +11,7 @@ export default function IntegrationsPage() {
       <section className="sg-integration-summary"><article><span>Registered</span><strong>{integrationHealth.length}</strong><small>Provider domains</small></article><article><span>Production Writes</span><strong>0</strong><small className="sg-good">Protected during rebuild</small></article><article><span>Firebase Adapter</span><strong>Ready</strong><small>REST/Auth contracts compiled</small></article><article><span>Console Changes</span><strong>0</strong><small>Rules/index changes deferred</small></article></section>
       <section className="sg-integration-grid">
         <FirebaseAdapterStatus />
+        <QuickBooksSandboxStatusCard />
         {remainingIntegrations.map((integration) => (
           <article className="panel sg-integration-card" key={integration.name}>
             <div className="sg-integration-head"><div className="sg-provider-mark">{integration.name.slice(0,2).toUpperCase()}</div><div><span>{integration.category}</span><h2>{integration.name}</h2></div><b className={integration.status === 'Design Ready' ? 'ready' : ''}>{integration.status}</b></div>

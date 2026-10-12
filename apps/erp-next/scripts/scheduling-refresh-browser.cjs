@@ -12,6 +12,9 @@ const { build } = require(path.join(tools, 'node_modules/esbuild'));
 const { chromium } = require(path.join(tools, 'node_modules/playwright'));
 fs.mkdirSync(output, { recursive: true });
 const stubs = {
+  // This retained attribution suite has no history fixtures; the real history hook
+  // and note interactions run in scheduling-slot-history-browser.cjs.
+  'use-schedule-history': `export function useScheduleHistory(){return {items:[],loading:false,error:'',refresh:async()=>{}};}`,
   'session': `export async function requireFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}`,
   'auth-provider': `import {useSyncExternalStore} from 'react';
     const listeners=new Set();let principal={userId:'synthetic-operator',displayName:'Viewer',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.schedule'])};
@@ -198,9 +201,10 @@ async function main(){
     res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"><style>body{margin:0;font:16px Arial,sans-serif;--brand:#006ba6;--brand-soft:#e8f2fa;--canvas:#f5f7fb;--surface:#fff;--surface-2:#f3f6f9;--text:#13233b;--muted:#55647a;--border:#cdd8e4;--success:#148158}*{box-sizing:border-box}</style></head><body><p>ISOLATED COMPONENT SIMULATION · synthetic adapters · no Firebase connection</p><div id="app"></div><script src="/app.js"></script></body></html>');
   });
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
-  const origin=`http://127.0.0.1:${server.address().port}`;const browser=await chromium.launch();
+  const origin=`http://127.0.0.1:${server.address().port}`;const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
   try { const results=await Promise.all([runCase(browser,origin,'desktop',{width:1440,height:1000}),runCase(browser,origin,'mobile',{width:390,height:844})]);
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify(results,null,2));console.log(JSON.stringify(results));
   } finally {await browser.close();await new Promise(r=>server.close(r));}
 }
-main().catch(e=>{console.error(e);process.exitCode=1;});
+module.exports = { stubs, entry };
+if (require.main === module) main().catch(e=>{console.error(e);process.exitCode=1;});

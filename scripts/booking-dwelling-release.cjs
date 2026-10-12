@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { validateCandidate, validateLock } = require('./booking-dwelling-candidate-validation.cjs');
 const { canonicalFunctionConfig } = require('./booking-references-release-config.cjs');
+const { verifyPreservedScaling } = require('./booking-dwelling-scaling-proof.cjs');
 const PROJECT = 'demac-corporation';
 const BASE = '1e9b4568a461367ee4aa8cff25ef34ebc73f19c9';
 const RELEASE = 'release/booking-dwelling-messages-20261012';
@@ -16,7 +17,9 @@ const HELPER = 'bookingLocationDisplay.js';
 // from verified recovery artifact 11774320564 (run 38308594583). Resume must keep
 // the exact application/dependency source already audited before first rollout.
 const REVIEWED_RUNTIME_HASHES = {
-  officeBookingAuthority: '12336022f661ad3f652b985085850bb85d3ddd212651063b4bedf1d6bb260141',
+  // PR576 changed only the history reader and its helper after this release.
+  // Recomputed from verified artifact 11777131701, successful run 38317054702.
+  officeBookingAuthority: '744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190',
   queueAppointmentConfirmation: '0b7c0e962c35c7ba7114fd1b92052cd1b949ee727d978520088fdd91d599fd51',
   sendDailyAppointmentReminders: '074987067b86431758182e737a3659ab800a295d10f8db91c60347ab306d05ac',
   sendDailyTechnicianSchedules: '9ed6d1bb89cc4dd748e043374d5fc9af4951fd13a57f17aa6a8a804c82350f61',
@@ -62,16 +65,18 @@ function verifyPublishedSource(candidate, published) {
 }
 const releaseConfig = fn => ({ ...canonicalFunctionConfig(fn), build: Object.fromEntries(Object.entries(fn.buildConfig).filter(([key]) => !['build', 'source', 'sourceProvenance', 'sourceToken'].includes(key))) });
 const configHash = fn => hash(releaseConfig(fn));
-function configurationRestorationPlan(name, fn, expectedHash) {
+function configurationRestorationPlan(name, fn, expectedHash, evidence) {
   if (configHash(fn) === expectedHash) return { required: false };
   assert.equal(name, 'notifyBookingReferenceUpdate', 'Unapproved original configuration drift');
   assert.equal(fn.serviceConfig.maxInstanceCount, 20, 'Unexpected scaling-policy drift');
   assert.equal(fn.eventTrigger?.retryPolicy, 'RETRY_POLICY_RETRY', 'Original retry policy must remain enabled');
   const restored = structuredClone(fn); delete restored.serviceConfig.maxInstanceCount;
-  // Read-only diagnostic 38312663741 proved this is the sole added API field.
-  // Require every other build/runtime/trigger field to match the pre-rollout hash.
-  assert.equal(configHash(restored), expectedHash, 'Configuration differs beyond the known maximum-instance restoration');
-  return { required: true, field: 'serviceConfig.maxInstanceCount', observedMaxInstances: 20, restoreUnspecified: true };
+  // Require every other field to match the original hash. System Event history
+  // then proves whether this is an equal cap already enforced at service level.
+  assert.equal(configHash(restored), expectedHash, 'Configuration differs beyond the explicit maximum-instance field');
+  assert.ok(evidence?.creation && evidence?.currentService, 'Historical service scaling evidence required');
+  const scalingProof = verifyPreservedScaling(evidence.creation, evidence.currentService);
+  return { required: false, representationChanged: true, scalingProof };
 }
 
 function safePaths(files) {
@@ -82,7 +87,7 @@ function deployArgs(name, stage) {
   assert.ok(FUNCTIONS.includes(name), 'Unapproved function');
   assert.ok(path.isAbsolute(stage), 'Absolute stage required');
   return ['functions', 'deploy', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--source=' + stage,
-    ...(name === 'notifyBookingReferenceUpdate' ? ['--retry', '--clear-max-instances'] : []), '--quiet', '--format=value(state)'];
+    '--quiet', '--format=value(state)'];
 }
 function sourceManifest(root) {
   const result = {};
@@ -230,9 +235,15 @@ async function main() {
       const patchPath = path.join(out, name + '.patch'); fs.writeFileSync(patchPath, patch);
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
       before[name] = fn; configs[name] = configHash(fn); policies[name] = iamHash(fn);
-      const configurationRestoration = configurationRestorationPlan(name, fn, ORIGINAL_CONFIG_HASHES[name]);
+      let scalingEvidence;
+      if (name === 'notifyBookingReferenceUpdate' && configs[name] !== ORIGINAL_CONFIG_HASHES[name]) {
+        const query = 'logName="projects/demac-corporation/logs/cloudaudit.googleapis.com%2Fsystem_event" AND protoPayload.resourceName:"/services/notifybookingreferenceupdate" AND timestamp="2026-10-07T17:27:15.905174Z"';
+        const entries = JSON.parse(cloud(['logging', 'read', query, '--project=' + PROJECT, '--limit=2', '--format=json']));
+        assert.equal(entries.length, 1, 'Original scaling evidence must be unique');
+        scalingEvidence = { creation: entries[0], currentService: JSON.parse(cloud(['run', 'services', 'describe', 'notifybookingreferenceupdate', '--project=' + PROJECT, '--region=us-central1', '--format=json'])) };
+      }
+      const configurationRestoration = configurationRestorationPlan(name, fn, ORIGINAL_CONFIG_HASHES[name], scalingEvidence);
       assert.equal(policies[name], ORIGINAL_IAM_HASHES[name], 'Original IAM changed: ' + name);
-      if (configurationRestoration.required) console.log(name + ': confirmed sole configuration drift is the added max-instance limit; exact original hash requires restoration');
       checkpoint('download-source');
       const stage = path.join(out, name); const original = download(fn, stage);
       const livePackage = JSON.parse(fs.readFileSync(path.join(stage, 'package.json')));
@@ -297,8 +308,8 @@ async function main() {
       const recoveredLock = reconstructed ? { source: 'owner-approved-reconstruction', sha256: original['package-lock.json'], previousVersionsUnknown: true } : null;
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
-        configHash: configs[name], targetConfigHash: ORIGINAL_CONFIG_HASHES[name], configurationRestoration, iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
-        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), reviewedRuntimeHash: runtimeSourceHash(candidate), originalRecoveryArtifactId: '11774320564', ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
+        configHash: configs[name], targetConfigHash: configs[name], configurationRestoration, iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
+        originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), reviewedRuntimeHash: runtimeSourceHash(candidate), originalRecoveryArtifactId: '11774320564', approvedHistoryArtifactId: name === 'officeBookingAuthority' ? '11777131701' : null, ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
         alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': baseline ' + baselineResult.testsPassed + ' tests; candidate ' + candidateResult.testsPassed + ' tests; runtime and recovery verified');
     }
@@ -328,7 +339,7 @@ async function main() {
       const reviewed = summary.functions.find(item => item.name === name);
       if (!reviewed.alreadyApplied || reviewed.configurationRestoration.required) cloud(deployArgs(name, stage));
       const after = describe(name); assert.equal(after.state, 'ACTIVE');
-      assert.equal(configHash(after), ORIGINAL_CONFIG_HASHES[name], 'Original runtime configuration not preserved/restored'); assert.equal(iamHash(after), ORIGINAL_IAM_HASHES[name], 'Original IAM changed');
+      assert.equal(configHash(after), reviewed.targetConfigHash, 'Verified runtime configuration changed'); assert.equal(iamHash(after), ORIGINAL_IAM_HASHES[name], 'Original IAM changed');
       const published = download(after, stage + '-published');
       const omittedPackagingFiles = verifyPublishedSource(candidates[name], published);
       Object.assign(reviewed, { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, originalScalingRestored: reviewed.configurationRestoration.required, iamPreserved: true }); save();
