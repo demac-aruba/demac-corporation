@@ -1,0 +1,17 @@
+.card { padding: 20px; }
+.card.card > p, .details p { min-height: 0; font-size: 13px; line-height: 1.5; }
+.card :global(.sg-integration-head) { flex-wrap: wrap; gap: 10px; }
+.card :global(.sg-integration-head) h2 { font-size: 17px; }
+.card :global(.sg-integration-head) span,
+.card :global(.sg-integration-head) b { font-size: 11px; }
+.details { padding: 12px; border-radius: 12px; background: var(--surface-2); overflow-wrap: anywhere; }
+.details > strong { font-size: 15px; }
+.details p { margin-bottom: 0; }
+.card :global(.sg-integration-foot) { flex-wrap: wrap; gap: 12px; }
+.card :global(.sg-integration-foot) span { font-size: 11px; }
+.card :global(.sg-integration-foot) strong { font-size: 12px; }
+.card :global(.sg-integration-foot) button,
+.card .retry { min-height: 44px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+.card :global(.sg-integration-foot) button { border: 1px solid var(--border); background: var(--brand-soft); }
+.card button:disabled { cursor: default; opacity: .55; }
+.retry { margin-top: 12px; width: 100%; }

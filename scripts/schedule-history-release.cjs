@@ -12,6 +12,9 @@ const PROJECT = 'demac-corporation';
 const TARGET = 'officeBookingAuthority';
 const BASE = '0dc09f3167150ed775018a6f257542961b21cddf';
 const REVIEWED = 'fb8ac45be42792de3ed1a41d01ceb4718ca16749';
+// Exact source trees from merging the reviewed feature with owner-approved
+// QuickBooks main f1700b0. The Office patch still comes only from REVIEWED.
+const SOURCE_TREES = { functions: 'c151ad668efb619cc8eb40e2d9e1aedfe44b6e1e', 'apps/erp-next': 'e5070f63d96cb586d1901823810c53bfb879683a' };
 const RELEASE = 'release/schedule-slot-history-20261012';
 const LIVE_HASH = '12336022f661ad3f652b985085850bb85d3ddd212651063b4bedf1d6bb260141';
 const stable = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(stable) : Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
@@ -66,7 +69,7 @@ async function main() {
     const branch = process.env.GITHUB_REF?.replace('refs/heads/', '');
     assert.ok(['feature/schedule-slot-history', RELEASE].includes(branch));
     assert.equal(remote(branch), process.env.GITHUB_SHA, 'Branch advanced');
-    for (const dir of ['functions', 'apps/erp-next']) assert.equal(git(['rev-parse', 'HEAD:' + dir]), git(['rev-parse', REVIEWED + ':' + dir]), 'Reviewed source changed');
+    for (const [dir, expected] of Object.entries(SOURCE_TREES)) assert.equal(git(['rev-parse', 'HEAD:' + dir]), expected, 'Reviewed integrated source changed');
     if (deploy) assert.equal(branch, RELEASE);
     if (branch === RELEASE) {
       const current = remote('main'); git(['fetch', 'origin', current]);

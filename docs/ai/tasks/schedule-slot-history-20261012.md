@@ -119,3 +119,18 @@ passed. No production authenticated booking or message send is needed for this
 read-only feature. Recovery is the uploaded tested Office baseline; restore only
 if its revision/configuration lease is still valid. Frontend publication follows
 successful backend verification and uses the exact reviewed merged source.
+
+### Concurrent main reconciliation
+
+While the release gates ran, owner-approved QuickBooks sandbox PR575 merged as
+`f1700b0d1ee08b1b14289d1249ea9237ecfde287`. Merged that main into this feature without
+conflicts. The only shared frontend file is package.json; both test commands remain.
+The release adapter now pins the exact integrated functions/ERP trees. The deployed
+Office patch remains exactly the original two-file history change, so the separate
+QuickBooks backend is neither replaced nor redeployed. Publication includes the
+already approved QuickBooks frontend and preserves its integration entry point.
+
+The first actual-source audit, run 38315909907, passed 503 baseline and 503 patched
+regressions plus six history checks; recovery artifact 11776925314 and evidence
+11776870392. Exact integrated-head CI/audit must pass before merge; this evidence
+does not waive the new checks.
