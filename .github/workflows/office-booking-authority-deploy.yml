@@ -277,6 +277,7 @@ jobs:
           node --check scripts/appointment-charges-project-deploy.cjs
           node --test scripts/appointment-charges-project-deploy.test.cjs
           node --test scripts/appointment-charges-project-compat.test.cjs
+          node --test scripts/appointment-finance-release-audit.test.cjs scripts/appointment-finance-tariff-plan.test.cjs
           npm run typecheck --prefix apps/erp-next
       - name: Real Firestore transaction and authorization checks
         env:
@@ -291,6 +292,7 @@ jobs:
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/charge-evidence
         run: |
           node apps/erp-next/scripts/booking-modal-browser.cjs
+          node apps/erp-next/scripts/appointment-finance-cutover-browser.cjs
           node apps/erp-next/scripts/appointment-charges-browser.cjs
           node apps/erp-next/scripts/service-catalog-browser.cjs
       - uses: actions/upload-artifact@v4

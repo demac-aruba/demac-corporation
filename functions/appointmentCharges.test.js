@@ -47,6 +47,20 @@ test('null, empty and missing catalogue prices remain unpriced; legitimate zero 
     assert.equal(quote.totalCents, basePrice === 0 ? 0 : null);
   }
 });
+test('all canonical matrix declarations price a catalog service without a fixed base price', async () => {
+  for (const declaration of [
+    { pricingRuleKind: 'standard_service' },
+    { pricingDefinition: { ruleKind: 'standard_service' } },
+    { serviceDefinition: { pricingRuleKind: 'standard_service' } },
+    { serviceDefinition: { bookingCode: 'standard_service' } },
+    { bookingCode: '12k_standard_service' },
+  ]) for (const basePrice of [null, '', undefined]) {
+    const { call } = fixture({ 'services/matrix': { name: 'Standard service', active: true, basePrice, ...declaration } });
+    const { quote } = await call('quote_appointment_charges', { lines: [priced('', { serviceId: 'matrix', btu: 12000 })] });
+    assert.equal(quote.totalCents, 12500);
+    assert.equal(quote.lines[0].label, 'Standard service');
+  }
+});
 test('arbitrary prices are rejected even with a reason and inactive catalogue cannot be selected', async () => {
   const { call } = fixture({ 'services/inactive': { name: 'Old', active: false, basePrice: 50 } });
   await rejectsCode(call('quote_appointment_charges', { lines: [priced('125', { unitPrice: '55', reason: 'Operator cannot override' })] }), 'charge_managed_price');
