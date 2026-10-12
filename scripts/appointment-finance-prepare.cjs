@@ -154,7 +154,7 @@ async function main() {
       const after = manifest(candidate), changed = verifyDelta(name,before,after);
       const baselineTests = [...spec.tests];
       summary.stage = name + '-test-baseline'; save();
-      const baselineResult = validateCandidate({source:baseline,root,out,env:isolation,candidate:false,reconstruct:false,name:name + '-baseline',selectedTests:baselineTests,smokeScript:'appointment-finance-runtime-smoke.cjs'});
+      const baselineResult = validateCandidate({source:baseline,root,out,env:isolation,candidate:false,reconstruct:false,name:name + '-baseline',selectedTests:baselineTests,smokeScript:'appointment-finance-runtime-smoke.cjs',testFixtures:name==='officeBookingAuthority'?['bookingScheduleHistory.test.js']:[]});
       summary.stage = name + '-test-candidate'; save();
       verifyInactivePricingFixture(candidate);
       const testFixtures=name==='officeBookingAuthority' ? ['demacServicePricingRules.js'] : [];

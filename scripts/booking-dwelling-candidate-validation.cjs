@@ -57,10 +57,11 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
   const validation = source + '-test'; fs.cpSync(source, validation, { recursive: true });
   if (candidate) {
     for (const file of selectedTests) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
-    for (const file of testFixtures) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
     fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
     if (reconstruct) fs.copyFileSync(path.join(root, 'functions/propertyLocations.emulator.test.cjs'), path.join(validation, 'propertyLocations.emulator.test.cjs'));
   }
+  for (const file of testFixtures) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
+  for (const file of selectedTests) assert.ok(fs.existsSync(path.join(validation,file)), 'Missing required selected test: ' + file);
   fs.symlinkSync(path.join(dependencies, 'node_modules'), path.join(validation, 'node_modules'), 'dir');
   const networkGuard = path.join(root, 'scripts/booking-dwelling-test-network.cjs');
   const testEnv = { ...env, NODE_OPTIONS: '--require=' + networkGuard };
