@@ -98,6 +98,9 @@ async function main() {
         assert.deepEqual(manifest(extracted), files, 'Recovery archive differs'); fs.rmSync(extracted, { recursive: true });
       }
       const policy = JSON.parse(run('gcloud', ['run', 'services', 'get-iam-policy', fn.serviceConfig.service.split('/').pop(), '--project=' + PROJECT, '--region=us-central1', '--format=json']));
+      const fresh = JSON.parse(run('gcloud', ['functions', 'describe', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--format=json']));
+      assert.deepEqual(fresh.buildConfig.source, fn.buildConfig.source, 'Source changed during read-only inspection');
+      assert.equal(hash(releaseConfig(fresh)), hash(releaseConfig(fn)), 'Configuration changed during inspection');
       report.functions.push({ name, revision: fn.serviceConfig.revision, state: fn.state, runtime: fn.buildConfig.runtime,
         source, configHash: hash(releaseConfig(fn)), iamHash: hash(policy), sourceHash: runtimeSourceHash(files), lockPresent,
         archiveHash: unknownFiles.length ? null : hash(fs.readFileSync(archive)), archiveVerified: !unknownFiles.length, unknownFiles,
