@@ -15,3 +15,15 @@
 .card :global(.sg-integration-foot) button { border: 1px solid var(--border); background: var(--brand-soft); }
 .card button:disabled { cursor: default; opacity: .55; }
 .retry { margin-top: 12px; width: 100%; }
+.reports { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); min-width: 0; }
+.reports h3 { font-size: 15px; margin: 0 0 8px; }
+.reports p { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.reports form { display: grid; gap: 10px; }
+.reports label { display: grid; gap: 5px; font-size: 12px; }
+.reports select, .reports input { min-width: 0; width: 100%; min-height: 42px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.tableScroll { overflow: auto; max-height: 500px; margin-top: 12px; }
+.tableScroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tableScroll th, .tableScroll td { padding: 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.tableScroll th:first-child, .tableScroll td:first-child { text-align: left; white-space: normal; min-width: 140px; }
+.tableScroll caption { text-align: left; font-size: 11px; padding-bottom: 10px; }
+.emphasis { font-weight: 700; background: var(--surface-2); }

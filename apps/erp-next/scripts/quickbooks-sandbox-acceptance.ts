@@ -80,6 +80,18 @@ async function run() {
   navigated = '';
   await assert.rejects(client.startQuickBooksSandbox('owner'));
   assert.equal(navigated, '', 'Untrusted authorization destination is rejected');
+  const reportInput = { report: 'ProfitAndLoss' as const, startDate: '2026-10-01', endDate: '2026-10-12', basis: 'Accrual' as const };
+  const savedBefore = JSON.stringify([...storage]);
+  fetcher = async body => { assert.equal(body?.action, 'report'); return new Response(JSON.stringify({ environment: 'sandbox', report: { rows: [] } })); };
+  await client.readQuickBooksSandboxReport('owner', reportInput);
+  assert.equal(JSON.stringify([...storage]), savedBefore, 'Financial reports never enter browser storage');
+  fetcher = async () => { signIn('other'); return new Response(JSON.stringify({ report: { private: 'synthetic' } })); };
+  await assert.rejects(client.readQuickBooksSandboxReport('owner', reportInput), /sesión/);
+  signIn();
+  process.env.NEXT_PUBLIC_ISOLATED_PREVIEW = 'true';
+  const beforeReport = calls.length;
+  await assert.rejects(client.readQuickBooksSandboxReport('owner', reportInput), /configuración/);
+  assert.equal(calls.length, beforeReport);
   console.log('QuickBooks sandbox browser acceptance: PASS (preview isolation, proof binding, retry, cancellation, session race, redirect guard).');
 }
 void run().catch(error => { console.error(error); process.exitCode = 1; });

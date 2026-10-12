@@ -19,9 +19,27 @@ const messages: Record<string, string> = {
   'authorization-cancelled': 'Cancelaste la autorización. Puedes volver a conectar cuando quieras.',
   'connection-busy': 'Hay una autorización en curso. Espera a que termine o a que venza en diez minutos.',
   'invalid-state': 'La autorización venció o no corresponde a esta sesión. Inicia una conexión nueva en esta pestaña.',
+  'sandbox-not-connected': 'Primero autoriza la empresa de prueba.',
+  'reauthorization-required': 'El acceso necesita renovarse. Pulsa «Volver a autorizar sandbox» y después consulta el informe nuevamente.',
+  'report-busy': 'Hay una consulta o autorización en curso. Espera un momento y vuelve a intentarlo.',
+  'report-rate-limited': 'Espera cinco segundos entre consultas.',
+  'provider-rate-limited': 'QuickBooks está limitando las consultas. Espera un minuto y vuelve a intentarlo.',
+  'invalid-report-request': 'Revisa las fechas y la base contable. El intervalo máximo es de 366 días.',
+  'invalid-report-response': 'QuickBooks devolvió un informe que no podemos verificar. No se muestran importes parciales.',
+  'report-too-large': 'El informe supera el tamaño permitido para esta prueba. Usa un período más corto.',
 };
 export function quickBooksMessage(code: string) {
   return messages[code] || 'No se pudo confirmar la conexión. Reintenta consultar el estado; si persiste, inicia una conexión nueva.';
+}
+
+export type QuickBooksReportInput = { report: 'ProfitAndLoss' | 'BalanceSheet' | 'AgedReceivables'; startDate: string; endDate: string; basis: 'Cash' | 'Accrual' };
+export type QuickBooksSandboxReport = {
+  environment: 'sandbox'; syncEnabled: false; realmId: string; companyName: string; fetchedAt: string; request: QuickBooksReportInput;
+  report: { name: string; currency: string; basis: string | null; startPeriod: string | null; endPeriod: string; generatedAt: string | null;
+    noData: boolean; columns: { title: string; type: string }[]; rows: { kind: 'heading' | 'data' | 'total'; depth: number; values: string[] }[] };
+};
+export function readQuickBooksSandboxReport(uid: string, input: QuickBooksReportInput): Promise<QuickBooksSandboxReport> {
+  return request<QuickBooksSandboxReport>(uid, { action: 'report', ...input });
 }
 export function quickBooksSandboxAvailable() {
   return process.env.NEXT_PUBLIC_QBO_SANDBOX_ENABLED === 'true' && process.env.NEXT_PUBLIC_ISOLATED_PREVIEW !== 'true';

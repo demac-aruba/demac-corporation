@@ -330,3 +330,13 @@ Production activation remains separately owner-approved through the server-side 
 ## Booking Spots and workload support
 
 - `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.
+
+## QuickBooks sandbox reporting
+
+- `FIN-QBO-SANDBOX-READ-001` — Owner-requested 2026-10-12. Active ERP owners/admins may
+  manually read three allowlisted reports from the configured test company through
+  the existing QuickBooks boundary. QuickBooks owns values, currency, basis and totals.
+  The ERP must not silently truncate, infer zero values, cache official balances, or
+  write accounting transactions. Token rotation must be serialized, encrypted and
+  recoverable through reauthorization after uncertain outcomes. Real DEMAC accounting
+  access, financial synchronization and ChatGPT/MCP access remain separate stages.
