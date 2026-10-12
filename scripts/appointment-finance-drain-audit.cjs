@@ -1,6 +1,6 @@
 'use strict';
 // Read-only observability probe. No deployment, metric writes or function calls.
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const {TARGETS}=require('./appointment-finance-prepare.cjs');
 async function main(){
@@ -19,12 +19,20 @@ async function main(){
     report.operationContract=(opPage.operations||[]).filter(op=>Object.keys(TARGETS).some(name=>op.metadata?.target?.endsWith('/functions/'+name))).slice(0,20).map(op=>{
       const request=op.metadata?.requestResource,response=op.response;
       const source=value=>value?{keys:Object.keys(value),bucket:value.bucket,object:value.object,generation:value.generation,generationType:typeof value.generation}:null;
-      return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,
+      return {name:op.name,target:op.metadata?.target,verb:op.metadata?.verb,done:op.done||false,errorCode:op.error?.code||null,errorMessage:op.error?.message,
         createTime:op.metadata?.createTime,requestName:request?.name,requestKeys:Object.keys(request||{}),requestSource:source(request?.buildConfig?.source?.storageSource),responseSource:source(response?.buildConfig?.source?.storageSource),
+        requestResolvedSource:source(request?.buildConfig?.sourceProvenance?.resolvedStorageSource),responseResolvedSource:source(response?.buildConfig?.sourceProvenance?.resolvedStorageSource),
         requestType:request?.['@type'],requestHasName:typeof request?.name==='string',requestHasFunction:typeof request?.function==='object',requestHasStorageSource:!!request?.buildConfig?.source?.storageSource,
         responseType:response?.['@type'],responseHasName:typeof response?.name==='string',responseHasRevision:typeof response?.serviceConfig?.revision==='string',responseHasStorageSource:!!response?.buildConfig?.source?.storageSource};
     });
     assert.ok(report.operationContract.length,'No scoped operation contract available');save();
+    const accepted=report.operationContract.find(op=>op.name==='projects/demac-corporation/locations/us-central1/operations/operation-1791846706644-65dacd2710786-4b7439cc-86abee4f');
+    if(accepted){
+      const src=accepted.requestSource;assert.equal(src.bucket,'gcf-v2-sources-1053571783393-us-central1');assert.equal(src.object,'inventoryAuthority/function-source.zip');assert.match(src.generation,/^\d+$/);
+      const local=path.join(process.env.RUNNER_TEMP,'accepted-source.archive');
+      run(['storage','cp',`gs://${src.bucket}/${src.object}#${src.generation}`,local,'--quiet']);
+      const bytes=fs.readFileSync(local);report.acceptedSource={operation:accepted.name,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,magic:bytes.subarray(0,4).toString('hex')};save();
+    }
     for(const name of Object.keys(TARGETS)){
       const fn=JSON.parse(run(['functions','describe',name,'--gen2','--project=demac-corporation','--region=us-central1','--format=json']));
       const serviceName=fn.serviceConfig.service.split('/').pop();assert.match(serviceName,/^[a-z0-9-]+$/);
