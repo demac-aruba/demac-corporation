@@ -138,6 +138,22 @@ async function main() {
             images: (build.results?.images || []).map(item => ({ name: imageReference(item.name), digest: /^sha256:[a-f0-9]{64}$/.test(item.digest) ? item.digest : null })),
             outputImages: (build.images || []).map(imageReference).filter(Boolean),
             artifactsPresent: Boolean(build.artifacts), source: build.sourceProvenance?.resolvedStorageSource || null };
+          const steps = JSON.stringify((build.steps || []).map(step => ({ name: step.name, args: step.args })));
+          diagnostic.buildReferences = {
+            images: [...new Set((steps.match(/[a-z0-9-]+-docker\.pkg\.dev\/demac-corporation\/[a-zA-Z0-9_./:@-]+/g) || []).filter(imageReference))],
+            storage: [...new Set(steps.match(/gs:\/\/gcf-[a-zA-Z0-9_./#-]+/g) || [])],
+          };
+          try {
+            const logs = cloud(['builds', 'log', buildRef[2], '--project=' + PROJECT, '--region=' + buildRef[1]]);
+            diagnostic.buildLogEvidence = {
+              generatedLock: /generat(?:e|ed|ing)[^\n]*package-lock/i.test(logs),
+              usedNpmCi: /(?:Running|executing)[^\n]*npm ci/i.test(logs),
+              usedNpmInstall: /(?:Running|executing)[^\n]*npm install/i.test(logs),
+              usedCache: /cache hit|reus(?:e|ed|ing)[^\n]*(?:node_modules|dependencies)/i.test(logs),
+              packageVersions: [...new Set(logs.match(/(?:firebase-admin|firebase-functions|nodemailer|sharp)@\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?/g) || [])],
+              storage: [...new Set(logs.match(/gs:\/\/gcf-[a-zA-Z0-9_./#-]+/g) || [])],
+            };
+          } catch { diagnostic.buildLogReadFailed = true; }
         } catch { diagnostic.buildReadFailed = true; }
       }
       try {
@@ -145,6 +161,12 @@ async function main() {
         assert.ok(repo, 'Unknown image repository');
         const registry = JSON.parse(cloud(['artifacts', 'repositories', 'describe', repo[2], '--project=' + PROJECT, '--location=' + repo[1], '--format=json']));
         diagnostic.cleanup = { dryRun: registry.cleanupPolicyDryRun, policies: registry.cleanupPolicies };
+        const images = JSON.parse(cloud(['artifacts', 'docker', 'images', 'list',
+          image.split('/').slice(0, 3).join('/'), '--project=' + PROJECT,
+          '--filter=package~office_booking_authority', '--include-tags', '--limit=50', '--format=json']));
+        diagnostic.retainedOfficeImages = images.map(item => ({ uri: imageReference(item.uri),
+          package: imageReference(item.package), version: /^sha256:[a-f0-9]{64}$/.test(item.version) ? item.version : null,
+          createTime: item.createTime, updateTime: item.updateTime }));
       } catch { diagnostic.repositoryReadFailed = true; }
       summary.recoveryDiagnostics = diagnostic; save();
       throw error;
