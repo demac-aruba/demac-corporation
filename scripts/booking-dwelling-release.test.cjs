@@ -1,11 +1,20 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { safePaths, deployArgs, verifyDelta } = require('./booking-dwelling-release.cjs');
+const { safePaths, deployArgs, verifyDelta, validateRecoveredLock } = require('./booking-dwelling-release.cjs');
 test('source archives reject traversal and absolute paths', () => {
   safePaths(['bootstrap.js', 'data/vocabulary.json']);
   for (const file of ['/etc/passwd', '../outside', 'a/../../outside', 'a\\..\\outside']) assert.throws(() => safePaths([file]));
   assert.throws(() => safePaths([]));
+});
+test('a recovered image lock must pin the deployed direct dependencies with package integrity', () => {
+  const manifest = { dependencies: { 'synthetic-package': '^1.0.0' } };
+  const lock = { lockfileVersion: 3, packages: { '': { dependencies: manifest.dependencies },
+    'node_modules/synthetic-package': { version: '1.2.0', integrity: 'sha512-synthetic' } } };
+  assert.equal(validateRecoveredLock(JSON.stringify(lock), manifest).lockfileVersion, 3);
+  assert.throws(() => validateRecoveredLock(JSON.stringify(lock), { dependencies: { other: '^2' } }));
+  assert.throws(() => validateRecoveredLock(JSON.stringify({ ...lock, packages: { '': lock.packages[''] } }), manifest));
+  assert.throws(() => validateRecoveredLock('{}', manifest));
 });
 test('deployment is limited to the five approved source targets and has no configuration/IAM/migration flags', () => {
   for (const name of ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate']) {

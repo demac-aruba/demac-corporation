@@ -44,6 +44,16 @@ function verifyDelta(before, after, reviewedHelperHash) {
   assert.equal(after['package.json'], before['package.json'], 'Dependency manifest changed');
   return changed;
 }
+function validateRecoveredLock(content, manifest) {
+  const lock = JSON.parse(content);
+  assert.ok(lock.lockfileVersion >= 2 && lock.packages?.[''], 'Runtime image has no verifiable npm lock');
+  assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies, 'Image lock does not match deployed dependency declarations');
+  for (const name of Object.keys(manifest.dependencies || {})) {
+    const pkg = lock.packages['node_modules/' + name];
+    assert.ok(pkg?.version && pkg?.integrity, 'Image lock has no exact package integrity: ' + name);
+  }
+  return lock;
+}
 async function main() {
   const deploy = process.argv.includes('--deploy');
   const root = process.cwd();
@@ -86,6 +96,26 @@ async function main() {
     run('unzip', ['-q', zip, '-d', directory]);
     fs.unlinkSync(zip); return sourceManifest(directory);
   };
+  const recoverLock = (fn, stage, manifest) => {
+    // Never generate a new lock from floating ranges. Copy the existing one
+    // from the immutable image serving this exact Cloud Run revision.
+    const revision = JSON.parse(cloud(['run', 'revisions', 'describe', fn.serviceConfig.revision,
+      '--project=' + PROJECT, '--region=us-central1', '--format=json']));
+    const image = revision.status?.imageDigest;
+    assert.ok(typeof image === 'string' && image.includes('/' + PROJECT + '/') && /@sha256:[a-f0-9]{64}$/.test(image), 'Immutable production image required');
+    const host = image.split('/')[0]; assert.ok(host.endsWith('-docker.pkg.dev'), 'Unexpected image registry');
+    cloud(['auth', 'configure-docker', host, '--quiet']);
+    run('docker', ['pull', image]);
+    const workingDir = run('docker', ['image', 'inspect', '--format={{.Config.WorkingDir}}', image]).trim();
+    assert.ok(path.posix.isAbsolute(workingDir) && !workingDir.split('/').includes('..'), 'Unknown image work directory');
+    const container = run('docker', ['create', '--entrypoint=/bin/false', image]).trim();
+    try {
+      run('docker', ['cp', container + ':' + path.posix.join(workingDir, 'package-lock.json'), path.join(stage, 'package-lock.json')]);
+      const content = fs.readFileSync(path.join(stage, 'package-lock.json'), 'utf8');
+      validateRecoveredLock(content, manifest);
+      return { image, sha256: hash(content), source: 'immutable-running-image' };
+    } finally { run('docker', ['rm', container]); }
+  };
   async function boundaries() {
     for (const origin of ['https://demac-aruba.com', 'https://www.demac-aruba.com']) {
       const url = `https://us-central1-${PROJECT}.cloudfunctions.net/officeBookingAuthority`;
@@ -113,9 +143,10 @@ async function main() {
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
       before[name] = fn; configs[name] = configHash(fn); policies[name] = iamHash(fn);
       const stage = path.join(out, name); const original = download(fn, stage);
-      assert.ok(original['package-lock.json'], 'Live dependency lock missing');
       const livePackage = JSON.parse(fs.readFileSync(path.join(stage, 'package.json')));
       assert.deepEqual(livePackage.dependencies, JSON.parse(fs.readFileSync(path.join(root, 'functions/package.json'))).dependencies, 'Live dependency declarations differ');
+      const recoveredLock = original['package-lock.json'] ? null : recoverLock(fn, stage, livePackage);
+      if (recoveredLock) original['package-lock.json'] = recoveredLock.sha256;
       let alreadyApplied = false;
       try { run('git', ['apply', '--check', '-p2', patchPath], stage); }
       catch {
@@ -136,7 +167,8 @@ async function main() {
       assert.match(tests, /(?:#|ℹ) fail 0/); fs.rmSync(validation, { recursive: true });
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
-        configHash: configs[name], iamHash: policies[name], changedFiles: changed, alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
+        configHash: configs[name], iamHash: policies[name], changedFiles: [...changed, ...(recoveredLock ? ['package-lock.json'] : [])], recoveredLock,
+        alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': live-source patch and isolated tests passed');
     }
     const unchanged = name => {
@@ -170,5 +202,5 @@ async function main() {
     console.error(summary.error); process.exitCode = 1;
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock };
 if (require.main === module) main();

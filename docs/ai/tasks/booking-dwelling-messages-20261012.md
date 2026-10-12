@@ -32,7 +32,7 @@
 - Already queued/sent messages remain unchanged. This release affects newly prepared eligible messages.
 
 ## Verification
-- Syntax validation, 239 Booking tests, 132 communication tests and 6 release/configuration safety tests.
+- Syntax validation, 239 Booking tests, 132 communication tests and 7 release/configuration safety tests.
 - Full isolated property/dwelling editor, concurrency, canonical booking persistence, saved-location message preparation and deny-role tests.
 - Current-main CI includes payment compatibility and browser checks; no failing gate may be waived.
 - Live pre/post checks are configuration/source inspection, scheduler inspection and actual-domain OPTIONS/anonymous-denial probes, never a real booking or WhatsApp send.
