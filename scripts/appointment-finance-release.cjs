@@ -138,7 +138,9 @@ async function main() {
   const getOperation=name=>{assert.ok(name.startsWith(`projects/${PROJECT}/locations/${REGION}/operations/`));return api('https://cloudfunctions.googleapis.com/v2/'+name);};
   const recordOperation=(name,op)=>{
     summary.operations||=[];
-    summary.operations.push({function:name,name:op.name,done:op.done||false,errorCode:op.error?.code||null,...(op.intent?{intent:true,at:op.at}:{})});save();
+    summary.operations.push({function:name,name:op.name,done:op.done||false,errorCode:op.error?.code||null,
+      hasTarget:typeof op.metadata?.target==='string',hasRequestName:typeof op.metadata?.requestResource?.name==='string',hasRequestSource:Boolean(op.metadata?.requestResource?.buildConfig?.source?.storageSource),
+      ...(op.intent?{intent:true,at:op.at}:{})});save();
   };
   const sourceChecks=new Map();let mirrorReads=0;
   try {

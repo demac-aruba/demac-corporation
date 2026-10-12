@@ -166,3 +166,21 @@ recovery, and identified one diagnostic output issue: arbitrary operation error 
 must not be copied into future artifacts. Resolved by fixed categories invalid_zip
 or unspecified; the historical pinned evidence contains only the reviewed benign ZIP
 failure. No runtime/package changes were required. Exact correction-head CI remains.
+
+### Accepted-operation verification and bounded re-read
+
+PR579/correction012df484 and merge2979d5e0 passed their applicable CI with identical
+trees. Run38322029114 verified all five private ZIPs, then stopped because the initial
+accepted Inventory operation did not satisfy the provenance check. Read-only run
+38322416928 proves the same operation subsequently completed successfully: mirrored
+ZIP SHA785330393418f5fa63e7f80c8d8c54619b11bd3f62b3878c0feeea90f064314c,
+Inventory ACTIVE00005-nup with100% traffic. Other consumers remain baseline, and no
+tariffs/rules/UI activation occurred. We cannot identify the initial differing field
+because it was not retained; the safe summary now captures presence flags.
+
+The follow-up reads only the accepted operation identity, at most six times5seconds,
+then requires the original exact-source/provenance checks. Wrong bytes, another operation,
+or absent proof still fail and no PATCH is repeated. Independent reviewer passed30/30,
+syntax and the predicate against real completed-operation evidence; GO after exact CI.
+The next run must prove Inventory's current configuration/IAM/source/traffic and reuse
+the successful operation before advancing the remaining sequence.

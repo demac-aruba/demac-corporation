@@ -26,7 +26,7 @@ async function main(){
         responseType:response?.['@type'],responseHasName:typeof response?.name==='string',responseHasRevision:typeof response?.serviceConfig?.revision==='string',responseHasStorageSource:!!response?.buildConfig?.source?.storageSource};
     });
     assert.ok(report.operationContract.length,'No scoped operation contract available');save();
-    const accepted=report.operationContract.find(op=>op.name==='projects/demac-corporation/locations/us-central1/operations/operation-1791846706644-65dacd2710786-4b7439cc-86abee4f');
+    const accepted=report.operationContract.find(op=>op.name==='projects/demac-corporation/locations/us-central1/operations/operation-1791847676710-65dad0c430e35-2b6c089f-1389e63c');
     if(accepted){
       const src=accepted.requestSource;assert.equal(src.bucket,'gcf-v2-sources-1053571783393-us-central1');assert.equal(src.object,'inventoryAuthority/function-source.zip');assert.match(src.generation,/^\d+$/);
       const local=path.join(process.env.RUNNER_TEMP,'accepted-source.archive');

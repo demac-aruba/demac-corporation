@@ -59,7 +59,18 @@ test('server-normalized immutable ZIP copy is verified before polling and on saf
  }
 });
 test('copied wrong bytes or live-source divergence never permit downstream activation',async()=>{
- const f=fixture();f.adapter.sourceMatches=()=>false;await assert.rejects(updateSource(f.adapter),/unreviewed operation/);assert.deepEqual(f.counts(),{patches:1,polls:0});
+ const f=fixture();f.adapter.sourceMatches=()=>false;await assert.rejects(updateSource(f.adapter),/unreviewed operation/);assert.deepEqual(f.counts(),{patches:1,polls:6});
  const changed=fixture(),inspect=changed.adapter.inspect;changed.adapter.inspect=async args=>{const v=await inspect(args);if(v.alreadyApplied)v.fn.buildConfig.source.storageSource.generation='wrong';return v;};
  await assert.rejects(updateSource(changed.adapter),/Live source differs/);
+});
+test('accepted operation provenance can populate after PATCH without another mutation',async()=>{
+ const f=fixture(),send=f.adapter.publish;
+ f.adapter.publish=async()=>{const response=await send();delete response.metadata.requestResource;return response;};
+ await updateSource(f.adapter);assert.deepEqual(f.counts(),{patches:1,polls:1});
+});
+test('provenance polling is bounded and cannot switch the accepted operation identity',async()=>{
+ const f=fixture(),send=f.adapter.publish,poll=f.adapter.getOperation;
+ f.adapter.publish=async()=>{const response=await send();delete response.metadata.requestResource;return response;};
+ f.adapter.getOperation=async()=>({...await poll(),name:'projects/demac-corporation/locations/us-central1/operations/unrelated'});
+ await assert.rejects(updateSource(f.adapter),/Operation identity changed/);assert.equal(f.counts().patches,1);
 });

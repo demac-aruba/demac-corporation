@@ -49,6 +49,14 @@ async function updateSource({patch,baselineRevision,operations,inspect,publish,g
   if(!operation)throw error;
  }
  record(operation);
+ // The PATCH response may precede the normalized requestResource snapshot.
+ // Read the same accepted operation; never repeat the mutation to obtain proof.
+ const acceptedName=operation.name;
+ assert.ok(typeof acceptedName==='string'&&acceptedName.startsWith(patch.name.split('/functions/')[0]+'/operations/'),'PATCH returned an unexpected operation identity');
+ for(let attempt=0;attempt<6&&!reviewedOperation(operation,patch,sourceMatches);attempt++){
+  await wait(5000);operation=await getOperation(acceptedName);
+  assert.equal(operation.name,acceptedName,'Operation identity changed during provenance read');record(operation);
+ }
  assert.equal(reviewedOperation(operation,patch,sourceMatches),true,'PATCH returned an unreviewed operation');
  operation=await settleOperation(operation,{getOperation,wait,record});assert.ok(!operation.error,'Source update failed; retain exact candidate for forward recovery');
  current=await inspect({allowFailed:false});assert.equal(current.fn.state,'ACTIVE');assert.equal(current.alreadyApplied,true);
