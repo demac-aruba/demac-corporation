@@ -35,7 +35,7 @@ Defaults are aligned in Functions and Legacy Company Rules. Existing saved setti
 - [x] Real Firestore emulator: 11/11 transaction/authorization/rules cases passed with isolated Java 21; no production credentials.
 - [x] ERP and Legacy typecheck/build completed. Final post-review CI on the exact remote commit remains required.
 - [ ] Verify/update the 15 effective saved Company Rules prices with a version-checked dry run and recovery, preserving existing durations/unknown fields.
-- [ ] Verify actual deployed Office, Inventory and customer-sales consumer source/dependency/configuration baselines and recovery archives.
+- [x] Verify actual deployed Office, Inventory, Field and customer-sales consumer source/dependency/configuration baselines and recovery archives.
 - [ ] Prove coordinated backend/ERP/Legacy/rules cutover, including old open clients and forward recovery; then nondestructive post-deploy checks.
 
 ## Verification
@@ -48,10 +48,37 @@ Synthetic 1000-item/60-line browser run: editor ready 309 ms; input-to-two-anima
 
 ## Release decision
 
-BLOCKED, draft PR #572 only. Latest fetched main: `0dc09f3167150ed775018a6f257542961b21cddf` (PR #573 packaging verification, following PR #570). Production target remains https://demac-aruba.com, Firebase demac-corporation/us-central1, Vercel demac-corporation-web. No production data, rules or deployments were mutated by this task.
+Owner authorization is present, conditional on completed technical gates. Final candidate
+preserves main4175285f (approved QuickBooks and slot history) and the actual deployed
+Office history runtime744a4c40, with bounded source overlays across five consumers.
+Target remains https://demac-aruba.com, Firebase demac-corporation/us-central1, Vercel
+demac-corporation-web. No behavior, tariffs, rules, customer records or communications
+have been changed by this task at this checkpoint. Private recovery packages are retained.
 
-The former Office baseline without a lock was superseded by PR #570's explicitly approved reconstructed fixed dependency baseline; do not claim that the historical runtime was recovered byte-for-byte. Its original recovery artifact is 11774320564. Run 38308594583 partially deployed and then failed published-source packaging verification. Follow-up read-only audit 38309923175 passed, but resumed release 38310446182 also failed its release step after attempting all five targets. Its audit passed; completion and exact live state must be verified, not inferred from an earlier revision. Do not overlay this uncertain release or use generic whole-source deployment, which also contains unrelated mutation helpers.
+Actual-source preparation83a4a423 completed188 original-source and234 candidate tests,
+real Node22 bootstrap/native smoke, and verified private archives for all five targets.
+An additional baseline history test was not executed because the archived package did
+not contain that newly selected test. The validation harness now explicitly rejects any
+missing selected test and injects this compatible test only into its isolated validation
+copy. Preparation216dd676 repeats the full gate; the pending replacement evidence must
+be accepted before activation. This is a harness correction, not a waiver.
 
-New unpriced-value guards necessarily touch existing Inventory/customer-sales consumers. Updating only Office would leave old consumers treating null as zero; therefore all actual consumer runtime sources, rollback archives and boundary tests are release gates. Saved pricing settings also still override repository defaults.
+Independent review reproduced a pre-cutover payment race and verified the implemented
+fresh-grant financial version fence. All four old financial commands are exercised in
+both commit orders, with exact replay protection. Latest cutover18/18 and client36/36
+passed; reviewer independently confirmed the handshake and notification neutrality.
 
-Rules deny direct services writes to make CAS/claims effective. Old open ERP/Legacy clients cannot safely continue writing after that cutover; an old monetary client also lacks an appointment lease. A tested release/update-session mechanism is required before claiming uninterrupted operation. Recovery must keep the governed protocol and every new financial/catalog audit record; never restore a database backup or reopen unguarded writes as an improvised rollback. Owner authorization is present but conditional on these critical checks. No merge or deploy is claimed.
+The controlled release uses source-only PATCH and retained immutable generations,
+current source/config/IAM/traffic verification, exact-operation recovery/provenance,
+CAS15 saved prices and governed services rules. Generic rules publication shares the
+production concurrency group. Rules settle before Office activation and before ERP
+promotion. Interrupted deployments recover forward; records/audit are never restored
+from a database backup and unguarded writes are not reopened.
+
+Final release-script review, exact-head CI, refreshed preparation evidence and coordinated
+production verification remain pending. Old ERP/Legacy sessions receive a reload notice
+and preserve their open draft; automatic reload does not transfer unsaved drafts. The
+updated Legacy source is maintained as the operational fallback; no separate live Legacy
+deployment has been identified or assumed. Existing catalog reads remain available.
+
+Final preparation run38318268340 at216dd676 completed193 baseline and234 candidate tests (427 total); Office baseline65/candidate91. All five real bootstrap/native smokes and private immutable archive checks passed. Summary artifact11777188590 SHA256546202bbf48e919dbd69baaa21a184c3f3de513a3880d0400e4d3973683997e6 is pinned in docs/ai/releases. Independent release-script review gave GO after22/22 tests. Read-only run38318399395 verified real request/response operation contracts; no remaining technical review blocker. Main12105b6d documentation/release-script update is preserved; application/function source trees are unchanged from4175285f outside this feature. Final exact-head CI and production verification remain required.

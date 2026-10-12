@@ -100,3 +100,28 @@ objects or production behavior were changed before the failed baseline test.
   source-only overlays preserve all other deployed code and original dependencies.
 - Activation remains gated on refreshed retained packages, final exact-head CI,
   independent release-script review, current source/config/IAM and coordinated promotion.
+
+
+### Interrupted-release review and harness correction
+
+The independent release reviewer found that ACTIVE-only preflight could not recover a
+lost accepted PATCH or terminal FAILED/UNKNOWN source update. A dedicated tested
+adapter now discovers only exact-target, exact-source-generation update operations,
+resumes running work without duplicate PATCH, permits forward recovery only for a
+classified failed reviewed attempt, and requires successful operation response/revision
+provenance before treating requested source metadata as deployed. Seven mock orchestration
+cases cover lost response, running resume, failed/unknown states, absent provenance,
+verification/poll failures and partial rollout; all22 release/preparation/planner tests pass.
+Generic Firestore rules deployment now uses the same production concurrency group, and
+Office activation waits65seconds after the rules release; ERP promotion waits610seconds.
+
+Run38317509610 (83a4a423) succeeded with188 baseline +234 candidate checks and private
+archives, including actual Office revision00084-vak. Builder inspected the baseline count
+and found Node22 had not executed a newly selected history test absent from the archived
+source. The test harness now asserts every selected test exists and supplies that unchanged
+history test as an isolated-only baseline fixture. Preparation216dd676 repeats all checks;
+its complete retained summary must replace the preliminary evidence before activation.
+No failed or missing required check is waived. Shipped runtime bytes are unchanged by
+this validation-only correction.
+
+Final repeated preparation216dd676/run38318268340 passed427 assembled-source tests (193 baseline,234 candidate), including all65 Office baseline tests. All archives are privately retained and verified. Missing-test gate is resolved by execution, not waiver. The reviewer independently passed22/22 orchestration tests and issued technical GO. Read-only run38318399395/artifact11777613562 confirms the real Google metadata.requestResource and response are direct v2 Function objects with name/storageSource and published revision fields. Final CI and coordinated activation remain gates; no production deployment is claimed here.

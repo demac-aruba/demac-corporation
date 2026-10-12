@@ -1,0 +1,49 @@
+name: Controlled appointment finance release
+on:
+  pull_request:
+    paths:
+      - 'scripts/appointment-finance-*'
+      - '.github/workflows/appointment-finance-release.yml'
+  push:
+    branches: [release/appointment-finance-20261012]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/appointment-finance-release.cjs && node --test scripts/appointment-finance-*.test.cjs
+  publish:
+    if: github.ref == 'refs/heads/release/appointment-finance-20261012'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish reviewed private packages, saved prices and catalog rules
+        run: node scripts/appointment-finance-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appointment-finance-release-summary
+          path: ${{ runner.temp }}/finance-release/summary.json
+          retention-days: 90
+          if-no-files-found: error
