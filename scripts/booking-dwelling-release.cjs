@@ -62,17 +62,18 @@ function verifyPublishedSource(candidate, published) {
 }
 const releaseConfig = fn => ({ ...canonicalFunctionConfig(fn), build: Object.fromEntries(Object.entries(fn.buildConfig).filter(([key]) => !['build', 'source', 'sourceProvenance', 'sourceToken'].includes(key))) });
 const configHash = fn => hash(releaseConfig(fn));
-function retryRestorationPlan(name, fn, expectedHash) {
-  const observedRetryPolicy = fn.eventTrigger?.retryPolicy || null;
-  if (configHash(fn) === expectedHash) return { required: false, observedRetryPolicy };
+function configurationRestorationPlan(name, fn, expectedHash) {
+  if (configHash(fn) === expectedHash) return { required: false };
   assert.equal(name, 'notifyBookingReferenceUpdate', 'Unapproved original configuration drift');
-  assert.equal(observedRetryPolicy, 'RETRY_POLICY_DO_NOT_RETRY', 'Unexpected retry-policy drift');
-  const restored = { ...fn, eventTrigger: { ...fn.eventTrigger, retryPolicy: 'RETRY_POLICY_RETRY' } };
-  // This is a restoration only if changing this one field reproduces the exact
-  // complete build/runtime/trigger hash saved before the original rollout.
-  assert.equal(configHash(restored), expectedHash, 'Configuration differs beyond the known retry-policy restoration');
-  return { required: true, observedRetryPolicy, intendedRetryPolicy: 'RETRY_POLICY_RETRY' };
+  assert.equal(fn.serviceConfig.maxInstanceCount, 20, 'Unexpected scaling-policy drift');
+  assert.equal(fn.eventTrigger?.retryPolicy, 'RETRY_POLICY_RETRY', 'Original retry policy must remain enabled');
+  const restored = structuredClone(fn); delete restored.serviceConfig.maxInstanceCount;
+  // Read-only diagnostic 38312663741 proved this is the sole added API field.
+  // Require every other build/runtime/trigger field to match the pre-rollout hash.
+  assert.equal(configHash(restored), expectedHash, 'Configuration differs beyond the known maximum-instance restoration');
+  return { required: true, field: 'serviceConfig.maxInstanceCount', observedMaxInstances: 20, restoreUnspecified: true };
 }
+
 function safePaths(files) {
   assert.ok(files.length > 0, 'Empty source archive');
   for (const file of files) assert.ok(!path.posix.isAbsolute(file) && !file.includes('\\') && !file.split('/').includes('..'), 'Unsafe source archive path');
@@ -81,7 +82,7 @@ function deployArgs(name, stage) {
   assert.ok(FUNCTIONS.includes(name), 'Unapproved function');
   assert.ok(path.isAbsolute(stage), 'Absolute stage required');
   return ['functions', 'deploy', name, '--project=' + PROJECT, '--region=us-central1', '--gen2', '--source=' + stage,
-    ...(name === 'notifyBookingReferenceUpdate' ? ['--retry'] : []), '--quiet', '--format=value(state)'];
+    ...(name === 'notifyBookingReferenceUpdate' ? ['--retry', '--clear-max-instances'] : []), '--quiet', '--format=value(state)'];
 }
 function sourceManifest(root) {
   const result = {};
@@ -130,7 +131,7 @@ function verifyPreparedRelease(prepared, current) {
       assert.ok(item[key], 'Missing prepared evidence: ' + key);
       assert.equal(item[key], audited[key], 'Prepared recovery/candidate differs: ' + key);
     }
-    assert.deepEqual(item.retryRestoration, audited.retryRestoration, 'Prepared retry restoration differs');
+    assert.deepEqual(item.configurationRestoration, audited.configurationRestoration, 'Prepared configuration restoration differs');
     assert.equal(audited.rollbackSourceVerified, true);
     assert.equal(audited.baselineResult.runtimeSmokePassed, true);
     assert.equal(audited.candidateResult.runtimeSmokePassed, true);
@@ -229,9 +230,9 @@ async function main() {
       const patchPath = path.join(out, name + '.patch'); fs.writeFileSync(patchPath, patch);
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
       before[name] = fn; configs[name] = configHash(fn); policies[name] = iamHash(fn);
-      const retryRestoration = retryRestorationPlan(name, fn, ORIGINAL_CONFIG_HASHES[name]);
+      const configurationRestoration = configurationRestorationPlan(name, fn, ORIGINAL_CONFIG_HASHES[name]);
       assert.equal(policies[name], ORIGINAL_IAM_HASHES[name], 'Original IAM changed: ' + name);
-      if (retryRestoration.required) console.log(name + ': confirmed sole configuration drift is retry policy; exact original hash requires restoration');
+      if (configurationRestoration.required) console.log(name + ': confirmed sole configuration drift is the added max-instance limit; exact original hash requires restoration');
       checkpoint('download-source');
       const stage = path.join(out, name); const original = download(fn, stage);
       const livePackage = JSON.parse(fs.readFileSync(path.join(stage, 'package.json')));
@@ -296,7 +297,7 @@ async function main() {
       const recoveredLock = reconstructed ? { source: 'owner-approved-reconstruction', sha256: original['package-lock.json'], previousVersionsUnknown: true } : null;
       candidates[name] = candidate;
       summary.functions.push({ name, state: fn.state, beforeRevision: fn.serviceConfig.revision, rollbackSource: fn.buildConfig.source.storageSource,
-        configHash: configs[name], targetConfigHash: ORIGINAL_CONFIG_HASHES[name], retryRestoration, iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
+        configHash: configs[name], targetConfigHash: ORIGINAL_CONFIG_HASHES[name], configurationRestoration, iamHash: policies[name], changedFiles: [...changed, ...(reconstructed ? ['package.json', 'package-lock.json'] : [])], recoveredLock,
         originalManifestHash, baselineManifestHash: hash(baselineManifest), candidateManifestHash: hash(candidate), reviewedRuntimeHash: runtimeSourceHash(candidate), originalRecoveryArtifactId: '11774320564', ...archiveHashes, baselineResult, candidateResult, rollbackSourceVerified: true,
         alreadyApplied, actualSourceTestsPassed: true, codeHashes: Object.fromEntries([...FILES, HELPER].map(file => [file, candidate[file]])) }); save();
       console.log(name + ': baseline ' + baselineResult.testsPassed + ' tests; candidate ' + candidateResult.testsPassed + ' tests; runtime and recovery verified');
@@ -308,15 +309,15 @@ async function main() {
       assert.equal(configHash(fresh), configs[name], 'Concurrent config change'); assert.equal(iamHash(fresh), policies[name], 'Concurrent IAM change');
     };
     sourceGate(); for (const name of FUNCTIONS) unchanged(name);
-    const retryWindowAudit = () => {
+    const deploymentWindowAudit = () => {
       // Read timestamps only, never request bodies, customer data or log text.
       const query = 'resource.type="cloud_run_revision" AND resource.labels.service_name="notifybookingreferenceupdate" AND timestamp>="2026-10-12T21:31:00Z" AND (severity>=ERROR OR httpRequest.status>=500)';
       const values = cloud(['logging', 'read', query, '--project=' + PROJECT, '--limit=1000', '--format=value(timestamp)']).trim();
       const errorCount = values ? values.split('\n').length : 0;
       return { from: '2026-10-12T21:31:00Z', observedAt: new Date().toISOString(), observedErrorCount: errorCount, completeWithinLimit: errorCount < 1000 };
     };
-    summary.retryWindowAudit = retryWindowAudit(); save();
-    assert.equal(summary.retryWindowAudit.observedErrorCount, 0, 'Reference-update errors in retry-policy window require investigation; no automatic replay');
+    summary.deploymentWindowAudit = deploymentWindowAudit(); save();
+    assert.equal(summary.deploymentWindowAudit.observedErrorCount, 0, 'Reference-update errors in deployment window require investigation; no automatic replay');
     // Check every prepared package before the first production write.
     if (deploy) verifyPreparedRelease(prepared, summary);
     if (deploy) for (const name of FUNCTIONS) {
@@ -325,18 +326,18 @@ async function main() {
       assert.deepEqual(sourceManifest(stage), candidates[name], 'Staged source changed after audit');
       console.log('Deploying reviewed source and approved dependency baseline: ' + name);
       const reviewed = summary.functions.find(item => item.name === name);
-      if (!reviewed.alreadyApplied || reviewed.retryRestoration.required) cloud(deployArgs(name, stage));
+      if (!reviewed.alreadyApplied || reviewed.configurationRestoration.required) cloud(deployArgs(name, stage));
       const after = describe(name); assert.equal(after.state, 'ACTIVE');
       assert.equal(configHash(after), ORIGINAL_CONFIG_HASHES[name], 'Original runtime configuration not preserved/restored'); assert.equal(iamHash(after), ORIGINAL_IAM_HASHES[name], 'Original IAM changed');
       const published = download(after, stage + '-published');
       const omittedPackagingFiles = verifyPublishedSource(candidates[name], published);
-      Object.assign(reviewed, { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, retryPolicyRestored: reviewed.retryRestoration.required, iamPreserved: true }); save();
+      Object.assign(reviewed, { afterRevision: after.serviceConfig.revision, publishedSourceVerified: true, omittedPackagingFiles, configPreserved: true, originalScalingRestored: reviewed.configurationRestoration.required, iamPreserved: true }); save();
     }
     for (const [name, digest] of Object.entries(schedules)) assert.equal(schedulerHash(scheduler(name)), digest, 'Scheduler changed');
     await boundaries(); sourceGate();
     if (deploy) {
-      summary.retryWindowAudit = retryWindowAudit(); save();
-      assert.equal(summary.retryWindowAudit.observedErrorCount, 0, 'Reference-update errors in retry-policy window require investigation; no automatic replay');
+      summary.deploymentWindowAudit = deploymentWindowAudit(); save();
+      assert.equal(summary.deploymentWindowAudit.observedErrorCount, 0, 'Reference-update errors in deployment window require investigation; no automatic replay');
     }
     summary.stage = 'complete'; summary.schedulersPreserved = true; summary.actualDomainBoundariesPassed = true; save();
     fs.copyFileSync(path.join(out, 'summary.json'), path.join(bundleDir, 'manifest.json'));
@@ -357,5 +358,5 @@ async function main() {
     if (summary.failureCategories.length) console.error('Failure categories: ' + summary.failureCategories.join(', '));
   }
 }
-module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction, verifyPublishedSource, runtimeSourceHash, configHash, retryRestorationPlan };
+module.exports = { safePaths, deployArgs, verifyDelta, validateRecoveredLock, isolatedTestEnv, authorizeReconstruction, verifyPreparedRelease, releaseConfig, sourceFilesForFunction, verifyPublishedSource, runtimeSourceHash, configHash, configurationRestorationPlan };
 if (require.main === module) main();
