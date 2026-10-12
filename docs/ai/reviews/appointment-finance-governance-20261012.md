@@ -136,3 +136,33 @@ checks; artifact11778051399 SHA256560c680659af396aa70bedb5ba20d61a770b9d752ba095
 supersedes the prior prepared evidence. READY preview dpl_27jCEa2yZDGMkUqHRc8vQB2oThGq
 serves the expected protected login with200. Final docs-only head CI, merge/source
 equivalence, coordinated production release and post-promotion verification remain.
+
+### First activation result and transport-only correction
+
+Final PR head bd2597f7 passed15/15 workflows. Merge3ab832a0 preserved concurrent
+dwelling release evidence; independent review passed41/41 relevant tests and all11
+merge validation workflows passed. Controlled run38320718009 stopped before any
+tariff/rule/UI activation: source-only Inventory PATCH copied the prepared tar to a
+normalized function-source.zip and failed with error3 invalid ZIP. Read-only run
+38321225811 proves the copied archive SHA equals the retained candidate and all five
+functions remain on their original ACTIVE revisions with100% traffic. Earlier generic
+StorageSource documentation described tar.gz, while the specific Functions upload
+contract requires ZIP; actual operation evidence resolves the discrepancy. This was
+a failed release attempt, not a successful deployment or a waived gate.
+
+The new transport helper preserves the prepared runtime bytes and private tar recovery,
+generates a deterministic ZIP with full extraction-manifest equality, and retains it
+under the same privacy/CAS/immutable-generation checks. Provenance checks now verify
+Google's normalized source by downloading only the exact expected function object and
+generation and requiring SHA256 equality to the reviewed ZIP. An unknown running
+update still blocks. Successful response revision and source must equal the live
+function, in addition to unchanged config/IAM and100% traffic. Tests cover wrong bytes,
+wrong bucket/function/generation/time, direct and normalized lost-response/resume,
+live source divergence, deterministic binary preservation and public-access refusal.
+Builder28/28 passed; independent review and exact-head CI are pending at this checkpoint.
+
+Independent reviewer repeated28/28 and syntax checks, approved transport/provenance/
+recovery, and identified one diagnostic output issue: arbitrary operation error text
+must not be copied into future artifacts. Resolved by fixed categories invalid_zip
+or unspecified; the historical pinned evidence contains only the reviewed benign ZIP
+failure. No runtime/package changes were required. Exact correction-head CI remains.

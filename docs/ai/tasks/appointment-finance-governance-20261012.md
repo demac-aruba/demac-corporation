@@ -97,3 +97,36 @@ ERP preview dpl_27jCEa2yZDGMkUqHRc8vQB2oThGq is READY at this source; protected
 /login returns200 and the expected Staff Login page. The following evidence-only commit
 must retain identical application/function/rules trees, pass final exact-head CI, and
 merge with [merge-only] before the reviewed controlled release branch is started.
+
+## Activation checkpoint and transport correction
+
+PR572 merged as3ab832a0 after15/15 final-head workflows. Concurrent main f865332f
+was preserved; application/functions/rules trees match the prepared a8fa5a9a and
+preview exactly. The independent reviewer verified the imported script delta and
+41/41 tests; all11 validation workflows on the merge passed. Automatic rules and
+ordinary deployments stayed withheld by the reviewed merge-only marker.
+
+Controlled run38320718009 stopped at the first Inventory source update. Google copied
+the exact retained tar bytes into its internal function-source.zip, then rejected the
+build with code3, "zip: not a valid zip file". The previous equality-by-GCS-location
+operation gate correctly stopped further work but did not model this normalization.
+Read-only run38321225811 verifies the copied SHA256 equals the prepared tar and all
+five original functions remain ACTIVE with100% original traffic. No tariffs, rules,
+Office finance activation or ERP promotion occurred. Safe evidence is recorded in
+appointment-finance-transport-evidence-20261012.json.
+
+The correction derives deterministic ZIP transport from each verified retained tar,
+proves complete file-manifest equality by extraction, and retains it privately using
+the same full ancestry/bucket privacy, exact-resource canary, generation CAS and byte
+round-trip requirements. The recovery tar archives and all427 runtime test results
+remain unchanged. Source-only PATCH must use ZIP. A normalized Google source is
+accepted only at the expected function/bucket with an explicit generation, operation
+time after ZIP retention, and SHA256-identical downloaded bytes. Completed operation,
+live source generation, revision, runtime config, IAM and traffic must still agree.
+Lost-response/resume checks remain; no blind PATCH retry. Local28/28 focused checks
+pass. Independent review and exact correction-head CI remain required before retry.
+
+Independent reviewer repeated28/28 checks and found the ZIP/provenance correction
+sound. Their single diagnostic finding was resolved by recording a fixed error
+category instead of arbitrary operation error messages. Exact correction-head CI
+and the controlled retry remain the final activation gates.
