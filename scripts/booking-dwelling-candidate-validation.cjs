@@ -23,7 +23,7 @@ function validateLock(content, manifest) {
   for (const name of Object.keys(manifest.dependencies)) assert.ok(lock.packages['node_modules/' + name], 'Missing direct dependency');
   return lock;
 }
-function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, smokeScript = 'booking-dwelling-runtime-smoke.cjs' }) {
+function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, smokeScript = 'booking-dwelling-runtime-smoke.cjs', testFixtures = [] }) {
   const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   validateLock(lockBytes, pkg);
@@ -53,6 +53,7 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
   const validation = source + '-test'; fs.cpSync(source, validation, { recursive: true });
   if (candidate) {
     for (const file of selectedTests) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
+    for (const file of testFixtures) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
     fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
     if (reconstruct) fs.copyFileSync(path.join(root, 'functions/propertyLocations.emulator.test.cjs'), path.join(validation, 'propertyLocations.emulator.test.cjs'));
   }
@@ -79,6 +80,12 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
     const command = [process.execPath, '--require', networkGuard, '--test', path.join(validation, 'propertyLocations.emulator.test.cjs')].map(value => "'" + value.replace(/'/g, "'\\''") + "'").join(' ');
     pass(run('npx', ['--yes', 'firebase-tools@15.30.0', 'emulators:exec', '--only', 'firestore', '--project', 'demo-demac-dwellings', '--config', path.join(root, 'firebase.dwellings-preview.json'), command], root, emulatorEnv));
   } else pass(run(process.execPath, ['--test', ...selectedTests], validation, testEnv));
+  // Fixtures serve synthetic tests only. Restore exact shipped bytes before the
+  // actual entrypoint/bootstrap smoke test so no fixture repairs its runtime.
+  for (const file of testFixtures) {
+    if (fs.existsSync(path.join(source,file))) fs.copyFileSync(path.join(source,file),path.join(validation,file));
+    else fs.unlinkSync(path.join(validation,file));
+  }
   const smoke = run(process.execPath, [path.join(root, 'scripts', smokeScript), validation, name.replace(/-(baseline|candidate)$/, '')], validation, testEnv);
   assert.match(smoke, /PASS: real bootstrap/);
   fs.rmSync(validation, { recursive: true });

@@ -13,12 +13,12 @@ const PROJECT = 'demac-corporation';
 const BUCKET = 'gcf-v2-sources-1053571783393-us-central1';
 const BASE = '0dc09f3167150ed775018a6f257542961b21cddf';
 const TARGETS = {
-  officeBookingAuthority: { sourceHash: '12336022f661ad3f652b985085850bb85d3ddd212651063b4bedf1d6bb260141', files: ['appointmentCharges.js','officeBookingAuthorityFacade.js','servicePricingAuthority.js','demacServicePricingRules.js'], added: ['appointmentChargeEditing.js','serviceCatalogEditing.js'],
-    tests: ['appointmentCharges.test.js','servicePricingAuthority.test.js','demacServicePricingRules.test.js','officeBookingAuthorityFacadeProject.test.js','officeBookingAuthorityCommunication.test.js','bookingAuthorityFirestore.test.js'], extraTests: ['appointmentChargeEditing.test.js','serviceCatalogEditing.test.js'] },
+  officeBookingAuthority: { sourceHash: '12336022f661ad3f652b985085850bb85d3ddd212651063b4bedf1d6bb260141', files: ['appointmentCharges.js','officeBookingAuthorityFacade.js','servicePricingAuthority.js'], added: ['appointmentChargeEditing.js','serviceCatalogEditing.js'],
+    tests: ['appointmentCharges.test.js','servicePricingAuthority.test.js','officeBookingAuthorityFacadeProject.test.js','officeBookingAuthorityCommunication.test.js','bookingAuthorityFirestore.test.js'], extraTests: ['appointmentChargeEditing.test.js','serviceCatalogEditing.test.js'] },
   inventoryAuthority: { sourceHash: 'd0863be9a354923b0cb3cea752ec263f6ec296f979602b28e5676df7eb2b65ff', files: ['inventoryAuthority.js'], added: ['servicePricingAuthority.js'], tests: ['inventoryAuthority.test.js'], extraTests: ['servicePricingAuthority.test.js'] },
   fieldOperationsAuthority: { sourceHash: 'dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d', files: ['servicePricingAuthority.js'], added: [], tests: ['fieldOperationsPriceSnapshots.test.js','servicePricingAuthority.test.js'], extraTests: [] },
-  processCustomerAgentInbound: { sourceHash: '67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c', files: ['commercialSalesAuthority.js','demacCustomerSalesTools.js','servicePricingAuthority.js','demacServicePricingRules.js'], added: [], tests: ['commercialSalesAuthority.test.js','demacCustomerReservationTools.test.js','demacServicePricingRules.test.js','servicePricingAuthority.test.js'], extraTests: ['catalogPriceCompatibility.test.js'] },
-  processCustomerAgentReactivation: { sourceHash: '67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c', files: ['commercialSalesAuthority.js','demacCustomerSalesTools.js','servicePricingAuthority.js','demacServicePricingRules.js'], added: [], tests: ['commercialSalesAuthority.test.js','demacCustomerReservationTools.test.js','demacServicePricingRules.test.js','servicePricingAuthority.test.js'], extraTests: ['catalogPriceCompatibility.test.js'] },
+  processCustomerAgentInbound: { sourceHash: '67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c', files: ['commercialSalesAuthority.js','demacCustomerSalesTools.js','servicePricingAuthority.js'], added: [], tests: ['commercialSalesAuthority.test.js','demacCustomerReservationTools.test.js','servicePricingAuthority.test.js','demacCustomerBusinessTools.test.js'], extraTests: ['catalogPriceCompatibility.test.js'] },
+  processCustomerAgentReactivation: { sourceHash: '67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c', files: ['commercialSalesAuthority.js','demacCustomerSalesTools.js','servicePricingAuthority.js'], added: [], tests: ['commercialSalesAuthority.test.js','demacCustomerReservationTools.test.js','servicePricingAuthority.test.js','demacCustomerBusinessTools.test.js'], extraTests: ['catalogPriceCompatibility.test.js'] },
 };
 const stable = value => value && typeof value === 'object' ? Array.isArray(value) ? value.map(stable) : Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const hash = value => crypto.createHash('sha256').update(Buffer.isBuffer(value) || typeof value === 'string' ? value : JSON.stringify(stable(value))).digest('hex');
@@ -47,6 +47,22 @@ function verifyInheritedPolicies(ancestors, policies) {
   assert.equal(ancestors.filter(item=>String(item.type).toLowerCase()==='project' && ['demac-corporation','1053571783393'].includes(String(item.id))).length,1,'Wrong project ancestry');
   assert.equal(policies.length,ancestors.length,'Incomplete inherited policy inspection');
   for (const policy of policies) assert.ok(!(policy.bindings || []).some(binding=>(binding.members || []).some(member=>['allUsers','allAuthenticatedUsers'].includes(member))),'Inherited public recovery access rejected');
+}
+function verifyInactivePricingFixture(source) {
+  const seen=new Set(), pending=['bootstrap.js'];
+  while(pending.length) {
+    const file=pending.pop(); if(seen.has(file)) continue; seen.add(file);
+    const code=fs.readFileSync(path.join(source,file),'utf8');
+    assert.ok(!code.includes('demacServicePricingRules'),'Repository pricing fixture is reachable from runtime');
+    for(const match of code.matchAll(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g)) {
+      const base=path.resolve(source,path.dirname(file),match[1]);
+      assert.ok(base.startsWith(source + path.sep),'Runtime import leaves source');
+      const resolved=[base,base+'.js',base+'.json',path.join(base,'index.js')].find(value=>fs.existsSync(value)&&fs.statSync(value).isFile());
+      assert.ok(resolved,'Missing reachable local runtime import');
+      if(resolved.endsWith('.js')) pending.push(path.relative(source,resolved));
+    }
+  }
+  return {reachableModules:seen.size,repositoryPricingFixtureReachable:false};
 }
 async function main() {
   assert.equal(process.versions.node.split('.')[0], '22');
@@ -103,6 +119,7 @@ async function main() {
       cloud(['storage','cp',`gs://${src.bucket}/${src.object}#${src.generation}`,zip,'--quiet']);
       safePaths(run('unzip',['-Z1',zip]).trim().split('\n')); fs.mkdirSync(baseline); run('unzip',['-q',zip,'-d',baseline]);
       const original = manifest(baseline); assert.equal(runtimeSourceHash(original),spec.sourceHash,'Unreviewed deployed source');
+      const runtimeGraph=verifyInactivePricingFixture(baseline);
       for (const file of Object.keys(original)) {
         assert.ok(!/(^|\/)\.env(?:\.|$)|\.(?:pem|key)$|(?:credential|service-account)\.json$/i.test(file), 'Private key in source');
         if (file === 'package-lock.json') continue; // Exact lock stays in verified private storage only.
@@ -131,7 +148,9 @@ async function main() {
       summary.stage = name + '-test-baseline'; save();
       const baselineResult = validateCandidate({source:baseline,root,out,env:isolation,candidate:false,reconstruct:false,name:name + '-baseline',selectedTests:baselineTests,smokeScript:'appointment-finance-runtime-smoke.cjs'});
       summary.stage = name + '-test-candidate'; save();
-      const candidateResult = validateCandidate({source:candidate,root,out,env:isolation,candidate:true,reconstruct:false,name:name + '-candidate',selectedTests:[...spec.tests,...spec.extraTests],smokeScript:'appointment-finance-runtime-smoke.cjs'});
+      verifyInactivePricingFixture(candidate);
+      const testFixtures=name==='officeBookingAuthority' ? ['demacServicePricingRules.js'] : [];
+      const candidateResult = validateCandidate({source:candidate,root,out,env:isolation,candidate:true,reconstruct:false,name:name + '-candidate',selectedTests:[...spec.tests,...spec.extraTests],smokeScript:'appointment-finance-runtime-smoke.cjs',testFixtures});
       assert.deepEqual(manifest(baseline),before); assert.deepEqual(manifest(candidate),after);
       const archives = [];
       for (const [label,directory,expected] of [['baseline',baseline,before],['candidate',candidate,after]]) {
@@ -168,12 +187,12 @@ async function main() {
       }
       const fresh = describe(name); assert.deepEqual(fresh.buildConfig.source,fn.buildConfig.source,'Concurrent source change');
       assert.equal(hash(releaseConfig(fresh)),originalConfig,'Concurrent configuration change'); assert.equal(hash(iam(fresh)),originalIam,'Concurrent IAM change');
-      summary.functions.push({name,beforeRevision:fn.serviceConfig.revision,source:src,originalSourceHash:spec.sourceHash,reconstructed,historicalDependencyEquivalence:reconstructed ? 'unknown; newly pinned baseline' : 'original lock preserved',configHash:originalConfig,iamHash:originalIam,changed,baselineResult,candidateResult,archives});
+      summary.functions.push({name,beforeRevision:fn.serviceConfig.revision,source:src,originalSourceHash:spec.sourceHash,reconstructed,historicalDependencyEquivalence:reconstructed ? 'unknown; newly pinned baseline' : 'original lock preserved',configHash:originalConfig,iamHash:originalIam,changed,runtimeGraph,testFixtures,baselineResult,candidateResult,archives});
       save(); console.log(name + ': baseline ' + baselineResult.testsPassed + '; candidate ' + candidateResult.testsPassed + '; runtime smoke passed; private recovery=' + retain);
     }
     checkBucket();
     summary.stage='complete'; save(); console.log('PASS preparation; no production behavior, settings, rules or records changed');
   } catch (error) { summary.error = error.code === 'ERR_ASSERTION' ? String(error.message).split('\n')[0] : 'Preparation failed at ' + summary.stage; save(); console.error(summary.error); process.exitCode=1; }
 }
-module.exports={TARGETS,verifyDelta,verifyPrivateBucket,verifyInheritedPolicies,retainedAction,CANARY};
+module.exports={TARGETS,verifyDelta,verifyPrivateBucket,verifyInheritedPolicies,verifyInactivePricingFixture,retainedAction,CANARY};
 if(require.main===module) main();

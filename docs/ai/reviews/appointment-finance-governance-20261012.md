@@ -61,3 +61,18 @@ and real recovery evidence remain required before it can be deployed.
 The Inventory and Firebase rules workflows now respect `[merge-only]`, retaining
 their ordinary deployment paths. This prevents those writes from racing a
 coordinated cutover. Final exact-head CI and release preparation remain pending.
+
+Preparation run 38315094298 failed an archived `demacServicePricingRules` test
+because that dormant fixture imports the retired scheduling module. This failed
+check is not recorded as passed. Independent traversal of the actual Office and
+Inventory bootstraps found 151 and 70 reachable modules, no missing local imports,
+and no path to that fixture; no non-test repository consumer imports it. Runtime
+scope was corrected to preserve that dormant file and test the actual pricing
+consumers instead. Repository default tests remain mandatory CI. Candidate Office
+tests use the current helper only as an isolated fixture, restore archived bytes
+before the real bootstrap smoke, and never include fixture changes in a deployed
+archive. Preparation now also checks this reachability in every downloaded bundle.
+
+The same run verified effective recovery privacy through the complete project
+ancestry (one project, no parent), plus bucket IAM and uniform access. No recovery
+objects or production behavior were changed before the failed baseline test.
