@@ -16,3 +16,5 @@ Reviewer independently passed three focused backend checks, three old/new golden
 ## Decision
 - [x] Pass with release gates
 Backend-first publication is mandatory. CI must pass the exact reviewed tree; controlled audit/release must prove the single-file runtime delta, unchanged config/IAM and active traffic before publishing UI. Retain compatible backend on frontend rollback. Existing owner authorization covers audited merge/deploy. Production customer mutations and communications are excluded.
+
+Release evidence: read-only audit run 38467175713 passed on fb3464ddceca8c6a942db47ebb8ca1a565c653ab. Exact live package baseline passed 126 tests; single-module candidate passed 127 plus runtime smoke. Configuration, IAM and active traffic matched before/after audit. Controlled source-only release reuses the reviewed catalog release mechanism, changing only task names/audit reference. Its 19 transport, retry and safety tests pass.
