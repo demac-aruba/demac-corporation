@@ -4,8 +4,36 @@ Implementation is prepared, not activated. This does not authorize accounting wr
 The owner requested development on 2026-10-12 Aruba time and previously explicitly
 authorized merge/deploy for this integration, conditional on protecting real QuickBooks
 data. That authorization covers publishing these disabled entry pages after review.
-Credential configuration, backend deployment and real-company activation remain outside
-this release. Production credentials are still locked until App details is completed.
+Credential configuration, backend deployment and real-company activation were outside
+the entry-page release. The later preparation status is recorded below.
+
+## Owner-confirmed company and preparation status — 2026-10-13
+
+- The owner supplied Company ID `9130 3523 2707 4466`; the exact server value is
+  `QBO_PRODUCTION_REALM_ID=9130352327074466`. Preserve this as a string. This is the
+  owner-designated target, not evidence of a completed Intuit authorization.
+- The owner confirmed the real company subscription is **QuickBooks Advanced**.
+  Subscription name does not establish the company's country edition or API eligibility.
+- Production credentials have been unlocked. Metadata preflight run `38406692889`
+  on merge `00090bb576f17a56fd6292358537b184dcf006e3` confirmed enabled version `1`
+  for both `QBO_PRODUCTION_CLIENT_ID` and `QBO_PRODUCTION_CLIENT_SECRET`.
+  Values were not accessed and Intuit has not validated them in a real authorization.
+- The same preflight found no `QBO_PRODUCTION_TOKEN_KEY` and no production
+  `quickbooksConnection` Function. Existing `quickbooksSandbox` was active on
+  revision `quickbookssandbox-00002-meb`; no existing function was changed.
+- The isolated source package is prepared with the designated realm and
+  `QBO_PRODUCTION_ENABLED=false`. It is not deployed. The frontend gate remains off.
+- The designated owner's Firebase UID is still unverified. Obtain the exact email
+  used by Christian to sign into the ERP, resolve that one Firebase Auth identity,
+  and verify the matching active administrative `users/{uid}` profile before assigning
+  `QBO_PRODUCTION_OWNER_UID`. Do not infer it from a GitHub author, company contact,
+  another admin, or the Intuit login. Do not alter users, roles or passwords.
+
+Next rollout work after owner identity is verified: securely create the encryption-key
+secret, review and deploy only the isolated disabled backend, verify its boundaries,
+and complete the activation gates below. Real-company consent remains owner-driven.
+No accounting writes, synchronization, financial-report access or ChatGPT access have
+been enabled by supplying the Company ID or preparing this configuration.
 
 ## Publish the entry pages first
 
