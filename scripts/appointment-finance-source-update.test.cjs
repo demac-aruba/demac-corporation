@@ -7,7 +7,7 @@ function fixture(){
  let state='ACTIVE',candidate=false,revision='old',patches=0,polls=0,ops=[];
  const operation=(done=false,error)=>({name:'projects/demac-corporation/locations/us-central1/operations/test',metadata:{target:patch.name,verb:'update',createTime:new Date().toISOString(),requestResource:clone(patch)},done,...(error?{error}:{...(done?{response:{...clone(patch),serviceConfig:{revision:'new'}}}:{})})});
  const adapter={patch,baselineRevision:'old',operations:async()=>clone(ops),wait:async()=>{},record:()=>{},
-  inspect:async({allowFailed})=>{assert.ok(state==='ACTIVE'||allowFailed&&['FAILED','UNKNOWN'].includes(state));return {fn:{name:patch.name,state,serviceConfig:{revision}},alreadyApplied:candidate};},
+  inspect:async({allowFailed})=>{assert.ok(state==='ACTIVE'||allowFailed&&['FAILED','UNKNOWN'].includes(state));return {fn:{...clone(patch),state,serviceConfig:{revision}},alreadyApplied:candidate};},
   publish:async()=>{patches++;state='DEPLOYING';ops=[operation()];return clone(ops[0]);},
   getOperation:async()=>{polls++;state='ACTIVE';candidate=true;revision='new';ops=[operation(true)];return clone(ops[0]);}};
  return {adapter,operation,set:value=>{({state=state,candidate=candidate,revision=revision,ops=ops}=value);},counts:()=>({patches,polls}),getOps:()=>ops};
@@ -43,4 +43,36 @@ test('partial rollout resume skips proven targets and stops at the first unverif
  const first=fixture(),second=fixture();first.set({candidate:true,revision:'new',ops:[first.operation(true)]});second.adapter.getOperation=async()=>second.operation(true,{code:13});let downstream=false;
  await assert.rejects((async()=>{for(const f of [first,second])await updateSource(f.adapter);downstream=true;})());
  assert.equal(first.counts().patches,0);assert.equal(second.counts().patches,1);assert.equal(downstream,false);
+});
+test('server-normalized immutable ZIP copy is verified before polling and on safe resume',async()=>{
+ const {sourceVerifier}=require('./appointment-finance-transport.cjs');
+ const source={bucket:'gcf-v2-sources-1053571783393-us-central1',object:'officeBookingAuthority/function-source.zip',generation:'99'},digest='b'.repeat(64);
+ for(const lost of [false,true]){
+  const f=fixture();let reads=0;
+  f.adapter.sourceMatches=sourceVerifier({name:'officeBookingAuthority',transport:{sha256:digest,createdAt:new Date(Date.now()-10000).toISOString()},downloadHash:()=>{reads++;return digest;}});
+  const normalized=done=>{const op=f.operation(done);op.metadata.requestResource.buildConfig.source.storageSource=clone(source);if(done)op.response.buildConfig.source.storageSource=clone(source);return op;};
+  const send=f.adapter.publish;f.adapter.publish=async()=>{await send();f.set({ops:[normalized(false)]});if(lost)throw Error('Synthetic response lost');return normalized(false);};
+  const poll=f.adapter.getOperation;f.adapter.getOperation=async()=>{await poll();f.set({ops:[normalized(true)]});return normalized(true);};
+  const inspect=f.adapter.inspect;f.adapter.inspect=async args=>{const value=await inspect(args);if(value.alreadyApplied)value.fn.buildConfig.source.storageSource=clone(source);return value;};
+  await updateSource(f.adapter);await updateSource(f.adapter);
+  assert.deepEqual(f.counts(),{patches:1,polls:1});assert.equal(reads,1);
+ }
+});
+test('copied wrong bytes or live-source divergence never permit downstream activation',async()=>{
+ const f=fixture();f.adapter.sourceMatches=()=>false;await assert.rejects(updateSource(f.adapter),/unreviewed operation/);assert.deepEqual(f.counts(),{patches:1,polls:1});
+ const changed=fixture(),inspect=changed.adapter.inspect;changed.adapter.inspect=async args=>{const v=await inspect(args);if(v.alreadyApplied)v.fn.buildConfig.source.storageSource.generation='wrong';return v;};
+ await assert.rejects(updateSource(changed.adapter),/Live source differs/);
+});
+test('accepted operation provenance can populate after PATCH without another mutation',async()=>{
+ const f=fixture(),send=f.adapter.publish;
+ f.adapter.publish=async()=>{const response=await send();delete response.metadata.requestResource;return response;};
+ await updateSource(f.adapter);assert.deepEqual(f.counts(),{patches:1,polls:1});
+});
+test('provenance polling is bounded and cannot switch the accepted operation identity',async()=>{
+ const f=fixture(),send=f.adapter.publish,poll=f.adapter.getOperation;
+ f.adapter.publish=async()=>{const response=await send();delete response.metadata.requestResource;return response;};
+ f.adapter.getOperation=async()=>({...await poll(),name:'projects/demac-corporation/locations/us-central1/operations/unrelated'});
+ await assert.rejects(updateSource(f.adapter),/Operation identity changed/);assert.equal(f.counts().patches,1);
+ const pending=fixture();let reads=0;pending.adapter.getOperation=async()=>{reads++;return pending.operation();};await assert.rejects(updateSource(pending.adapter),/exceeded30minutes/);assert.equal(reads,90);assert.equal(pending.counts().patches,1);
+ const wrong=fixture(),sendWrong=wrong.adapter.publish;wrong.adapter.publish=async()=>{const op=await sendWrong();op.metadata.target='another-function';return op;};await assert.rejects(updateSource(wrong.adapter),/another function target/);assert.equal(wrong.counts().polls,0);
 });

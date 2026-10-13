@@ -5,12 +5,14 @@ const {TARGETS}=require('./appointment-finance-prepare.cjs');
 const {planTariffs}=require('./appointment-finance-tariff-plan.cjs');
 const sha='a'.repeat(40),bucket='gcf-v2-sources-1053571783393-us-central1';
 const archive=name=>({label:'candidate',privateRetained:true,extractionVerified:true,anonymousAccessDenied:true,generation:'123456789',sha256:'b'.repeat(64),uri:`gs://${bucket}/codex-release-recovery/appointment-finance/${sha}/${name}-candidate.tar.gz`});
+const transport=name=>({...archive(name),format:'zip',recoverySha256:'c'.repeat(64),fullManifestHash:'d'.repeat(64),uri:archive(name).uri.replace('.tar.gz','.zip')});
 test('source patch can only select a retained immutable reviewed candidate and cannot modify runtime configuration',()=>{
  for(const name of Object.keys(TARGETS)){
-  const patch=sourcePatch(name,archive(name),sha);
+  const patch=sourcePatch(name,transport(name),sha);
   assert.deepEqual(Object.keys(patch).sort(),['buildConfig','name']);assert.deepEqual(Object.keys(patch.buildConfig),['source']);
   assert.equal(patch.buildConfig.source.storageSource.generation,'123456789');
-  for(const change of [{label:'baseline'},{privateRetained:false},{anonymousAccessDenied:false},{uri:'gs://public/arbitrary.tar.gz'},{generation:''}])assert.throws(()=>sourcePatch(name,{...archive(name),...change},sha));
+  for(const change of [{format:'tar.gz'},{recoverySha256:''},{fullManifestHash:''},{label:'baseline'},{privateRetained:false},{anonymousAccessDenied:false},{uri:'gs://public/arbitrary.zip'},{generation:''}])assert.throws(()=>sourcePatch(name,{...transport(name),...change},sha));
+  assert.throws(()=>sourcePatch(name,archive(name),sha),'Recovery tar must never be published as function source');
  }
  assert.throws(()=>sourcePatch('unrelated',archive('unrelated'),sha));
 });

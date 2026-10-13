@@ -1,0 +1,163 @@
+{
+  "backendRunId": 38323120937,
+  "backendArtifactId": 11780885333,
+  "backendArtifactZipSha256": "599a71c59678c8f02a46d589ab268272cb1551389ee7acab6fe7808375b11325",
+  "backendSourceSha": "1e3153b6bec0726cba285f1350e45d90d7e82aa9",
+  "applicationSourceSha": "a8fa5a9acb61c400b02c077d30726475566d60cd",
+  "previewDeploymentId": "dpl_27jCEa2yZDGMkUqHRc8vQB2oThGq",
+  "productionDeploymentId": "dpl_6xLMiVwQrsTozBCLWXke3QiFkepA",
+  "productionUrl": "https://demac-aruba.com",
+  "projectId": "prj_bJz7bZZtj8qgj9gX4DHZglyP6Jl7",
+  "teamId": "team_DMKv1yhhUjnR4Pu141k3iwuX",
+  "productionTarget": "production",
+  "productionState": "READY",
+  "productionRebuiltFromApprovedPreview": true,
+  "withLatestCommit": false,
+  "stagingDomainCheck": {
+    "productionStillOnPriorDeployment": "dpl_4tgZrZeCWGYvbmM2JQM6t78VMg9j",
+    "checkedAfterProductionBuildReady": true
+  },
+  "approvedStagedPages": [
+    {
+      "path": "/login",
+      "status": 200,
+      "title": "Staff Login | DEMAC"
+    },
+    {
+      "path": "/scheduling",
+      "status": 200,
+      "title": "ERP | DEMAC"
+    },
+    {
+      "path": "/catalog",
+      "status": 200,
+      "title": "ERP | DEMAC"
+    }
+  ],
+  "stagedAssets": [
+    {
+      "path": "/_next/static/chunks/1eh82uacw6qxp.js",
+      "status": 200,
+      "bytes": 31407
+    },
+    {
+      "path": "/_next/static/chunks/2q2djc5uiszne.js",
+      "status": 200,
+      "bytes": 227315
+    },
+    {
+      "path": "/_next/static/chunks/2uduyt0fjue0b.js",
+      "status": 200,
+      "bytes": 137108
+    },
+    {
+      "path": "/_next/static/chunks/3mn0yuidjngx8.js",
+      "status": 200,
+      "bytes": 44409
+    },
+    {
+      "path": "/_next/static/chunks/turbopack-0eoaoc813bt51.js",
+      "status": 200,
+      "bytes": 11074
+    },
+    {
+      "path": "/_next/static/chunks/3la-_67fyqkip.js",
+      "status": 200,
+      "bytes": 23803
+    },
+    {
+      "path": "/_next/static/chunks/2z2y8ccgq59fq.js",
+      "status": 200,
+      "bytes": 54636
+    },
+    {
+      "path": "/_next/static/chunks/1-20v5oolcict.js",
+      "status": 200,
+      "bytes": 9273
+    },
+    {
+      "path": "/_next/static/chunks/0cz1d0mv5g_q7.js",
+      "status": 200,
+      "bytes": 112541
+    },
+    {
+      "path": "/_next/static/chunks/1uzcoav2y6udt.js",
+      "status": 200,
+      "bytes": 5585
+    }
+  ],
+  "firebasePublicConfiguration": {
+    "projectId": "demac-corporation",
+    "authDomain": "demac-corporation.firebaseapp.com",
+    "storageBucket": "demac-corporation.firebasestorage.app",
+    "path": "/_next/static/chunks/3la-_67fyqkip.js"
+  },
+  "promotionAliases": [
+    {
+      "alias": "demac-aruba.com",
+      "status": "completed"
+    },
+    {
+      "alias": "www.demac-aruba.com",
+      "status": "completed"
+    },
+    {
+      "alias": "demac-corporation-web.vercel.app",
+      "status": "completed"
+    }
+  ],
+  "domainResolvedDeploymentId": "dpl_6xLMiVwQrsTozBCLWXke3QiFkepA",
+  "autoAssignment": {
+    "stagingFalseRequestAccepted": true,
+    "finalTrueRequestAccepted": true,
+    "originalValue": "not exposed by connector",
+    "readback": "field not exposed by connector; no original-value restoration claimed",
+    "observedBehavior": "domain remained on prior deployment through READY; explicit promotion completed all three aliases"
+  },
+  "runtimeLogCheck": {
+    "environment": "production",
+    "deploymentId": "dpl_6xLMiVwQrsTozBCLWXke3QiFkepA",
+    "window": "10m",
+    "levels": [
+      "error",
+      "fatal"
+    ],
+    "returnedGroups": 0,
+    "limitation": "immediate available runtime window only; not evidence of all authenticated business flows"
+  },
+  "independentReview": "GO for backend completion and bounded production rebuild/stage/promotion adaptation",
+  "productionCustomerWriteTests": false,
+  "publicSmoke": {
+    "checkedAt": "2026-10-13T00:06:57.843059+00:00",
+    "routes": [
+      {
+        "url": "https://demac-aruba.com/login",
+        "status": 200,
+        "finalUrl": "https://demac-aruba.com/login",
+        "title": "Staff Login | DEMAC",
+        "hasExpectedBundle": true
+      },
+      {
+        "url": "https://demac-aruba.com/scheduling",
+        "status": 200,
+        "finalUrl": "https://demac-aruba.com/scheduling",
+        "title": "ERP | DEMAC",
+        "hasExpectedBundle": true
+      },
+      {
+        "url": "https://demac-aruba.com/catalog",
+        "status": 200,
+        "finalUrl": "https://demac-aruba.com/catalog",
+        "title": "ERP | DEMAC",
+        "hasExpectedBundle": true
+      },
+      {
+        "url": "https://www.demac-aruba.com/login",
+        "status": 200,
+        "finalUrl": "https://www.demac-aruba.com/login",
+        "title": "Staff Login | DEMAC",
+        "hasExpectedBundle": true
+      }
+    ]
+  }
+}

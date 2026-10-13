@@ -1,0 +1,207 @@
+{
+  "failedRunId": 38320718009,
+  "failedArtifactId": 11778976568,
+  "failedArtifactSha256": "2d274646698e896acf269f2863e4e51c00197420fb773106766f56526070ff1e",
+  "release": {
+    "sourceSha": "3ab832a0d2b10ce31cdce2dbe03d2c4c15232972",
+    "preparedSha": "a8fa5a9acb61c400b02c077d30726475566d60cd",
+    "stage": "source-inventoryAuthority",
+    "functions": [
+      {
+        "name": "officeBookingAuthority",
+        "beforeRevision": "officebookingauthority-00084-vak",
+        "alreadyApplied": false,
+        "sourceHash": "744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190"
+      },
+      {
+        "name": "inventoryAuthority",
+        "beforeRevision": "inventoryauthority-00004-dis",
+        "alreadyApplied": false,
+        "sourceHash": "d0863be9a354923b0cb3cea752ec263f6ec296f979602b28e5676df7eb2b65ff"
+      },
+      {
+        "name": "fieldOperationsAuthority",
+        "beforeRevision": "fieldoperationsauthority-00008-goz",
+        "alreadyApplied": false,
+        "sourceHash": "dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d"
+      },
+      {
+        "name": "processCustomerAgentInbound",
+        "beforeRevision": "processcustomeragentinbound-00054-bav",
+        "alreadyApplied": false,
+        "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c"
+      },
+      {
+        "name": "processCustomerAgentReactivation",
+        "beforeRevision": "processcustomeragentreactivation-00054-juj",
+        "alreadyApplied": false,
+        "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c"
+      }
+    ],
+    "mode": "forward-release",
+    "mainSha": "3ab832a0d2b10ce31cdce2dbe03d2c4c15232972",
+    "rulesBefore": {
+      "rulesetName": "projects/demac-corporation/rulesets/17419371-17cf-4a7c-aef3-f66323276c75",
+      "sourceHash": "2ed66f4dab0ed612eb080b778b50e72e8081e7b12c77a5d90c884c7fa076a5c2"
+    },
+    "operations": [
+      {
+        "function": "inventoryAuthority",
+        "name": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+        "done": false,
+        "errorCode": null,
+        "intent": true,
+        "at": "2026-10-12T23:11:46.242Z"
+      }
+    ],
+    "error": "PATCH returned an unreviewed operation"
+  },
+  "diagnosticRunId": 38321225811,
+  "diagnosticArtifactId": 11778772371,
+  "diagnosticArtifactSha256": "9c55c49f3428311d46dd1e0ca6a6534067fff1db4f6a5f41a97e69ffb889a046",
+  "acceptedSource": {
+    "operation": "projects/demac-corporation/locations/us-central1/operations/operation-1791846706644-65dacd2710786-4b7439cc-86abee4f",
+    "sha256": "ca184f0d68089b5cb8f5f8c87430a9896d12db6b88e0d7552e02a63c6eb97f9c",
+    "bytes": 465359,
+    "magic": "1f8b0800"
+  },
+  "rejectedOperation": {
+    "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791846706644-65dacd2710786-4b7439cc-86abee4f",
+    "target": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+    "verb": "update",
+    "done": true,
+    "errorCode": 3,
+    "errorMessage": "Build failed with status: FAILURE and message: failed to Fetch: opening archive /workspace/.download/inventoryAuthority/function-source.zip: zip: not a valid zip file\n. For more details see the logs at https://console.cloud.google.com/cloud-build/builds;region=us-central1/6d851d90-961f-4f09-beaf-50d84d5bcfe7?project=1053571783393.",
+    "createTime": "2026-10-12T23:11:48.906714248Z",
+    "requestName": "projects/demac-corporation/locations/us-central1/functions/inventoryAuthority",
+    "requestKeys": [
+      "@type",
+      "name",
+      "buildConfig",
+      "serviceConfig",
+      "state",
+      "labels",
+      "environment",
+      "url",
+      "satisfiesPzi"
+    ],
+    "requestSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1791846708853538",
+      "generationType": "string"
+    },
+    "responseSource": null,
+    "requestResolvedSource": {
+      "keys": [
+        "bucket",
+        "object",
+        "generation"
+      ],
+      "bucket": "gcf-v2-sources-1053571783393-us-central1",
+      "object": "inventoryAuthority/function-source.zip",
+      "generation": "1788215232822379",
+      "generationType": "string"
+    },
+    "responseResolvedSource": null,
+    "requestType": "type.googleapis.com/google.cloud.functions.v2.Function",
+    "requestHasName": true,
+    "requestHasFunction": false,
+    "requestHasStorageSource": true,
+    "responseHasName": false,
+    "responseHasRevision": false,
+    "responseHasStorageSource": false
+  },
+  "activeFunctions": [
+    {
+      "name": "officeBookingAuthority",
+      "state": "ACTIVE",
+      "current": "officebookingauthority-00084-vak",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791844438804991",
+        "object": "officeBookingAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "officebookingauthority-00084-vak",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "inventoryAuthority",
+      "state": "ACTIVE",
+      "current": "inventoryauthority-00004-dis",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1788215232822379",
+        "object": "inventoryAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "inventoryauthority-00004-dis",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "state": "ACTIVE",
+      "current": "fieldoperationsauthority-00008-goz",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791672075422069",
+        "object": "fieldOperationsAuthority/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "fieldoperationsauthority-00008-goz",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "state": "ACTIVE",
+      "current": "processcustomeragentinbound-00054-bav",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657179928828",
+        "object": "processCustomerAgentInbound/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "processcustomeragentinbound-00054-bav",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "state": "ACTIVE",
+      "current": "processcustomeragentreactivation-00054-juj",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1790657228411844",
+        "object": "processCustomerAgentReactivation/function-source.zip"
+      },
+      "traffic": [
+        {
+          "revision": "processcustomeragentreactivation-00054-juj",
+          "percent": 100,
+          "tagged": false
+        }
+      ]
+    }
+  ]
+}

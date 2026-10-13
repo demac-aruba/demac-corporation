@@ -11,19 +11,25 @@ const {manifest,auditTariffs,decode}=require('./appointment-finance-release-audi
 const {runtimeSourceHash,releaseConfig,safePaths}=require('./booking-dwelling-release.cjs');
 const {planTariffs}=require('./appointment-finance-tariff-plan.cjs');
 const {selectOperations,settleOperation,updateSource}=require('./appointment-finance-source-update.cjs');
+const {retainZip,sourceVerifier}=require('./appointment-finance-transport.cjs');
 const PROJECT='demac-corporation', REGION='us-central1';
 const RELEASE='release/appointment-finance-20261012';
 const BUCKET='gcf-v2-sources-1053571783393-us-central1';
 const BASE_RULES='2ed66f4dab0ed612eb080b778b50e72e8081e7b12c77a5d90c884c7fa076a5c2';
 const stable=value=>value&&typeof value==='object'?Array.isArray(value)?value.map(stable):Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
 const hash=value=>crypto.createHash('sha256').update(Buffer.isBuffer(value)||typeof value==='string'?value:JSON.stringify(stable(value))).digest('hex');
-function sourcePatch(name,archive,preparedSha) {
+function archiveSource(name,archive,preparedSha,extension) {
   assert.ok(Object.hasOwn(TARGETS,name),'Unreviewed function');
   assert.equal(archive.label,'candidate'); assert.equal(archive.privateRetained,true); assert.equal(archive.extractionVerified,true); assert.equal(archive.anonymousAccessDenied,true);
   assert.match(preparedSha,/^[a-f0-9]{40}$/); assert.match(archive.generation,/^\d+$/); assert.match(archive.sha256,/^[a-f0-9]{64}$/);
-  const object=`codex-release-recovery/appointment-finance/${preparedSha}/${name}-candidate.tar.gz`;
+  const object=`codex-release-recovery/appointment-finance/${preparedSha}/${name}-candidate.${extension}`;
   assert.equal(archive.uri,`gs://${BUCKET}/${object}`,'Unreviewed archive location');
   return {name:`projects/${PROJECT}/locations/${REGION}/functions/${name}`,buildConfig:{source:{storageSource:{bucket:BUCKET,object,generation:archive.generation}}}};
+}
+function sourcePatch(name,transport,preparedSha){
+  assert.equal(transport.format,'zip','Functions publication requires reviewed ZIP transport');
+  assert.match(transport.recoverySha256,/^[a-f0-9]{64}$/);assert.match(transport.fullManifestHash,/^[a-f0-9]{64}$/);
+  return archiveSource(name,transport,preparedSha,'zip');
 }
 function verifyTraffic(service,revision) {
   assert.equal(service.status?.latestReadyRevisionName,revision,'Latest ready revision differs');
@@ -44,7 +50,7 @@ function verifyPrepared(prepared) {
     assert.equal(item.baselineResult.dependencyLockSha256,item.candidateResult.dependencyLockSha256);
     assert.equal(item.runtimeGraph.repositoryPricingFixtureReachable,false);
     assert.ok(item.archives.some(archive=>archive.label==='baseline'&&archive.privateRetained&&archive.extractionVerified));
-    sourcePatch(item.name,item.archives.find(archive=>archive.label==='candidate'),prepared.sourceSha);
+    archiveSource(item.name,item.archives.find(archive=>archive.label==='candidate'),prepared.sourceSha,'tar.gz');
   }
 }
 function tariffWrite(name,plan) {
@@ -62,7 +68,7 @@ async function main() {
   const run=(cmd,args)=>execFileSync(cmd,args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:50*1024*1024});
   const cloud=args=>run('gcloud',args), git=args=>run('git',args).trim();
   const prepared=JSON.parse(fs.readFileSync('docs/ai/releases/appointment-finance-prepared-20261012.json'));verifyPrepared(prepared);
-  const summary={sourceSha:process.env.GITHUB_SHA,preparedSha:prepared.sourceSha,stage:'preflight',functions:[],mode:'forward-release'};
+  const summary={sourceSha:process.env.GITHUB_SHA,preparedSha:prepared.sourceSha,stage:'preflight',functions:[],transports:[],mode:'forward-release'};
   const save=()=>fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
   const sourceGate=()=>{
     assert.equal(git(['rev-parse','HEAD']),process.env.GITHUB_SHA);
@@ -132,8 +138,11 @@ async function main() {
   const getOperation=name=>{assert.ok(name.startsWith(`projects/${PROJECT}/locations/${REGION}/operations/`));return api('https://cloudfunctions.googleapis.com/v2/'+name);};
   const recordOperation=(name,op)=>{
     summary.operations||=[];
-    summary.operations.push({function:name,name:op.name,done:op.done||false,errorCode:op.error?.code||null,...(op.intent?{intent:true,at:op.at}:{})});save();
+    summary.operations.push({function:name,name:op.name,done:op.done||false,errorCode:op.error?.code||null,
+      hasTarget:typeof op.metadata?.target==='string',hasRequestName:typeof op.metadata?.requestResource?.name==='string',hasRequestSource:Boolean(op.metadata?.requestResource?.buildConfig?.source?.storageSource),
+      ...(op.intent?{intent:true,at:op.at}:{})});save();
   };
+  const sourceChecks=new Map();let mirrorReads=0;
   try {
     sourceGate();save();
     const rules=await readRules(),candidateRules=fs.readFileSync('firestore.rules','utf8');
@@ -146,10 +155,17 @@ async function main() {
       cloud(['storage','cp',archive.uri+'#'+archive.generation,local,'--quiet']);assert.equal(hash(fs.readFileSync(local)),archive.sha256);
       safePaths(run('tar',['-tzf',local]).trim().split('\n'));fs.mkdirSync(dir);run('tar',['-xzf',local,'-C',dir]);const files=manifest(dir);assert.equal(runtimeSourceHash(files),archive.manifestHash);
       for(const file of [...TARGETS[item.name].files,...TARGETS[item.name].added])assert.equal(files[file],hash(fs.readFileSync(path.join(root,'functions',file))),'Candidate patch bytes differ');
-      const patch=sourcePatch(item.name,archive,prepared.sourceSha);
-      let prior=selectOperations(await operations(item),patch);
+      const transport={name:item.name,...await retainZip({name:item.name,directory:dir,archive,out,prepared,cloud})};
+      summary.transports.push(transport);save();
+      const sourceMatches=sourceVerifier({name:item.name,transport,downloadHash:source=>{
+        const local=path.join(out,'mirrored-source-'+(++mirrorReads));
+        cloud(['storage','cp',`gs://${source.bucket}/${source.object}#${source.generation}`,local,'--quiet']);
+        const digest=hash(fs.readFileSync(local));fs.unlinkSync(local);return digest;
+      }});sourceChecks.set(item.name,sourceMatches);
+      const patch=sourcePatch(item.name,transport,prepared.sourceSha);
+      let prior=selectOperations(await operations(item),patch,sourceMatches);
       const active=prior.find(op=>!op.done);
-      if(active){await settleOperation(active,{getOperation,wait,record:op=>recordOperation(item.name,op)});prior=selectOperations(await operations(item),patch);}
+      if(active){await settleOperation(active,{getOperation,wait,record:op=>recordOperation(item.name,op)});prior=selectOperations(await operations(item),patch,sourceMatches);}
       const state=inspect(item,item.name+'-initial',{allowFailed:Boolean(prior[0]?.done&&prior[0]?.error)});
       if(state.fn.state==='ACTIVE')await boundary(item.name);
       summary.functions.push({name:item.name,beforeRevision:state.fn.serviceConfig.revision,alreadyApplied:state.alreadyApplied,sourceHash:state.sourceHash});save();
@@ -162,8 +178,11 @@ async function main() {
     const deploy=async item=>{
       sourceGate();summary.stage='source-'+item.name;save();
       const entry=summary.functions.find(x=>x.name===item.name),archive=item.archives.find(x=>x.label==='candidate');
-      const patch=sourcePatch(item.name,archive,prepared.sourceSha);
+      const transport=summary.transports.find(x=>x.name===item.name);
+      assert.equal(transport.recoverySha256,archive.sha256);
+      const patch=sourcePatch(item.name,transport,prepared.sourceSha);
       const after=await updateSource({patch,baselineRevision:item.beforeRevision,operations:()=>operations(item),
+        sourceMatches:sourceChecks.get(item.name),
         inspect:options=>inspect(item,item.name+'-verified',options),
         publish:body=>{sourceGate();return api('https://cloudfunctions.googleapis.com/v2/'+patch.name+'?updateMask=buildConfig.source','PATCH',body);},
         getOperation,wait,record:op=>recordOperation(item.name,op)});

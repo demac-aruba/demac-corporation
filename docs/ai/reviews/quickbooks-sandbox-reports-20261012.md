@@ -66,3 +66,17 @@ completion; a normal frontend deployment could activate unrelated finance behavi
 This is a concrete concurrent-production dependency, not a missing owner approval.
 Keep the QBO extension reviewable in its PR; do not trigger deployment markers while
 this dependency remains unresolved.
+
+## Release dependency resolved — 2026-10-13 UTC
+
+Owner requested continuation at20:25 Aruba on2026-10-12. Main63da4599 records
+completed finance activation. Controlled run38323120937 succeeded, including the
+publish job115055581644. Production evidence matches the live ERP deployment
+dpl_6xLMiVwQrsTozBCLWXke3QiFkepA, READY ondemac-aruba.com. The previous failed
+finance attempts are historical; the coordinated-publication blocker above is resolved.
+
+Merged63da4599 into this task branch. Its changes since3ab832a0 are finance release
+transport and evidence only, with no changed application/runtime/rules source. The
+QuickBooks Function source still matches reviewed4f1f6b5a; all23 focused tests and the
+source pin check pass again. Existing authorization covers this bounded sandbox
+publication. Final exact-head CI and deployment verification remain mandatory.

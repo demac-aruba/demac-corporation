@@ -1,6 +1,6 @@
 # ADR: Governed visit service pricing and exclusive financial editing
 
-- Status: Proposed (owner-approved behavior; production release blocked)
+- Status: Accepted and active in production (backend 2026-10-12, ERP 2026-10-13 UTC)
 - Date: 2026-10-12
 - Owners: DEMAC business owner; ERP engineering
 - Rule: OPS-SCHED-CHARGES-001
@@ -25,7 +25,13 @@ Blank catalog prices are null (unpriced); only explicit zero is free. Customer p
 
 ## Verification and rollout
 
-See task and review evidence. Production release remains blocked by effective tariff verification, all-consumer runtime/recovery checks and coordinated client cutover. PR #570 supplied an owner-approved reconstructed dependency baseline, but its resumed publication failed and actual live state still requires verification. Validate a coordinated frontend/backend release and forward recovery against fixed dependencies first. Old frontend clients fail closed on new monetary writes and need reload; do not claim an uninterrupted rollout until the compatibility plan is tested. Reverting only the frontend is insufficient. Preserve every financial/operational document during recovery; coordination may expire naturally.
+See task and review evidence. The initial release was blocked by effective tariff verification, all-consumer runtime/recovery checks and coordinated client cutover. Those gates are now complete: controlled run38323120937 verified all five deployed consumers, saved 15 tariffs and governed rules before ERP promotion. The 427 actual-source preparation tests, old-client race/browser tests and final independent artifact review passed. Inventory uses the owner-approved reconstructed recovery dependency baseline; exact historical dependency equivalence remains unknown. Old frontend clients fail closed on new monetary writes and need reload; unsaved drafts remain in the old page and do not transfer automatically across reload. Reverting only the frontend is insufficient. Preserve every financial/operational document during recovery; coordination may expire naturally.
+
+The production ERP was rebuilt from the exact approved a8fa5a9a preview with production
+settings, staged and checked before promotion as dpl_6xLMiVwQrsTozBCLWXke3QiFkepA.
+Preview builds cannot be treated as instant production promotions. Backend activation
+and nonmutating public-domain proof are pinned in docs/ai/releases. Legacy source and
+old-client compatibility are maintained; no separate live Legacy host was identified.
 
 
 ### Cutover race and concurrency revision
