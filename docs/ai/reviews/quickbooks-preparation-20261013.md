@@ -29,11 +29,15 @@ No auth, Firestore rules, credential, token-scope or provider-write boundary cha
 | --- | --- | --- |
 | Medium | Removing a native dialog without closing it lost keyboard focus. | Call native close before removal; desktop/mobile tests assert focus returns to the trigger and Escape leaves the parent appointment open. |
 | Low | A malformed Field evidence envelope could throw instead of explaining the blocker. | Validate envelope before fingerprint comparison; malformed evidence yields no figures. |
-| Medium | Two existing browser fixtures omitted the newly consumed session-read export, preventing bundling. | Extend their synthetic identity contract; actual charge-service browser suite passes. Historical cutover fixture received the same export and a syntax check; its full Legacy cutover is outside this no-cutover change. |
+| Medium | Existing browser fixtures omitted the newly consumed session-read export, preventing bundling. | Extend the synthetic identity contract using exactly each fixture's existing principal. Actual charge-service browser suite passes. Initial CI exposed another transitive consumer in coworker support; all remaining synthetic session stubs now export the same read contract. Nine additional fixtures pass syntax checks, with assertions/network guards byte-for-byte preserved. Full CI must pass before production merge. |
 | Follow-up | Production Balance Sheet still fails a generic validator condition. | Add fixed diagnostic classifications and privacy tests; do not guess the condition or weaken report checks. Backend update and real read remain pending. |
 
 No unresolved finding blocks publishing this read-only frontend candidate. No existing
 gate or assertion was removed or weakened; CI gains a dedicated preview browser step.
+The first published candidate `6af8763` built successfully on Vercel and its protected
+`/scheduling/` route returned HTTP 200. Its coworker support CI failed on the missing
+fixture export above, so that run is not considered a passing release gate. The follow-up
+fixture commit requires a fresh CI run; current evidence is tracked on PR #597.
 
 ## Verification
 

@@ -32,7 +32,7 @@ const publishedProjection = {
   actualLaborHours: fixture.actualLaborHours, phases: [], assignments: [],
 };
 const stubs = {
-  'session': `export async function requireFirebaseWebSession(){return {uid:'SYNTHETIC-ACTOR',idToken:'synthetic-project-token'};}`,
+  'session': `export function loadFirebaseWebSession(){return {uid:'SYNTHETIC-ACTOR',idToken:'synthetic-project-token'};}export async function requireFirebaseWebSession(){return {uid:'SYNTHETIC-ACTOR',idToken:'synthetic-project-token'};}`,
   'auth-provider': `const principal = {userId:'SYNTHETIC-ACTOR',active:true, role:window.__schedulerOnly ? 'office_operator' : 'operations', displayName:'Synthetic operator', capabilities:new Set(window.__readOnly ? ['projects.view'] : window.__schedulerOnly ? ['projects.schedule'] : ['projects.view','projects.manage','projects.schedule'])}; export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[{id:'CUSTOMER-BROWSER-TEST',name:'Synthetic customer',active:true}],properties:[{id:'PROPERTY-BROWSER-TEST',clientId:'CUSTOMER-BROWSER-TEST',name:'Synthetic site',address:'Synthetic site',active:true}]};}

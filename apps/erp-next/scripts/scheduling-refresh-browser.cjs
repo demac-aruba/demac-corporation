@@ -15,7 +15,7 @@ const stubs = {
   // This retained attribution suite has no history fixtures; the real history hook
   // and note interactions run in scheduling-slot-history-browser.cjs.
   'use-schedule-history': `export function useScheduleHistory(){return {items:[],loading:false,error:'',refresh:async()=>{}};}`,
-  'session': `export async function requireFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}`,
+  'session': `export function loadFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}export async function requireFirebaseWebSession(){return {uid:window.getSyntheticUid(),idToken:'synthetic-project-token'};}`,
   'auth-provider': `import {useSyncExternalStore} from 'react';
     const listeners=new Set();let principal={userId:'synthetic-operator',displayName:'Viewer',active:true,capabilities:new Set(['scheduling.view','scheduling.manage','projects.schedule'])};
     window.switchPrincipal=(value)=>{principal={...principal,...value};for(const fn of listeners)fn();};

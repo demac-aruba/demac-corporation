@@ -97,7 +97,7 @@ async function runCase(browser, origin, name, viewport, dark) {
   finally { await context.close(); }
 }
 async function main() {
-  const stubs = { session: `export async function requireFirebaseWebSession(){return {idToken:'synthetic-only'};}`,
+  const stubs = { session: `export function loadFirebaseWebSession(){return {idToken:'synthetic-only'};}export async function requireFirebaseWebSession(){return {idToken:'synthetic-only'};}`,
     'client-config': `export const firebaseClientConfig={projectId:'demo-demac-references'};`,
     'isolated-preview': `export function firebaseTransportUrl(url){return url;}`,
     'next/image': `export default function Image({unoptimized,...props}){return <img {...props}/>;}` };
