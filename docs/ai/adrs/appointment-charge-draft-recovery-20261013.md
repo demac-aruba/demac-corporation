@@ -18,6 +18,12 @@ and Field fingerprint; exclude only the lease-fencing version. Financial changes
 explicit review tied to the exact observed baseline. Lease-only changes can safely rebase.
 A known own write advances the baseline only after its matching fresh server version.
 
+Follow-up incident: the exact-baseline lease rebase applies to fresh drafts as well
+as recovered ones. Visiting History releases the lease; returning reacquires it and
+advances version without changing financial evidence. Restricting rebase to restored
+drafts blocked confirmation of fresh work. Scope/Field acknowledgments reset after
+rebasing; changed financial baselines and open payment versions are not adopted.
+
 Persist each monetary request before dispatch. The retained edit token belongs only to
 that immutable replay payload; every activation acquires a new edit-session identity.
 No auto retry or background monetary commit occurs. Authentication invalidation and

@@ -142,6 +142,19 @@ await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 375.00'}).
 await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('OWNER-CASE-250');await page.getByRole('button',{name:'Guardar pago',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
 const balance=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');await balance.getByText('Afl. 125.00',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal(db.read('appointments/apt').jobCharges.originalEstimate,null);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,25000);
 await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor({state:'hidden',timeout:6000});assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3','Success feedback disappears; the draft remains');
+// A fresh draft must survive a lease-only version change when visiting History.
+await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.getAttribute('aria-label')==='Confirmar monto final'&&!button.disabled));
+const beforeHistoryVersion=db.read('appointments/apt').jobCharges.version;
+await page.getByRole('button',{name:'Historial',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos',exact:true}).waitFor();
+await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
+await page.getByText('SALDO ESTIMADO',{exact:true}).locator('..').getByText('Afl. 125.00',{exact:true}).waitFor();
+assert.ok(db.read('appointments/apt').jobCharges.version>beforeHistoryVersion,'History return acquires a fresh edit fence');
+assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),false,'Lease-only rebase resets scope review');
+await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.getAttribute('aria-label')==='Confirmar monto final'&&!button.disabled));
+assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,1);
+await page.screenshot({path:path.join(evidence,'fresh-draft-after-history.png'),fullPage:true});
 // The reported failure: reload AFTER the payment but BEFORE final confirmation.
 page.once('dialog',dialog=>dialog.accept());await page.reload();
 await page.getByLabel('Cantidad 1',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3','Pending work survives refresh');
@@ -161,6 +174,23 @@ const download=page.waitForEvent('download');await page.getByRole('button',{name
 await page.reload();await page.getByText('Saldo por cobrar',{exact:true}).locator('..').getByText('Afl. 125.00',{exact:true}).waitFor();assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,37500);assert.equal(db.read('appointments/apt').jobCharges.originalEstimate,null);assert.equal(db.read('workOrders/wo').status,'Confirmada');assert.equal(writes.length,2);assert.deepEqual(external,[]);assert.deepEqual(errors,[]);
 results.push({name:'owner-case-reload-before-final-no-projection',status:'PASS',finalCents:37500,receivedCents:25000,balanceCents:12500,pdf:true});console.log('PASS exact owner case: no projection, 375 work, 250 transfer, 125 balance, persistence and PDF');
 }finally{await context.close();}
+
+// Equal amounts alone do not authorize rebasing a fresh draft over another actor.
+reset();const changedContext=await browser.newContext({viewport:{width:1366,height:768},serviceWorkers:'block'});
+await changedContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+const changed=await changedContext.newPage();changed.setDefaultTimeout(12000);
+try{
+await changed.goto(origin+'/existing');await changed.getByLabel('Añadir servicio o producto',{exact:true}).fill('12KFSSF');await changed.getByRole('button',{name:'Seleccionar 12K BTU Split Unit Standard Service - First Floor · 12KFSSF',exact:true}).click();await changed.getByLabel('Cantidad 1',{exact:true}).fill('3');
+await changed.getByText('SALDO ESTIMADO',{exact:true}).locator('..').getByText('Afl. 375.00',{exact:true}).waitFor();
+await changed.getByRole('button',{name:'Historial',exact:true}).click();await changed.getByRole('heading',{name:'Historial de importes y pagos',exact:true}).waitFor();
+const state=db.read('appointments/apt').jobCharges;
+db.store.set('appointments/apt',{...db.read('appointments/apt'),jobCharges:{...state,version:state.version+1,updatedBy:'another-office',updatedAt:'2026-10-13T19:00:00.000Z'}});
+await changed.getByRole('button',{name:'Importes y pagos',exact:true}).click();await changed.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
+await changed.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();
+await changed.getByLabel('Revisé los trabajos realizados',{exact:false}).check();assert.equal(await changed.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+assert.equal(await changed.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal(writes.length,0,'Changed financial evidence is never silently overwritten');
+results.push({name:'fresh-draft-history-foreign-baseline-stays-blocked',status:'PASS'});console.log('PASS fresh draft remains blocked after foreign same-amount history change');
+}finally{await changedContext.close();}
 
 // Refresh after the server committed a cash receipt but its acknowledgement was lost.
 reset();const uncertainContext=await browser.newContext({viewport:{width:1366,height:768},serviceWorkers:'block'});
