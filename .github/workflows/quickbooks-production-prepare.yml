@@ -1,0 +1,53 @@
+name: QuickBooks production disabled installation
+on:
+  pull_request:
+    paths:
+      - 'scripts/quickbooks-production-prepare*.cjs'
+      - '.github/workflows/quickbooks-production-prepare.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/quickbooks-production-prepare*.cjs'
+      - '.github/workflows/quickbooks-production-prepare.yml'
+permissions:
+  contents: read
+concurrency:
+  group: quickbooks-production-installation
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/quickbooks-production-prepare.cjs
+      - run: node --test scripts/quickbooks-production-prepare.test.cjs functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
+      - run: node scripts/quickbooks-production-prepare.cjs --check
+  install-disabled:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[prepare-qbo-production]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      - name: Verify designated owner and install only the disabled production connector
+        run: node scripts/quickbooks-production-prepare.cjs --install-disabled
+# No frontend gate, OAuth authorization, financial report or accounting write is enabled.
