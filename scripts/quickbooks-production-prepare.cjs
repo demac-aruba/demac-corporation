@@ -240,4 +240,5 @@ if (require.main === module) {
   });
 }
 module.exports = { ownerFromLookup, checkProfile, resolveOwner, google, environment, checkSecretVersions, checkTokenKey,
-  verifyFunction, boundaries, diagnose, sourceCheck, stagePackage, OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE };
+  verifyFunction, boundaries, diagnose, sourceCheck, stagePackage, releaseCheck, inventory, verifyPublishedSource,
+  OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE };

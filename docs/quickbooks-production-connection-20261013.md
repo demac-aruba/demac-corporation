@@ -1,6 +1,7 @@
 # QuickBooks production connection rollout
 
-Implementation is prepared, not activated. This does not authorize accounting writes.
+The backend was installed disabled. Controlled identity activation is being prepared;
+see the current status below. This does not authorize accounting writes.
 The owner requested development on 2026-10-12 Aruba time and previously explicitly
 authorized merge/deploy for this integration, conditional on protecting real QuickBooks
 data. That authorization covers publishing these disabled entry pages after review.
@@ -53,6 +54,25 @@ The bounded installer and acceptance criteria are documented in
 recorded separately and must not be inferred from local tests.
 No accounting writes, synchronization, financial-report access or ChatGPT access have
 been enabled by supplying the Company ID or preparing this configuration.
+
+## Current status — installation complete; controlled activation
+
+PR #589 merged as `aeaa9bb504e89779f49316c4e3fe644912fa4795`. Run `38428683358`
+completed disabled installation with verified published source, owner, realm, version-1
+secrets, five HTTP boundaries and unchanged other functions. Revision:
+`quickbooksconnection-00001-taq`. No Intuit call occurred. This supersedes earlier status.
+
+The owner requested continuing after country verification. Intuit Developer links to
+https://quickbooks.intuit.com/choose-country/#south-america, which lists Aruba. His
+Accepted connections screenshot includes All other accepted countries. Geolocation
+United States describes hosting and matches us-central1; it is not the business domicile
+or proof of the subscription edition.
+
+See `docs/ai/tasks/quickbooks-production-activation-20261013.md`. Updated disclosures
+distinguish real identity verification from sandbox reports, acknowledge the broad scope
+and explain confirmed/uncertain revocation. No official Intuit security certification is
+claimed. Real consent and disconnect/reconnect acceptance remain owner-driven. Financial
+reports and accounting synchronization require a separate release.
 
 ## Publish the entry pages first
 
