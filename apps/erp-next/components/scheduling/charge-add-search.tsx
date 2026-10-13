@@ -14,7 +14,7 @@ export function ChargeAddSearch({ disabled, onAdd }: { disabled: boolean; onAdd:
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [revision]);
-  return <ChargeCatalogPicker inline index={0} items={items} disabled={disabled} loading={loading} error={error}
+  return <ChargeCatalogPicker inline floating index={0} items={items} disabled={disabled} loading={loading} error={error}
     fallbackLabel="" onRetry={() => setRevision(value => value + 1)} onSelect={item => {
       if (item) onAdd({ id: `actual-${crypto.randomUUID()}`, label: item.name, quantity: 1, serviceId: item.id });
     }}/>;

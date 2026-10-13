@@ -8,10 +8,10 @@ import styles from './charge-catalog-picker.module.css';
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 type Filter = 'Todos' | 'Servicio' | 'Producto';
 
-export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, disabled, loading, error, onRetry, onSelect, inline = false }: {
+export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, disabled, loading, error, onRetry, onSelect, inline = false, floating = false }: {
   items: ChargeCatalogItem[]; selectedId?: string; index: number; fallbackLabel: string; disabled: boolean;
   loading: boolean; error: string; onRetry: () => void; onSelect: (item: ChargeCatalogItem | null) => void;
-  inline?: boolean;
+  inline?: boolean; floating?: boolean;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [filter, setFilter] = useState<Filter>('Todos');
   const panelId = useId(), inputRef = useRef<HTMLInputElement>(null), triggerRef = useRef<HTMLButtonElement>(null);
@@ -27,7 +27,7 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
     if (inline) inputRef.current?.focus(); else triggerRef.current?.focus();
     setOpen(false);
   };
-  return <div className={styles.picker} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); if (inline) inputRef.current?.focus(); else triggerRef.current?.focus(); setOpen(false); } }}>
+  return <div className={`${styles.picker} ${floating ? styles.floating : ''}`} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); if (inline) inputRef.current?.focus(); else triggerRef.current?.focus(); setOpen(false); } }}>
     {inline ? <div className={styles.addRow}><label className={styles.search}><span>Añadir servicio, adicional o producto</span><input ref={inputRef} type="search" aria-label="Añadir servicio o producto" aria-expanded={open} aria-controls={panelId} value={query} disabled={disabled} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setOpen(true); }} placeholder="Buscar servicio, producto o código…"/></label><button type="button" className={styles.addButton} disabled={disabled} aria-expanded={open} aria-controls={panelId} onClick={() => { inputRef.current?.focus(); setOpen(true); }}><ChargeIcon name="plus"/>Añadir</button></div> : <><span className={styles.label}>Producto o servicio del catálogo</span>
     <button ref={triggerRef} type="button" className={styles.trigger} aria-label={`Tarifa del catálogo ${index}`} aria-expanded={open} aria-controls={panelId} disabled={disabled} onClick={() => setOpen(value => !value)}>
       <span className={`${styles.icon} ${selected?.itemType === 'Producto' ? styles.product : ''}`}><ChargeIcon name={selected?.itemType === 'Producto' ? 'grid' : 'work'}/></span>

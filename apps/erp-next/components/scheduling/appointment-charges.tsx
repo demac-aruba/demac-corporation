@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
 import { officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
-import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, mutateAppointmentCharges, newChargeRequestId,
+import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
   paymentMethods, quoteAppointmentCharges, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
@@ -16,21 +17,22 @@ const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', trans
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', receivedAt: new Date().toISOString(), note: '' });
 function useQuote(lines: ChargeLineInput[], revision = 0, appointmentId?: string, expectedVersion?: number, purpose: 'projection' | 'final' = 'final') {
-  const [quote, setQuote] = useState<ChargeQuote | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(false);
   const signature = JSON.stringify(lines);
+  const key = JSON.stringify([signature, revision, appointmentId, expectedVersion, purpose]);
+  const [result, setResult] = useState<{ key: string; quote: ChargeQuote | null; error: string; loading: boolean }>({ key: '', quote: null, error: '', loading: false });
   useEffect(() => {
     let active = true;
-    setQuote(null); setError('');
-    if (!lines.length) { setLoading(false); return; }
-    setLoading(true);
+    setResult({ key, quote: null, error: '', loading: Boolean(lines.length) });
+    if (!lines.length) return;
     const timer = window.setTimeout(() => { void quoteAppointmentCharges(JSON.parse(signature), appointmentId ? { appointmentId, expectedVersion: expectedVersion ?? 0 } : undefined, purpose).then(result => {
-      if (active) setQuote(result.quote);
-    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'No se pudo consultar el precio.'); }).finally(() => { if (active) setLoading(false); }); }, 300);
+      if (active) setResult({ key, quote: result.quote, error: '', loading: false });
+    }).catch(cause => { if (active) setResult({ key, quote: null, error: cause instanceof Error ? cause.message : 'No se pudo consultar el precio.', loading: false }); }); }, 300);
     return () => { active = false; window.clearTimeout(timer); };
   // The serialized immutable input prevents stale quote responses from replacing edits.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, revision, appointmentId, expectedVersion, purpose]);
-  return { quote, error, loading };
+  // Invalidate during render too: no frame may expose the previous input's price.
+  return result.key === key ? result : { quote: null, error: '', loading: Boolean(lines.length) };
 }
 export function ChargeNotice({ children }: { children: React.ReactNode }) { return <div className={styles.notice}><ChargeIcon name="info"/><div>{children}</div></div>; }
 function PaymentFields({ value, onChange, disabled = false }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean }) {
@@ -75,9 +77,13 @@ function ChargesSkeleton() {
   </div>;
 }
 const historyLabels: Record<string,string> = { initial_estimate: 'Proyección inicial', save_appointment_estimate: 'Proyección actualizada', finalize_appointment_charges: 'Monto final confirmado', record_appointment_payment: 'Pago registrado', void_appointment_payment: 'Registro de pago anulado' };
-export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory }: { appointmentId: string; seeds: ChargeLineInput[]; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void }) {
+export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; seeds: ChargeLineInput[]; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
   const [error, setError] = useState(''), [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false), [editing, setEditing] = useState<'final' | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const pdfFlight = useRef(false), pdfGeneration = useRef(0);
+  useEffect(() => { pdfGeneration.current++; return () => { pdfGeneration.current++; }; }, [appointmentId, active, showHistory, editing, busy]);
+  useEffect(() => { if (!success) return; const timer = window.setTimeout(() => setSuccess(''), 4500); return () => window.clearTimeout(timer); }, [success]);
   const [lines, setLines] = useState<ChargeLineInput[]>([]), [note, setNote] = useState(''), [reviewed, setReviewed] = useState(false), [payment, setPayment] = useState<PaymentInput | null>(null);
   const [candidateFingerprint, setCandidateFingerprint] = useState('');
   const [editingVersion, setEditingVersion] = useState(0), [paymentVersion, setPaymentVersion] = useState(0);
@@ -91,12 +97,13 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   useEffect(() => { onBusyChange(busy || Boolean(pending)); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
   const state = record?.state;
   const estimate = state?.estimate;
-  const amount = state?.final?.totalCents ?? estimate?.totalCents;
-  const balance = amount == null ? null : amount - (state?.receivedCents || 0);
   const blocked = !canManage || !editSession.owned || Boolean(record?.blocker) || busy || Boolean(pending) || loading || Boolean(readError);
   const version = state?.version || 0;
   const editingConflict = Boolean(editing) && editingVersion !== version;
   const paymentConflict = Boolean(payment) && paymentVersion !== version;
+  const totals = record ? appointmentChargeBalance(record, editing ? { quote, unavailable: quoting || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
+  const balance = totals?.balanceCents ?? null;
+  const reasonRequired = Boolean(state?.originalEstimate || state?.estimate || state?.final);
   const candidateReviewed = Boolean(candidateFingerprint) && candidateFingerprint === record?.candidateEvidence?.fingerprint;
   const startEdit = (_mode: 'final', addition?: ChargeLineInput, usePlanned = false) => {
     setEditing('final'); setEditingVersion(version);
@@ -124,7 +131,7 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
         if (request.action === 'record_appointment_payment') setPayment(null);
         if (editing && ownVersion && editingVersion === request.data.expectedVersion) setEditingVersion(result.state.version);
         if (payment && request.action !== 'record_appointment_payment' && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
-      } setSuccess('Registro guardado con su historial.');
+      } setSuccess(historyLabels[request.action] || 'Cambios guardados');
       await reload();
       try { await onChanged(); } catch { /* Monetary commit already succeeded; refresh does not undo it. */ }
     } catch (cause) {
@@ -138,41 +145,66 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
     void perform({ action, data: { ...values, ...lease, appointmentId, expectedVersion: action === 'record_appointment_payment' ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } });
   };
   const startPayment = (method: PaymentMethod = 'cash') => { setPaymentVersion(version); setPayment({ ...newPayment(), method }); setSuccess(''); };
+  const downloadPdf = async () => {
+    if (pdfFlight.current || editing || pending || busy || loading || readError || !record?.state?.final || record.blocker || !documentContext) return;
+    pdfFlight.current = true; setPdfBusy(true); setError('');
+    const generation = pdfGeneration.current;
+    try {
+      const fresh = await getAppointmentCharges(appointmentId);
+      const { downloadAppointmentChargesPdf } = await import('../../lib/appointment-charges-pdf');
+      if (generation === pdfGeneration.current) downloadAppointmentChargesPdf({ appointmentId, ...documentContext, record: fresh });
+    } catch (cause) { if (generation === pdfGeneration.current) setError(cause instanceof Error ? cause.message : 'No se pudo generar el PDF. Reintenta la descarga.'); }
+    finally { pdfFlight.current = false; setPdfBusy(false); }
+  };
   if (loading && !record) return <ChargesSkeleton/>;
-  return <div className={`${styles.workspace} ${!editing && !showHistory ? styles.overview : ''}`} aria-busy={loading} data-charge-stage={editing === 'final' ? 'final' : 'appointment'}>
-    {canManage && active && !showHistory && record && !record.blocker ? <ChargeNotice><span role="status">{editSession.message}</span>{!editSession.owned && !editSession.loading ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => { void read(); editSession.retry(); }}>Recuperar acceso de edición</button> : null}</ChargeNotice> : null}
+  return <div className={`${styles.workspace} ${!showHistory ? `${styles.overview} ${styles.compactWorkspace}` : ''}`} aria-busy={loading} data-charge-stage={editing === 'final' ? 'final' : 'appointment'}>
     {readError ? <div role="alert" className={styles.error}>{record ? 'No se pudieron actualizar los importes. Los datos visibles corresponden a la última consulta; vuelve a actualizar antes de guardar. ' : ''}{readError}</div> : null}
     {editingConflict || paymentConflict ? <div role="alert" className={styles.error}>Los importes cambiaron desde que abriste el formulario. Conservamos tu borrador: vuelve atrás o cancela y revisa los datos actualizados antes de iniciar otro registro.</div> : null}
-    {error ? <div role="alert" className={styles.error}>{error}</div> : null}{success ? <div role="status" className={styles.success}><ChargeIcon name="check"/>{success}</div> : null}
+    {error ? <div role="alert" className={styles.error}>{error}</div> : null}{success && active && !showHistory ? <div role="status" className={styles.successToast}><ChargeIcon name="check"/>{success}</div> : null}
     {pending && !busy ? <div className={styles.notice}><ChargeIcon name="info"/><div>El resultado todavía no está confirmado. Reintentar conserva la misma solicitud y evita duplicados.<div style={{ marginTop: 9 }}><button type="button" className={styles.primary} onClick={() => void perform(pending)}>Reintentar la misma operación</button></div></div></div> : null}
     {!record ? <button type="button" className={styles.secondary} onClick={() => void reload()}>Volver a cargar</button> : <>
-    <div className={styles.refresh}><span className={styles.muted} role="status">{loading ? 'Consultando datos actuales…' : `Última consulta · ${dateLabel(new Date(updatedAt).toISOString())}`}</span><button type="button" className={styles.link} disabled={busy || Boolean(pending) || loading} onClick={() => void reload()}>{loading ? 'Actualizando…' : 'Actualizar importes'}</button></div>
+    <div className={styles.refresh}><div className={styles.accessStatus}>{canManage && active && !showHistory && !record.blocker ? <><span role="status"><ChargeIcon name="info"/>{editSession.message}</span>{!editSession.owned && !editSession.loading ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => { void read(); editSession.retry(); }}>Recuperar acceso de edición</button> : null}</> : <span className={styles.muted} role="status">{loading ? 'Consultando datos actuales…' : `Última consulta · ${dateLabel(new Date(updatedAt).toISOString())}`}</span>}</div><button type="button" className={styles.link} disabled={busy || Boolean(pending) || loading} onClick={() => void reload()}>{loading ? 'Actualizando…' : 'Actualizar importes'}</button></div>
     {record.blocker ? <div className={styles.error} role="alert">{record.blocker}</div> : null}
     {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio y anulación mantiene su responsable, fecha y motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : <>
-    {!editing && state?.final && !readError && !record.blocker ? <div className={styles.confirmation}><ChargeIcon name="check"/><strong>Importe final confirmado</strong><span>{state.originalEstimate ? 'El estimado original se conserva en el historial.' : 'El importe final queda registrado en el historial.'}</span></div> : null}
-    {editing ? <div className={styles.metrics}><Metric icon="receipt" label="PROYECTADO ORIGINAL" value={state?.originalEstimate?.totalCents}/><Metric icon="receipt" label="MONTO FINAL" value={editing === 'final' ? quote?.totalCents ?? null : state?.final?.totalCents ?? null} note={editing === 'final' ? 'Vista previa · sin guardar' : state?.final ? 'Confirmado por oficina' : 'Por confirmar'}/><Metric icon="money" label="TOTAL RECIBIDO" value={state ? state.receivedCents : undefined} color={styles.green}/><Metric icon="clock" label={balance !== null && balance < 0 ? 'SALDO A FAVOR' : state?.final ? 'SALDO PENDIENTE' : 'SALDO ESTIMADO'} value={balance === null ? null : Math.abs(balance)} color={balance === 0 ? styles.green : styles.amber} note={!state?.final ? 'Hasta confirmar el monto final' : undefined}/></div> : <ChargeOverviewMetrics record={record}/>}
+    {editing ? <div className={styles.metrics}>
+      <Metric icon="receipt" label="PROYECCIÓN ORIGINAL" value={state?.originalEstimate?.totalCents} note="Solo referencia del booking"/>
+      <Metric icon="receipt" label="TOTAL DE TRABAJOS" value={totals?.totalCents ?? null} note={quoting ? 'Consultando tarifas…' : 'Borrador · sin confirmar'} color={styles.violet}/>
+      <Metric icon="money" label="TOTAL RECIBIDO" value={totals?.receivedCents} note="Pagos guardados" color={styles.green}/>
+      <Metric icon="clock" label={balance !== null && balance < 0 ? 'A FAVOR ESTIMADO' : 'SALDO ESTIMADO'} value={balance === null ? null : Math.abs(balance)} color={styles.amber} note={balance === null ? 'Requiere un borrador válido' : 'Según este borrador'}/>
+    </div> : <ChargeOverviewMetrics record={record}/>}
 
     <div className={styles.columns}>
-      <section className={styles.panel} aria-label="Trabajos e importes"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={styles.tile}><ChargeIcon name="work"/></span><div><h3 className={styles.heading}>{editing ? 'Trabajos realizados y monto final' : 'Trabajos e importes'}</h3>{!editing ? <p>{state?.final ? 'Servicios y productos confirmados' : 'Añade lo que se realizó o vendió al cliente'}</p> : null}</div></div>{!editing && state?.final ? <button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final')}><ChargeIcon name="edit"/>Editar trabajos</button> : null}</div>
+      <section className={`${styles.panel} ${styles.workPanel}`} aria-label="Trabajos e importes"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={styles.tile}><ChargeIcon name="work"/></span><div><h3 className={styles.heading}>{editing ? 'Trabajos realizados y monto final' : 'Trabajos e importes'}</h3>{!editing ? <p>{state?.final ? 'Importe final confirmado' : 'Añade lo que se realizó o vendió al cliente'}</p> : null}</div></div>{!editing && state?.final ? <button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final')}><ChargeIcon name="edit"/>Editar trabajos</button> : null}</div>
+      <div className={styles.workScroll} tabIndex={0} aria-label="Lista de trabajos y detalles">
       {editing ? <ChargeLinesEditor lines={lines} quote={quote} loading={quoting} disabled={blocked || editingConflict} onChange={value => { setLines(value); setReviewed(false); }}/> : state?.final ? <ChargeLineSummary record={record}/> : null}
-      <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual}/>
+
       {record.candidateEvidence?.records.length ? <ChargeNotice><strong>Trabajos revisados en Field</strong><p>Contrasta estos conceptos con el monto final. No se suman automáticamente.</p>{record.candidateEvidence.records.map(candidate => <div key={candidate.id}><small>Revisión {candidate.revisionNumber}</small>{candidate.lines.map((line, index) => <div key={index}>{line.description} · {line.quantity} · {chargeMoney(Math.round(line.lineTotal * 100))}</div>)}{candidate.blockers.map((blocker, index) => <div key={index}>{blocker.message}</div>)}</div>)}{editing === 'final' ? <label className={styles.check}><input type="checkbox" disabled={blocked} checked={candidateReviewed} onChange={event => setCandidateFingerprint(event.target.checked ? record.candidateEvidence?.fingerprint || '' : '')}/>Concilié los conceptos Field en este total, sin duplicarlos.</label> : null}</ChargeNotice> : null}
-      {editing ? <><label>Motivo / detalle del alcance{state?.originalEstimate || state?.estimate || state?.final ? ' *' : ''}<textarea maxLength={1000} rows={2} value={note} disabled={blocked} onChange={event => setNote(event.target.value)} placeholder="Describe el cambio de servicio, tiempo extra o adicionales"/></label>{editing === 'final' ? <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={blocked} onChange={event => setReviewed(event.target.checked)}/>Revisé los trabajos realizados, los adicionales y el importe acordado con el cliente.</label> : null}{quoteError ? <div className={styles.error} role="alert">{quoteError}</div> : null}<div className={styles.summary}><strong>{editing === 'final' ? 'Total final' : 'Total proyectado'}</strong><strong>{chargeMoney(quote?.totalCents)}</strong></div>{quote?.totalCents != null && state?.originalEstimate?.totalCents != null ? <div className={styles.summary}><span>Diferencia vs. original</span><strong>{chargeMoney(quote.totalCents - state.originalEstimate.totalCents)}</strong></div> : null}<div className={styles.footer}><button type="button" disabled={busy || Boolean(pending)} className={styles.secondary} onClick={() => setEditing(null)}>Volver</button><button type="button" disabled={blocked || editingConflict || paymentConflict || quoting || !quote || (editing === 'final' && (!reviewed || quote.totalCents === null || (Boolean(record.candidateEvidence?.records.length) && !candidateReviewed)))} className={styles.primary} onClick={() => save('finalize_appointment_charges', { lines, note, scopeReviewed: reviewed, quoteToken: quote?.quoteToken, candidateReviewed, candidateFingerprint })}>{busy ? 'Guardando…' : editing === 'final' ? 'Confirmar monto final' : 'Guardar proyección'}</button></div></> : <>
+      {editing ? <><details className={styles.scopeDetails} open={reasonRequired || undefined}><summary>{reasonRequired ? 'Motivo del cambio (obligatorio)' : 'Añadir nota del trabajo (opcional)'}</summary><label>Motivo / detalle del alcance{reasonRequired ? ' *' : ''}<textarea maxLength={1000} rows={2} value={note} disabled={blocked} onChange={event => setNote(event.target.value)} placeholder="Describe el cambio de servicio o adicionales"/></label></details>{quoteError ? <div className={styles.error} role="alert">{quoteError}</div> : null}</> : <>
       {!state?.final ? <p className={styles.muted}>Selecciona los artículos realizados del catálogo. Cada selección añade una línea y deja el buscador listo para el siguiente artículo.</p> : null}
       {estimate ? <details className={styles.priorEstimate}><summary>Ver proyección del booking · {chargeMoney(estimate.totalCents)}</summary><ChargeLineSummary record={{ ...record, state: state ? { ...state, final: null } : null }}/></details> : !state?.final ? <p className={styles.muted}>Esta cita no tiene una proyección original guardada.</p> : null}
       {!state?.final ? <div className={styles.footer}><div><button type="button" className={styles.primary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final')}>Registrar trabajos realizados</button><button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final', undefined, true)}>Usar trabajos agendados</button></div></div> : null}
       </>}
-      {editing ? <ChargeNotice>La confirmación del importe permite saldo pendiente. El cierre técnico, las evidencias y las horas del equipo se mantienen en su flujo habitual.</ChargeNotice> : null}
+      </div>
+      <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual}/>
       </section>
-      <section className={styles.panel} aria-label="Pagos de la visita"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={`${styles.tile} ${styles.green}`}><ChargeIcon name="money"/></span><div><h3 className={styles.heading}>Pagos de la visita</h3><p>Pagos registrados para esta cita</p></div></div><span className={`${styles.paymentStatus} ${!record.blocker && state?.final && balance === 0 ? styles.paidStatus : ''}`}>{record.blocker ? 'Por conciliar' : state?.final && balance === 0 ? '✓ Pagado' : balance !== null && balance < 0 ? 'A favor' : state?.final && state.receivedCents > 0 ? 'Parcial' : 'Abonos y cobros'}</span></div>
-        {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)} · {item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
-        <div className={styles.receivedStrip}><strong>Total recibido</strong><strong>{state ? chargeMoney(state.receivedCents) : 'Sin registrar'}</strong></div>
-        {balance !== null ? <div className={`${styles.balanceStrip} ${balance === 0 ? styles.settledStrip : ''}`}><strong>{balance < 0 ? 'Saldo a favor' : state?.final ? 'Saldo por cobrar' : 'Saldo estimado'}</strong><strong>{chargeMoney(Math.abs(balance))}</strong></div> : null}
+      <section className={`${styles.panel} ${styles.paymentsPanel}`} aria-label="Pagos de la visita"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={`${styles.tile} ${styles.green}`}><ChargeIcon name="money"/></span><div><h3 className={styles.heading}>Pagos de la visita</h3><p>Pagos registrados para esta cita</p></div></div><span className={`${styles.paymentStatus} ${!editing && totals?.paymentStatus === '✓ Pagado' ? styles.paidStatus : ''}`}>{record.blocker ? 'Por conciliar' : editing ? 'Borrador en edición' : totals?.paymentStatus}</span></div>
+        {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
+        <div className={styles.receivedStrip}><strong>Total recibido</strong><strong>{chargeMoney(totals?.receivedCents)}</strong></div>
+        {balance !== null ? <div className={`${styles.balanceStrip} ${!editing && balance === 0 ? styles.settledStrip : ''}`}><strong>{editing ? balance < 0 ? 'A favor estimado' : 'Saldo estimado' : balance < 0 ? 'Saldo a favor' : 'Saldo por cobrar'}</strong><strong>{chargeMoney(Math.abs(balance))}</strong></div> : null}
         {payment ? <div className={styles.paymentForm}><PaymentFields value={payment} onChange={setPayment} disabled={blocked}/><div className={styles.footer}><button type="button" className={styles.secondary} disabled={busy || Boolean(pending)} onClick={() => setPayment(null)}>Cancelar</button><button type="button" className={styles.primary} disabled={blocked || paymentConflict || editingConflict || !payment.amount} onClick={() => save('record_appointment_payment', { payment })}>Guardar pago</button></div></div> : <div className={styles.paymentEntry}><h4>Registrar depósito, abono o pago</h4><div className={styles.methodShortcuts}>{paymentMethods.map(method => <button key={method.id} type="button" disabled={blocked || editingConflict || record.appointmentStatus === 'temporary_hold'} onClick={() => startPayment(method.id)}><ChargeIcon name={methodIcon[method.id]}/>{method.label}</button>)}</div><button type="button" className={styles.primary} disabled={blocked || editingConflict || record.appointmentStatus === 'temporary_hold'} onClick={() => startPayment()}><ChargeIcon name="plus"/>Registrar pago</button></div>}
         {onShowHistory ? <button type="button" className={styles.historyShortcut} disabled={busy || Boolean(pending)} onClick={onShowHistory}><ChargeIcon name="history"/>Ver movimientos</button> : null}
         {payment ? <ChargeNotice>Registra un pago ya recibido. Este formulario no realiza cargos en POS o SUAVE.</ChargeNotice> : null}
       </section>
-    </div></>}
+    </div>
+    <footer className={styles.workspaceFooter}>
+      <div>{editing ? <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={blocked} onChange={event => setReviewed(event.target.checked)}/>Revisé los trabajos realizados, los adicionales y el importe acordado con el cliente.</label> : <span className={styles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span>}</div>
+      <div className={styles.footerActions}>
+        {editing ? <><button type="button" disabled={busy || Boolean(pending)} className={styles.secondary} onClick={() => setEditing(null)}>Volver</button><button type="button" aria-label="Confirmar monto final" disabled={blocked || editingConflict || paymentConflict || quoting || !quote || !reviewed || quote.totalCents === null || (reasonRequired && !note.trim()) || (Boolean(record.candidateEvidence?.records.length) && !candidateReviewed)} className={styles.primary} onClick={() => save('finalize_appointment_charges', { lines, note, scopeReviewed: reviewed, quoteToken: quote?.quoteToken, candidateReviewed, candidateFingerprint })}>{busy ? 'Guardando…' : `Confirmar monto final${quote?.totalCents != null ? ` · ${chargeMoney(quote.totalCents)}` : ''}`}</button></> : <>
+          <button type="button" className={styles.secondary} disabled={!state?.final || Boolean(record.blocker) || busy || Boolean(pending) || loading || Boolean(readError) || pdfBusy || !documentContext} onClick={() => void downloadPdf()} title="Resumen de trabajos y pagos confirmados de esta cita"><ChargeIcon name="receipt"/>{pdfBusy ? 'Preparando PDF…' : 'Descargar PDF'}</button>
+          {onClose ? <button type="button" className={styles.secondary} disabled={busy || Boolean(pending)} onClick={onClose}>Cerrar</button> : null}
+        </>}
+      </div>
+    </footer></>}
     </>}
   </div>;
 }

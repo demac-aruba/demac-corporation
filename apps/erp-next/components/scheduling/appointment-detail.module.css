@@ -61,3 +61,12 @@
 @media(max-width:600px){.modal .context span{font-size:12px!important}.modal .header .button,.modal .footer .button,.modal .footer .primary{font-size:11px!important}.modal .footer .more .button{font-size:0!important}.modal .grid :is(input,textarea){font-size:16px!important}}
 
 .modal .body{padding:14px 18px}.modal .cardHeader .tile{width:42px;height:42px}.modal .statusRow{padding:7px 0}
+/* Financial entry has its own viewport; the appointment summary keeps its layout. */
+.modal.financeModal{width:min(1760px,100%);height:calc(100dvh - 44px)}
+.financeModal .header{padding:14px 20px 10px}.financeModal .header h2{font-size:23px}
+.financeModal .context{margin:0 20px 3px;padding:9px 4px}.financeModal .context span{font-size:13px!important}.financeModal .context svg{width:20px;height:20px}
+.financeModal>nav{margin:3px 20px 0}.financeModal>nav button{padding:10px 4px}
+.financeModal .financeBody{flex:1;display:flex;flex-direction:column;min-height:0;padding:10px 16px 0;overflow:auto}
+.financeContent{display:flex;flex-direction:column;flex:1;min-height:0}
+@media(max-width:1000px),(max-height:649px){.financeContent{display:block;min-height:auto}.financeModal .financeBody{display:block}}
+@media(max-width:600px){.modal.financeModal{height:100dvh;max-height:100dvh}.financeModal .header{padding:10px 12px}.financeModal .context{margin:0 12px 3px}.financeModal .context>div{gap:6px;padding:0 8px}.financeModal>nav{margin:3px 12px 0;gap:12px}.financeModal .financeBody{padding:8px 10px 0}}
