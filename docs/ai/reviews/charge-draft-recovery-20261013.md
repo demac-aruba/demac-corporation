@@ -130,3 +130,37 @@ This decision does not waive a failed gate or grant deployment authority.
 
 Human approval remains required for actions covered by the repository boundary; the
 release owner must apply the authorization already established in the user session.
+
+## Integration addendum: current main QuickBooks reports
+
+Independently reviewed merge `02687532dd3417ccb2198e1e48fb92390f16b168`
+(tree `3b2737861ae1b2ab130bd84d14a8c086ef0d70e4`, before this addendum), combining
+reviewed recovery commit `65a33bd3552ff1df46ad3d35966875bc9c42fc28` with main
+`0fe88f1e310e0076933703b90c6c4254055c4bb3` / PR 593.
+
+- Compared blob identities for all 21 incoming paths against main. All 20 exclusive
+  QuickBooks code, tests, workflow, legal and documentation files are byte-identical
+  to main. The remaining shared `BUSINESS_RULES.md` contains both changes: the recovery
+  paragraphs are intact and the new production reporting rule is preserved verbatim.
+- Firebase `session.ts`, AuthProvider, the charge recovery module and package manifest
+  are byte-identical to the previously reviewed recovery commit. There is no combined
+  authentication implementation or dependency change to resolve.
+- Inspected the new reports client and connection caller. They use the existing verified
+  session, bind requests/results to the requesting UID, and remain under the existing
+  AuthProvider boundary. Charge logout cleanup touches only the
+  `demac.erp-next.charge-recovery.v1:` prefix; it cannot remove QuickBooks' separate
+  `demac.quickbooks.production.v1` authorization proof. No report read uses or changes
+  charge draft, payment, replay or editing state.
+- The new reporting rule leaves accounting writes/synchronization disabled and does
+  not redefine operational appointment financial authority. Its backend release remains
+  the separate QuickBooks release workflow already present in main; this recovery
+  release does not authorize rerunning that workflow or changing its configuration.
+- `git diff 65a33bd3..HEAD --check` passes. This was a bounded integration inspection,
+  not a new full audit of PR 593 or a rerun of the financial/auth suites. The Builder
+  is rerunning build and applicable CI against the integrated head.
+
+**Integration GO, conditional on the integrated head's build/CI and exact preview.**
+No integration blocker found. Preserve current main's QuickBooks runtime when selecting
+the production deployment and rollback baseline; do not deploy the older recovery-only
+preview if it would drop the newly integrated reports. All prior recovery limitations,
+financial retention requirements and release gates remain in force.

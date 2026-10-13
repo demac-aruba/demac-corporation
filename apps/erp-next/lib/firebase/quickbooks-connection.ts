@@ -93,7 +93,7 @@ export async function loadConnection(uid: string) {
   if (!connectionAvailable()) return unconfiguredConnection;
   let pending: Pending | null = null;
   try { pending = pendingFor(uid); } catch { /* Normal visits have no pending authorization. */ }
-  if (!pending?.ticket || !opaquePattern.test(pending.ticket)) return readConnectionStatus(uid);
+  if (!pending?.ticket || !opaquePattern.test(pending.ticket)) throw new Error(connectionMessage('invalid-state'));
   if (flight?.uid === uid && flight.ticket === pending.ticket) return flight.promise;
   const promise = request<QuickBooksConnectionStatus>(uid, { action: 'finish', ticket: pending.ticket, proof: pending.proof }).then(result => {
     assertIdentity(uid); sessionStorage.removeItem(STORAGE_KEY); return result;
