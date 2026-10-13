@@ -13,6 +13,11 @@ module.exports = async function runSessionChecks(session, transport) {
   const fresh = () => ({ ...make(), expiresAt: Date.now() + 3600000 });
   global.fetch = async () => { throw new Error('Unconfigured test transport.'); };
   try {
+    await run('auth invalidation and same-user sign-in retain uncertain charge recovery', async () => {
+      seed();const key='demac.erp-next.charge-recovery.v1:synthetic-tech:apt',pending='synthetic immutable pending operation';data.set(key,pending);
+      global.fetch=async()=>new Response(JSON.stringify({error:{message:'INVALID_REFRESH_TOKEN'}}),{status:400});await assert.rejects(session.getValidFirebaseWebSession());assert.equal(session.loadFirebaseWebSession(),null);assert.equal(data.get(key),pending);
+      global.fetch=async()=>new Response(JSON.stringify({localId:'synthetic-tech',email:'tech@demac-preview.invalid',idToken:'synthetic-id',refreshToken:'synthetic-ref',expiresIn:'3600'}));await session.signInWithFirebaseEmail('tech@demac-preview.invalid','synthetic');assert.equal(session.loadFirebaseWebSession().uid,'synthetic-tech');assert.equal(data.get(key),pending);data.delete(key);
+    });
     for (const status of [408,429,500,502,503,504]) await run(`refresh HTTP ${status} keeps credential but rejects expired access`, async () => {
       seed(); const before = session.loadFirebaseWebSession(); global.fetch = async () => new Response('<html>upstream unavailable</html>', { status });
       await assert.rejects(session.getValidFirebaseWebSession(), (error) => transport.isTransientFirebaseError(error));

@@ -111,3 +111,5 @@
 @media(max-width:600px){.compactWorkspace .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.compactWorkspace .metric{padding:9px;gap:7px;min-height:78px}.compactWorkspace .metric .tile{width:25px;height:25px}.compactWorkspace .metric strong{font-size:18px!important}.compactWorkspace .metric small{font-size:9px!important}.compactWorkspace .panel{padding:11px}.compactWorkspace .invoiceLine{gap:8px;padding:9px 4px}.workspaceFooter{flex-direction:column;align-items:stretch;gap:9px;padding:10px 0}.footerActions{justify-content:space-between}.footerActions button{font-size:11px!important;white-space:normal}.workspaceFooter .auditFooter{max-width:100%}.successToast{right:12px;top:12px}.compactWorkspace .paymentForm input,.scopeDetails textarea{font-size:16px!important}}
 
 .compactWorkspace .accessStatus :is(span,button),.compactWorkspace .auditFooter{font-size:11px!important}.compactWorkspace .accessStatus{font-size:11px!important}
+
+.draftStatus{flex-shrink:0;color:#855416;background:#fff6e6;border-radius:7px;padding:5px 9px;margin-bottom:7px;font-size:11px!important}

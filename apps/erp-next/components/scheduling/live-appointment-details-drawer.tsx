@@ -30,6 +30,7 @@ type Props = {
   appointment: BrowserAppointmentRecord;
   project?: import('../../lib/scheduling-project-labels').SchedulingProjectLabel;
   canManage: boolean;
+  currentUserId: string;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
 };
@@ -117,10 +118,15 @@ function Field({ label, value, wide = false }: { label: string; value: React.Rea
   return <div className={`${ui.field} ${wide ? ui.wide : ''}`}><span>{label}</span><strong>{value || '—'}</strong></div>;
 }
 
-export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, onClose, onChanged }: Props) {
+export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, currentUserId, onClose, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>('details');
   const [tab, setTab] = useState<'details' | 'charges' | 'history'>('details');
   const [chargeBusy, setChargeBusy] = useState(false);
+  const [chargeDraft, setChargeDraft] = useState({ dirty: false, recoverable: false });
+  const close = () => {
+    if (chargeDraft.dirty && !chargeDraft.recoverable && !window.confirm('Hay cambios sin guardar que no se podrán recuperar. ¿Cerrar de todos modos?')) return;
+    onClose();
+  };
   const [referenceBusy, setReferenceBusy] = useState(false);
   const [communicationBusy, setCommunicationBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -181,7 +187,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
     try {
       await confirmOfficeTemporaryHold({ appointmentId: appointment.id, requestId: createOfficeLifecycleRequestId('confirm-hold') });
       await onChanged();
-      onClose();
+      close();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The temporary hold could not be confirmed.');
     } finally {
@@ -204,7 +210,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         note,
       });
       await onChanged();
-      onClose();
+      close();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `The ${temporaryHold ? 'temporary hold' : 'appointment'} could not be cancelled.`);
     } finally {
@@ -213,18 +219,18 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   };
 
   const blocked = busy || chargeBusy || referenceBusy || communicationBusy;
-  const dialogRef = useBookingDialog(onClose, blocked);
+  const dialogRef = useBookingDialog(close, blocked);
   const chargeSeeds = (appointment.workSummaryLines?.length ? appointment.workSummaryLines : [{ label: workLabel, quantity: appointment.totalQuantity }]).map((line, index) => ({ id: `work-${index + 1}`, label: line.label, quantity: line.quantity || 1, ...(index === 0 && !appointment.workSummaryLines?.length ? { presetId: appointment.workTypeId || appointment.presetId, serviceId: appointment.serviceId } : {}) }));
 
   const initials = appointment.customer.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase();
   const outcomeAction = partialOutcome ? partialOutcome.remainingWorkStatus === 'scheduled' ? 'Revisar resultado' : `Agendar ${partialOutcome.remainingQuantity} pendientes` : 'Registrar resultado';
-  return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !blocked) onClose(); }}>
+  return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !blocked) close(); }}>
     <aside className={`${chargeStyles.modal} ${ui.modal} ${tab === 'charges' ? ui.financeModal : ''}`} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Detalle de la cita · ${appointment.customer}`}>
       <header className={ui.header}>
         <div><span className={ui.eyebrow}>DEMAC · SCHEDULING</span><h2>Detalle de la cita</h2></div>
         <div className={ui.headerActions}>
           {tab === 'details' && mode === 'details' && !partialOutcome ? <button type="button" className={ui.button} disabled={!canManageLifecycle || blocked} onClick={() => begin('edit')}><ChargeIcon name="edit"/>Editar cita</button> : null}
-          <button type="button" className={ui.close} disabled={blocked} aria-label="Cerrar cita" onClick={onClose}>×</button>
+          <button type="button" className={ui.close} disabled={blocked} aria-label="Cerrar cita" onClick={close}>×</button>
         </div>
       </header>
       <div className={`${ui.context} ${tab !== 'details' ? chargeStyles.financeContext : ''}`}>
@@ -246,7 +252,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             </div>
           </section>
         </div> : null}
-        <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={onClose} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
+        <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={`${currentUserId}:${appointment.id}`} currentUserId={currentUserId} onDraftStateChange={setChargeDraft} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={close} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
@@ -289,16 +295,16 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             {error ? <p className={ui.notice} role="alert">{error}</p> : null}
             {canManage && !canManageLifecycle && appointment.status !== 'cancelled' ? <p className={ui.notice}>Vincula el cliente y la propiedad antes de modificar esta cita.</p> : null}
           </div>
-        {mode === 'edit' ? <LiveAppointmentEditPanel appointment={appointment} onBack={() => begin('details')} onSaved={async () => { await onChanged(); onClose(); }} /> : null}
+        {mode === 'edit' ? <LiveAppointmentEditPanel appointment={appointment} onBack={() => begin('details')} onSaved={async () => { await onChanged(); close(); }} /> : null}
 
         {mode === 'capacity' ? <RegularHistoricalCapacityPanel appointment={appointment} onBack={() => begin('details')} onSaved={onChanged} onBusyChange={setBusy} /> : null}
 
-        {mode === 'outcome' ? <PartialCompletionPanel appointment={appointment} onBack={backFromOutcome} onSaved={async () => { await onChanged(); onClose(); }} /> : null}
+        {mode === 'outcome' ? <PartialCompletionPanel appointment={appointment} onBack={backFromOutcome} onSaved={async () => { await onChanged(); close(); }} /> : null}
 
         {mode === 'reschedule' ? <AppointmentRescheduleSchedulePicker
           appointment={appointment}
           onClose={() => begin('details')}
-          onRescheduled={async () => { await onChanged(); onClose(); }}
+          onRescheduled={async () => { await onChanged(); close(); }}
         /> : null}
 
         {mode === 'cancel' ? <section className={styles.formSection}>
@@ -312,7 +318,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         </section> : null}
         </div>
       </div>
-      {tab === 'history' ? <footer className={ui.footer}><span className={chargeStyles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span><button type="button" className={ui.button} disabled={blocked} onClick={onClose}>Cerrar</button></footer> : null}
+      {tab === 'history' ? <footer className={ui.footer}><span className={chargeStyles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span><button type="button" className={ui.button} disabled={blocked} onClick={close}>Cerrar</button></footer> : null}
       {tab === 'details' && mode === 'details' ? <footer className={ui.footer}>
         {!partialOutcome ? <details className={ui.more} open={moreOpen}><summary className={ui.button} aria-disabled={blocked} onClick={event => { event.preventDefault(); if (!blocked) setMoreOpen(!moreOpen); }}><ChargeIcon name="more"/>Más acciones<ChargeIcon name="chevron"/></summary><div className={ui.menu}>
           {canCorrectHistoricalCapacity ? <button type="button" disabled={blocked} onClick={() => begin('capacity')}>Corregir cupos pasados</button> : null}

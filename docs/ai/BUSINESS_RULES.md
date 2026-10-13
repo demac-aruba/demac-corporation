@@ -361,6 +361,16 @@ Production activation remains separately owner-approved through the server-side 
   export freshly read, reconciled confirmed work and receipts as an operational summary;
   it does not issue an official invoice or write to QBO. See
   `adrs/appointment-charge-balance-pdf-20261013.md`.
+- Actual-work form recovery is private, versioned and scoped to the authenticated user,
+  appointment and browser tab. Refresh/reopen restores inputs, requotes them and resets
+  scope/Field acknowledgments. It never confirms a financial total. A lease-only version
+  increase may rebase an equivalent full financial baseline; changed work, receipts or
+  Field evidence require a new baseline-bound review before continuing.
+- Monetary requests are retained before dispatch with their exact immutable identity.
+  An uncertain request survives refresh/auth revalidation and is not replaced by a new
+  request. Explicit sign-out clears ordinary drafts but preserves uncertain/unreadable
+  copies for the same user's authorized reconciliation. See
+  `adrs/appointment-charge-draft-recovery-20261013.md` for proven no-commit fencing.
 
 ## Booking Spots and workload support
 
