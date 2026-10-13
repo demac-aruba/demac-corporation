@@ -67,6 +67,20 @@ async function run() {
   location.hash = `#qbo_production_ticket=${ticket}`; const count = calls.length;
   assert.throws(() => client.captureConnectionReturn()); assert.equal(calls.length, count);
   location.hash = '#qbo_production_error=authorization-cancelled'; assert.throws(() => client.captureConnectionReturn(), /Cancelaste/);
+  storage.set(key, JSON.stringify({ ...pending, ticket, createdAt: Date.now() - 600001 }));
+  const expiredCalls = calls.length; await assert.rejects(client.loadConnection('owner'), /venció/); assert.equal(calls.length, expiredCalls);
+  const reports = await import('../lib/firebase/quickbooks-reports');
+  const reportInput = { report: 'ProfitAndLoss' as const, startDate: '2026-10-01', endDate: '2026-10-13', basis: 'Accrual' as const };
+  const reportResult = { environment: 'production', realmId: '9130352327074466', syncEnabled: false, accountingWritesEnabled: false,
+    report: { name: 'ProfitAndLoss', endPeriod: reportInput.endDate, rows: [], columns: [] } };
+  fetcher = async body => { assert.deepEqual(body, reportInput); return Response.json(reportResult); };
+  await reports.readProductionReport('owner', reportInput);
+  assert.match(calls.at(-1)!.url, /\/quickbooksReports$/);
+  for (const patch of [{ realmId: 'wrong' }, { environment: 'sandbox' }, { accountingWritesEnabled: true }]) {
+    fetcher = async () => Response.json({ ...reportResult, ...patch }); await assert.rejects(reports.readProductionReport('owner', reportInput), /verificar/);
+  }
+  fetcher = async () => { signIn('other'); return Response.json(reportResult); };
+  await assert.rejects(reports.readProductionReport('owner', reportInput), /sesión/); signIn();
   console.log('QuickBooks production entry acceptance: PASS (allowlisted login, isolation, proof, read-only landing, completion, recovery, identity race, redirect, explicit disconnect).');
 }
 void run().catch(error => { console.error(error); process.exitCode = 1; });

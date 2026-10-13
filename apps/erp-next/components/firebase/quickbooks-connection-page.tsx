@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth/auth-provider';
 import { captureConnectionReturn, disconnectConnection, hasPendingConnection, loadConnection, readConnectionStatus, startConnection,
   type QuickBooksConnectionStatus } from '@/lib/firebase/quickbooks-connection';
 import styles from './quickbooks-connection-page.module.css';
+import { QuickBooksProductionReports } from './quickbooks-production-reports';
 
 type Intent = 'connect' | 'disconnect';
 function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
@@ -14,14 +15,15 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [reload, setReload] = useState(0);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const mounted = useRef(false);
   const actionLock = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    let active = true; setBusy(true); setError(null); setConfirmed(false); setPending(hasPendingConnection(uid));
+    let active = true; setBusy(true); setError(null); setCheckedAt(null); setConfirmed(false); setPending(hasPendingConnection(uid));
     // Page visits only read status. Completion and revocation both need an explicit button.
-    void readConnectionStatus(uid).then(result => { if (active) setSnapshot(result); }, failure => {
+    void readConnectionStatus(uid).then(result => { if (active) { setSnapshot(result); setCheckedAt(new Date().toLocaleTimeString('es')); } }, failure => {
       if (active) { setSnapshot(null); setError(failure instanceof Error ? failure.message : 'No se pudo consultar el estado.'); }
     }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
@@ -35,7 +37,7 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
       const result = kind === 'finish' ? await loadConnection(uid) : await disconnectConnection(uid, snapshot!.disconnectVersion!);
       if (mounted.current) { setSnapshot(result); setPending(hasPendingConnection(uid)); setConfirmed(false); setDisconnected(kind === 'disconnect'); }
     } catch (failure) {
-      if (mounted.current) setError(failure instanceof Error ? failure.message : 'No se pudo confirmar la operación.');
+      if (mounted.current) { setPending(hasPendingConnection(uid)); setError(failure instanceof Error ? failure.message : 'No se pudo confirmar la operación.'); }
       try { const current = await readConnectionStatus(uid); if (mounted.current) setSnapshot(current); }
       catch { if (mounted.current) setSnapshot(null); }
     } finally { if (!navigating) { actionLock.current = false; if (mounted.current) setBusy(false); } }
@@ -50,7 +52,7 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
     {snapshot && !snapshot.configured ? <p>La conexión con la empresa real está pendiente de configuración y revisión. El sandbox continúa separado. No se han habilitado movimientos contables.</p> : null}
     {snapshot?.connection ? <dl><dt>Empresa</dt><dd>{snapshot.connection.companyName}</dd><dt>Company ID</dt><dd>{snapshot.connection.realmId}</dd><dt>País informado por QuickBooks</dt><dd>{snapshot.connection.country || 'No informado'}</dd><dt>Última verificación</dt><dd>{new Date(snapshot.connection.verifiedAt).toLocaleString('es')}</dd></dl> : null}
     {phase === 'connected' ? <p>Esta es la última autorización registrada; no confirma acceso continuo. La sincronización de ventas, pagos y gastos permanece deshabilitada.</p> : null}
-    {phase === 'confirmation-pending' ? <p>Termina la autorización desde la misma pestaña donde la iniciaste. Si no puedes completarla, usa la desconexión para cancelar ese acceso antes de intentar otra conexión.</p> : null}
+    {phase === 'confirmation-pending' ? <p>{pending ? 'Confirma ahora desde esta misma pestaña. El proceso dispone de 10 minutos desde que se inicia la conexión.' : 'La confirmación venció o no está disponible en esta pestaña. Usa «Gestionar desconexión» para retirar la autorización pendiente y después vuelve a conectar.'}</p> : null}
     {phase === 'disconnect-pending' ? <p>El acceso desde el ERP está suspendido. QuickBooks todavía no confirmó la revocación; puedes reintentarla de forma explícita.</p> : null}
     {disconnected ? <p className={styles.success} role="status">QuickBooks confirmó la revocación. Las credenciales de esta conexión se retiraron del ERP.</p> : null}
     {intent === 'connect' && snapshot?.configured && phase !== 'disconnect-pending' ? <div className={styles.actions}>
@@ -63,9 +65,11 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
     </div> : null}
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     <div className={styles.actions}>
-      <button className="btn" disabled={busy} onClick={() => setReload(value => value + 1)}>Consultar estado</button>
+      <button className="btn" disabled={busy} onClick={() => setReload(value => value + 1)}>{busy ? 'Procesando…' : 'Consultar estado'}</button>
       <Link href={intent === 'connect' ? '/quickbooks/disconnect/' : '/quickbooks/connect/'}>{intent === 'connect' ? 'Gestionar desconexión' : 'Conectar o reconectar'}</Link>
     </div>
+    {checkedAt && !busy ? <p className={styles.success} role="status">Estado consultado a las {checkedAt}.</p> : null}
+    {intent === 'connect' && phase === 'connected' && snapshot?.connection ? <QuickBooksProductionReports key={snapshot.connection.connectedAt} uid={uid} /> : null}
   </section>;
 }
 export function QuickBooksConnectionPage({ intent }: { intent: Intent }) {

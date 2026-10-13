@@ -42,9 +42,16 @@ async function main() {
       });
       const page = await context.newPage(); const errors = []; const blocked = []; const posts = [];
       page.on('pageerror', error => errors.push(error.message));
-      let current = { ...empty }; let failRevoke = false;
+      let current = { ...empty }; let failRevoke = false; const reportRequests = []; let reportMode = 'success';
       await page.route('**/*', async route => {
         const req = route.request(); const url = req.url(); if (url.startsWith(origin)) return route.continue();
+        if (url === 'https://us-central1-demo-qbo-browser.cloudfunctions.net/quickbooksReports') {
+          const headers = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
+          if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
+          assert.equal(req.method(), 'POST'); const input = req.postDataJSON(); reportRequests.push(input);
+          if (reportMode === 'error') return route.fulfill({ status: 409, headers, json: { error: 'reauthorization-required' } });
+          return route.fulfill({ headers, json: { environment: 'production', realmId: '9130352327074466', companyName: 'DEMAC · datos sintéticos de prueba', syncEnabled: false, accountingWritesEnabled: false, fetchedAt: new Date().toISOString(), request: input, report: { name: input.report, currency: 'AWG', basis: input.basis, startPeriod: input.startDate, endPeriod: input.endDate, noData: reportMode === 'empty', columns: [{ title: 'Concepto', type: 'Account' }, { title: 'Total', type: 'Money' }], rows: reportMode === 'empty' ? [] : [{ kind: 'data', depth: 0, values: ['Prueba sintética', '987.65'] }] } } });
+        }
         if (url === 'https://us-central1-demo-qbo-browser.cloudfunctions.net/quickbooksConnection') {
           const headers = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
           if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
@@ -73,6 +80,27 @@ async function main() {
       await page.evaluate(() => sessionStorage.removeItem('test-role'));
       current = { ...empty, configured: true, phase: 'connected', disconnectVersion: version,
         connection: { realmId: '1234567890123456', companyName: 'DEMAC · datos sintéticos de prueba', country: 'AW', verifiedAt: '2026-10-13T02:30:00Z', connectedAt: '2026-10-13T02:30:00Z' } };
+      await page.goto(origin + '/quickbooks/connect/');
+      await page.getByRole('heading', { name: 'Informes reales · solo lectura' }).waitFor();
+      assert.equal(reportRequests.length, 0, 'Page visit cannot fetch reports');
+      await page.getByRole('button', { name: 'Consultar estado', exact: true }).click();
+      await page.getByRole('status').filter({ hasText: 'Estado consultado' }).waitFor();
+      assert.equal(reportRequests.length, 0);
+      for (const report of ['ProfitAndLoss', 'BalanceSheet', 'AgedReceivables', 'AgedPayables']) {
+        await page.getByLabel('Informe', { exact: true }).selectOption(report);
+        assert.equal(await page.getByRole('region', { name: 'Tabla del informe real' }).count(), 0);
+        await page.getByRole('button', { name: 'Consultar informe real' }).click();
+        await page.getByText('987.65', { exact: true }).waitFor();
+        assert.equal(reportRequests.at(-1).report, report);
+        assert.equal(await page.getByLabel('Base contable').isDisabled(), report.startsWith('Aged'));
+      }
+      await page.screenshot({ path: path.join(output, `real-reports-synthetic-${width}.png`), fullPage: true });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      reportMode = 'error'; await page.getByRole('button', { name: 'Consultar informe real' }).click();
+      await page.getByRole('alert').filter({ hasText: 'renovar la autorización' }).waitFor();
+      assert.equal(await page.getByRole('region', { name: 'Tabla del informe real' }).count(), 0);
+      reportMode = 'empty'; await page.getByRole('button', { name: 'Consultar informe real' }).click();
+      await page.getByText('QuickBooks indica que no hay datos para esta consulta.').waitFor();
       await page.goto(origin + '/quickbooks/disconnect/?realmId=untrusted&disconnect=true');
       await page.getByRole('heading', { name: 'Identidad de empresa verificada' }).waitFor();
       assert.equal(posts.length, 0, 'Disconnect GET and query parameters cannot revoke');
@@ -97,7 +125,13 @@ async function main() {
       await page.getByRole('button', { name: 'Confirmar autorización de DEMAC' }).click();
       await page.getByRole('heading', { name: 'Identidad de empresa verificada' }).waitFor(); assert.equal(posts.length, 3);
       assert.equal(posts.at(-1).action, 'finish'); assert.deepEqual(errors, []); assert.deepEqual(blocked, []);
-      results.push({ width, result: 'PASS', states: ['disabled', 'signed-out', 'unauthorized', 'read-only-disconnect-landing', 'confirmation', 'uncertain-revocation', 'explicit-retry', 'explicit-OAuth-completion'], unexpectedRequests: 0, errors: 0 });
+      await page.evaluate(({ ticket, proof }) => sessionStorage.setItem('demac.quickbooks.production.v1', JSON.stringify({ uid: 'owner', ticket, proof, createdAt: Date.now() - 600001 })), { ticket, proof });
+      current = { ...empty, configured: true, phase: 'confirmation-pending', disconnectVersion: version };
+      await page.goto(origin + '/quickbooks/connect/');
+      await page.getByText('La confirmación venció o no está disponible en esta pestaña.', { exact: false }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Confirmar autorización de DEMAC' }).count(), 0);
+      assert.equal(reportRequests.length, 6);
+      results.push({ width, result: 'PASS', states: ['disabled', 'signed-out', 'unauthorized', 'read-only-disconnect-landing', 'confirmation', 'uncertain-revocation', 'explicit-retry', 'explicit-OAuth-completion', 'four-real-report-forms', 'no-automatic-report', 'report-error-clears-old-values', 'report-empty', 'expired-proof-guidance', 'status-feedback'], unexpectedRequests: 0, errors: 0 });
       await context.close();
     }
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); fs.rmSync(folder, { recursive: true, force: true }); }

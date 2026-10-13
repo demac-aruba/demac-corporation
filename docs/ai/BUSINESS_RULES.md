@@ -382,3 +382,15 @@ Production activation remains separately owner-approved through the server-side 
 - Catalog writers preserve a frozen observed version; stale edits fail with the draft retained. Fresh current role and exact replay are server-enforced. Existing unknown fields and creation metadata survive updates.
 - Booking-code uniqueness follows actual legacy booking resolution. Delete retains private audit/identity and rejects linked work, Field interventions/sales or stock. Deleted IDs cannot be reused.
 - No bulk rewrite/backfill is implied. Direct-write closure requires verified backend, ERP, Legacy and old-session cutover plus forward recovery. See the finance governance task/review.
+
+## QuickBooks production reporting
+
+- `FIN-QBO-PRODUCTION-READ-001` — Owner authorized continuation on 2026-10-13 after
+  confirming DEMAC realm 9130352327074466 (CompanyInfo country AW). Only the designated
+  owner with a currently active administrative profile may request four fixed reports:
+  ProfitAndLoss, BalanceSheet, AgedReceivables and AgedPayables. Official amounts, currency,
+  basis and dates come from QuickBooks, with no inferred balances or persisted report values.
+  The report function shares the existing authorization operation lease, retains rotated
+  credentials encrypted, and fails closed on uncertain refresh or identity changes. No
+  accounting writes, synchronization, financial export to AI, or MCP access is authorized
+  by this reporting release. See `adrs/quickbooks-production-reports-20261013.md`.
