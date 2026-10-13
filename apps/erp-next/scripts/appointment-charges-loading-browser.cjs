@@ -65,6 +65,7 @@ const tab=(page,name)=>page.getByRole('navigation',{name:'Secciones de la cita'}
 const finance=page=>page.locator('[data-charge-stage]');
 async function loaded(page){await page.waitForFunction(()=>document.querySelector('[data-charge-stage]')?.getAttribute('aria-busy')==='false');}
 async function openFinance(page){await tab(page,'Importes y pagos').click();await loaded(page);}
+async function selectActualService(page){await page.getByLabel('Añadir servicio o producto',{exact:true}).fill('DEEP-DEMO');await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).click();}
 async function reads(page){return page.evaluate(()=>window.__reads.length);}
 async function focus(page,age=31_000){await page.evaluate(age=>{window.__offset+=age;window.dispatchEvent(new Event('focus'));},age);}
 async function main(){
@@ -89,6 +90,32 @@ async function main(){
    await focus(page);await tab(page,'Historial').click();await tab(page,'Resumen').click();await tab(page,'Importes y pagos').click();assert.equal(await reads(page),1);
    await page.screenshot({path:path.join(artifacts,'loading-desktop.png'),fullPage:true});await page.evaluate(()=>window.__release[0]());await loaded(page);
   },{__holdReads:true});
+  for(const viewport of [{width:1600,height:1000},{width:1366,height:768},{width:390,height:844}])await run('direct-catalog-entry-'+viewport.width,async page=>{
+   await openFinance(page);
+   assert.equal(await page.getByRole('button',{name:/Registrar trabajos realizados|Usar trabajos agendados/}).count(),0);
+   const search=page.getByLabel('Añadir servicio o producto',{exact:true});await search.waitFor();
+   const top=await search.boundingBox(),panel=await page.getByRole('region',{name:'Trabajos e importes',exact:true}).boundingBox();
+   assert.ok(top.y-panel.y<130,'Entry row begins directly below the work heading');
+   assert.equal(await page.getByLabel('Concepto 1',{exact:true}).count(),0,'Forecast is not copied into actual work');
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await page.screenshot({path:path.join(artifacts,'direct-empty-'+viewport.width+'.png'),fullPage:true});
+   const catalogReads=await page.evaluate(()=>window.__catalogReads);
+   await page.getByRole('button',{name:'Añadir',exact:true}).click();
+   const popup=await page.getByRole('region',{name:'Buscar en catálogo 0',exact:true}).boundingBox();
+   assert.ok(popup.y>=0 && popup.y+popup.height<=viewport.height,'Initial catalog stays inside the viewport');
+   await page.screenshot({path:path.join(artifacts,'direct-search-'+viewport.width+'.png'),fullPage:true});
+   await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).click();
+   await search.fill('R410A-DEMO');await page.getByRole('button',{name:'Seleccionar Refrigerante de prueba · R410A-DEMO',exact:true}).click();
+   await search.fill('ADDON-DEMO');await page.getByRole('button',{name:'Seleccionar Adicional de prueba · ADDON-DEMO',exact:true}).click();
+   for(const [i,label] of ['Deep cleaning','Refrigerante de prueba','Adicional de prueba'].entries())assert.equal(await page.getByLabel('Concepto '+(i+1),{exact:true}).textContent(),label);
+   assert.equal(await search.inputValue(),'');assert.equal(await search.evaluate(node=>node===document.activeElement),true);
+   assert.equal(await page.locator('input[aria-label^="BTU"],select[aria-label^="Servicio realizado"]').count(),0);
+   assert.equal(await page.evaluate(()=>window.__catalogReads),catalogReads,'Adding entries reuses the loaded catalog');
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[],'Selection does not finalize work or record a payment');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false);
+   await page.getByLabel('Importe 3',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   await page.screenshot({path:path.join(artifacts,'direct-three-lines-'+viewport.width+'.png'),fullPage:true});
+  },{__record:{...record,candidateEvidence:{fingerprint:'empty',records:[]}},__catalogItems:[...catalogItems,{id:'addon',name:'Adicional de prueba',itemType:'Servicio',category:'Adicionales',sku:'ADDON-DEMO'}]},viewport);
   await run('refresh-retains-data-error-blocks-writes-recovers',async page=>{
    await openFinance(page);await page.getByText(/Ver proyección del booking/).click();await page.evaluate(()=>{window.__holdReads=true;window.__readError='Synthetic read unavailable';});await focus(page);await page.waitForFunction(()=>window.__reads.length===2);
    assert.match(await finance(page).innerText(),/CheckUp de ejemplo/);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
@@ -97,13 +124,13 @@ async function main(){
    await page.evaluate(()=>{window.__readError='';window.__holdReads=false;});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isEnabled(),true);
   });
   await run('draft-version-fingerprint-and-cross-tab-preservation',async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Usar trabajos agendados',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Alcance de prueba');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   await openFinance(page);await selectActualService(page);await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Alcance de prueba');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
    await tab(page,'Resumen').click();await focus(page);await tab(page,'Importes y pagos').click();assert.equal(await reads(page),1);assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Alcance de prueba');
    await page.evaluate(()=>{window.__record.state.version=2;window.__record.candidateEvidence.fingerprint='field-v2';});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);
    await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();assert.equal(await page.getByLabel('Concilié los conceptos Field',{exact:false}).isChecked(),false);assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
-   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Descartar borrador',exact:true}).click();await page.getByRole('button',{name:'Usar trabajos agendados',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Revisión actualizada');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.waitForFunction(()=>window.__writes.length===1);
+   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Descartar borrador',exact:true}).click();await selectActualService(page);await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Revisión actualizada');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.waitForFunction(()=>window.__writes.length===1);
    const write=await page.evaluate(()=>window.__writes[0]);assert.equal(write.data.expectedVersion,2);assert.equal(write.data.candidateFingerprint,'field-v2');
-  });
+  },{__catalogItems:catalogItems});
   await run('payment-conflict-cannot-adopt-new-version',async page=>{
    await openFinance(page);await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('50');await page.evaluate(()=>window.__record.state.version=2);await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Guardar pago',exact:true}).isDisabled(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'50');await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   });
@@ -127,14 +154,24 @@ async function main(){
    await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Corrección pendiente');
    await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos'}).waitFor();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Corrección pendiente');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium},viewport);
-  await run('historical-agreed-estimate-remains-editable',async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Usar trabajos agendados',exact:true}).click();
+  const historicalRecord=(()=>{const r=structuredClone(record);r.state.estimate={...quote,lines:[{...work('historic','Acuerdo histórico',6500),manualPrice:true,btu:null}],totalCents:6500,knownTotalCents:6500};r.state.originalEstimate=structuredClone(r.state.estimate);r.candidateEvidence={fingerprint:'empty',records:[]};return r;})();
+  await run('historical-estimate-preserved-without-copying-planned-work',async page=>{
+   await openFinance(page);await page.getByText(/Ver proyección del booking/).click();
+   assert.match(await finance(page).innerText(),/Acuerdo histórico/);assert.match(await finance(page).innerText(),/Afl. 65.00/);
+   assert.equal(await page.getByLabel('Concepto 1',{exact:true}).count(),0);
+   await selectActualService(page);assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Deep cleaning');
+   await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   assert.deepEqual(await page.evaluate(()=>window.__record.state.estimate),historicalRecord.state.estimate);
+   assert.deepEqual(await page.evaluate(()=>window.__record.state.originalEstimate),historicalRecord.state.originalEstimate);
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:historicalRecord,__catalogItems:catalogItems});
+  await run('historical-confirmed-agreed-price-remains-editable',async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
    assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Acuerdo histórico');
    await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 65.00'}).waitFor();
-   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');
-   await page.getByText('Afl. 130.00',{exact:true}).first().waitFor();
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.getByText('Afl. 130.00',{exact:true}).first().waitFor();
    assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
-  },{__record:(()=>{const r=structuredClone(record);r.state.estimate={...quote,lines:[{...work('historic','Acuerdo histórico',6500),manualPrice:true}],totalCents:6500,knownTotalCents:6500};r.state.originalEstimate=structuredClone(r.state.estimate);r.candidateEvidence={fingerprint:'empty',records:[]};return r;})()});
+  },{__record:{...historicalRecord,state:{...historicalRecord.state,final:historicalRecord.state.estimate}}});
   await run('method-shortcuts-preserve-payment-draft',async page=>{
    await openFinance(page);
    for(const method of ['Efectivo','Transferencia','POS','SUAVE']){
@@ -152,7 +189,7 @@ async function main(){
    if(scenario==='unknown'){assert.match(text,/Por confirmar/);assert.doesNotMatch(text,/✓ Pagado/);assert.match(text,/BTU pendiente/);}
    if(scenario==='zero'){assert.match(text,/Afl. 0.00/);assert.match(text,/Sin saldo pendiente/);assert.match(text,/✓ Pagado/);}
    if(scenario==='credit'){assert.match(text,/SALDO A FAVOR/);assert.match(text,/Afl. 20.00/);assert.doesNotMatch(text,/✓ Pagado/);}
-   if(scenario==='empty'){assert.match(text,/Sin registrar/);assert.match(text,/no tiene una proyección original guardada/);assert.doesNotMatch(text,/✓ Pagado/);}
+   if(scenario==='empty'){assert.match(text,/Sin registrar/);assert.match(text,/Sin proyección guardada/);assert.match(text,/Por confirmar/);assert.equal(await page.getByLabel('Concepto 1',{exact:true}).count(),0);assert.doesNotMatch(text,/✓ Pagado/);}
    if(scenario==='fractional'){const row=page.getByRole('row').filter({hasText:'Hora adicional'});assert.match(await row.innerText(),/1.5/);assert.match(await row.innerText(),/45.00/);assert.match(await row.innerText(),/67.50/);}
   },{__record:(()=>{const r=structuredClone(premium);if(scenario==='final-only')r.state.originalEstimate=null;if(scenario==='empty')r.state=null;if(scenario==='unknown'){r.state.final=null;r.state.estimate.totalCents=null;r.state.estimate.lines[0].unitCents=null;r.state.estimate.lines[0].totalCents=null;r.state.estimate.lines[0].pendingReason='BTU pendiente';}if(scenario==='zero'){r.state.final.totalCents=0;r.state.final.lines=[];r.state.receivedCents=0;r.payments=[];}if(scenario==='credit')r.state.receivedCents=45000;if(scenario==='fractional'){r.state.final.lines=[{...work('extra','Hora adicional',4500),quantityMillis:1500,totalCents:6750}];r.state.final.totalCents=6750;}return r;})()});
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChargeCatalogItem } from '../../lib/appointment-charges';
 import { ChargeIcon } from './appointment-charge-icons';
 import styles from './charge-catalog-picker.module.css';
@@ -14,6 +14,8 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
   inline?: boolean; floating?: boolean;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [filter, setFilter] = useState<Filter>('Todos');
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState({ below: false, height: 380 });
   const panelId = useId(), inputRef = useRef<HTMLInputElement>(null), triggerRef = useRef<HTMLButtonElement>(null);
   const selected = items.find(item => item.id === selectedId);
   const searchIndex = useMemo(() => open ? items.map(item => ({ item, text: normalize(`${item.name} ${item.description || ''} ${item.category || ''} ${item.sku || ''}`) })) : [], [items, open]);
@@ -21,13 +23,36 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
   const matches = searchIndex.filter(({ item, text }) => (filter === 'Todos' || item.itemType === filter) && words.every(word => text.includes(word))).map(({ item }) => item);
   const metadataAvailable = items.some(item => item.itemType);
   useEffect(() => { if (open && !disabled && !inline) inputRef.current?.focus(); }, [open, disabled, inline]);
+  useLayoutEffect(() => {
+    if (!open || !floating) return;
+    const position = () => {
+      const picker = pickerRef.current;
+      if (!picker) return;
+      const rect = picker.getBoundingClientRect();
+      let top = 0, bottom = window.innerHeight;
+      // The drawer body clips results even when there is room in the viewport.
+      for (let parent = picker.parentElement; parent; parent = parent.parentElement) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) continue;
+        const bounds = parent.getBoundingClientRect();
+        top = Math.max(top, bounds.top + parent.clientTop);
+        bottom = Math.min(bottom, bounds.top + parent.clientTop + parent.clientHeight);
+      }
+      const above = Math.max(0, rect.top - top - 8), below = Math.max(0, bottom - rect.bottom - 8);
+      const next = { below: below > above, height: Math.floor(Math.min(380, Math.max(above, below))) };
+      setPlacement(current => current.below === next.below && current.height === next.height ? current : next);
+    };
+    position();
+    window.addEventListener('resize', position);
+    window.addEventListener('scroll', position, true);
+    return () => { window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true); };
+  }, [open, floating]);
   const choose = (item: ChargeCatalogItem | null) => {
     if (disabled || (item && loading)) return;
     onSelect(item); setQuery(''); setFilter('Todos');
     if (inline) inputRef.current?.focus(); else triggerRef.current?.focus();
     setOpen(false);
   };
-  return <div className={`${styles.picker} ${floating ? styles.floating : ''}`} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); if (inline) inputRef.current?.focus(); else triggerRef.current?.focus(); setOpen(false); } }}>
+  return <div ref={pickerRef} className={`${styles.picker} ${floating ? styles.floating : ''}`} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); if (inline) inputRef.current?.focus(); else triggerRef.current?.focus(); setOpen(false); } }}>
     {inline ? <div className={styles.addRow}><label className={styles.search}><span>Añadir servicio, adicional o producto</span><input ref={inputRef} type="search" aria-label="Añadir servicio o producto" aria-expanded={open} aria-controls={panelId} value={query} disabled={disabled} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setOpen(true); }} placeholder="Buscar servicio, producto o código…"/></label><button type="button" className={styles.addButton} disabled={disabled} aria-expanded={open} aria-controls={panelId} onClick={() => { inputRef.current?.focus(); setOpen(true); }}><ChargeIcon name="plus"/>Añadir</button></div> : <><span className={styles.label}>Producto o servicio del catálogo</span>
     <button ref={triggerRef} type="button" className={styles.trigger} aria-label={`Tarifa del catálogo ${index}`} aria-expanded={open} aria-controls={panelId} disabled={disabled} onClick={() => setOpen(value => !value)}>
       <span className={`${styles.icon} ${selected?.itemType === 'Producto' ? styles.product : ''}`}><ChargeIcon name={selected?.itemType === 'Producto' ? 'grid' : 'work'}/></span>
@@ -35,7 +60,7 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
     </button></>}
     {selected && !open ? <div className={styles.selectedInfo}>{selected.description ? <p>{selected.description}</p> : null}{selected.durationMinutes ? <span><ChargeIcon name="clock"/>{selected.durationMinutes} min por servicio</span> : null}</div> : null}
     {selectedId && !selected && !loading && !error ? <p className={styles.empty}>El artículo guardado ya no está disponible en el catálogo activo. El concepto y su precio se conservan.</p> : null}
-    {open ? <section id={panelId} className={styles.panel} aria-label={`Buscar en catálogo ${index}`}>
+    {open ? <section id={panelId} className={styles.panel} style={floating ? { top: placement.below ? 'calc(100% + 4px)' : 'auto', bottom: placement.below ? 'auto' : 'calc(100% + 4px)', maxHeight: placement.height } : undefined} aria-label={`Buscar en catálogo ${index}`}>
       {!inline ? <label className={styles.search}><span>Buscar por nombre, descripción o código</span><input ref={inputRef} type="search" aria-label={`Buscar producto o servicio ${index}`} value={query} disabled={disabled} onChange={event => setQuery(event.target.value)} placeholder="Ej.: deep cleaning, refrigerante, R410A…"/></label> : null}
       {metadataAvailable ? <div className={styles.filters} aria-label="Tipo de concepto">{(['Todos', 'Servicio', 'Producto'] as const).map(type => <button key={type} type="button" disabled={disabled} aria-pressed={filter === type} onClick={() => setFilter(type)}>{type === 'Todos' ? type : type === 'Servicio' ? 'Servicios' : 'Productos'}</button>)}</div> : null}
       {loading ? <p role="status" className={styles.empty}>Cargando catálogo…</p> : error ? <div role="alert" className={styles.error}>{error}<button type="button" disabled={disabled} onClick={onRetry}>Reintentar catálogo</button></div> : <>

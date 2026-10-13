@@ -99,7 +99,7 @@
 .compactWorkspace .metrics{gap:10px;margin-bottom:10px;flex-shrink:0}.compactWorkspace .metric{min-height:70px;padding:10px 12px;gap:10px}.compactWorkspace .metric .tile{width:34px;height:34px;border-radius:10px}.compactWorkspace .metric .tile svg{width:21px;height:21px}.compactWorkspace .metric strong{font-size:21px!important;margin-top:2px}.compactWorkspace .metric small{font-size:10px!important;margin-top:3px}
 .compactWorkspace .columns{grid-template-columns:minmax(0,2.08fr) minmax(300px,1fr);gap:12px;flex:1;min-height:160px;align-items:stretch}
 .compactWorkspace .panel{padding:14px;border-radius:12px}.compactWorkspace .panelHeader{margin-bottom:10px;flex-shrink:0}.compactWorkspace .panelTitle>.tile{width:34px;height:34px}.compactWorkspace .panelTitle .heading{font-size:15px!important}.compactWorkspace .panelTitle p{font-size:11px!important}
-.workPanel{display:flex;flex-direction:column;min-height:0}.workScroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 4px 4px 2px}.paymentsPanel{overflow:auto;overscroll-behavior:contain}
+.workPanel{display:flex;flex-direction:column;min-height:0}.workScroll{flex:0 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 4px 4px 2px}.paymentsPanel{overflow:auto;overscroll-behavior:contain}
 .compactWorkspace .invoiceLines{margin:0}.compactWorkspace .invoiceLine{padding:9px 10px;gap:10px;border-width:0 0 1px;border-radius:0;margin:0}.compactWorkspace .invoiceLine:nth-child(even){background:#fafcff}.compactWorkspace .invoiceLine input{padding:7px!important}.compactWorkspace .invoiceConcept strong{font-size:12px!important}.compactWorkspace .invoiceMoney>span{margin-bottom:4px}
 .scopeDetails{margin:12px 0 3px;color:#647b98;font-size:11px}.scopeDetails summary,.paymentDetails summary{cursor:pointer}.scopeDetails label{margin-top:7px}.scopeDetails textarea{font-size:12px;min-height:60px;resize:vertical}
 .compactWorkspace .payment{padding:9px 0;gap:8px}.compactWorkspace .payment>.tile{width:29px;height:29px}.paymentDetails{margin-top:5px;color:#1268ff;font-size:10px}.compactWorkspace .paymentEntry{margin-top:12px}.compactWorkspace .methodShortcuts{gap:6px}.compactWorkspace .methodShortcuts button{min-height:36px;padding:7px}.compactWorkspace .empty{padding:14px}.compactWorkspace .workTable td{padding:10px 8px}
@@ -113,3 +113,6 @@
 .compactWorkspace .accessStatus :is(span,button),.compactWorkspace .auditFooter{font-size:11px!important}.compactWorkspace .accessStatus{font-size:11px!important}
 
 .draftStatus{flex-shrink:0;color:#855416;background:#fff6e6;border-radius:7px;padding:5px 9px;margin-bottom:7px;font-size:11px!important}
+
+/* Start with the catalog row; keep it visible below growing work lists. */
+.emptyWorkPanel .workScroll{order:1;margin-top:10px}
