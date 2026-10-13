@@ -137,10 +137,12 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     if (acknowledgedVersion.current === version) {
       setDraftBaseline(currentBaseline); acknowledgedVersion.current = null;
     } else if (acknowledgedVersion.current !== null && version > acknowledgedVersion.current) acknowledgedVersion.current = null;
-    if ((recoveringDraft || (recovered && version > editingVersion)) && !busy && !pending && !record.blocker && draftBaseline === currentBaseline) {
+    // Returning from History reacquires a lease and advances version even for a
+    // fresh draft. Rebase only when all financial evidence is still identical.
+    if ((recoveringDraft || (editing && version > editingVersion)) && !busy && !pending && !record.blocker && draftBaseline === currentBaseline) {
       setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint('');
     }
-  }, [record, currentBaseline, version, loading, readError, recoveringDraft, recovered, editingVersion, busy, pending, draftBaseline]);
+  }, [record, currentBaseline, version, loading, readError, recoveringDraft, editing, editingVersion, busy, pending, draftBaseline]);
   useEffect(() => {
     if (!recoveryReady || invalidRecovery || !canManage || !currentUserId) return;
     try { persistRecovery(); setDraftSaved(Boolean(editing)); setStorageError(''); }

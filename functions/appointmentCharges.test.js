@@ -148,6 +148,31 @@ test('finalization rejects incomplete price or scope review; explicit zero-price
   await rejectsCode(call('finalize_appointment_charges', { lines: [priced('0')] }), 'charge_scope');
   const result = await call('finalize_appointment_charges', { lines: [priced('0')], scopeReviewed: true }); assert.equal(result.state.final.totalCents, 0);
 });
+test('two bookings isolate receipts, exact replay and confirmed totals even with the same request identity', async () => {
+  const { db, call } = fixture({
+    'appointments/other': { customerId: 'other-customer', propertyId: 'other-property', status: 'confirmed', workOrderIds: [] },
+    'appointments/other/chargeEditing/current': { ownerId: 'office', sessionId: 'fixture-session-0000000001', token: 'fixture-token', expiresAtMs: NOW.getTime() + 90000 },
+  });
+  const otherBefore = db.read('appointments/other');
+  const a = { payment: cash('250', { method: 'transfer', reference: 'SYNTHETIC-250' }), requestId: 'shared-request-id', expectedVersion: 0 };
+  const b = { appointmentId: 'other', payment: cash('50'), requestId: 'shared-request-id', expectedVersion: 0 };
+  const receiptA = await call('record_appointment_payment', a);
+  assert.deepEqual(db.read('appointments/other'), otherBefore);
+  const receiptB = await call('record_appointment_payment', b);
+  assert.notEqual(receiptA.paymentId, receiptB.paymentId);
+  assert.equal((await call('record_appointment_payment', a)).replayed, true);
+  assert.equal((await call('record_appointment_payment', b)).replayed, true);
+  await call('finalize_appointment_charges', { lines: [priced('125', { quantity: 3 })], scopeReviewed: true });
+  const first = await call('get_appointment_charges');
+  const second = await call('get_appointment_charges', { appointmentId: 'other' });
+  assert.equal(first.state.final.totalCents - first.state.receivedCents, 12500);
+  assert.equal(first.payments.length, 1); assert.equal(first.payments[0].appointmentId, 'apt');
+  assert.equal(second.state.final, null); assert.equal(second.state.receivedCents, 5000);
+  assert.equal(second.payments.length, 1); assert.equal(second.payments[0].appointmentId, 'other');
+  const before = [...db.store];
+  await rejectsCode(call('void_appointment_payment', { paymentId: receiptB.paymentId, reason: 'Wrong appointment' }), 'payment_unavailable');
+  assert.deepEqual([...db.store], before, 'A booking cannot void another booking receipt');
+});
 test('all four split methods total exactly, void preserves receipt and audit, credits stay visible', async () => {
   const { db, call } = fixture();
   await call('finalize_appointment_charges', { lines: [priced('497.50')], scopeReviewed: true });
