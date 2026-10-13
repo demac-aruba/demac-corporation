@@ -35,7 +35,8 @@ jobs:
           node --check functions/quickbooksConnectionHttp.js
           node --check functions/quickbooksConnectionService.js
           node --test functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
-      - run: npm ci --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+      # ERP Next intentionally has no committed lockfile; match its existing CI installer.
+      - run: npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
       - run: npm run test:quickbooks-connection --prefix apps/erp-next
       - run: npm run typecheck --prefix apps/erp-next
 # Deliberately no deploy job, cloud credentials, activation or accounting calls.

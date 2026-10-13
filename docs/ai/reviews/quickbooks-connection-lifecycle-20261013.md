@@ -33,6 +33,7 @@ All implementation findings below were corrected before this record was finalize
 | Medium | Disconnect UI | A checked confirmation could survive a status change to a new connection. | Clear confirmation on reload/actions and retain server-side version matching. |
 | Low | Launch login return | The private launch URL could lose its destination after login. | Add exactly `/integrations/` to the super-admin-only allowlist; reject arbitrary destinations. |
 | Low | Build verification | Old generated output initially obscured whether the new exported pages existed. | Remove generated `.next`/`out`, run the full clean build and inspect both actual HTML files. Restore Next-generated source configuration edits. |
+| Low | New CI installation | GitHub's clean runner rejected `npm ci` because ERP Next has no committed lockfile. | Match the existing ERP pipeline's `npm install` while preserving every test, typecheck and build gate. Re-run checks on the corrected SHA. |
 
 ## Verification
 
