@@ -67,6 +67,7 @@ function createSandboxService({ db, config, fetchImpl = fetch, now = Date.now })
     await db.runTransaction(async tx => {
       await requireAdmin(uid, tx);
       const record = (await tx.get(ref)).data() || {};
+      if (record.reportOperation?.expiresAt > now()) throw fault(409, 'report-busy');
       const previous = record.attempt;
       if (previous?.expiresAt > now() && (previous.status === 'exchanging' ||
         (['started', 'awaiting-finish'].includes(previous.status) && previous.uid !== uid))) throw fault(409, 'connection-busy');
@@ -127,7 +128,8 @@ function createSandboxService({ db, config, fetchImpl = fetch, now = Date.now })
       if (typeof company?.Id !== 'string' || !company.Id || typeof company.CompanyName !== 'string' || !company.CompanyName.trim()) throw fault(502, 'company-verification-failed');
       const verifiedAt = new Date(now()).toISOString();
       const ticket = opaque();
-      const pending = { credentials: sealTokens({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
+      const pending = { credentialConfigId: hash(JSON.stringify([config.realmId, config.clientId, config.redirectUri, config.encryptionKey])),
+        credentials: sealTokens({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
         accessExpiresAt }, config.encryptionKey, config.realmId),
       connection: { realmId: config.realmId, companyName: company.CompanyName.slice(0, 200),
         country: typeof company.Country === 'string' ? company.Country.slice(0, 80) : null, verifiedAt, connectedAt: verifiedAt, connectedBy: attempt.uid } };
@@ -155,7 +157,9 @@ function createSandboxService({ db, config, fetchImpl = fetch, now = Date.now })
       if (attempt.status === 'completed') return publicStatus(record, config); // Lost HTTP response; no second exchange/write.
       if (attempt.status !== 'awaiting-finish' || attempt.pending.connection.realmId !== config.realmId) throw fault(400, 'invalid-state');
       const { pending, ...completed } = attempt;
-      const next = { ...record, ...pending, attempt: { ...completed, status: 'completed' } };
+      if (record.reportOperation?.expiresAt > now()) throw fault(409, 'report-busy');
+      const next = { ...record, ...pending, reportOperation: null, reauthorizationRequired: false,
+        attempt: { ...completed, status: 'completed' } };
       tx.set(ref, next);
       audit(tx, attempt.id, 'connected', uid, 'sandbox-authorized-sync-disabled');
       return publicStatus(next, config);

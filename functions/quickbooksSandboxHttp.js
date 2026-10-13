@@ -1,6 +1,7 @@
 'use strict';
 
 const { createSandboxService, validateConfig, fault } = require('./quickbooksSandboxService');
+const { createSandboxReports } = require('./quickbooksSandboxReports');
 
 function createSandboxHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now, log = () => {} }) {
   return async (request, response) => {
@@ -47,6 +48,8 @@ function createSandboxHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now
       const body = request.body || {};
       if (body.action === 'start') return response.json(await service.start(uid, body.proofHash));
       if (body.action === 'finish') return response.json(await service.finish(uid, body.ticket, body.proof));
+      if (body.action === 'report') return response.json(await createSandboxReports({ db, config, fetchImpl, now,
+        requireAdmin: service.requireAdmin }).report(uid, body));
       throw fault(400, 'invalid-request');
     } catch (error) {
       const code = error.safeCode || 'connection-failed';
