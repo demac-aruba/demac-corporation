@@ -210,7 +210,7 @@ Observación de la comprobación anterior (2026-10-13): corte 2026-09-30, Accrua
 sí respondieron. Esto identifica la validación de respuesta como el lugar del rechazo,
 pero no identifica aún cuál condición falla.
 
-`quickbooksReportsFormat.js` colapsa en el mismo código discrepancias de nombre, moneda,
+La versión desplegada de `quickbooksReportsFormat.js` colapsa en el mismo código discrepancias de nombre, moneda,
 fecha, base, columnas, celdas, profundidad, opciones y filas. No existe un subcódigo que
 permita distinguirlas en `quickbooksReportsHttp.js` o en el audit del servicio. No se
 capturó el payload real. La inspección de navegador adicional de esta sesión quedó
@@ -228,6 +228,14 @@ Cualquier diagnóstico/corrección de backend exige una ruta de actualización r
 pin de revisión/origen y verificación posterior; no quitar esa protección para desplegar.
 
 ## Referencias
+
+Avance de implementación (mismo día): se añadió una vista previa de solo lectura a
+Importes y pagos. Usa una consulta autenticada nueva, exige la misma versión y sesión,
+muestra líneas confirmadas y recibos vigentes, y mantiene pendientes todas las relaciones
+con QuickBooks. No produce un payload enviable ni guarda estado de integración. También
+se implementaron subcódigos de diagnóstico cerrados; el backend desplegado sigue sin
+ellos hasta contar con una ruta de actualización revisada. Véase la
+[revisión de esta etapa](../reviews/quickbooks-preparation-20261013.md).
 
 - [Servicio operativo de importes y recibos](../../../functions/appointmentCharges.js).
 - [Lector de informes actual](../../../functions/quickbooksReportsService.js).

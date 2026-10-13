@@ -11,9 +11,9 @@ const { validateExisting, disclosures } = require('./quickbooks-production-activ
 const NAME = 'quickbooksReports';
 const PINS = {
   "quickbooksReports.js": "0ef83be98a7fd96fecd6b5dd70ba379520f734cf68b433b56e5de43d77fd2622",
-  "quickbooksReportsHttp.js": "5d3ac3b65caebe95d7fe39e85ed9528d72296719fac47427a1206a9d90893e64",
+  "quickbooksReportsHttp.js": "78f6d23223bfff96831719a57f75600061e0fa97bd729317f81a670b5a7e9fb9",
   "quickbooksReportsService.js": "46b4befc0fb17a7743f54b3334e2f211e595d9b5211b1b788c019b632c8c62de",
-  "quickbooksReportsFormat.js": "2714a0a48bbbb643e016dc7e02acf68b69c2ef551f3d071e512725242906d45f",
+  "quickbooksReportsFormat.js": "2ddaf7671c22b20b45c4aeb155b96c93479115830ccc44e28443d28012b4afb5",
   "quickbooksConnectionService.js": "322a06542c71894a27994b89c4daa28bd848e08b6f3ef2231c9749a13533d1ed",
   "package-lock.json": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb"
 };

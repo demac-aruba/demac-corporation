@@ -45,3 +45,14 @@ Current scope: four owner-only read reports, explicit queries and encrypted toke
 No ERP-to-QuickBooks sales/payment/expense/inventory synchronization and no ChatGPT/MCP
 financial access are enabled. Suspend only the new reports gate if needed; do not delete
 the existing authorization or redeploy the original identity installer for recovery.
+
+## Prepared diagnostic change — not deployed
+
+The continuation in PR #597 adds fixed validation classifications to the report formatter
+and HTTP error response, plus compatible frontend messages. Tests verify that no provider
+values, report amounts or arbitrary classification strings leave the error boundary.
+This has not changed production revision `quickbooksreports-00001-liy`; Balance Sheet's
+actual rejected condition remains unknown. Source pins follow the candidate, while the
+initial installer's existing-function rejection remains unchanged. A separately reviewed
+update path and authenticated read are still required; this is not a Balance Sheet fix.
+See the [preparation review](reviews/quickbooks-preparation-20261013.md).

@@ -1,6 +1,7 @@
 'use strict';
 const { createConnectionService, fault, RETURN } = require('./quickbooksConnectionService');
 const { createReportsService } = require('./quickbooksReportsService');
+const { reportValidationIssue } = require('./quickbooksReportsFormat');
 function createReportsHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now, log = () => {} }) {
   return async (request, response) => {
     response.set('Cache-Control', 'private, no-store');
@@ -29,7 +30,9 @@ function createReportsHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now
       return response.json(await createReportsService({ db, config, requireOwner, fetchImpl, now }).report(uid, request.body));
     } catch (error) {
       const code = error.safeCode || 'report-failed'; const status = error.safeCode ? error.status : 503;
-      log({ code, status }); return response.status(status).json({ error: code });
+      const validationIssue = reportValidationIssue(error);
+      const diagnostic = validationIssue ? { validationIssue } : {};
+      log({ code, status, ...diagnostic }); return response.status(status).json({ error: code, ...diagnostic });
     }
   };
 }
