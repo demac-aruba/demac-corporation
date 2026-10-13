@@ -10,7 +10,7 @@ ERP production promotion and public-domain checks completed 2026-10-13 UTC.
 
 ## Scope and governance
 
-Candidate extends draft PR #572. Existing Office facade, canonical `services`, company pricing rules, `appointments.jobCharges`, private appointment coordination and immutable receipt/event paths remain authoritative. Rule: OPS-SCHED-CHARGES-001. No new ledger or invoice numbering. Financial roles are unchanged. No production migration, security-rule change, customer communication or production write was performed.
+The implementation extended PR #572. Existing Office facade, canonical `services`, company pricing rules, `appointments.jobCharges`, private appointment coordination and immutable receipt/event paths remain authoritative. Rule: OPS-SCHED-CHARGES-001. No new ledger or invoice numbering. Financial roles are unchanged. The initial implementation checkpoint performed no production writes or rule changes. The subsequent controlled release saved the approved pricing settings and published the reviewed rules; customer records and communications were not used for testing.
 
 The selected service controls new prices and server-derived descriptions. Existing snapshots retain their unit price when line, service, preset, BTU and work-line identity match; a changed service or BTU resolves the current tariff. Historical retired catalog items remain viewable and quantity-editable but cannot be newly selected. The approved AWG matrix is:
 
@@ -22,7 +22,7 @@ The selected service controls new prices and server-derived descriptions. Existi
 | 24000 | 145 | 195 | 250 |
 | 36000 | 175 | 250 | 300 |
 
-Defaults are aligned in Functions and Legacy Company Rules. Existing saved settings take precedence and are NOT rewritten by this change. A reviewed, version-checked settings update remains necessary before activation. Existing duration/commercial eligibility policy is not replaced; the added 9000 installation default uses the established installation duration (120 minutes), not a new owner-provided duration.
+Defaults are aligned in Functions and Legacy Company Rules. Existing saved settings take precedence; changing code defaults alone does not rewrite them. The reviewed, version-checked update of the 15 saved prices completed during the controlled release. Existing duration/commercial eligibility policy is not replaced; the added 9000 installation default uses the established installation duration (120 minutes), not a new owner-provided duration.
 
 ## Acceptance and observed evidence
 
