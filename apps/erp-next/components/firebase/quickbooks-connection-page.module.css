@@ -1,0 +1,8 @@
+.page{min-height:100vh;background:var(--bg,#f3f6fa);padding:48px 20px;color:var(--text,#18283f);display:grid;place-items:start center}
+.card{width:100%;max-width:780px;padding:36px;background:var(--panel,#fff);border:1px solid var(--border,#dce4ee);border-radius:18px;box-shadow:0 12px 36px #142b4910;overflow-wrap:anywhere}
+.eyebrow{color:#28629b;font-size:12px;font-weight:750;letter-spacing:.06em;text-transform:uppercase}
+.card h1{font-size:30px;line-height:1.2;margin:12px 0}.card h2{font-size:20px;margin:0 0 12px}.card p{line-height:1.65;margin:12px 0}
+.status{margin-top:28px;border-top:1px solid var(--border,#dce4ee);padding-top:24px}.status dl{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;margin:20px 0}.status dt{font-weight:650}.status dd{margin:0}
+.actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:20px}.confirmation{padding:18px;border:1px solid #ddb8b8;border-radius:10px;margin-top:20px}.confirmation label{display:flex;gap:12px;align-items:flex-start;line-height:1.5}.confirmation input{flex:none;margin-top:5px}.confirmation button{margin-top:16px}
+.error{color:#9c2727}.success{color:#186b48}.card footer{margin-top:30px;padding-top:20px;border-top:1px solid var(--border,#dce4ee);display:flex;gap:14px;flex-wrap:wrap;font-size:13px}.card a{color:#175c9c;text-decoration:underline}.card a:global(.btn){text-decoration:none;color:white}.card button:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:600px){.page{padding:20px 12px}.card{padding:22px 18px}.card h1{font-size:25px}.status dl{grid-template-columns:1fr;gap:5px}.status dd{margin-bottom:10px}.actions{align-items:flex-start;flex-direction:column}.card footer{flex-direction:column}}
