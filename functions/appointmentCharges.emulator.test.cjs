@@ -14,6 +14,19 @@ const pay=(requestId,expectedVersion=0)=>({requestId,expectedVersion,payment:{me
 const line={id:'work',label:'Synthetic service',quantity:1,serviceId:'synthetic'};
 beforeEach(async()=>{const cleared=await fetch(`http://127.0.0.1:8404/emulator/v1/projects/${PROJECT}/databases/(default)/documents`,{method:'DELETE'});assert.equal(cleared.ok,true);await Promise.all(Object.entries({'services/synthetic':{name:'Synthetic service',basePrice:125,active:true},'appointments/apt/chargeEditing/current':{ownerId:'office',ownerName:'Test office',sessionId:'emulator-tab-00000000001',token:'emulator-lease',expiresAtMs:Date.now()+90000},'users/office':{role:'office',active:true},'users/accounting':{role:'accounting',active:true},'users/tech':{role:'technician',active:true},'appointments/apt':{customerId:'customer',propertyId:'property',status:'confirmed',workOrderIds:['wo']},'workOrders/wo':{status:'Confirmada',scheduledSlots:2}}).map(([path,value])=>db.doc(path).set(value)));});
 after(async()=>{await db.terminate();await deleteApp(app);});
+test('real Firestore saves capacity-specific catalog selections without a separate BTU confirmation',async()=>{
+await db.doc('businessSettings/company-service-pricing-rules').set({version:1,standardServiceSplit:[{btu:12000,price:125},{btu:18000,price:135}]});
+await db.doc('services/std18').set({name:'18K Standard',active:true,serviceDefinition:{version:1,bookingCode:'18k_standard_service'}});
+const lines=[{id:'selected',serviceId:'std18',label:'18K Standard',quantity:2}];
+const quoted=await call('quote_appointment_charges',{expectedVersion:0,lines});assert.equal(quoted.status,200);
+assert.equal(quoted.body.quote.lines[0].btu,18000);assert.equal(quoted.body.quote.totalCents,27000);
+const request={requestId:'catalog-line-final',expectedVersion:0,lines,scopeReviewed:true,quoteToken:quoted.body.quote.quoteToken};
+const saved=await call('finalize_appointment_charges',request);assert.equal(saved.status,200,JSON.stringify(saved.body));
+const replay=await call('finalize_appointment_charges',request);assert.equal(replay.status,200);assert.equal(replay.body.replayed,true);
+const read=await call('get_appointment_charges');assert.equal(read.body.state.final.lines[0].serviceId,'std18');assert.equal(read.body.state.final.lines[0].btu,18000);assert.equal(read.body.state.final.totalCents,27000);
+assert.equal((await db.doc('appointments/apt').collection('chargeEvents').get()).size,1);
+assert.equal((await db.collection('payments').get()).size,0);assert.equal((await db.collection('invoices').get()).size,0);assert.equal((await db.doc('workOrders/wo').get()).data().status,'Confirmada');
+});
 test('HTTP facade denies missing/expired/tech identities and accepts canonical accounting',async()=>{
 assert.equal((await api.handle({method:'POST',headers:{},body:{action:'get_appointment_charges',data:{appointmentId:'apt'}}})).status,401);
 for(const [uid,status] of [['expired',401],['missing',403],['tech',403],['accounting',200]])assert.equal((await call('get_appointment_charges',{},uid)).status,status);

@@ -72,6 +72,14 @@ function initialInput(input) {
     ...(input.purpose === 'projection' ? { purpose: 'projection' } : {}) };
 }
 const chargeFingerprint = input => hash(stable(initialInput(input)));
+function catalogCapacity(service) {
+  // These are the canonical capacity-specific codes already governed by the
+  // Pricing Authority. Names, descriptions and SKUs are not pricing authority.
+  const code = clean(service.serviceDefinition?.bookingCode || service.bookingCode, 160)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const match = /^(9|12|18|24|36)k_(?:standard(?:_service)?|deep_cleaning|standard_installation)$/.exec(code);
+  return match ? Number(match[1]) * 1000 : null;
+}
 async function actorFor(get, db, uid, write = true) {
   const snapshot = await get(db.collection('users').doc(id(uid, 'Usuario')));
   const profile = snapshot.exists ? snapshot.data() : null;
@@ -83,7 +91,8 @@ async function quoteLines({ db, get, lines, now, previous, purpose = 'final', al
   const rules = await get(db.collection('businessSettings').doc('company-service-pricing-rules'));
   const pricingSettings = rules.exists ? rules.data() : null;
   const result = [];
-  for (const line of lines) {
+  for (const input of lines) {
+    let line = input;
     const saved = previous?.lines?.find(item => item.id === line.id && (item.serviceId || '') === line.serviceId
       && (item.presetId || '') === line.presetId && (item.workLineId || '') === line.workLineId && (item.btu ?? null) === line.btu);
     if (saved && (!saved.projectionOnly || purpose === 'projection') && Number.isSafeInteger(saved.unitCents) && saved.unitCents >= 0) {
@@ -100,6 +109,13 @@ async function quoteLines({ db, get, lines, now, previous, purpose = 'final', al
         const snapshot = await get(db.collection('services').doc(line.serviceId));
         if (!snapshot.exists || snapshot.data().active === false) fail(allowUnavailable ? 'service_pricing_not_configured' : 'charge_catalog', 'El servicio seleccionado no está activo.');
         const service = { ...snapshot.data(), id: line.serviceId };
+        if (purpose === 'final') {
+          const capacity = catalogCapacity(service);
+          if (capacity !== null) {
+            if (line.btu !== null && line.btu !== capacity) fail('charge_catalog_capacity', 'La capacidad pertenece al artículo seleccionado. Selecciona el servicio correcto del catálogo.');
+            line = { ...line, btu: capacity };
+          }
+        }
         label = clean(service.name || service.label || line.serviceId, 220);
         base = purpose === 'projection' && line.btu === null ? minimumProjectionPrice({ service, pricingSettings }) : null;
         base ||= resolveServicePriceSnapshot({ service, pricingSettings, btu: line.btu, capturedAt: now.toISOString() });
