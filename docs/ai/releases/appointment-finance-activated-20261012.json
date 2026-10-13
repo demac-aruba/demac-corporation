@@ -1,0 +1,489 @@
+{
+  "sourceSha": "1e3153b6bec0726cba285f1350e45d90d7e82aa9",
+  "preparedSha": "a8fa5a9acb61c400b02c077d30726475566d60cd",
+  "stage": "complete",
+  "functions": [
+    {
+      "name": "officeBookingAuthority",
+      "beforeRevision": "officebookingauthority-00084-vak",
+      "alreadyApplied": false,
+      "sourceHash": "744a4c40d8d34a615beeb5e0cb817d6474d2d44506dcacf8deabc7e106267190",
+      "afterRevision": "officebookingauthority-00085-bid",
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "trafficVerified": true,
+      "verifiedAt": "2026-10-12T23:50:29.767Z"
+    },
+    {
+      "name": "inventoryAuthority",
+      "beforeRevision": "inventoryauthority-00005-nup",
+      "alreadyApplied": true,
+      "sourceHash": "69cdfda9c0e07418b709d7f0667c0cddc86567c2b414b3a8bcbb9726d63e11d4",
+      "afterRevision": "inventoryauthority-00005-nup",
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "trafficVerified": true,
+      "verifiedAt": "2026-10-12T23:40:26.617Z"
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "beforeRevision": "fieldoperationsauthority-00008-goz",
+      "alreadyApplied": false,
+      "sourceHash": "dbe4d44338368c2aab86fc351553557c50430a5b1932ed5dd9a74c50da04c18d",
+      "afterRevision": "fieldoperationsauthority-00009-zir",
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "trafficVerified": true,
+      "verifiedAt": "2026-10-12T23:42:20.632Z"
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "beforeRevision": "processcustomeragentinbound-00054-bav",
+      "alreadyApplied": false,
+      "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+      "afterRevision": "processcustomeragentinbound-00055-pab",
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "trafficVerified": true,
+      "verifiedAt": "2026-10-12T23:43:53.872Z"
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "beforeRevision": "processcustomeragentreactivation-00054-juj",
+      "alreadyApplied": false,
+      "sourceHash": "67dc7ded92f19cf9159ad782c68bcef0a27bb1661d1d710e2fe1a02bd20b751c",
+      "afterRevision": "processcustomeragentreactivation-00055-zed",
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "trafficVerified": true,
+      "verifiedAt": "2026-10-12T23:45:06.752Z"
+    }
+  ],
+  "transports": [
+    {
+      "name": "officeBookingAuthority",
+      "label": "candidate",
+      "format": "zip",
+      "sha256": "3402c0aef0070f6d567acdcba56e7444113033d40f2ed8b840db0c967d4b8e17",
+      "fullManifestHash": "38e152b4ca9ed1134e19e6fd9164af92b03d5e26cf4b171cf08fd106fab7e7d7",
+      "extractionVerified": true,
+      "recoverySha256": "4973b8f5711b767909e3c7e71f5b0f825f17ec356091b60b9412560fa12cbc8e",
+      "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/officeBookingAuthority-candidate.zip",
+      "generation": "1791847562173110",
+      "createdAt": "2026-10-12T23:26:02+0000",
+      "privateRetained": true,
+      "anonymousAccessDenied": true,
+      "reused": true
+    },
+    {
+      "name": "inventoryAuthority",
+      "label": "candidate",
+      "format": "zip",
+      "sha256": "785330393418f5fa63e7f80c8d8c54619b11bd3f62b3878c0feeea90f064314c",
+      "fullManifestHash": "69cdfda9c0e07418b709d7f0667c0cddc86567c2b414b3a8bcbb9726d63e11d4",
+      "extractionVerified": true,
+      "recoverySha256": "ca184f0d68089b5cb8f5f8c87430a9896d12db6b88e0d7552e02a63c6eb97f9c",
+      "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/inventoryAuthority-candidate.zip",
+      "generation": "1791847585790998",
+      "createdAt": "2026-10-12T23:26:25+0000",
+      "privateRetained": true,
+      "anonymousAccessDenied": true,
+      "reused": true
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "label": "candidate",
+      "format": "zip",
+      "sha256": "6ff246ea5f280154fd9217c2fa855bfeace06342ff320154033e44c080e3af8e",
+      "fullManifestHash": "c0c8b3a20560abb6d0a10860b8c7a17c3ac287f25d1b4568990bfd40d7cc9765",
+      "extractionVerified": true,
+      "recoverySha256": "19e6ce24e4de4af30c9df20dfb10eed0b60d2d00edfb91ae163a37a825fefff4",
+      "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/fieldOperationsAuthority-candidate.zip",
+      "generation": "1791847610788035",
+      "createdAt": "2026-10-12T23:26:50+0000",
+      "privateRetained": true,
+      "anonymousAccessDenied": true,
+      "reused": true
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "label": "candidate",
+      "format": "zip",
+      "sha256": "3620eb04aca11985b190915af13ce06156bc68e12273947bb116513532680a67",
+      "fullManifestHash": "4d66ba452e18579e57cec0d65e07eb02b7c2d4083fcd2662921edbe3eaceb81e",
+      "extractionVerified": true,
+      "recoverySha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+      "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentInbound-candidate.zip",
+      "generation": "1791847635626985",
+      "createdAt": "2026-10-12T23:27:15+0000",
+      "privateRetained": true,
+      "anonymousAccessDenied": true,
+      "reused": true
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "label": "candidate",
+      "format": "zip",
+      "sha256": "3620eb04aca11985b190915af13ce06156bc68e12273947bb116513532680a67",
+      "fullManifestHash": "4d66ba452e18579e57cec0d65e07eb02b7c2d4083fcd2662921edbe3eaceb81e",
+      "extractionVerified": true,
+      "recoverySha256": "f678a603ff8d24b285f968cacad725ac8166ef0f2628233f0cd142af5777cacd",
+      "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/a8fa5a9acb61c400b02c077d30726475566d60cd/processCustomerAgentReactivation-candidate.zip",
+      "generation": "1791847658716339",
+      "createdAt": "2026-10-12T23:27:38+0000",
+      "privateRetained": true,
+      "anonymousAccessDenied": true,
+      "reused": true
+    }
+  ],
+  "mode": "forward-release",
+  "mainSha": "1e3153b6bec0726cba285f1350e45d90d7e82aa9",
+  "rulesBefore": {
+    "rulesetName": "projects/demac-corporation/rulesets/17419371-17cf-4a7c-aef3-f66323276c75",
+    "sourceHash": "2ed66f4dab0ed612eb080b778b50e72e8081e7b12c77a5d90c884c7fa076a5c2"
+  },
+  "operations": [
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/functions/fieldOperationsAuthority",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": false,
+      "hasRequestName": false,
+      "hasRequestSource": false,
+      "intent": true,
+      "at": "2026-10-12T23:40:31.967Z"
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "fieldOperationsAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848432565-65dad39507eab-0830ac2c-b249b54b",
+      "done": true,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/functions/processCustomerAgentInbound",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": false,
+      "hasRequestName": false,
+      "hasRequestSource": false,
+      "intent": true,
+      "at": "2026-10-12T23:42:25.821Z"
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentInbound",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848546342-65dad40189568-4888ff22-bf6da634",
+      "done": true,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/functions/processCustomerAgentReactivation",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": false,
+      "hasRequestName": false,
+      "hasRequestSource": false,
+      "intent": true,
+      "at": "2026-10-12T23:43:58.868Z"
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848639356-65dad45a3dd10-936c9377-427deaf2",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848639356-65dad45a3dd10-936c9377-427deaf2",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848639356-65dad45a3dd10-936c9377-427deaf2",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848639356-65dad45a3dd10-936c9377-427deaf2",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "processCustomerAgentReactivation",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848639356-65dad45a3dd10-936c9377-427deaf2",
+      "done": true,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/functions/officeBookingAuthority",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": false,
+      "hasRequestName": false,
+      "hasRequestSource": false,
+      "intent": true,
+      "at": "2026-10-12T23:49:21.159Z"
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848961661-65dad58d9d976-78d7bb58-2631d792",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848961661-65dad58d9d976-78d7bb58-2631d792",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": false,
+      "hasRequestSource": false
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848961661-65dad58d9d976-78d7bb58-2631d792",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848961661-65dad58d9d976-78d7bb58-2631d792",
+      "done": false,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    },
+    {
+      "function": "officeBookingAuthority",
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791848961661-65dad58d9d976-78d7bb58-2631d792",
+      "done": true,
+      "errorCode": null,
+      "hasTarget": true,
+      "hasRequestName": true,
+      "hasRequestSource": true
+    }
+  ],
+  "consumerObservation": [
+    {
+      "name": "inventoryAuthority",
+      "revision": "inventoryauthority-00005-nup",
+      "series": [
+        {
+          "state": "active",
+          "latest": {
+            "interval": {
+              "startTime": "2026-10-12T23:47:00Z",
+              "endTime": "2026-10-12T23:47:00Z"
+            },
+            "value": {
+              "int64Value": "0"
+            }
+          }
+        },
+        {
+          "state": "idle",
+          "latest": {
+            "interval": {
+              "startTime": "2026-10-12T23:47:00Z",
+              "endTime": "2026-10-12T23:47:00Z"
+            },
+            "value": {
+              "int64Value": "1"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "fieldOperationsAuthority",
+      "revision": "fieldoperationsauthority-00008-goz",
+      "series": [
+        {
+          "state": "active",
+          "latest": {
+            "interval": {
+              "startTime": "2026-10-12T23:47:00Z",
+              "endTime": "2026-10-12T23:47:00Z"
+            },
+            "value": {
+              "int64Value": "0"
+            }
+          }
+        },
+        {
+          "state": "idle",
+          "latest": {
+            "interval": {
+              "startTime": "2026-10-12T23:47:00Z",
+              "endTime": "2026-10-12T23:47:00Z"
+            },
+            "value": {
+              "int64Value": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "revision": "processcustomeragentinbound-00054-bav",
+      "series": []
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "revision": "processcustomeragentreactivation-00054-juj",
+      "series": []
+    }
+  ],
+  "tariffs": {
+    "changed": true,
+    "verified": 15,
+    "updateTime": "2026-10-12T23:48:08.456466Z",
+    "documentHash": "8f1e8791a89fcc9daa6d48f985846015d96a6e08442779ff2784300cedd43a9c"
+  },
+  "createdRuleset": "projects/demac-corporation/rulesets/95e3cf97-1533-46d2-8e64-873a29bf8366",
+  "rulesAfter": {
+    "rulesetName": "projects/demac-corporation/rulesets/95e3cf97-1533-46d2-8e64-873a29bf8366",
+    "sourceHash": "8dbcaecf7d6faee427cc3600680f542c0be495c0e43f8366c39e3ed1418c5624",
+    "updateTime": "2026-10-12T23:48:10.884888Z"
+  },
+  "readyForErpPromotion": true,
+  "completedAt": "2026-10-12T23:58:49.574Z"
+}

@@ -4,6 +4,10 @@
 
 Owner clarification and conditional merge/deploy authorization, 2026-10-12. Operators select the performed service, exact BTU and quantity; they do not directly override prices. Reserve billing while Importes y pagos is open and show another operator's name. Preserve original estimates, historical financial evidence and all operational/customer records.
 
+Current status: completed in production. The final activation evidence below supersedes
+the historical preparation and blocked checkpoints. Backend completed 2026-10-12;
+ERP production promotion and public-domain checks completed 2026-10-13 UTC.
+
 ## Scope and governance
 
 Candidate extends draft PR #572. Existing Office facade, canonical `services`, company pricing rules, `appointments.jobCharges`, private appointment coordination and immutable receipt/event paths remain authoritative. Rule: OPS-SCHED-CHARGES-001. No new ledger or invoice numbering. Financial roles are unchanged. No production migration, security-rule change, customer communication or production write was performed.
@@ -33,10 +37,10 @@ Defaults are aligned in Functions and Legacy Company Rules. Existing saved setti
 - [x] Blank price remains unpriced; explicit zero remains zero across appointment pricing, customer product projection, reservations and Inventory. Existing snapshots are not backfilled.
 - [x] Catalog failure/late response cannot hold operational Legacy reads or overwrite a confirmed local catalog mutation.
 - [x] Real Firestore emulator: 11/11 transaction/authorization/rules cases passed with isolated Java 21; no production credentials.
-- [x] ERP and Legacy typecheck/build completed. Final post-review CI on the exact remote commit remains required.
-- [ ] Verify/update the 15 effective saved Company Rules prices with a version-checked dry run and recovery, preserving existing durations/unknown fields.
+- [x] ERP and Legacy typecheck/build completed; all 15 final implementation-head workflows and subsequent release-correction CI passed.
+- [x] Verify/update the 15 effective saved Company Rules prices with a version-checked dry run and recovery, preserving existing durations/unknown fields.
 - [x] Verify actual deployed Office, Inventory, Field and customer-sales consumer source/dependency/configuration baselines and recovery archives.
-- [ ] Prove coordinated backend/ERP/Legacy/rules cutover, including old open clients and forward recovery; then nondestructive post-deploy checks.
+- [x] Prove coordinated backend/live ERP/rules cutover, including old ERP/Legacy client compatibility and forward recovery; complete nondestructive post-deploy checks. Legacy source is tested and maintained; no separate live Legacy host was identified or published.
 
 ## Verification
 
@@ -147,3 +151,36 @@ flags are now retained. Reviewer independently
 passed30/30 and reproduced the provenance check using the real completed operation,
 then gave GO after CI. Resume must verify Inventory source/config/IAM/traffic and skip
 its already-proven update; remaining functions, tariffs, rules and UI are still pending.
+
+## Final activation evidence
+
+PR580 head6fdf4353 and merge1e3153b6 passed applicable CI with identical reviewed
+trees. Controlled run38323120937 completed successfully at23:58:49.574Z on2026-10-12.
+Artifact11780885333 ZIP SHA256599a71c59678c8f02a46d589ab268272cb1551389ee7acab6fe7808375b11325
+is pinned in appointment-finance-activated-20261012.json. All five source, runtime
+configuration, IAM and traffic checks passed. Inventory00005-nup was reused without
+another PATCH; Office00085-bid, Field00009-zir, Inbound00055-pab and Reactivation00055-zed
+completed their approved source-only updates. Fifteen saved tariffs were verified after
+the bounded CAS update at23:48:08Z. Governed rules95e3cf97 were activated at23:48:10Z;
+Office activation and final completion respected the65/610-second propagation gates.
+Missing monitoring series are not treated as zero; the financial version fence remains
+the monetary exclusivity guarantee. Independent final artifact review gave GO.
+
+The preview-to-production request returned422 without changing the live domain.
+Vercel requires a production rebuild, so the approved a8fa5a9a preview was rebuilt
+with production settings and withLatestCommit:false as dpl_6xLMiVwQrsTozBCLWXke3QiFkepA.
+Automatic domain assignment was temporarily disabled; after READY the live domain
+still resolved to the previous deployment. The three application routes, all ten login
+scripts and compiled DEMAC Firebase configuration passed before explicit promotion.
+The exact staged production build is now live at https://demac-aruba.com. Both custom
+domains and the project domain mapped successfully. Anonymous public HTTP checks on
+login, scheduling and catalog returned200 with expected titles and bundle, including
+www login. The immediate error/fatal runtime-log query returned no groups.
+
+Autoassignment=true was explicitly requested and accepted after promotion. The connector
+does not expose that field for readback or its original value; this is not described as
+restoring a known prior value. Actual domain behavior was verified. Safe production proof
+is in appointment-finance-production-20261013.json. No customer/payment/appointment test
+writes or communications were performed. Existing unsaved drafts remain in old open
+pages; reload does not transfer them automatically. Inventory's approved reconstructed
+dependency recovery retains the documented historical-equivalence limitation.
