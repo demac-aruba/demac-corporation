@@ -219,7 +219,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   const initials = appointment.customer.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase();
   const outcomeAction = partialOutcome ? partialOutcome.remainingWorkStatus === 'scheduled' ? 'Revisar resultado' : `Agendar ${partialOutcome.remainingQuantity} pendientes` : 'Registrar resultado';
   return <div className={chargeStyles.modalOverlay} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !blocked) onClose(); }}>
-    <aside className={`${chargeStyles.modal} ${ui.modal}`} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Detalle de la cita · ${appointment.customer}`}>
+    <aside className={`${chargeStyles.modal} ${ui.modal} ${tab === 'charges' ? ui.financeModal : ''}`} data-booking-modal ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Detalle de la cita · ${appointment.customer}`}>
       <header className={ui.header}>
         <div><span className={ui.eyebrow}>DEMAC · SCHEDULING</span><h2>Detalle de la cita</h2></div>
         <div className={ui.headerActions}>
@@ -234,7 +234,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         {tab !== 'details' ? <div><ChargeIcon name="person"/><span>{appointment.customer}</span></div> : null}
       </div>
       <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita">{([{ id: 'details', label: 'Resumen', icon: 'clipboard' }, { id: 'charges', label: 'Importes y pagos', icon: 'receipt' }, { id: 'history', label: 'Historial', icon: 'history' }] as const).map(item => <button key={item.id} type="button" disabled={blocked || mode !== 'details'} aria-current={tab === item.id ? 'page' : undefined} className={tab === item.id ? chargeStyles.active : ''} onClick={() => { setMoreOpen(false); setTab(item.id); }}><ChargeIcon name={item.icon}/>{item.label}</button>)}</nav>
-      <div className={ui.body}>
+      <div className={`${ui.body} ${tab === 'charges' ? ui.financeBody : ''}`}>
         {tab === 'history' ? <div className={ui.history}>
           <section className={ui.card} aria-label="Auditoría de la cita">
             <div className={ui.cardHeader}><span className={ui.tile}><ChargeIcon name="history"/></span><div><h3>Historial de la reserva</h3><p>Creación, confirmación y referencias de la cita</p></div></div>
@@ -246,7 +246,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             </div>
           </section>
         </div> : null}
-        <div className={tab === 'details' ? ui.hidden : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')}/></div>
+        <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={appointment.id} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={onClose} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
@@ -312,7 +312,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         </section> : null}
         </div>
       </div>
-      {tab !== 'details' ? <footer className={ui.footer}><span className={chargeStyles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span><button type="button" className={ui.button} disabled={blocked} onClick={onClose}>Cerrar</button></footer> : null}
+      {tab === 'history' ? <footer className={ui.footer}><span className={chargeStyles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span><button type="button" className={ui.button} disabled={blocked} onClick={onClose}>Cerrar</button></footer> : null}
       {tab === 'details' && mode === 'details' ? <footer className={ui.footer}>
         {!partialOutcome ? <details className={ui.more} open={moreOpen}><summary className={ui.button} aria-disabled={blocked} onClick={event => { event.preventDefault(); if (!blocked) setMoreOpen(!moreOpen); }}><ChargeIcon name="more"/>Más acciones<ChargeIcon name="chevron"/></summary><div className={ui.menu}>
           {canCorrectHistoricalCapacity ? <button type="button" disabled={blocked} onClick={() => begin('capacity')}>Corregir cupos pasados</button> : null}

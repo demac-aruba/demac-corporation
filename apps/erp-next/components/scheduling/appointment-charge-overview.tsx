@@ -1,4 +1,5 @@
 import type { ChargeLine, ChargeQuote, ChargeRecord } from '../../lib/appointment-charges';
+import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
 import { chargeMoney } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
@@ -15,15 +16,14 @@ function lineChange(line: ChargeLine, original: ChargeQuote | null | undefined) 
 
 export function ChargeOverviewMetrics({ record }: { record: ChargeRecord }) {
   const state = record.state, final = state?.final, original = state?.originalEstimate;
-  const total = final?.totalCents ?? state?.estimate?.totalCents;
-  const balance = total == null ? null : total - (state?.receivedCents ?? 0);
+  const { balanceCents: balance, receivedCents } = appointmentChargeBalance(record);
   const difference = final?.totalCents != null && original?.totalCents != null ? final.totalCents - original.totalCents : null;
   const paymentCount = record.payments.filter(payment => payment.status === 'recorded').length;
   const metrics: { icon: ChargeIconName; label: string; value: number | null | undefined; note: string; tone: string }[] = [
     { icon: 'receipt', label: 'PROYECCIÓN DEL BOOKING', value: original?.totalCents, note: original ? 'Proyección original conservada' : 'Sin proyección guardada', tone: '' },
     { icon: 'receipt', label: 'IMPORTE FINAL', value: final?.totalCents ?? null, note: difference !== null ? `${deltaMoney(difference)} vs. estimado` : final ? 'Confirmado por oficina' : 'Por confirmar', tone: styles.violet },
-    { icon: 'money', label: 'RECIBIDO', value: state ? state.receivedCents : undefined, note: record.blocker ? 'Pagos pendientes de conciliación' : `${paymentCount} pago${paymentCount === 1 ? '' : 's'} vigente${paymentCount === 1 ? '' : 's'}`, tone: styles.green },
-    { icon: 'clock', label: balance !== null && balance < 0 ? 'SALDO A FAVOR' : final ? 'PENDIENTE' : 'SALDO ESTIMADO', value: balance === null ? null : Math.abs(balance), note: !final ? 'Hasta confirmar el importe final' : balance === null ? 'Por confirmar' : balance < 0 ? 'Importe recibido por encima del total' : balance === 0 ? 'Sin saldo pendiente' : state?.receivedCents ? 'Pago parcial' : 'Por cobrar', tone: balance === 0 ? styles.green : styles.amber },
+    { icon: 'money', label: 'RECIBIDO', value: receivedCents, note: record.blocker ? 'Pagos pendientes de conciliación' : `${paymentCount} pago${paymentCount === 1 ? '' : 's'} vigente${paymentCount === 1 ? '' : 's'}`, tone: styles.green },
+    { icon: 'clock', label: balance !== null && balance < 0 ? 'SALDO A FAVOR' : final ? 'PENDIENTE' : 'SALDO PENDIENTE', value: balance === null ? null : Math.abs(balance), note: !final ? 'Confirma los trabajos realizados' : balance === null ? 'Por confirmar' : balance < 0 ? 'Importe recibido por encima del total' : balance === 0 ? 'Sin saldo pendiente' : state?.receivedCents ? 'Pago parcial' : 'Por cobrar', tone: balance === 0 ? styles.green : styles.amber },
   ];
   return <div className={styles.metrics}>{metrics.map(metric => <div className={`${styles.metric} ${metric.tone}`} key={metric.label}>
     <div className={styles.tile}><ChargeIcon name={metric.icon}/></div><div><span>{metric.label}</span><strong>{metric.value === undefined ? 'Sin registrar' : chargeMoney(metric.value)}</strong><small>{metric.note}</small></div>

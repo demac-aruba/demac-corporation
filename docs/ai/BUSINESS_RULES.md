@@ -354,6 +354,14 @@ Production activation remains separately owner-approved through the server-side 
   verified write; external version changes still require review. See
   `adrs/automatic-booking-projection-20261013.md` for compatibility and rollback constraints.
 
+- Owner-approved 2026-10-13 workspace clarification: the original/current projection is
+  informational only. Estimated balance during entry uses the current valid actual-work
+  quote minus saved receipts; confirmed balance uses only the saved final minus receipts.
+  Missing/invalid totals remain pending. Drafts never mark a visit paid. A local PDF may
+  export freshly read, reconciled confirmed work and receipts as an operational summary;
+  it does not issue an official invoice or write to QBO. See
+  `adrs/appointment-charge-balance-pdf-20261013.md`.
+
 ## Booking Spots and workload support
 
 - `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.

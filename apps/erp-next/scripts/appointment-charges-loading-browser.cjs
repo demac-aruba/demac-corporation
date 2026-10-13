@@ -19,10 +19,13 @@ export async function callOfficeBookingAuthority(action,data){
  if(action==='quote_appointment_charges')window.__quoteReads=(window.__quoteReads||0)+1;
  if(action==='quote_appointment_charges'){
   window.__lastQuoteInput=structuredClone(data);
+  if(window.__quoteError)throw Error('Synthetic quote failure');
   const saved=window.__record.state.final||window.__record.state.estimate;
   const lines=data.lines.map(line=>{const old=saved.lines.find(x=>x.id===line.id&&(x.serviceId||'')===(line.serviceId||'')&&(x.presetId||'')===(line.presetId||'')&&(x.btu||null)===(line.btu||null));const unitCents=old?old.unitCents:line.serviceId?5500:null;return {...line,quantityMillis:Number(line.quantity)*1000,unitCents,baseUnitCents:unitCents,totalCents:unitCents===null?null:Math.round(unitCents*Number(line.quantity)),pendingReason:unitCents===null?'Selecciona un servicio con tarifa':'',manualPrice:!!old?.manualPrice};});
   const knownTotalCents=lines.reduce((n,line)=>n+(line.totalCents||0),0);
-  return {success:true,quote:{...saved,lines,totalCents:lines.every(l=>l.unitCents!==null)?knownTotalCents:null,knownTotalCents,quoteToken:'synthetic-quote'}};
+  const result={success:true,quote:{...saved,lines,totalCents:lines.every(l=>l.unitCents!==null)?knownTotalCents:null,knownTotalCents,quoteToken:'synthetic-quote'}};
+  if(window.__quoteDelay)await new Promise(resolve=>setTimeout(resolve,window.__quoteDelay));
+  return result;
  }
  if(action.endsWith('_appointment_charge_edit')){
   (window.__leaseCalls||=[]).push({action,data});
@@ -143,7 +146,7 @@ async function main(){
   },{__canManage:scenario!=='read-only',__record:{...premium,blocker:scenario==='blocker'?'Synthetic legacy blocker':'',appointmentStatus:scenario==='hold'?'temporary_hold':scenario==='cancelled'?'cancelled':'confirmed'}});
   for(const scenario of ['unknown','zero','credit','empty','fractional','final-only'])await run('premium-amount-'+scenario,async page=>{
    await openFinance(page);if(scenario==='unknown')await page.getByText(/Ver proyección del booking/).click();const text=await finance(page).innerText();
-   if(scenario==='final-only'){assert.match(text,/El importe final queda registrado en el historial/);assert.doesNotMatch(text,/El estimado original se conserva en el historial/);assert.doesNotMatch(text,/vs. estimado/);}
+   if(scenario==='final-only'){assert.match(text,/Importe final confirmado/);assert.match(text,/Todos los cambios quedan en el historial/);assert.match(text,/Sin proyección guardada/);assert.doesNotMatch(text,/El estimado original se conserva en el historial/);assert.doesNotMatch(text,/vs. estimado/);}
    if(scenario==='unknown'){assert.match(text,/Por confirmar/);assert.doesNotMatch(text,/✓ Pagado/);assert.match(text,/BTU pendiente/);}
    if(scenario==='zero'){assert.match(text,/Afl. 0.00/);assert.match(text,/Sin saldo pendiente/);assert.match(text,/✓ Pagado/);}
    if(scenario==='credit'){assert.match(text,/SALDO A FAVOR/);assert.match(text,/Afl. 20.00/);assert.doesNotMatch(text,/✓ Pagado/);}
@@ -210,7 +213,7 @@ async function main(){
    await page.screenshot({path:path.join(artifacts,'catalog-search-'+viewport.width+'.png'),fullPage:true});await page.getByRole('button',{name:'Seleccionar Refrigerante de prueba · R410A-DEMO',exact:true}).click();
    assert.equal(await page.getByLabel('Concepto 4',{exact:true}).textContent(),'Refrigerante de prueba');assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Standard service');assert.equal(await page.locator('input[aria-label^="Precio unitario"],input[aria-label^="BTU"],select[aria-label^="Servicio realizado"]').count(),0);
    await page.getByLabel('Precio unitario 4',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();assert.equal(await search(page).inputValue(),'');assert.equal(await search(page).evaluate(node=>node===document.activeElement),true);
-   const positions=await page.evaluate(()=>({last:document.querySelector('[aria-label="Concepto 4"]').getBoundingClientRect().bottom,search:document.querySelector('[aria-label="Añadir servicio o producto"]').getBoundingClientRect().top}));assert.ok(positions.search>positions.last,'Next search stays below selected lines');
+   const positions=await page.evaluate(()=>({list:document.querySelector('[aria-label="Lista de trabajos y detalles"]').getBoundingClientRect().bottom,search:document.querySelector('[aria-label="Añadir servicio o producto"]').getBoundingClientRect().top}));assert.ok(positions.search>positions.list,'Next search stays below the scrollable selected-lines viewport');
    await plus(page).click();await search(page).press('Escape');assert.equal(await page.getByRole('dialog').count(),1);assert.equal(await search(page).getAttribute('aria-expanded'),'false');assert.equal(await search(page).evaluate(node=>node===document.activeElement),true);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false);
    await page.screenshot({path:path.join(artifacts,'catalog-lines-'+viewport.width+'.png'),fullPage:true});
   },{__record:premium,__catalogItems:catalogItems},viewport);
@@ -245,6 +248,37 @@ async function main(){
    await panel.getByRole('button',{name:/^Seleccionar /}).first().click();await page.getByLabel('Concepto 60',{exact:true}).waitFor();assert.equal(await search(page).isDisabled(),true);assert.equal(await plus(page).isDisabled(),true);
    const samples=await page.evaluate(()=>window.__searchFrames),sorted=[...samples].sort((a,b)=>a-b);const metrics={name:'catalog-1000-synthetic-performance',catalogItems:1000,chargeLines:59,maximumLinesVerified:60,renderedResultsLimit:40,payloadBytes:Buffer.byteLength(JSON.stringify({success:true,services:largeCatalog})),editorReadyMs,inputToTwoAnimationFramesMs:{samples:samples.length,median:sorted[Math.floor(sorted.length/2)],p95:sorted[Math.ceil(sorted.length*.95)-1],max:sorted.at(-1)},authorityRequestsWhileTyping:0,networkRequestsWhileTyping:0,productionWrites:0};results.push(metrics);console.log(JSON.stringify(metrics));
   },{__record:largeRecord,__catalogItems:largeCatalog});
+  const compactRecord=(()=>{const r=structuredClone(premium);r.state.originalEstimate=null;r.state.estimate=null;r.state.final={...quote,totalCents:37500,knownTotalCents:37500,lines:[{...work('actual','Servicio estándar de prueba',12500,12000),quantity:3,quantityMillis:3000,totalCents:37500}]};r.state.receivedCents=25000;r.state.paymentCount=1;r.payments=[{...premium.payments[0],amountCents:25000}];r.candidateEvidence={fingerprint:'empty',records:[]};return r;})();
+  await run('draft-balance-independent-and-stale-quote-fails-closed',async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
+   const metric=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');
+   await metric.getByText('Afl. 125.00',{exact:true}).waitFor();assert.match(await metric.innerText(),/Según este borrador/);
+   await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Confirmación de prueba');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   await page.evaluate(()=>window.__quoteDelay=600);await page.getByLabel('Cantidad 1',{exact:true}).fill('4');
+   await metric.getByText('Por confirmar',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await metric.getByText('Afl. 0.00',{exact:true}).waitFor();
+   assert.doesNotMatch(await finance(page).innerText(),/✓ Pagado/,'A zero draft balance is not a paid confirmed amount');
+   await page.evaluate(()=>{window.__quoteDelay=0;window.__quoteError=true;});await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByRole('alert').filter({hasText:'Synthetic quote failure'}).waitFor();await metric.getByText('Por confirmar',{exact:true}).waitFor();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:compactRecord});
+  for(const viewport of [{width:1600,height:900},{width:1366,height:768}])await run('compact-scroll-search-footer-'+viewport.width,async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Precio unitario 8',{exact:true}).filter({hasText:'Afl. 125.00'}).waitFor();
+   const dimensions=await page.evaluate(()=>{const box=node=>{const b=node.getBoundingClientRect();return {top:b.top,bottom:b.bottom,width:b.width,height:b.height}};const list=document.querySelector('[aria-label="Lista de trabajos y detalles"]');return {list:box(list),scrollable:list.scrollHeight>list.clientHeight,search:box(document.querySelector('[aria-label="Añadir servicio o producto"]')),confirm:box(document.querySelector('[aria-label="Confirmar monto final"]')),dialog:box(document.querySelector('[role="dialog"]')),kpis:[...document.querySelectorAll('[class*="metrics"]>div')].map(box)};});
+   assert.ok(dimensions.scrollable);assert.ok(dimensions.search.top>dimensions.list.bottom);assert.ok(dimensions.search.bottom<dimensions.confirm.top);assert.ok(dimensions.confirm.bottom<=viewport.height);assert.ok(dimensions.dialog.width>=viewport.width-60);assert.ok(dimensions.kpis.every(k=>k.height<90));
+   await plus(page).click();const panel=page.getByRole('region',{name:'Buscar en catálogo 0'});await panel.waitFor();const box=await panel.boundingBox();assert.ok(box.y>=0&&box.y+box.height<=viewport.height);await search(page).press('Escape');
+   await page.screenshot({path:path.join(artifacts,'compact-eight-lines-'+viewport.width+'.png'),fullPage:true});
+  },{__record:{...compactRecord,state:{...compactRecord.state,final:{...compactRecord.state.final,totalCents:100000,lines:Array.from({length:8},(_,i)=>({...work('actual-'+i,'Servicio de prueba '+(i+1),12500,12000),quantity:1}))}}},__catalogItems:catalogItems},viewport);
+  await run('pdf-fresh-authorized-read-without-edit-lease',async page=>{
+   await openFinance(page);await page.evaluate(()=>{window.__record.state.receivedCents=30000;window.__record.payments[0].amountCents=30000;});
+   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Descargar PDF',exact:true}).click();const file=await download;await file.saveAs(path.join(artifacts,'fresh-confirmed.pdf'));
+   const source=fs.readFileSync(path.join(artifacts,'fresh-confirmed.pdf'),'utf8');assert.match(source,/Afl\. 75.00/);assert.match(source,/Afl\. 300.00/);assert.doesNotMatch(source,/Afl\. 125.00.*Saldo/);
+   assert.equal(await reads(page),2);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);assert.equal(await page.evaluate(()=>window.__leaseCalls?.length||0),0);
+  },{__record:compactRecord,__canManage:false});
+  await run('pdf-fresh-blocker-is-visible-and-never-downloads',async page=>{
+   await openFinance(page);let downloads=0;page.on('download',()=>downloads++);await page.evaluate(()=>window.__record.blocker='Synthetic changed financial source');await page.getByRole('button',{name:'Descargar PDF',exact:true}).click();await page.getByRole('alert').filter({hasText:'pagos conciliados'}).waitFor();assert.equal(downloads,0);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:compactRecord});
+  await run('pdf-loading-does-not-block-close-and-discards-late-result',async page=>{
+   await openFinance(page);let downloads=0;page.on('download',()=>downloads++);await page.evaluate(()=>window.__holdReads=true);await page.getByRole('button',{name:'Descargar PDF',exact:true}).click();await page.waitForFunction(()=>window.__reads.length===2);assert.equal(await page.getByRole('button',{name:'Preparando PDF…',exact:true}).isDisabled(),true);await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();await page.getByText('Cita cerrada').waitFor();await page.evaluate(()=>window.__release[1]());await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));assert.equal(downloads,0);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:compactRecord});
   fs.writeFileSync(path.join(artifacts,'results.json'),JSON.stringify({results,externalRequests:0,productionWrites:0},null,2));
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(output,{recursive:true,force:true});}
 }
