@@ -54,43 +54,70 @@ reset();const context=await browser.newContext({viewport,serviceWorkers:'block'}
 await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});
 const page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));
 try{
-await page.goto(origin);assert.equal(await page.evaluate(()=>window.__chargeContract.initialChargesAcknowledged({}, {lines:[]})),false,'Old backend cannot silently acknowledge monetary input');assert.equal(await page.evaluate(()=>window.__chargeContract.initialChargesAcknowledged({},undefined)),true,'Old callers stay compatible');await page.getByRole('button',{name:'Separar equipos por BTU'}).click();
-await page.getByLabel('BTU 1',{exact:true}).fill('12000');await page.getByLabel('BTU 2',{exact:true}).fill('18000');
-await page.getByText('Afl. 260.00',{exact:true}).waitFor();assert.equal(writes.length,0,'Opening and quoting never write');
-const originalWork=await page.evaluate(()=>window.__chargeDraft.lines.map(({id,workLineId,presetId,label,quantity,btu})=>({id,workLineId,presetId,label,quantity,btu})));
-await page.getByRole('button',{name:'Tarifa del catálogo 1',exact:true}).click();await page.getByRole('button',{name:'Seleccionar Check up · CHECK-DEMO',exact:true}).click();
-assert.deepEqual(await page.evaluate(()=>window.__chargeDraft.lines.map(({id,workLineId,presetId,label,quantity,btu})=>({id,workLineId,presetId,label,quantity,btu}))),originalWork,'Catalog selection preserves the booked work, split quantities and BTU');
-assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).isDisabled(),true);await page.getByRole('button',{name:'Tarifa del catálogo 1',exact:true}).click();await page.getByRole('button',{name:'Volver a tarifa del trabajo / BTU',exact:true}).click();await page.getByText('Afl. 260.00',{exact:true}).waitFor();
-await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('TR-TEST-100');
+await page.goto(origin);
+assert.equal(await page.evaluate(()=>window.__chargeContract.initialChargesAcknowledged({}, {lines:[]})),false,'Old backend cannot silently acknowledge monetary input');
+assert.equal(await page.evaluate(()=>window.__chargeContract.initialChargesAcknowledged({},undefined)),true,'Old callers stay compatible');
+await page.getByText('Afl. 250.00',{exact:true}).first().waitFor();
+assert.equal(await page.getByLabel('BTU 1',{exact:true}).count(),0,'Booking forecast does not require BTU input');
+assert.equal(await page.getByRole('button',{name:/Registrar proyección|Editar proyectado/}).count(),0);
+assert.equal(writes.length,0,'Opening and quoting never write');
+await page.getByLabel('Registrar anticipo al confirmar la cita').check();
+await page.getByRole('button',{name:'Transferencia',exact:true}).click();
+await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');
+await page.getByLabel('Referencia / comprobante',{exact:false}).fill('DEPOSIT-TEST-100');
 await page.screenshot({path:path.join(evidence,`booking-${viewport.width}.png`),fullPage:true});
-await page.getByRole('button',{name:'Confirmar cita de prueba'}).click();await page.getByText('ESTIMADO ORIGINAL',{exact:true}).waitFor();
-assert.equal(db.read('appointments/apt').jobCharges.originalEstimate.totalCents,26000);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,10000);
+await page.getByRole('button',{name:'Confirmar cita de prueba'}).click();
+await page.getByLabel('Añadir servicio o producto',{exact:true}).waitFor();
+await page.waitForFunction(()=>!document.querySelector('input[aria-label="Añadir servicio o producto"]').disabled);
+assert.equal(db.read('appointments/apt').jobCharges.originalEstimate.totalCents,25000);
+assert.equal(db.read('appointments/apt').jobCharges.receivedCents,10000);
+assert.equal(db.read('appointments/apt').jobCharges.final,null,'Forecast is not actual work');
 await page.screenshot({path:path.join(evidence,`appointment-${viewport.width}.png`),fullPage:true});
-await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();
+const add=async(query,label)=>{await page.getByLabel('Añadir servicio o producto',{exact:true}).fill(query);await page.getByRole('button',{name:label,exact:true}).click();};
+await add('standard','Seleccionar Standard service');
+await page.getByLabel('BTU 1',{exact:true}).fill('12000');
+await add('deep','Seleccionar Deep cleaning');
+await page.getByLabel('BTU 2',{exact:true}).fill('36000');
+// A receipt saved alongside the work draft must preserve line identities and BTU.
+await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
+await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('10');
+await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
+await page.getByText('Registro guardado con su historial.',{exact:true}).waitFor();
+assert.equal(await page.getByLabel('BTU 1',{exact:true}).inputValue(),'12000');
+assert.equal(await page.getByLabel('BTU 2',{exact:true}).inputValue(),'36000');
+await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
+await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('20');
+page.once('dialog',dialog=>dialog.accept('Synthetic correction'));
+await page.getByRole('button',{name:'Anular registro',exact:true}).last().click();
+await page.getByText('Anulado · Synthetic correction',{exact:true}).waitFor();
+assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'20');
+await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
+await page.getByRole('button',{name:'Registrar pago',exact:true}).waitFor();
+assert.equal(await page.getByLabel('BTU 1',{exact:true}).inputValue(),'12000');
 await page.getByRole('button',{name:'Tarifa del catálogo 1',exact:true}).click();await page.getByRole('button',{name:'Seleccionar Refrigerante de prueba · GAS-DEMO',exact:true}).click();assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Refrigerante de prueba');
 await page.getByRole('button',{name:'Tarifa del catálogo 1',exact:true}).click();await page.getByRole('button',{name:'Volver a tarifa del trabajo / BTU',exact:true}).click();assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Standard service');await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 125.00'}).waitFor();
 await page.getByLabel('Servicio realizado 2',{exact:true}).selectOption('deep_cleaning');await page.getByLabel('BTU 2',{exact:true}).fill('36000');
-await page.getByRole('button',{name:'Añadir concepto / adicional'}).click();await page.getByRole('button',{name:'Tarifa del catálogo 3',exact:true}).click();await page.getByLabel('Buscar producto o servicio 3',{exact:true}).fill('diagnostico');await page.getByRole('button',{name:'Seleccionar Check up · CHECK-DEMO',exact:true}).click();assert.equal(await page.getByLabel('Concepto 3',{exact:true}).textContent(),'Check up');
+await add('diagnostico','Seleccionar Check up · CHECK-DEMO');assert.equal(await page.getByLabel('Concepto 3',{exact:true}).textContent(),'Check up');
 await page.getByLabel('Precio unitario 3',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();assert.equal(await page.locator('input[aria-label="Precio unitario 3"]').count(),0,'Unit prices cannot be edited');await page.getByRole('button',{name:'Tarifa del catálogo 3',exact:true}).click();await page.getByRole('button',{name:'Seleccionar Check up · CHECK-DEMO',exact:true}).click();assert.equal(await page.getByLabel('Concepto 3',{exact:true}).textContent(),'Check up');
-await page.getByRole('button',{name:'Añadir concepto / adicional'}).click();await page.getByRole('button',{name:'Tarifa del catálogo 4',exact:true}).click();await page.getByRole('button',{name:/Seleccionar Tiempo adicional de prueba/}).click();await page.getByLabel('Cantidad 4',{exact:true}).fill('1.5');
-await page.getByRole('button',{name:'Añadir concepto / adicional'}).click();await page.getByRole('button',{name:'Tarifa del catálogo 5',exact:true}).click();await page.getByRole('button',{name:'Productos',exact:true}).click();await page.getByLabel('Buscar producto o servicio 5',{exact:true}).fill('GAS-DEMO');await page.getByRole('button',{name:'Seleccionar Refrigerante de prueba · GAS-DEMO',exact:true}).click();await page.getByLabel('Cantidad 5',{exact:true}).fill('1.5');await page.getByText('Afl. 580.00',{exact:true}).first().waitFor();assert.equal(await page.getByLabel('Concepto 5',{exact:true}).textContent(),'Refrigerante de prueba');await page.getByRole('button',{name:'Eliminar concepto 5',exact:true}).click();
+await add('Tiempo adicional','Seleccionar Tiempo adicional de prueba');await page.getByLabel('Cantidad 4',{exact:true}).fill('1.5');
+await add('GAS-DEMO','Seleccionar Refrigerante de prueba · GAS-DEMO');await page.getByLabel('Cantidad 5',{exact:true}).fill('1.5');await page.getByText('Afl. 580.00',{exact:true}).first().waitFor();assert.equal(await page.getByLabel('Concepto 5',{exact:true}).textContent(),'Refrigerante de prueba');await page.getByRole('button',{name:'Eliminar concepto 5',exact:true}).click();
 await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Deep cleaning, chequeo y 1.5 horas adicionales acordadas');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByText('Afl. 497.50',{exact:true}).first().waitFor();
 await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.getByText('Registro guardado con su historial.',{exact:true}).waitFor();
 assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,49750);assert.equal(db.read('workOrders/wo').status,'Confirmada');
-for(const [method,amount,reference] of [['Efectivo','200',''],['POS','150','POS-TEST-150'],['SUAVE','47.50','SUAVE-TEST-47']]){
+for(const [method,amount,reference] of [['Efectivo','180',''],['POS','150','POS-TEST-150'],['SUAVE','47.50','SUAVE-TEST-47']]){
 await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('button',{name:method,exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill(amount);if(reference)await page.getByLabel('Referencia / comprobante',{exact:false}).fill(reference);
 if(method==='SUAVE')dropNext=true;
 await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
 if(method==='SUAVE'){await page.getByRole('button',{name:'Reintentar la misma operación'}).waitFor();assert.equal(await page.getByRole('button',{name:'Cerrar cita'}).isDisabled(),true);await page.getByRole('button',{name:'Reintentar la misma operación'}).click();}
 await page.getByText('Registro guardado con su historial.',{exact:true}).waitFor();await page.getByRole('button',{name:'Registrar pago',exact:true}).waitFor();
 }
-assert.equal(db.read('appointments/apt').jobCharges.receivedCents,49750);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,4);
+assert.equal(db.read('appointments/apt').jobCharges.receivedCents,49750);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,6);
 await page.getByText('✓ Pagado',{exact:true}).waitFor();
 await page.screenshot({path:path.join(evidence,`final-${viewport.width}.png`),fullPage:true});
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'No document horizontal overflow');
 assert.ok(await page.locator('svg').count()>=12,'Visual icons retained');
-await page.getByRole('button',{name:'Historial',exact:true}).click();await page.getByText('Monto final confirmado',{exact:true}).waitFor();assert.equal(await page.getByText('Pago registrado',{exact:true}).count(),3);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-results.push({viewport,status:'PASS',receiptCount:4,finalCents:49750});console.log('PASS financial flow '+viewport.width);
+await page.getByRole('button',{name:'Historial',exact:true}).click();await page.getByText('Monto final confirmado',{exact:true}).waitFor();assert.equal(await page.getByText('Pago registrado',{exact:true}).count(),5);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+results.push({viewport,status:'PASS',receiptCount:6,finalCents:49750});console.log('PASS financial flow '+viewport.width);
 }catch(error){await page.screenshot({path:path.join(evidence,`failure-${viewport.width}.png`),fullPage:true});console.error((await page.locator('body').innerText()).slice(0,6000));throw error;}finally{await context.close();}
 }}finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(evidence,'results.json'),JSON.stringify(results,null,2));fs.rmSync(folder,{recursive:true,force:true});}
 }

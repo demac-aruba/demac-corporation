@@ -70,7 +70,7 @@ function commitInput(offer, key = 'independent-review-booking', createMode = BOO
   return { offerId: offer.offer.id, offerVersion: offer.offer.version, optionId: offer.options[0].id,
     idempotencyKey: key, actor, context: context(), createMode };
 }
-function collection(f, name) { return [...f.db.store].filter(([path]) => path.startsWith(`${name}/`)).map(([, value]) => value); }
+function collection(f, name) { return [...f.db.store].filter(([path]) => path.startsWith(`${name}/`) && path.split('/').length === 2).map(([, value]) => value); }
 function reservation(vanId, time, durationMinutes = 60) {
   return { id: 'synthetic-existing', appointmentId: 'synthetic-existing-appointment', date: DATE, time,
     vanId, status: 'Confirmada', appointmentDurationMinutes: durationMinutes, scheduledSlots: Math.ceil(durationMinutes / 60) };
@@ -323,6 +323,7 @@ test('morning overtime preserves protected lunch, exact partial finish, all lock
   assert.equal(saved.workOrder.appointmentWorkItems[0].durationMinutes, 450);
   assert.equal((await f.overtime.createCapacityOvertime(consent)).replayed, true);
   assert.equal(collection(f, 'appointments').length, 1);
+  assert.equal([...f.db.store.keys()].filter(path => path.startsWith(`appointments/${saved.appointmentId}/chargeEvents/`)).length, 1, 'Exact replay retains one automatic projection audit event');
   assert.equal(collection(f, 'employeeTimesheets').length, 0);
 });
 

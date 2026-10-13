@@ -434,3 +434,19 @@ test('temporary hold can save projection but rejects deposit atomically', async 
   delete request.context.charges.payment; const result = await authority.createAppointment(request);
   assert.equal(result.appointment.status, 'temporary_hold'); assert.equal(result.appointment.jobCharges.receivedCents, 0);
 });
+
+test('ordinary booking without opening finance saves one canonical minimum forecast on exact replay', async () => {
+  const { db, authority } = authorityFixture({ Database: TransactionalFirestore, seed: {
+    'services/service-1': { name: 'Standard service', active: true, pricingRuleKind: 'standard_service' },
+    'businessSettings/company-service-pricing-rules': { version: 1, standardServiceSplit: [{ btu: 9000, price: 100 }, { btu: 12000, price: 125 }] },
+  } });
+  const availability = await authority.checkAvailability({ request: baseRequest() });
+  const input = { offerId: availability.offer.id, offerVersion: availability.offer.version, optionId: 'opt-1', idempotencyKey: 'automatic-projection-no-finance-tab', actor: { source: 'office-scheduling', id: 'office' } };
+  const first = await authority.createAppointment(input), replay = await authority.createAppointment(input);
+  assert.equal(first.appointment.jobCharges.originalEstimate.totalCents, 20000);
+  assert.equal(first.appointment.jobCharges.originalEstimate.lines[0].projectionOnly, true);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.appointmentId, first.appointmentId);
+  assert.equal([...db.store.keys()].filter(key => key.includes('/chargeEvents/')).length, 1);
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('payments/')).length, 0);
+});

@@ -319,22 +319,23 @@ async function main(){
    await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();
    await page.getByText('Afl. 375.00',{exact:true}).waitFor();
    await page.screenshot({path:path.join(artifacts,'booking-charges-parent.png'),fullPage:true});
-   await page.evaluate(()=>{window.__pendingQuote=true;});await page.getByLabel('BTU 1',{exact:true}).fill('18000');
+   assert.equal(await page.getByLabel('BTU 1',{exact:true}).count(),0,'Booking does not ask for unknown BTU');
+   await page.evaluate(()=>{window.__pendingQuote=true;});await page.getByRole('button',{name:'Actualizar tarifas',exact:true}).click();
    await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();assert.equal(await page.evaluate(()=>window.__commits.length),0,'Pending quote cannot confirm');
    await page.getByText('Revisa los importes y espera la tarifa actualizada antes de confirmar.',{exact:true}).waitFor();
    await assertNoWrites(page);
   });
   await run('financial-support-detour-and-exact-recovery',{width:1366,height:768},async page=>{
    await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Afl. 375.00',{exact:true}).waitFor();
-   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByLabel('Nota de la proyección').fill('Synthetic preserved estimate');
+   await page.getByLabel('Registrar anticipo al confirmar la cita').check();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('100');await page.getByLabel('Nota del pago').fill('Synthetic preserved estimate');
    await supportDraft(page);await source(page,'Regular Booking');
-   assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'100');assert.equal(await page.getByLabel('Nota de la proyección').inputValue(),'Synthetic preserved estimate');
+   assert.equal(await page.getByLabel('Registrar anticipo al confirmar la cita').isChecked(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'100');assert.equal(await page.getByLabel('Nota del pago').inputValue(),'Synthetic preserved estimate');
    await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
    await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await page.getByRole('button',{name:'Recuperar reserva original',exact:true}).waitFor();
    assert.equal(await page.getByRole('button',{name:'Importes y pagos',exact:true}).isDisabled(),true,'Uncertain charged booking cannot edit financial draft');await assertSourceBlocked(page,'Send van support');
    await page.getByRole('button',{name:'Recuperar reserva original',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();
    const result=await page.evaluate(()=>({commits:window.__commits,records:window.__records,holds:window.__holds,support:window.__supportWrites}));
-   assert.equal(result.commits.length,2);assert.deepEqual(result.commits[0],result.commits[1],'Booking recovery preserves complete financial input');assert.equal(Object.keys(result.records).length,1);assert.equal(result.commits[0].charges.payment.amount,'100');assert.equal(result.commits[0].charges.note,'Synthetic preserved estimate');assert.equal(result.commits[0].charges.lines.length,2);assert.ok(result.commits[0].charges.quoteToken);assert.deepEqual(result.holds,[]);assert.deepEqual(result.support,[]);
+   assert.equal(result.commits.length,2);assert.deepEqual(result.commits[0],result.commits[1],'Booking recovery preserves complete financial input');assert.equal(Object.keys(result.records).length,1);assert.equal(result.commits[0].charges.payment.amount,'100');assert.equal(result.commits[0].charges.payment.note,'Synthetic preserved estimate');assert.equal(result.commits[0].charges.lines.length,2);assert.ok(result.commits[0].charges.quoteToken);assert.deepEqual(result.holds,[]);assert.deepEqual(result.support,[]);
   },{__allowCharges:true,__loseResponse:true});
   await run('financial-hold-guard-and-support-isolation',{width:390,height:844},async page=>{
    await setupRegular(page);await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Afl. 375.00',{exact:true}).waitFor();

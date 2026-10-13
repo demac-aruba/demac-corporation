@@ -337,6 +337,15 @@ Production activation remains separately owner-approved through the server-side 
   requires explicit fingerprint-bound reconciliation before final confirmation and is not
   automatically summed again. No live migration or new client-write permission is needed.
 
+- `OPS-SCHED-CHARGES-002` — Owner clarification 2026-10-12: new bookings automatically
+  snapshot the selected work at canonical minimum tariffs when BTU is unknown. These
+  minimums are forecast-only; final service pricing requires real BTU. Actual services,
+  products and quantities are explicitly reviewed separately from planned work. Old
+  originals/agreements remain preserved, and missing historical projections are not backfilled.
+  Receipt entry alongside an actual-work draft preserves it only across the same session's
+  verified write; external version changes still require review. See
+  `adrs/automatic-booking-projection-20261013.md` for compatibility and rollback constraints.
+
 ## Booking Spots and workload support
 
 - `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.

@@ -7,6 +7,7 @@ const { companyMatrixPrice, resolveServicePriceSnapshot, PRICING_RULE_KINDS } = 
 const { projectBillingCandidate } = require('./fieldOperationsBillingCandidates');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
 const { EDIT_ACTIONS, editingRef, assertEditing, changeEditing } = require('./appointmentChargeEditing');
+const { minimumProjectionPrice, bookingProjectionLines } = require('./appointmentProjectionPricing');
 const SOURCE = 'appointment-operational';
 const ACTIONS = new Set(['list_charge_services', 'quote_appointment_charges', 'get_appointment_charges', 'save_appointment_estimate',
   'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment', ...EDIT_ACTIONS]);
@@ -67,7 +68,8 @@ function initialInput(input) {
   if (typeof input !== 'object' || Array.isArray(input)) fail('charge_input', 'Importes no válidos.');
   // Retain the exact entered receipt date in the replay identity; never hash a
   // server-generated timestamp which changes between retries.
-  return { lines: inputLines(input.lines), note: clean(input.note, 1000), payment: input.payment || null, quoteToken: clean(input.quoteToken, 64) };
+  return { lines: inputLines(input.lines), note: clean(input.note, 1000), payment: input.payment || null, quoteToken: clean(input.quoteToken, 64),
+    ...(input.purpose === 'projection' ? { purpose: 'projection' } : {}) };
 }
 const chargeFingerprint = input => hash(stable(initialInput(input)));
 async function actorFor(get, db, uid, write = true) {
@@ -77,33 +79,37 @@ async function actorFor(get, db, uid, write = true) {
   if (profile?.active !== true || !(WRITERS.has(role) || (!write && role === 'auditor'))) fail('permission_denied', 'Se requiere una cuenta de oficina o contabilidad activa.', 403);
   return { id: uid, name: clean(profile.name || profile.displayName, 180), role };
 }
-async function quoteLines({ db, get, lines, now, previous }) {
+async function quoteLines({ db, get, lines, now, previous, purpose = 'final', allowUnavailable = false }) {
   const rules = await get(db.collection('businessSettings').doc('company-service-pricing-rules'));
   const pricingSettings = rules.exists ? rules.data() : null;
   const result = [];
   for (const line of lines) {
     const saved = previous?.lines?.find(item => item.id === line.id && (item.serviceId || '') === line.serviceId
       && (item.presetId || '') === line.presetId && (item.workLineId || '') === line.workLineId && (item.btu ?? null) === line.btu);
-    if (saved && Number.isSafeInteger(saved.unitCents) && saved.unitCents >= 0) {
+    if (saved && (!saved.projectionOnly || purpose === 'projection') && Number.isSafeInteger(saved.unitCents) && saved.unitCents >= 0) {
       if (line.overrideCents !== null && line.overrideCents !== saved.unitCents) fail('charge_managed_price', 'Selecciona el servicio realizado y sus BTU; el precio no se modifica directamente.');
       result.push({ ...line, label: saved.label, baseUnitCents: saved.baseUnitCents ?? saved.unitCents, unitCents: saved.unitCents,
         totalCents: Math.round(saved.unitCents * line.quantityMillis / 1000), pricingVersion: saved.pricingVersion || '',
-        pendingReason: '', manualPrice: Boolean(saved.manualPrice), retainedPrice: true, reason: saved.reason || '' });
+        pendingReason: '', manualPrice: Boolean(saved.manualPrice), retainedPrice: true, reason: saved.reason || '',
+        ...(saved.projectionOnly ? { projectionOnly: true } : {}) });
       continue;
     }
     let base = null, label = line.label, pendingReason = '', pricingVersion = '';
     try {
       if (line.serviceId) {
         const snapshot = await get(db.collection('services').doc(line.serviceId));
-        if (!snapshot.exists || snapshot.data().active === false) fail('charge_catalog', 'El servicio seleccionado no está activo.');
+        if (!snapshot.exists || snapshot.data().active === false) fail(allowUnavailable ? 'service_pricing_not_configured' : 'charge_catalog', 'El servicio seleccionado no está activo.');
         const service = { ...snapshot.data(), id: line.serviceId };
         label = clean(service.name || service.label || line.serviceId, 220);
-        base = resolveServicePriceSnapshot({ service, pricingSettings, btu: line.btu, capturedAt: now.toISOString() });
+        base = purpose === 'projection' && line.btu === null ? minimumProjectionPrice({ service, pricingSettings }) : null;
+        base ||= resolveServicePriceSnapshot({ service, pricingSettings, btu: line.btu, capturedAt: now.toISOString() });
       } else if (PRICING_RULE_KINDS.has(line.presetId)) {
         // These three exact Scheduling kinds explicitly refer to the governed
         // company BTU matrix, not a guessed catalog product or label match.
         label = { standard_service: 'Standard service', deep_cleaning: 'Deep cleaning', standard_installation: 'Instalación estándar back to back' }[line.presetId];
-        base = companyMatrixPrice({ service: { bookingCode: line.presetId }, pricingSettings, btu: line.btu });
+        const service = { bookingCode: line.presetId };
+        base = purpose === 'projection' && line.btu === null ? minimumProjectionPrice({ service, pricingSettings }) : null;
+        base ||= companyMatrixPrice({ service, pricingSettings, btu: line.btu });
       } else pendingReason = 'Selecciona el servicio o producto realizado; su tarifa se calcula automáticamente.';
     } catch (error) {
       if (!String(error.code || '').startsWith('service_pricing_')) throw error;
@@ -112,11 +118,15 @@ async function quoteLines({ db, get, lines, now, previous }) {
     if (!label) fail('charge_label', 'Cada concepto necesita una descripción.');
     const baseUnitCents = base ? decimal(base.unitPrice.toFixed(2), 2, MAX_CENTS, 'Precio base') : null;
     pricingVersion = base?.pricingVersion || '';
-    const changed = line.overrideCents !== null && line.overrideCents !== baseUnitCents;
+    // Older clients echo the stored price. A marked forecast must never be
+    // promoted into a final agreed price by that compatibility mechanism.
+    const overrideCents = saved?.projectionOnly && purpose === 'final' && line.overrideCents === saved.unitCents ? null : line.overrideCents;
+    const changed = overrideCents !== null && overrideCents !== baseUnitCents;
     if (changed) fail('charge_managed_price', 'Selecciona el servicio realizado y sus BTU; el precio no se modifica directamente.');
     const unitCents = baseUnitCents;
     result.push({ ...line, label, baseUnitCents, unitCents, totalCents: unitCents === null ? null : Math.round(unitCents * line.quantityMillis / 1000),
-      pricingVersion, pendingReason: unitCents === null ? pendingReason : '', manualPrice: changed });
+      pricingVersion, pendingReason: unitCents === null ? pendingReason : '', manualPrice: changed,
+      ...(base?.projectionOnly ? { projectionOnly: true } : {}) });
   }
   const knownTotalCents = result.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
   if (!Number.isSafeInteger(knownTotalCents) || knownTotalCents > MAX_CENTS) fail('charge_total', 'El total supera el límite por cita.');
@@ -145,13 +155,19 @@ function paymentDocument(payment, appointment, appointmentId, actor, paymentId, 
     verificationStatus: 'office_recorded', createdAt: now.toISOString(), createdBy: actor.id, createdByName: actor.name };
 }
 function eventRef(db, appointmentId, uid, requestId) {
-  return db.collection('appointments').doc(appointmentId).collection('chargeEvents').doc(hash(`${uid}|${requestId}`));
+  return db.collection(`appointments/${appointmentId}/chargeEvents`).doc(hash(`${uid}|${requestId}`));
 }
 async function prepareInitialCharges({ db, transaction, input, actor, appointmentId, appointment, now = new Date() }) {
-  const normalized = initialInput(input);
+  const automaticLines = input == null ? bookingProjectionLines(appointment) : [];
+  const normalized = initialInput(input ?? (automaticLines.length ? { lines: automaticLines } : null));
   if (!normalized) return null;
-  const authorized = await authorizeInitialCharges({ db, get: ref => transaction.get(ref), input, actor });
-  const estimate = { ...await quoteLines({ db, get: ref => transaction.get(ref), lines: normalized.lines, now }), note: normalized.note, actor: authorized };
+  // Booking Authority has already authenticated/revalidated its actor. Deriving
+  // a forecast adds no financial-write privilege or receipt. Explicit monetary
+  // payloads still require the existing fresh office authorization.
+  const authorized = input != null ? await authorizeInitialCharges({ db, get: ref => transaction.get(ref), input, actor })
+    : { id: clean(actor?.id, 180) || 'booking-authority', name: clean(actor?.name, 180) || 'Booking Authority', role: 'automatic-projection' };
+  const purpose = input == null || normalized.purpose === 'projection' ? 'projection' : 'final';
+  const estimate = { ...await quoteLines({ db, get: ref => transaction.get(ref), lines: normalized.lines, now, purpose, allowUnavailable: input == null }), note: normalized.note, actor: authorized };
   assertQuote(estimate, normalized.quoteToken);
   const payment = normalized.payment ? paymentInput(normalized.payment, now) : null;
   if (payment && appointment.status === 'temporary_hold') fail('payment_hold', 'Confirma la cita antes de registrar un pago.');
@@ -248,9 +264,11 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
         if (!snapshot.exists) fail('not_found', 'La cita ya no existe.', 404);
         const state = validateState(snapshot.data().jobCharges);
         if (data.expectedVersion !== state.version) fail('charge_conflict', 'Los importes cambiaron. Revisa los datos actuales; tu borrador se conserva.', 409);
-        return { success: true, quote: await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: state.final || state.estimate }) };
+        return { success: true, quote: await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: state.final || state.estimate,
+          purpose: data.purpose === 'projection' ? 'projection' : 'final' }) };
       });
-      return { success: true, quote: await quoteLines({ db, get: ref => ref.get(), lines: inputLines(data.lines), now }) };
+      return { success: true, quote: await quoteLines({ db, get: ref => ref.get(), lines: inputLines(data.lines), now,
+        purpose: data.purpose === 'projection' ? 'projection' : 'final' }) };
     }
     const appointmentId = id(data.appointmentId, 'Cita');
     const ref = db.collection('appointments').doc(appointmentId);
@@ -280,7 +298,7 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       const blocker = receiptBlocker(payments, state) || candidates.blocker || await legacyBlocker({ db, get, appointment, appointmentId });
       const events = await get(ref.collection('chargeEvents').orderBy('at','desc').limit(100));
       return { success: true, state: appointment.jobCharges || null, payments: blocker ? [] : payments, blocker, candidateEvidence: candidates,
-        workItems: (appointment.workItems || appointment.workLines || []).map((line, index) => ({ id: `work-${index + 1}`, label: clean(line.label || line.workTypeName || line.presetId, 220), quantity: line.quantity || 1, presetId: line.presetId || '', serviceId: line.serviceId || '' })),
+        workItems: bookingProjectionLines(appointment),
         history: events.docs.map(doc => ({ ...doc.data(), id: doc.id })), appointmentStatus: appointment.status };
       });
     }
@@ -313,7 +331,8 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       if (action === 'save_appointment_estimate' || action === 'finalize_appointment_charges') {
         if (['cancelled','canceled'].includes(appointment.status)) fail('charge_cancelled', 'La cita está cancelada; conserva sus importes e historial.', 409);
         if (action === 'save_appointment_estimate' && current.final) fail('charge_final_exists', 'El monto final ya está confirmado; usa una corrección de cierre con motivo.', 409);
-        const quote = await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: current.final || current.estimate });
+        const quote = await quoteLines({ db, get, lines: inputLines(data.lines), now, previous: current.final || current.estimate,
+          purpose: action === 'save_appointment_estimate' && data.purpose === 'projection' ? 'projection' : 'final' });
         assertQuote(quote, data.quoteToken);
         const note = clean(data.note, 1000);
         if ((current.originalEstimate || current.estimate || current.final) && !note) fail('charge_change_reason', 'Explica el cambio respecto al importe anterior.');

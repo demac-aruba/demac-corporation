@@ -64,3 +64,19 @@ const replay=await call('record_appointment_payment',request);assert.equal(repla
 assert.equal((await call('record_appointment_payment',pay('after-expiry',1))).status,409);
 assert.equal((await db.collection('payments').get()).size,1);
 });
+
+test('real Firestore automatic forecast is atomic and cannot close as an unknown-BTU final price',async()=>{
+await db.doc('businessSettings/company-service-pricing-rules').set({version:1,standardServiceSplit:[{btu:9000,price:100},{btu:12000,price:125}]});
+await db.runTransaction(async transaction=>{
+ const appointment=(await transaction.get(db.doc('appointments/apt'))).data();
+ const commit=await prepareInitialCharges({db,transaction,actor:{source:'office-scheduling',id:'office'},appointmentId:'apt',appointment:{...appointment,workItems:[{id:'planned',presetId:'standard_service',label:'Standard',quantity:2}]}});
+ transaction.update(db.doc('appointments/apt'),{jobCharges:commit.value});commit.write();
+});
+const state=(await db.doc('appointments/apt').get()).data().jobCharges;
+assert.equal(state.originalEstimate.totalCents,20000);
+assert.equal((await db.doc('appointments/apt').collection('chargeEvents').get()).size,1);
+const result=await call('finalize_appointment_charges',{requestId:'minimum-not-final',expectedVersion:1,lines:[{id:'planned',workLineId:'planned',presetId:'standard_service',label:'Standard',quantity:2,unitPrice:'100'}],scopeReviewed:true,note:'Review required'});
+assert.equal(result.status,400,JSON.stringify(result.body));assert.equal(result.body.error.code,'charge_unpriced');
+assert.equal((await db.doc('appointments/apt').get()).data().jobCharges.final,null);
+assert.equal((await db.collection('payments').get()).size,0);
+});

@@ -1,0 +1,32 @@
+name: Automatic projection read-only source audit
+on:
+  push:
+    branches: [fix/automatic-booking-projection]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/automatic-projection-audit.cjs
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Inspect production packages and test isolated candidate
+        run: node scripts/automatic-projection-audit.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automatic-projection-read-only-audit
+          path: ${{ runner.temp }}/automatic-projection-audit/summary.json
+          if-no-files-found: error
+          retention-days: 90

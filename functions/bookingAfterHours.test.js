@@ -435,7 +435,8 @@ test('overtime retry is exact and changed payload is rejected without duplicate 
   const saved = await authority.createRestDayOvertime(request);
   assert.equal((await authority.createRestDayOvertime(request)).replayed, true);
   await assert.rejects(() => authority.createRestDayOvertime({ ...request, quantity: 3 }), (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
-  assert.equal([...db.store.keys()].filter((key) => key.startsWith('appointments/')).length, 1);
+  assert.equal([...db.store.keys()].filter((key) => key.startsWith('appointments/') && key.split('/').length === 2).length, 1);
+  assert.equal([...db.store.keys()].filter(key => key.includes('/chargeEvents/')).length, 1);
   assert.equal(db.read(`appointments/${saved.appointmentId}`).endTime, '17:30');
 });
 
@@ -520,7 +521,8 @@ test('new regular booking: four services, three ordinary afternoon slots, explic
   assert.equal(saved.workOrder.afterHoursOpenEnded, undefined);
   assert.deepEqual(saved.workOrder.scheduledOvertime.slotStarts, ['13:30', '14:30', '15:30', '16:30']);
   assert.equal((await authority.createCapacityOvertime(request)).replayed, true);
-  assert.equal([...db.store.keys()].filter(key => key.startsWith('appointments/')).length, 1);
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('appointments/') && key.split('/').length === 2).length, 1);
+  assert.equal([...db.store.keys()].filter(key => key.includes('/chargeEvents/')).length, 1);
   await assert.rejects(() => authority.createCapacityOvertime({ ...restInput(), quantity: 5 }), error => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT);
 });
 

@@ -190,7 +190,8 @@ test("temporary hold creation is idempotent and never duplicates capacity or wor
   assert.equal(second.replayed, true);
   assert.equal(second.appointmentId, first.appointmentId);
   assert.equal(second.createMode, "temporary_hold");
-  assert.equal([...db.store.keys()].filter((path) => path.startsWith("appointments/")).length, 1);
+  assert.equal([...db.store.keys()].filter(path => path.includes("/chargeEvents/")).length, 1);
+  assert.equal([...db.store.keys()].filter((path) => path.startsWith("appointments/") && path.split("/").length === 2).length, 1);
   assert.equal([...db.store.keys()].filter((path) => path.startsWith("workOrders/")).length, 1);
   assert.equal([...db.store.keys()].filter((path) => path.startsWith("bookingCapacityLocks/")).length, 1);
 });

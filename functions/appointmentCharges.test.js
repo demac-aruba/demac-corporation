@@ -290,3 +290,75 @@ test('legacy catalog descriptions also come from the server when name is absent'
     assert.equal(quote.lines[0].label,label);assert.equal(quote.totalCents,12500);
   }
 });
+
+test('new booking automatically snapshots configured minimum without an explicit financial payload', async () => {
+  const { db } = fixture();
+  const appointment = { ...db.read('appointments/apt'), workItems: [{ id: 'planned-standard', presetId: 'standard_service', label: 'Standard', quantity: 3 }] };
+  await db.runTransaction(async transaction => {
+    const commit = await prepareInitialCharges({ db, transaction, actor: office, appointmentId: 'apt', appointment, now: NOW });
+    assert.equal(commit.value.originalEstimate.totalCents, 37500);
+    assert.equal(commit.value.originalEstimate.lines[0].btu, null);
+    assert.equal(commit.value.originalEstimate.lines[0].projectionOnly, true);
+    transaction.update(db.collection('appointments').doc('apt'), { jobCharges: commit.value }); commit.write();
+  });
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('payments/')).length, 0);
+  assert.equal(db.read('workOrders/wo').status, 'Confirmada');
+  assert.equal([...db.store.keys()].filter(key => key.startsWith('appointments/apt/chargeEvents/')).length, 1);
+});
+test('minimum forecast never becomes final BTU price, including an old client echoing the snapshot amount', async () => {
+  const { db, call } = fixture();
+  const line = { id: 'planned-standard', presetId: 'standard_service', label: 'Standard', quantity: 2 };
+  const { quote } = await call('quote_appointment_charges', { lines: [line], purpose: 'projection' });
+  assert.equal(quote.totalCents, 25000);
+  await db.runTransaction(async transaction => {
+    const commit = await prepareInitialCharges({ db, transaction, actor: office, appointmentId: 'apt', appointment: db.read('appointments/apt'),
+      input: { lines: [line], purpose: 'projection', quoteToken: quote.quoteToken }, now: NOW });
+    transaction.update(db.collection('appointments').doc('apt'), { jobCharges: commit.value }); commit.write();
+  });
+  const original = structuredClone(db.read('appointments/apt').jobCharges.originalEstimate);
+  const data = { lines: [{ ...line, unitPrice: '125' }], note: 'Review actual work', scopeReviewed: true };
+  await rejectsCode(call('finalize_appointment_charges', data), 'charge_unpriced');
+  const finalQuote = await call('quote_appointment_charges', { lines: [line] });
+  assert.equal(finalQuote.quote.totalCents, null);
+  const final = await call('finalize_appointment_charges', { ...data, lines: [{ ...line, btu: 18000 }] });
+  assert.equal(final.state.final.totalCents, 29000);
+  assert.deepEqual(final.state.originalEstimate, original);
+});
+test('legacy explicit booking quote remains accepted while new projection quotes bind the minimum tariff', async () => {
+  const { db, service } = fixture();
+  const lines = [{ id: 'standard', presetId: 'standard_service', label: 'Standard', quantity: 1 }];
+  for (const purpose of [undefined, 'projection']) {
+    const { quote } = await service.execute({ action: 'quote_appointment_charges', uid: 'office', data: { lines, ...(purpose ? { purpose } : {}) } });
+    const commit = await db.runTransaction(transaction => prepareInitialCharges({ db, transaction, actor: office, appointmentId: 'apt', appointment: db.read('appointments/apt'),
+      input: { lines, quoteToken: quote.quoteToken, ...(purpose ? { purpose } : {}) }, now: NOW }));
+    assert.equal(commit.value.estimate.totalCents, purpose ? 12500 : null);
+  }
+});
+test('missing, ambiguous or invalid minimum is pending; configured zero is a real minimum', async () => {
+  const line = { id: 'standard', presetId: 'standard_service', label: 'Standard', quantity: 2 };
+  for (const rows of [[], [{ btu: 12000, price: null }], [{ btu: 12000, price: 100 }, { btu: 12000, price: 50 }], [{ btu: 12000, price: 100 }, { btu: 18000, price: '' }], [{ btu: 12000, price: 0 }, { btu: 18000, price: 150 }]]) {
+    const { call } = fixture({ 'businessSettings/company-service-pricing-rules': { version: 1, standardServiceSplit: rows } });
+    const { quote } = await call('quote_appointment_charges', { lines: [line], purpose: 'projection' });
+    assert.equal(quote.totalCents, rows[0]?.price === 0 ? 0 : null);
+  }
+});
+test('automatic projection preserves unpriced canonical work when the price catalog is unavailable', async () => {
+  const { db } = fixture();
+  const appointment = { ...db.read('appointments/apt'), workItems: [{ id: 'unknown', serviceId: 'missing', presetId: 'manual', label: 'Trabajo por cotizar', quantity: 2 }] };
+  const commit = await db.runTransaction(transaction => prepareInitialCharges({ db, transaction, actor: office, appointmentId: 'apt', appointment, now: NOW }));
+  assert.equal(commit.value.estimate.totalCents, null);
+  assert.equal(commit.value.estimate.lines[0].serviceId, 'missing');
+  assert.equal(commit.value.estimate.lines[0].quantityMillis, 2000);
+});
+
+test('catalog BTU tiers forecast their validated minimum; final quotes require exact BTU', async () => {
+  const service = { name: 'Synthetic tiered service', active: true, pricingDefinition: { mode: 'tiered_btu', currency: 'AWG', tiers: [{ minBtu: 1, maxBtu: 12000, amount: 90 }, { minBtu: 12001, maxBtu: 60000, amount: 200 }] } };
+  const { call } = fixture({ 'services/tiered': service });
+  const lines = [{ id: 'tiered', serviceId: 'tiered', label: service.name, quantity: 3 }];
+  assert.equal((await call('quote_appointment_charges', { lines, purpose: 'projection' })).quote.totalCents, 27000);
+  assert.equal((await call('quote_appointment_charges', { lines })).quote.totalCents, null);
+  for (const patch of [{ currency: 42 }, { tiers: [null] }, { tiers: [] }, { tiers: [{ minBtu: 12000, maxBtu: 9000, amount: 100 }] }, { tiers: [{ minBtu: 1, maxBtu: 12000, amount: 90 }, { minBtu: 9000, amount: 10 }] }]) {
+    const { call: invalid } = fixture({ 'services/tiered': { ...service, pricingDefinition: { ...service.pricingDefinition, ...patch } } });
+    assert.equal((await invalid('quote_appointment_charges', { lines, purpose: 'projection' })).quote.totalCents, null);
+  }
+});
