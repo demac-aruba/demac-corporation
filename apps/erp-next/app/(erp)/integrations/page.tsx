@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { FirebaseAdapterStatus } from '@/components/firebase/firebase-adapter-status';
 import { QuickBooksSandboxStatusCard } from '@/components/firebase/quickbooks-sandbox-status';
 import { integrationHealth } from '@/lib/system-governance';
@@ -12,6 +13,11 @@ export default function IntegrationsPage() {
       <section className="sg-integration-grid">
         <FirebaseAdapterStatus />
         <QuickBooksSandboxStatusCard />
+        <article className="panel sg-integration-card">
+          <div className="sg-integration-head"><div className="sg-provider-mark">QB</div><div><span>DEMAC · empresa real</span><h2>Conexión QuickBooks</h2></div></div>
+          <p>Gestiona la autorización de la empresa real por separado del sandbox. La sincronización de facturas, pagos y gastos permanece deshabilitada.</p>
+          <div className="sg-integration-foot"><Link href="/quickbooks/connect/">Conectar / consultar estado →</Link><Link href="/quickbooks/disconnect/">Desconectar</Link></div>
+        </article>
         {remainingIntegrations.map((integration) => (
           <article className="panel sg-integration-card" key={integration.name}>
             <div className="sg-integration-head"><div className="sg-provider-mark">{integration.name.slice(0,2).toUpperCase()}</div><div><span>{integration.category}</span><h2>{integration.name}</h2></div><b className={integration.status === 'Design Ready' ? 'ready' : ''}>{integration.status}</b></div>

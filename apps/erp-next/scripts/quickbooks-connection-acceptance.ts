@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import { quickBooksLoginDestination } from '../lib/quickbooks-entry';
+import { defaultAuthenticatedRoute } from '../lib/role-routing';
+import type { QuickBooksConnectionStatus } from '../lib/firebase/quickbooks-connection';
+async function run() {
+  for (const next of ['/quickbooks/connect/', '/quickbooks/disconnect/', '/integrations/']) {
+    assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'super_admin'), next);
+    assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'technician'), defaultAuthenticatedRoute('technician'));
+  }
+  for (const next of ['https://evil.example', '//evil.example', '/quickbooks/connect/?url=evil', '/quickbooks/connect/../evil', '/other']) {
+    assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'super_admin'), defaultAuthenticatedRoute('super_admin'));
+  }
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = 'demo-qbo-synthetic';
+  process.env.NEXT_PUBLIC_QBO_PRODUCTION_ENABLED = 'true';
+  process.env.NEXT_PUBLIC_ISOLATED_PREVIEW = 'false';
+  const storage = new Map<string, string>();
+  const sessionStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) };
+  let navigated = '';
+  const location = { pathname: '/quickbooks/connect/', search: '', hash: '', assign: (url: string) => { navigated = url; } };
+  Object.assign(globalThis, { sessionStorage, window: { sessionStorage, location, history: {
+    state: null, replaceState: (_state: unknown, _title: string, url: string) => { assert.equal(url, location.pathname); location.hash = ''; },
+  } } });
+  const { persistFirebaseWebSession } = await import('../lib/firebase/session');
+  const client = await import('../lib/firebase/quickbooks-connection');
+  const signIn = (uid = 'owner') => persistFirebaseWebSession({ uid, email: 'synthetic@example.test', idToken: 'synthetic-firebase', refreshToken: 'synthetic-refresh', expiresAt: Date.now() + 3600000 });
+  const key = 'demac.quickbooks.production.v1'; const ticket = Buffer.alloc(32, 3).toString('base64url');
+  const status: QuickBooksConnectionStatus = { configured: true, environment: 'production', phase: 'disconnected', syncEnabled: false, accountingWritesEnabled: false, connection: null, disconnectVersion: null };
+  const calls: Array<{ url: string; body: Record<string, string> | null }> = [];
+  let fetcher = async (_body: Record<string, string> | null) => Response.json(status);
+  globalThis.fetch = async (input, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : null; calls.push({ url: String(input), body });
+    assert.equal(init?.credentials, 'omit'); assert.equal(init?.redirect, 'error'); return fetcher(body);
+  };
+  signIn();
+  for (const flag of ['NEXT_PUBLIC_ISOLATED_PREVIEW', 'NEXT_PUBLIC_QBO_PRODUCTION_ENABLED']) {
+    process.env[flag] = flag.includes('ISOLATED') ? 'true' : 'false';
+    assert.equal((await client.readConnectionStatus('owner')).configured, false);
+    await assert.rejects(client.startConnection('owner')); assert.equal(calls.length, 0);
+    process.env[flag] = flag.includes('ISOLATED') ? 'false' : 'true';
+  }
+  fetcher = async () => Response.json({ authorizationUrl: 'https://appcenter.intuit.com/connect/oauth2?state=synthetic' });
+  await client.startConnection('owner'); const pending = JSON.parse(storage.get(key)!);
+  assert.equal(pending.uid, 'owner'); assert.equal(pending.proof.length, 43); assert.equal(calls.at(-1)?.body?.proofHash.length, 64);
+  assert.equal(calls.at(-1)?.body?.proof, undefined); assert.match(navigated, /^https:\/\/appcenter.intuit.com\/connect\/oauth2/);
+  location.hash = `#qbo_production_ticket=${ticket}`; const before = calls.length;
+  client.captureConnectionReturn(); assert.equal(location.hash, ''); assert.equal(calls.length, before, 'Landing never commits OAuth');
+  assert.equal(client.hasPendingConnection('owner'), true); assert.equal(client.hasPendingConnection('other'), false);
+  fetcher = async () => Response.json(status); await client.readConnectionStatus('owner');
+  assert.equal(calls.at(-1)?.body, null, 'Normal status visit is read-only');
+  let release: () => void = () => {}; const wait = new Promise<void>(resolve => { release = resolve; });
+  fetcher = async () => { await wait; return Response.json(status); };
+  const first = client.loadConnection('owner'); const second = client.loadConnection('owner'); release(); await Promise.all([first, second]);
+  assert.equal(calls.filter(call => call.body?.action === 'finish').length, 1); assert.equal(storage.has(key), false);
+  storage.set(key, JSON.stringify({ ...pending, ticket }));
+  fetcher = async () => { throw Error('private-response'); };
+  await assert.rejects(client.loadConnection('owner'), error => error instanceof Error && !error.message.includes('private-response'));
+  assert.equal(storage.has(key), true);
+  fetcher = async () => Response.json(status); await client.loadConnection('owner');
+  storage.set(key, JSON.stringify({ ...pending, ticket }));
+  fetcher = async () => { signIn('other'); return Response.json(status); };
+  await assert.rejects(client.loadConnection('owner'), /sesión/); assert.equal(storage.has(key), true); signIn();
+  fetcher = async () => Response.json({ authorizationUrl: 'https://evil.example/oauth' }); navigated = '';
+  await assert.rejects(client.startConnection('owner')); assert.equal(navigated, '');
+  fetcher = async body => { assert.deepEqual(body, { action: 'disconnect', version: ticket }); return Response.json({ error: 'revocation-pending' }, { status: 409 }); };
+  await assert.rejects(client.disconnectConnection('owner', ticket), /no confirmó/);
+  fetcher = async () => Response.json(status); await client.disconnectConnection('owner', ticket); assert.equal(storage.has(key), false);
+  location.hash = `#qbo_production_ticket=${ticket}`; const count = calls.length;
+  assert.throws(() => client.captureConnectionReturn()); assert.equal(calls.length, count);
+  location.hash = '#qbo_production_error=authorization-cancelled'; assert.throws(() => client.captureConnectionReturn(), /Cancelaste/);
+  console.log('QuickBooks production entry acceptance: PASS (allowlisted login, isolation, proof, read-only landing, completion, recovery, identity race, redirect, explicit disconnect).');
+}
+void run().catch(error => { console.error(error); process.exitCode = 1; });

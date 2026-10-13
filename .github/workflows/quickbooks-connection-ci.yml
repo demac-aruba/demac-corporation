@@ -1,0 +1,41 @@
+name: QuickBooks connection lifecycle
+on:
+  pull_request:
+    paths:
+      - 'functions/quickbooksConnection*.js'
+      - 'apps/erp-next/app/quickbooks/**'
+      - 'apps/erp-next/app/login/page.tsx'
+      - 'apps/erp-next/app/(erp)/integrations/page.tsx'
+      - 'apps/erp-next/components/firebase/quickbooks-connection*'
+      - 'apps/erp-next/lib/firebase/quickbooks-connection.ts'
+      - 'apps/erp-next/lib/quickbooks-entry.ts'
+      - 'apps/erp-next/scripts/quickbooks-connection*'
+      - '.github/workflows/quickbooks-connection-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'functions/quickbooksConnection*.js'
+      - 'apps/erp-next/**'
+      - '.github/workflows/quickbooks-connection-ci.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Verify isolated authorization, revocation and existing sandbox behavior
+        run: |
+          node --check functions/quickbooksConnection.js
+          node --check functions/quickbooksConnectionHttp.js
+          node --check functions/quickbooksConnectionService.js
+          node --test functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
+      - run: npm ci --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+      - run: npm run test:quickbooks-connection --prefix apps/erp-next
+      - run: npm run typecheck --prefix apps/erp-next
+# Deliberately no deploy job, cloud credentials, activation or accounting calls.

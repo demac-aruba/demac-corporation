@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/auth-provider';
-import { defaultAuthenticatedRoute } from '@/lib/role-routing';
+import { quickBooksLoginDestination } from '@/lib/quickbooks-entry';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,7 +15,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (mode === 'firebase' && status === 'ready' && principal.active) {
-      router.replace(defaultAuthenticatedRoute(principal.role));
+      router.replace(quickBooksLoginDestination(window.location.search, principal.role));
     }
   }, [mode, principal.active, principal.role, router, status]);
 

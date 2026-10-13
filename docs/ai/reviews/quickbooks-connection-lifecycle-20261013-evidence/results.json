@@ -1,0 +1,34 @@
+[
+  {
+    "width": 1280,
+    "result": "PASS",
+    "states": [
+      "disabled",
+      "signed-out",
+      "unauthorized",
+      "read-only-disconnect-landing",
+      "confirmation",
+      "uncertain-revocation",
+      "explicit-retry",
+      "explicit-OAuth-completion"
+    ],
+    "unexpectedRequests": 0,
+    "errors": 0
+  },
+  {
+    "width": 375,
+    "result": "PASS",
+    "states": [
+      "disabled",
+      "signed-out",
+      "unauthorized",
+      "read-only-disconnect-landing",
+      "confirmation",
+      "uncertain-revocation",
+      "explicit-retry",
+      "explicit-OAuth-completion"
+    ],
+    "unexpectedRequests": 0,
+    "errors": 0
+  }
+]
