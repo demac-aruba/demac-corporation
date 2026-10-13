@@ -1,0 +1,52 @@
+{
+  "sourceSha": "2f2b7823712d897572f8a522ba65b074eb7b9b85",
+  "mode": "read-only",
+  "productionWrites": false,
+  "customerReads": false,
+  "stage": "complete",
+  "functions": [
+    {
+      "name": "officeBookingAuthority",
+      "revision": "officebookingauthority-00086-cey",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791856515970253",
+        "object": "officeBookingAuthority/function-source.zip"
+      },
+      "sourceHash": "32546067bb17be2ff9f414da0207977ba82a3eede510080a4c276f99ed516c1f",
+      "configHash": "1f3068bd669b1ffdd17ef79f170546722a42131d2949a0566852f929d95e6e39",
+      "iamHash": "6ea6e4e297bf9c84cb0dd0386bb594b16b49cb13448749e5f7e28ed2086997a3",
+      "bookingHasInitialCharges": true,
+      "afterHoursHasInitialCharges": true,
+      "alreadyAutomatic": true,
+      "dependenciesPinned": true,
+      "trafficVerified": true,
+      "changed": [
+        "appointmentCharges.js"
+      ],
+      "candidateSourceHash": "38e6a59ec4e681d4eead4e372e00d577f4371f64e4cc74a15bb58f7269212ff3",
+      "baselineTestsSha": "7d60b76a322178bc412a7fab013777fed7b05ba8",
+      "baselineResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          122
+        ],
+        "testsPassed": 122,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          125
+        ],
+        "testsPassed": 125,
+        "runtimeSmokePassed": true
+      }
+    }
+  ],
+  "runId": 38408002296,
+  "artifactId": 11819384062,
+  "artifactZipSha256": "61c76c120596876b126ee1a6fd363518c5c82e784da6c945025d1600fc91215e"
+}

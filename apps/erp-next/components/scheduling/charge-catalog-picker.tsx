@@ -23,10 +23,12 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
   useEffect(() => { if (open && !disabled && !inline) inputRef.current?.focus(); }, [open, disabled, inline]);
   const choose = (item: ChargeCatalogItem | null) => {
     if (disabled || (item && loading)) return;
-    onSelect(item); setOpen(false); setQuery(''); setFilter('Todos'); triggerRef.current?.focus();
+    onSelect(item); setQuery(''); setFilter('Todos');
+    if (inline) inputRef.current?.focus(); else triggerRef.current?.focus();
+    setOpen(false);
   };
-  return <div className={styles.picker} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpen(false); triggerRef.current?.focus(); } }}>
-    {inline ? <label className={styles.search}><span>Añadir servicios realizados o productos vendidos</span><input ref={inputRef} type="search" aria-label="Añadir servicio o producto" aria-expanded={open} aria-controls={panelId} value={query} disabled={disabled} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setOpen(true); }} placeholder="Buscar servicio, producto o código…"/></label> : <><span className={styles.label}>Producto o servicio del catálogo</span>
+  return <div className={styles.picker} data-booking-escape-layer={open || undefined} onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); if (inline) inputRef.current?.focus(); else triggerRef.current?.focus(); setOpen(false); } }}>
+    {inline ? <div className={styles.addRow}><label className={styles.search}><span>Añadir servicio, adicional o producto</span><input ref={inputRef} type="search" aria-label="Añadir servicio o producto" aria-expanded={open} aria-controls={panelId} value={query} disabled={disabled} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setOpen(true); }} placeholder="Buscar servicio, producto o código…"/></label><button type="button" className={styles.addButton} disabled={disabled} aria-expanded={open} aria-controls={panelId} onClick={() => { inputRef.current?.focus(); setOpen(true); }}><ChargeIcon name="plus"/>Añadir</button></div> : <><span className={styles.label}>Producto o servicio del catálogo</span>
     <button ref={triggerRef} type="button" className={styles.trigger} aria-label={`Tarifa del catálogo ${index}`} aria-expanded={open} aria-controls={panelId} disabled={disabled} onClick={() => setOpen(value => !value)}>
       <span className={`${styles.icon} ${selected?.itemType === 'Producto' ? styles.product : ''}`}><ChargeIcon name={selected?.itemType === 'Producto' ? 'grid' : 'work'}/></span>
       <span><strong>{selected?.name || (selectedId ? 'Concepto guardado del catálogo' : 'Buscar producto o servicio')}</strong><small>{selected ? [selected.itemType, selected.category, selected.sku].filter(Boolean).join(' · ') : selectedId ? 'Seleccionado en este registro' : 'Selecciona una tarifa para este concepto'}</small></span><ChargeIcon name="chevron"/>

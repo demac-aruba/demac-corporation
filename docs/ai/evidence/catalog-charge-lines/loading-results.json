@@ -1,0 +1,186 @@
+{
+  "results": [
+    {
+      "name": "latency-1440",
+      "syntheticServerMs": 1200,
+      "clickToVisibleMs": 156
+    },
+    {
+      "name": "preload-retention-1440",
+      "status": "PASS"
+    },
+    {
+      "name": "latency-390",
+      "syntheticServerMs": 1200,
+      "clickToVisibleMs": 152
+    },
+    {
+      "name": "preload-retention-390",
+      "status": "PASS"
+    },
+    {
+      "name": "slow-first-load-skeleton-dedupe",
+      "status": "PASS"
+    },
+    {
+      "name": "refresh-retains-data-error-blocks-writes-recovers",
+      "status": "PASS"
+    },
+    {
+      "name": "draft-version-fingerprint-and-cross-tab-preservation",
+      "status": "PASS"
+    },
+    {
+      "name": "payment-conflict-cannot-adopt-new-version",
+      "status": "PASS"
+    },
+    {
+      "name": "unknown-payment-preserves-exact-retry",
+      "status": "PASS"
+    },
+    {
+      "name": "appointment-session-isolation-late-response",
+      "status": "PASS"
+    },
+    {
+      "name": "close-during-read",
+      "status": "PASS"
+    },
+    {
+      "name": "prefetch-denial-keeps-overview-usable",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-final-1440",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-final-1366",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-final-390",
+      "status": "PASS"
+    },
+    {
+      "name": "historical-agreed-estimate-remains-editable",
+      "status": "PASS"
+    },
+    {
+      "name": "method-shortcuts-preserve-payment-draft",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-restriction-read-only",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-restriction-blocker",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-restriction-hold",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-restriction-cancelled",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-unknown",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-zero",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-credit",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-empty",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-fractional",
+      "status": "PASS"
+    },
+    {
+      "name": "premium-amount-final-only",
+      "status": "PASS"
+    },
+    {
+      "name": "lease-fence-discards-stale-prefetch-and-preserves-expired-draft",
+      "status": "PASS"
+    },
+    {
+      "name": "lease-other-operator-read-only-and-recovery-preserves-draft",
+      "status": "PASS"
+    },
+    {
+      "name": "lease-unknown-acquire-retries-same-session-and-invalid-expiry-blocks",
+      "status": "PASS"
+    },
+    {
+      "name": "lease-late-acquire-after-leaving-tab-releases-its-own-session",
+      "status": "PASS"
+    },
+    {
+      "name": "lease-hidden-focus-resumes-renewal-and-expiry-keeps-draft",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-search-no-mutations-1440",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-search-no-mutations-390",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-error-retry-and-missing-saved-item",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-old-response-empty-and-refresh-lock",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-refresh-new-product-retains-draft",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-failure-keeps-unpriced-without-manual-override",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-empty-does-not-invent-generic-services",
+      "status": "PASS"
+    },
+    {
+      "name": "catalog-1000-synthetic-performance",
+      "catalogItems": 1000,
+      "chargeLines": 59,
+      "maximumLinesVerified": 60,
+      "renderedResultsLimit": 40,
+      "payloadBytes": 1176919,
+      "editorReadyMs": 565.8999999994412,
+      "inputToTwoAnimationFramesMs": {
+        "samples": 15,
+        "median": 107.59999999962747,
+        "p95": 284.3999999994412,
+        "max": 284.3999999994412
+      },
+      "authorityRequestsWhileTyping": 0,
+      "networkRequestsWhileTyping": 0,
+      "productionWrites": 0
+    },
+    {
+      "name": "catalog-1000-items-bounded-local-search",
+      "status": "PASS"
+    }
+  ],
+  "externalRequests": 0,
+  "productionWrites": 0
+}

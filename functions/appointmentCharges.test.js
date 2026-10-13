@@ -47,6 +47,64 @@ test('null, empty and missing catalogue prices remain unpriced; legitimate zero 
     assert.equal(quote.totalCents, basePrice === 0 ? 0 : null);
   }
 });
+test('selecting a capacity-specific catalog article prices and saves its canonical BTU without extra input', async () => {
+  const { db, call } = fixture({
+    'services/std12': { name: '12K BTU Standard - First Floor', active: true, basePrice: 999, serviceDefinition: { version: 1, bookingCode: '12k_standard_service' } },
+    'services/std18': { name: '18K BTU Standard - First Floor', active: true, bookingCode: '18K-Standard-Service' },
+  });
+  const lines = [priced('', { id: 'one', serviceId: 'std12' }), priced('', { id: 'two', serviceId: 'std18' }), priced('', { id: 'three', serviceId: 'fixed', quantity: 1.5 })];
+  const { quote } = await call('quote_appointment_charges', { lines });
+  assert.deepEqual(quote.lines.map(line => [line.btu, line.unitCents]), [[12000,12500],[18000,14500],[null,5500]]);
+  assert.equal(quote.totalCents,35250);
+  const input = { lines, scopeReviewed: true, quoteToken: quote.quoteToken, requestId: 'catalog-capacity-save', expectedVersion: 0 };
+  await call('finalize_appointment_charges',input);
+  assert.deepEqual(db.read('appointments/apt').jobCharges.final.lines.map(line => line.btu),[12000,18000,null]);
+  const replay = await call('finalize_appointment_charges',input);
+  assert.equal(replay.replayed,true);
+  // Quantity edits retain the exact agreed snapshot, including a retired item.
+  db.store.set('services/std12',{name:'Changed catalog name',active:false,basePrice:999});
+  const edited = quote.lines.map(line => ({ ...line, quantity: 2, unitPrice: line.unitCents / 100 }));
+  const retained = await call('quote_appointment_charges',{lines:edited});
+  assert.deepEqual(retained.quote.lines.map(line => line.unitCents),[12500,14500,5500]);
+  assert.equal(retained.quote.lines[0].label,'12K BTU Standard - First Floor');
+});
+test('new catalog selections cannot contradict their canonical capacity or infer it from names/SKUs', async () => {
+  const { call } = fixture({
+    'services/std12': { name:'Standard',bookingCode:'12k_standard_service',active:true },
+    'services/named': { name:'12K BTU Standard',sku:'12K',pricingRuleKind:'standard_service',active:true },
+    'services/tiered': { name:'12K tier',active:true,pricingDefinition:{mode:'tiered_btu',currency:'AWG',tiers:[{minBtu:9000,maxBtu:18000,amount:125}]} },
+    'services/fixed12': { name:'12K fixed service',active:true,basePrice:125 },
+  });
+  await rejectsCode(call('quote_appointment_charges',{lines:[priced('',{serviceId:'std12',btu:18000})]}),'charge_catalog_capacity');
+  for (const serviceId of ['named','tiered']) {
+    const { quote } = await call('quote_appointment_charges',{lines:[priced('',{serviceId})]});
+    assert.equal(quote.totalCents,null);assert.equal(quote.lines[0].btu,null);
+    await rejectsCode(call('finalize_appointment_charges',{lines:[priced('',{serviceId})],scopeReviewed:true}),'charge_unpriced');
+  }
+  const { quote } = await call('quote_appointment_charges',{lines:[priced('',{serviceId:'fixed12'})]});
+  assert.equal(quote.totalCents,12500);assert.equal(quote.lines[0].btu,null);
+});
+test('catalog capacity inference leaves unknown-BTU booking forecasts and historical agreements unchanged', async () => {
+  const { db, call } = fixture({
+    'services/std18':{name:'18K Standard',bookingCode:'18k_standard_service',active:true},
+  });
+  const lines=[priced('',{serviceId:'std18'})];
+  const projection=await call('quote_appointment_charges',{lines,purpose:'projection'});
+  assert.equal(projection.quote.totalCents,12500);assert.equal(projection.quote.lines[0].btu,null);assert.equal(projection.quote.lines[0].projectionOnly,true);
+  const final=await call('quote_appointment_charges',{lines});
+  assert.equal(final.quote.totalCents,14500);assert.equal(final.quote.lines[0].btu,18000);
+  db.store.set('appointments/apt',{...db.read('appointments/apt'),jobCharges:{schemaVersion:1,version:1,final:null,estimate:projection.quote,originalEstimate:projection.quote,receivedCents:0,paymentCount:0}});
+  const echoed=await call('quote_appointment_charges',{lines:[{...lines[0],unitPrice:'125.00'}]});
+  assert.equal(echoed.quote.totalCents,14500);assert.equal(echoed.quote.lines[0].btu,18000);
+  await call('finalize_appointment_charges',{lines:[{...lines[0],unitPrice:'125.00'}],scopeReviewed:true,note:'Specific article selected',quoteToken:echoed.quote.quoteToken});
+  assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,14500);
+  assert.equal(db.read('appointments/apt').jobCharges.originalEstimate.totalCents,12500);
+  // A valid historical agreement is checked before today's catalog definition.
+  const old={...final.quote,lines:[{...final.quote.lines[0],btu:null,unitCents:6500,totalCents:6500,manualPrice:true,label:'Historical agreed item'}],totalCents:6500};
+  db.store.set('appointments/apt',{...db.read('appointments/apt'),jobCharges:{schemaVersion:1,version:1,final:old,estimate:null,receivedCents:0,paymentCount:0}});
+  const retained=await call('quote_appointment_charges',{lines:[{...lines[0],quantity:2,unitPrice:'65.00'}]});
+  assert.equal(retained.quote.totalCents,13000);assert.equal(retained.quote.lines[0].btu,null);assert.equal(retained.quote.lines[0].label,'Historical agreed item');
+});
 test('all canonical matrix declarations price a catalog service without a fixed base price', async () => {
   for (const declaration of [
     { pricingRuleKind: 'standard_service' },

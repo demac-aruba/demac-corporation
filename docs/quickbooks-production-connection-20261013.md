@@ -23,8 +23,8 @@ the entry-page release. The later preparation status is recorded below.
   revision `quickbookssandbox-00002-meb`; no existing function was changed.
 - The isolated source package is prepared with the designated realm and
   `QBO_PRODUCTION_ENABLED=false`. It is not deployed. The frontend gate remains off.
-- The designated owner's Firebase UID is still unverified. Obtain the exact email
-  used by Christian to sign into the ERP, resolve that one Firebase Auth identity,
+- Christian supplied his exact ERP sign-in address on 2026-10-13. His Firebase UID is
+  still unverified: resolve that one Firebase Auth identity,
   and verify the matching active administrative `users/{uid}` profile before assigning
   `QBO_PRODUCTION_OWNER_UID`. Do not infer it from a GitHub author, company contact,
   another admin, or the Intuit login. Do not alter users, roles or passwords.
@@ -32,6 +32,9 @@ the entry-page release. The later preparation status is recorded below.
 Next rollout work after owner identity is verified: securely create the encryption-key
 secret, review and deploy only the isolated disabled backend, verify its boundaries,
 and complete the activation gates below. Real-company consent remains owner-driven.
+The bounded installer and acceptance criteria are documented in
+`docs/ai/tasks/quickbooks-production-installation-20261013.md`; its cloud result must be
+recorded separately and must not be inferred from local tests.
 No accounting writes, synchronization, financial-report access or ChatGPT access have
 been enabled by supplying the Company ID or preparing this configuration.
 

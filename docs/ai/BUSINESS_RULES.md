@@ -323,6 +323,13 @@ Production activation remains separately owner-approved through the server-side 
   Operators cannot directly override a line price or describe one matrix service as another.
   Existing snapshot unit prices and labels, including historical manual agreements, are retained
   while service/BTU/work-line identity remains unchanged; quantity changes use that unit price.
+- Owner clarification 2026-10-13: actual-work entry selects existing catalog articles as
+  invoice-style lines. A capacity-specific service selection already identifies its specifications;
+  operators do not reconfigure that article or reconfirm BTU. Final pricing resolves capacity from
+  a recognized canonical capacity-specific booking code when needed, never from a name/SKU.
+  Quantity and explicit removal remain available; the next catalog search stays below the list.
+  Existing agreed snapshots are preserved before applying today's catalog definitions. A generic
+  article without enough pricing information remains pending; select a specific configured article.
 - Unknown prices remain pending; explicit zero requires a configured zero tariff (or an existing
   historical snapshot). Opening an old appointment never backfills missing financial values.
   Final scope review permits an outstanding balance and never marks Field/attendance complete.
@@ -339,7 +346,8 @@ Production activation remains separately owner-approved through the server-side 
 
 - `OPS-SCHED-CHARGES-002` — Owner clarification 2026-10-12: new bookings automatically
   snapshot the selected work at canonical minimum tariffs when BTU is unknown. These
-  minimums are forecast-only; final service pricing requires real BTU. Actual services,
+  minimums are forecast-only; final service pricing uses the selected catalog specification
+  (automatically resolving canonical BTU when required). Actual services,
   products and quantities are explicitly reviewed separately from planned work. Old
   originals/agreements remain preserved, and missing historical projections are not backfilled.
   Receipt entry alongside an actual-work draft preserves it only across the same session's
