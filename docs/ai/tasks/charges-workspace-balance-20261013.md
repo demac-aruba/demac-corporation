@@ -32,4 +32,21 @@
   receipts and work saved while this UI is active survive frontend rollback.
 
 ## Evidence
-Pending implementation and verification; final results belong in the review record and PR.
+Local verification completed with synthetic data and external network blocked:
+- Typecheck and ERP production build (including prebuild acceptance suites): PASS.
+- Financial/lease domain tests: 43/43 PASS.
+- Balance/PDF acceptance: 10/10 PASS, including the independent review pagination regression.
+- Drawer compatibility: 17/17 PASS; finance loading/catalog/permissions/latency/PDF: 44/44 PASS.
+- Real components + client transport + Office facade + transactional test database: three
+  responsive full flows and the exact no-projection 375/250/125 persistence/PDF case PASS.
+- Synthetic 1000-item catalog, 59 entered lines: 15 input samples, median 63.2 ms,
+  p95 112 ms to two animation frames; 462.8 ms to ready editor; zero reads/quotes/writes
+  while filtering. These are isolated browser measurements, not production latency claims.
+- PDF rendered with Poppler: one-page receipt and 16-page long-description fixture;
+  extraction retains all 60 concept endings and exact totals. A continuation table overlap
+  found independently was corrected and covered by a geometry regression assertion.
+- No backend, schema, security-rule, configuration, customer record or communication writes.
+
+Remote CI, independent review, exact-head integration and release evidence are recorded in
+PR #591 and `reviews/charges-workspace-balance-20261013.md`. Production checks are read-only;
+financial creation/persistence verification is isolated, not executed against real clients.

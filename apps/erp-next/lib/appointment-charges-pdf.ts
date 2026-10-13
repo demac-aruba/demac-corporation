@@ -61,7 +61,7 @@ export function buildAppointmentChargesPdf({ appointmentId, customer, dateKey, r
     text('Resumen de trabajos y pagos', 36, 90, 13, true);
     text('Comprobante operativo de la cita', 36, 108, 10);
     rule(120); y = 140;
-    if (pages.length > 1) paragraph(`Cita: ${appointmentId}`, 9);
+    if (pages.length > 1) { paragraph(`Cita: ${appointmentId}`, 9); y += 12; }
   };
   const ensure = (height: number) => { if (y + height > 766) newPage(); };
   const paragraph = (value: string, size = 10) => {

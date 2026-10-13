@@ -24,7 +24,7 @@ reads and reconciliation blockers prevent download. Leaving the view discards la
   Field reconciliation, mandatory reasons, scope acknowledgment and receipt audit.
 - An estimate-only balance was rejected because it conflicts with actual-work entry.
 - Exporting the displayed draft was rejected because it would imply confirmation.
-- PDF uses standard embedded-reference PDF fonts like the existing payroll exporter,
+- PDF uses standard PDF font references like the existing payroll exporter,
   with deterministic body metrics, pagination, escaped data and no external resources.
   Latin/WinAnsi text is rendered directly; unsupported code points are retained visibly
   as `[U+XXXX]`, rather than silently discarded. No generated document is stored remotely.

@@ -72,6 +72,12 @@ check('60 long concepts wrap across pages; special text is escaped, never trunca
   assert.ok((value.match(/\/Type \/Page /g) || []).length > 1); assert.match(value, /FIN-60/);
   assert.match(value, /Afl\. 22,500.00/); assert.match(value, /U\+1F600/); assert.match(value, /\\\(par/);
 });
+check('continuation appointment reference is above the table background', () => {
+  const value = new TextDecoder().decode(longPdf);
+  const matches = [...value.matchAll(/1 0 0 1 36 ([\d.]+) Tm \(Cita:[^\n]+\n[\s\S]*?0\.93 0\.96 1 rg 36 ([\d.]+) 523 24 re f/g)];
+  assert.ok(matches.length > 1);
+  for (const match of matches) assert.ok(Number(match[1]) > Number(match[2]) + 26, 'Table fill cannot cover the appointment reference');
+});
 if (process.env.CHARGE_PDF_TEST_OUTPUT) {
   mkdirSync(process.env.CHARGE_PDF_TEST_OUTPUT, { recursive: true });
   writeFileSync(join(process.env.CHARGE_PDF_TEST_OUTPUT, 'confirmed-charges.pdf'), pdf);
