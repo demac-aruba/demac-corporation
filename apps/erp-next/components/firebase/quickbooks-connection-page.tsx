@@ -48,7 +48,7 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
   return <section className={styles.status} aria-busy={busy} aria-label="Estado de la conexión">
     <h2>{snapshot ? labels[snapshot.phase] : busy ? 'Consultando estado…' : 'Estado no disponible'}</h2>
     {snapshot && !snapshot.configured ? <p>La conexión con la empresa real está pendiente de configuración y revisión. El sandbox continúa separado. No se han habilitado movimientos contables.</p> : null}
-    {snapshot?.connection ? <dl><dt>Empresa</dt><dd>{snapshot.connection.companyName}</dd><dt>Company ID</dt><dd>{snapshot.connection.realmId}</dd><dt>Última verificación</dt><dd>{new Date(snapshot.connection.verifiedAt).toLocaleString('es')}</dd></dl> : null}
+    {snapshot?.connection ? <dl><dt>Empresa</dt><dd>{snapshot.connection.companyName}</dd><dt>Company ID</dt><dd>{snapshot.connection.realmId}</dd><dt>País informado por QuickBooks</dt><dd>{snapshot.connection.country || 'No informado'}</dd><dt>Última verificación</dt><dd>{new Date(snapshot.connection.verifiedAt).toLocaleString('es')}</dd></dl> : null}
     {phase === 'connected' ? <p>Esta es la última autorización registrada; no confirma acceso continuo. La sincronización de ventas, pagos y gastos permanece deshabilitada.</p> : null}
     {phase === 'confirmation-pending' ? <p>Termina la autorización desde la misma pestaña donde la iniciaste. Si no puedes completarla, usa la desconexión para cancelar ese acceso antes de intentar otra conexión.</p> : null}
     {phase === 'disconnect-pending' ? <p>El acceso desde el ERP está suspendido. QuickBooks todavía no confirmó la revocación; puedes reintentarla de forma explícita.</p> : null}

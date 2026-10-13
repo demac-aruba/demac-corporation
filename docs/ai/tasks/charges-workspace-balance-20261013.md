@@ -50,3 +50,16 @@ Local verification completed with synthetic data and external network blocked:
 Remote CI, independent review, exact-head integration and release evidence are recorded in
 PR #591 and `reviews/charges-workspace-balance-20261013.md`. Production checks are read-only;
 financial creation/persistence verification is isolated, not executed against real clients.
+
+## Final integration check
+- Integrated main `12d99cc228422e2a2ccf3457fde34cc4d35e8922` without conflicts;
+  QuickBooks identity/legal changes retained byte for byte. ERP typecheck PASS.
+- Prior Office CI failed on a stale generic success-message selector in the cutover
+  browser test. Updated it to the action-specific accessible `Pago registrado` status;
+  all persistence, duplicate-count, permission and old-client assertions retained.
+- After installing the same root dependencies as CI, the full old/current-client
+  cutover browser suite PASS: 18 cases; zero external requests and browser errors.
+- Latest production recovery baseline: `dpl_5zAKQFygJ6x5fV84gWhjzbEQbU1Z`,
+  source `5a75d193bb5deaa2156d9820079e561ac13861c6`; its tree is identical to
+  integrated main (`9f1ac84dc43dbce2698e329c94aab798ab8398c9`).
+- Final integrated CI, preview and deployment results remain release gates, recorded in PR #591.

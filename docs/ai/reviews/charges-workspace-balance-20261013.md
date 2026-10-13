@@ -114,3 +114,43 @@ recorded by Builder as `dpl_HHYxEWTGWnqvLH3qRBGkBuDdrTRm`; verify that target be
 use. Keep the compatible backend and all saved work/receipts. No financial-data restore
 or backend downgrade is part of recovery. Builder owns final release evidence and
 post-deploy smoke verification before declaring the task complete.
+
+## Final main integration review
+
+Independent scoped re-review of merge `b5e83291734930b9c3e29b6fe72425559df68081`,
+whose parents are reviewed correction `dc334d9a5a89c3ed533a5f5e96a1f61daeed262a`
+and upstream main `12d99cc228422e2a2ccf3457fde34cc4d35e8922`:
+
+- All 11 files brought in by main match that upstream revision exactly, including
+  the QuickBooks country display, legal pages, activation workflow/scripts and their
+  documentation. None of the previously reviewed financial implementation files was
+  altered by integration. There is no backend, workflow, release-script or QuickBooks
+  surface difference from current main attributable to this financial correction.
+- Reviewed the sole subsequent cutover-test change at
+  `apps/erp-next/scripts/appointment-finance-cutover-browser.cjs:138`: it waits for
+  the new action-specific `Pago registrado` status instead of the removed generic
+  success text. Assertions for exactly 7,500 received cents and two payment records,
+  old-client denial, retained drafts, errors and external requests are unchanged.
+  This fixes a stale selector without weakening the financial gate.
+- Independent `node --check` for that script and `npm run test:quickbooks-connection`
+  both PASS. Diff whitespace checks PASS. Builder reports seven workflows passed on
+  the prior remote head, with Office blocked by that obsolete success-text selector;
+  this report does not convert that failed run into a passing one.
+- The initial local cutover attempt had an environment dependency resolution failure
+  (`react` / `react-native-web`). Builder installed the locked dependencies with scripts
+  disabled and reran the unchanged gate: **18/18 cutover cases PASS**, independently
+  checked in `charges-workspace-evidence/cutover.log` and `cutover/cutover-results.json`.
+  Builder also reports integrated typecheck PASS. Required Office CI and the remaining
+  exact-head preview/deployment evidence must still be completed and recorded in PR #591.
+
+**Integration code review PASS; conditional technical GO unchanged.** No new code
+blocker was found. Do not publish based on this review while an applicable final gate
+is failing or pending. Preserve the integrated QuickBooks pages during frontend
+publication and verify the current rollback target before activation. No backend or
+financial-data rollback is needed for this change.
+
+Builder's updated production recovery target supersedes the earlier target above:
+`dpl_5zAKQFygJ6x5fV84gWhjzbEQbU1Z`, source `5a75d193`, tree `9f1ac84d`, reported
+identical to integrated main `12d99cc2`. Use this newer baseline to preserve the
+QuickBooks activation surfaces if frontend recovery is required; deployment identity
+and baseline verification remain the release operator's gate.
