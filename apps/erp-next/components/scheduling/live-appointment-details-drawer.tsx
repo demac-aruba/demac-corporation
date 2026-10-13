@@ -220,7 +220,6 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
 
   const blocked = busy || chargeBusy || referenceBusy || communicationBusy;
   const dialogRef = useBookingDialog(close, blocked);
-  const chargeSeeds = (appointment.workSummaryLines?.length ? appointment.workSummaryLines : [{ label: workLabel, quantity: appointment.totalQuantity }]).map((line, index) => ({ id: `work-${index + 1}`, label: line.label, quantity: line.quantity || 1, ...(index === 0 && !appointment.workSummaryLines?.length ? { presetId: appointment.workTypeId || appointment.presetId, serviceId: appointment.serviceId } : {}) }));
 
   const initials = appointment.customer.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase();
   const outcomeAction = partialOutcome ? partialOutcome.remainingWorkStatus === 'scheduled' ? 'Revisar resultado' : `Agendar ${partialOutcome.remainingQuantity} pendientes` : 'Registrar resultado';
@@ -252,7 +251,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
             </div>
           </section>
         </div> : null}
-        <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={`${currentUserId}:${appointment.id}`} currentUserId={currentUserId} onDraftStateChange={setChargeDraft} appointmentId={appointment.id} seeds={chargeSeeds} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={close} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
+        <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={`${currentUserId}:${appointment.id}`} currentUserId={currentUserId} onDraftStateChange={setChargeDraft} appointmentId={appointment.id} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={close} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}

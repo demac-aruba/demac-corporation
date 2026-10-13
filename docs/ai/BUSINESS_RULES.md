@@ -328,6 +328,10 @@ Production activation remains separately owner-approved through the server-side 
   operators do not reconfigure that article or reconfirm BTU. Final pricing resolves capacity from
   a recognized canonical capacity-specific booking code when needed, never from a name/SKU.
   Quantity and explicit removal remain available; the next catalog search stays below the list.
+  Owner clarification 2026-10-13: Importes y pagos opens directly on that catalog row,
+  without "Registrar trabajos realizados" or "Usar trabajos agendados" choices. The
+  first actual line begins the work draft; planned/forecast lines are never copied into
+  it. Existing confirmed work remains explicitly editable with its agreed snapshots.
   Existing agreed snapshots are preserved before applying today's catalog definitions. A generic
   article without enough pricing information remains pending; select a specific configured article.
 - Unknown prices remain pending; explicit zero requires a configured zero tariff (or an existing

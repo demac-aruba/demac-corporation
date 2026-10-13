@@ -39,6 +39,18 @@ The first published candidate `6af8763` built successfully on Vercel and its pro
 fixture export above, so that run is not considered a passing release gate. The follow-up
 fixture commit requires a fresh CI run; current evidence is tracked on PR #597.
 
+## Concurrent main integration
+
+Main advanced to `3a1578dd5ade78da0c409ceb0a6666f864ad3316` (PR #598) during
+publication. It was merged into this candidate, preserving the reviewed direct catalog
+entry, picker placement, removed planned-work seed prop and updated caller/fixture
+signatures. The QBO preview import/footer, fresh source read and synthetic identity
+exports remain intact. No merge conflict required manual resolution. The existing
+[direct-entry review](direct-charge-entry-20261013.md) covers those upstream changes;
+this is not a new review claim for their original implementation. Re-run the combined
+preview/model/types and full charge/drawer browser cases and publish a new exact-head
+preview. Record their final outcome and CI/deployment links on PR #597 before delivery.
+
 ## Verification
 
 - `npm run validate:firebase --prefix functions`: PASS.
