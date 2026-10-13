@@ -40,3 +40,21 @@ On activation deploy compatible backend first, retain projectionOnly, and never 
 
 ## Final integration evidence
 All five CI workflows passed on9acb620, including13/13 real Firestore/authorization tests with Java21 and no skips. Protected preview returned HTTP200 for ERP HTML and the new catalog-lines bundle. Main00090bb5 metadata-only additions merge cleanly and their4 tests pass. Final release preparation must rerun CI on its resulting head.
+
+## Controlled production release
+Existing owner authorization applies to this correction of the same update. Audit38408002296
+validated immutable live Office revision00086-cey, baseline122 tests and candidate125 tests,
+clean deployed dependency lock and actual bootstrap smoke. Only appointmentCharges.js changes;
+config/IAM/traffic and automatic projection remain intact. Recorded sanitized source/hash proof
+is ../releases/catalog-charge-lines-audit-20261013.json.
+
+Release script pins that baseline/candidate, refuses drift or concurrent unrelated operations,
+retains private ZIPs, updates only buildConfig.source, verifies exact published source and
+configuration/IAM/traffic, then checks both production origins and unauthenticated rejection.
+19 local transport/retry/publication guard tests PASS, no skipped tests. Merge uses [merge-only]
+to prevent automatic frontend/backend activation; the release branch must equal reviewed main.
+
+Frontend recovery target verified: dpl_798qAHwiBWooonykP9ntHakNx4oD, source30cb69319d671384beef79ca2f687a2771a82668
+(QBO connection pages). Restore this frontend first if necessary; keep the compatible new
+backend while investigating. Any backend recovery is a separate reviewed source-only operation
+to the retained00086 baseline, preserving projectionOnly. Never restore databases or old financial data.
