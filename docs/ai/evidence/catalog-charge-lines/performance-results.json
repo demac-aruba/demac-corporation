@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "name": "catalog-1000-synthetic-performance",
+      "catalogItems": 1000,
+      "chargeLines": 59,
+      "maximumLinesVerified": 60,
+      "renderedResultsLimit": 40,
+      "payloadBytes": 1176919,
+      "editorReadyMs": 452.79999999981374,
+      "inputToTwoAnimationFramesMs": {
+        "samples": 15,
+        "median": 60.200000000186265,
+        "p95": 98.3999999994412,
+        "max": 98.3999999994412
+      },
+      "authorityRequestsWhileTyping": 0,
+      "networkRequestsWhileTyping": 0,
+      "productionWrites": 0
+    },
+    {
+      "name": "catalog-1000-items-bounded-local-search",
+      "status": "PASS"
+    }
+  ],
+  "externalRequests": 0,
+  "productionWrites": 0
+}
