@@ -47,16 +47,22 @@ async function main() {
       const iamHash = iam(), source = fn.buildConfig.source.storageSource;
       assert.ok(source.bucket && source.object && source.generation, 'Immutable source required');
       const dir = path.join(out, name), zip = dir + '.zip';
+      report.stage = name + '-download'; save();
       cloud(['storage', 'cp', `gs://${source.bucket}/${source.object}#${source.generation}`, zip, '--quiet']);
-      safePaths(run('unzip', ['-Z1', zip]).trim().split('\n'));
-      fs.mkdirSync(dir); run('unzip', ['-q', zip, '-d', dir]);
+      report.stage = name + '-extract'; save();
+      const gzip = fs.readFileSync(zip).subarray(0, 2).equals(Buffer.from([0x1f, 0x8b]));
+      safePaths(run(gzip ? 'tar' : 'unzip', gzip ? ['-tzf', zip] : ['-Z1', zip]).trim().split('\n'));
+      fs.mkdirSync(dir); run(gzip ? 'tar' : 'unzip', gzip ? ['-xzf', zip, '-C', dir] : ['-q', zip, '-d', dir]);
       const files = manifest(dir);
+      report.stage = name + '-dependencies'; save();
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
-      validateLock(fs.readFileSync(path.join(dir, 'package-lock.json')), pkg);
+      const lockPresent = Object.hasOwn(files, 'package-lock.json');
+      if (name === 'officeBookingAuthority') assert.equal(lockPresent, true, 'Published Office lock required');
+      if (lockPresent) validateLock(fs.readFileSync(path.join(dir, 'package-lock.json')), pkg);
       const read = f => fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8') : '';
       const entry = { name, revision: fn.serviceConfig.revision, source, sourceHash: runtimeSourceHash(files), configHash: hash(releaseConfig(fn)), iamHash,
         files, bookingHasInitialCharges: read('bookingAuthorityFirestore.js').includes('prepareInitialCharges'), afterHoursHasInitialCharges: read('bookingAfterHours.js').includes('prepareInitialCharges'),
-        alreadyAutomatic: read('appointmentCharges.js').includes('bookingProjectionLines'), dependenciesPinned: true, trafficVerified: true };
+        alreadyAutomatic: read('appointmentCharges.js').includes('bookingProjectionLines'), dependenciesPinned: lockPresent, trafficVerified: true };
       report.functions.push(entry); save();
       if (name === 'officeBookingAuthority') {
         for (const f of FILES.filter(f => f !== 'appointmentProjectionPricing.js')) assert.equal(files[f], hash(run('git', ['show', BASE + ':functions/' + f])), 'Live patch base differs: ' + f);
