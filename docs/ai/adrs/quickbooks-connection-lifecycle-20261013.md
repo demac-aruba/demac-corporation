@@ -42,3 +42,24 @@ Official references consulted 2026-10-13:
 Production configuration, approved deployment, real authorization/revocation acceptance,
 Intuit policy review and country eligibility remain explicit rollout gates. Publishing
 entry pages alone does not establish production readiness or enable accounting writes.
+
+## Controlled identity activation — 2026-10-13
+
+Disabled installation succeeded in run `38428683358` with source/configuration and
+other-function inventory verification. The owner subsequently requested continuing.
+Aruba appears under South America in the official list linked by Intuit's
+"From which countries can you accept app connections?" documentation:
+https://quickbooks.intuit.com/choose-country/#south-america
+This establishes listed-country coverage, not DEMAC's subscription edition. CompanyInfo
+will provide the company's own country field after consent.
+
+Activation uses a bounded Cloud Functions v2 PATCH of the existing runtime gate after
+verifying owner, original disabled revision, reviewed source, version-1 secret metadata
+and updated public disclosures. It creates no resources or accounting capabilities.
+The source archive remains the disabled installation package. The frontend gate is
+production-only. The real owner completes Intuit consent and browser-bound confirmation.
+
+The Intuit scope is broad accounting authorization; application code exposes only token
+exchange/revocation and CompanyInfo GET. This is an application-enforced limit, not a
+technically read-only accounting scope. Completed compliance forms/unlocked keys are
+not represented as certification or a security audit by Intuit.
