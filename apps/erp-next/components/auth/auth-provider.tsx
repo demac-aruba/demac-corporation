@@ -6,6 +6,7 @@ import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import { clearFirebaseWebSession, loadFirebaseWebSession, signInWithFirebaseEmail, FirebaseSessionSupersededError, onFirebaseSessionInvalidated } from '@/lib/firebase/session';
 import { roleLabels, type AuthPrincipal } from '@/lib/security';
 import { isTransientFirebaseError } from '@/lib/firebase/request-error';
+import { clearChargeRecovery } from '@/lib/appointment-charge-recovery';
 import recoveryStyles from './auth-recovery.module.css';
 
 export type AuthMode = 'signed_out' | 'firebase';
@@ -163,7 +164,10 @@ export function AuthProvider({ children }: Readonly<{ children: React.ReactNode 
     await verifySession(id, uid);
   }, [lockSession, verifySession]);
 
-  const signOut = useCallback(() => { lockSession(); }, [lockSession]);
+  const signOut = useCallback(() => {
+    try { clearChargeRecovery(window.sessionStorage); } catch { /* Storage failure must never keep access open. */ }
+    lockSession();
+  }, [lockSession]);
 
   const refreshPrincipal = useCallback(async () => {
     if (mode !== 'firebase') throw new Error('Authentication is required.');

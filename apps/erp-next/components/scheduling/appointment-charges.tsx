@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { chargeRetryWasNotCommitted, chargeRecoveryBaseline, readChargeRecovery, writeChargeRecovery, type PendingChargeOperation } from '../../lib/appointment-charge-recovery';
 import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
-import { officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
+import { OfficeBookingRequestError, officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
 import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
   paymentMethods, quoteAppointmentCharges, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
@@ -77,7 +78,7 @@ function ChargesSkeleton() {
   </div>;
 }
 const historyLabels: Record<string,string> = { initial_estimate: 'Proyección inicial', save_appointment_estimate: 'Proyección actualizada', finalize_appointment_charges: 'Monto final confirmado', record_appointment_payment: 'Pago registrado', void_appointment_payment: 'Registro de pago anulado' };
-export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; seeds: ChargeLineInput[]; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
+export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDraftStateChange, seeds, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; currentUserId: string; onDraftStateChange?: (state: { dirty: boolean; recoverable: boolean }) => void; seeds: ChargeLineInput[]; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
   const [error, setError] = useState(''), [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false), [editing, setEditing] = useState<'final' | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -87,7 +88,12 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   const [lines, setLines] = useState<ChargeLineInput[]>([]), [note, setNote] = useState(''), [reviewed, setReviewed] = useState(false), [payment, setPayment] = useState<PaymentInput | null>(null);
   const [candidateFingerprint, setCandidateFingerprint] = useState('');
   const [editingVersion, setEditingVersion] = useState(0), [paymentVersion, setPaymentVersion] = useState(0);
-  const [pending, setPending] = useState<{ action: string; data: Record<string,unknown> } | null>(null);
+  const [pending, setPending] = useState<PendingChargeOperation | null>(null);
+  const [recoveryReady, setRecoveryReady] = useState(false), [recoveringDraft, setRecoveringDraft] = useState(false);
+  const [draftBaseline, setDraftBaseline] = useState(''), [storageError, setStorageError] = useState('');
+  const [draftSaved, setDraftSaved] = useState(false), [recovered, setRecovered] = useState(false);
+  const [reviewRecovery, setReviewRecovery] = useState(''), [invalidRecovery, setInvalidRecovery] = useState(false);
+  const acknowledgedVersion = useRef<number | null>(null);
   const inFlight = useRef(false);
   const [quoteRevision, setQuoteRevision] = useState(0);
   const { quote, error: quoteError, loading: quoting } = useQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
@@ -97,16 +103,71 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   useEffect(() => { onBusyChange(busy || Boolean(pending)); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
   const state = record?.state;
   const estimate = state?.estimate;
-  const blocked = !canManage || !editSession.owned || Boolean(record?.blocker) || busy || Boolean(pending) || loading || Boolean(readError);
+  const accessBlocked = invalidRecovery || !canManage || !editSession.owned || Boolean(record?.blocker) || busy || Boolean(pending) || loading || Boolean(readError);
+  const blocked = accessBlocked || recoveringDraft;
   const version = state?.version || 0;
+  const currentBaseline = useMemo(() => record ? chargeRecoveryBaseline(record) : '', [record]);
+  const recoveryReviewed = Boolean(reviewRecovery) && reviewRecovery === currentBaseline;
   const editingConflict = Boolean(editing) && editingVersion !== version;
   const paymentConflict = Boolean(payment) && paymentVersion !== version;
-  const totals = record ? appointmentChargeBalance(record, editing ? { quote, unavailable: quoting || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
+  const totals = record ? appointmentChargeBalance(record, editing ? { quote, unavailable: recoveringDraft || quoting || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
   const balance = totals?.balanceCents ?? null;
   const reasonRequired = Boolean(state?.originalEstimate || state?.estimate || state?.final);
   const candidateReviewed = Boolean(candidateFingerprint) && candidateFingerprint === record?.candidateEvidence?.fingerprint;
+  const persistRecovery = (nextPending = pending, keepDraft = Boolean(editing)) => {
+    if (!currentUserId) throw Error('No se pudo verificar el usuario del borrador.');
+    writeChargeRecovery({ schema: 1, userId: currentUserId, appointmentId, savedAt: Date.now(),
+      draft: keepDraft ? { lines, note, version: editingVersion, baseline: draftBaseline } : null, pending: nextPending });
+  };
+  useEffect(() => {
+    if (recoveryReady || !canManage || !active || showHistory || !currentUserId || !record || loading || readError) return;
+    try {
+      const saved = readChargeRecovery(currentUserId, appointmentId);
+      if (saved?.draft) {
+        setLines(saved.draft.lines); setNote(saved.draft.note); setEditingVersion(saved.draft.version);
+        setDraftBaseline(saved.draft.baseline); setEditing('final'); setReviewed(false); setCandidateFingerprint('');
+        setRecoveringDraft(true); setRecovered(true);
+      }
+      if (saved?.pending) setPending(saved.pending);
+    } catch { setInvalidRecovery(true); setStorageError('No se pudo recuperar el borrador de esta pestaña. Conserva esta pantalla abierta y revisa el historial antes de registrar otro pago.'); }
+    setRecoveryReady(true);
+  }, [active, showHistory, currentUserId, appointmentId, canManage, record, loading, readError, recoveryReady]);
+  useEffect(() => {
+    if (!record || loading || readError) return;
+    if (acknowledgedVersion.current === version) {
+      setDraftBaseline(currentBaseline); acknowledgedVersion.current = null;
+    } else if (acknowledgedVersion.current !== null && version > acknowledgedVersion.current) acknowledgedVersion.current = null;
+    if ((recoveringDraft || (recovered && version > editingVersion)) && !busy && !pending && !record.blocker && draftBaseline === currentBaseline) {
+      setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint('');
+    }
+  }, [record, currentBaseline, version, loading, readError, recoveringDraft, recovered, editingVersion, busy, pending, draftBaseline]);
+  useEffect(() => {
+    if (!recoveryReady || invalidRecovery || !canManage || !currentUserId) return;
+    try { persistRecovery(); setDraftSaved(Boolean(editing)); setStorageError(''); }
+    catch { setDraftSaved(false); setStorageError('No se pudo conservar el borrador en esta pestaña. No cierres ni refresques hasta confirmar los trabajos.'); }
+  // Inputs plus comparison-only financial evidence and, if uncertain, one immutable
+  // request for exact replay. None grants a new edit lease or confirms a total.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recoveryReady, invalidRecovery, canManage, currentUserId, appointmentId, editing, lines, note, editingVersion, draftBaseline, pending]);
+  useEffect(() => {
+    onDraftStateChange?.({ dirty: Boolean(editing || payment), recoverable: Boolean(editing && draftSaved && !payment) });
+    return () => onDraftStateChange?.({ dirty: false, recoverable: false });
+  }, [editing, payment, draftSaved, onDraftStateChange]);
+  useEffect(() => {
+    if (!editing && !payment && !pending) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [editing, payment, pending]);
+  const discardDraft = () => {
+    if (busy || pending || !window.confirm('¿Descartar los cambios de trabajos sin confirmar? Los pagos guardados se conservan.')) return;
+    try { persistRecovery(null, false); } catch { setError('No se pudo descartar el borrador guardado. Reintenta.'); return; }
+    setEditing(null); setRecoveringDraft(false); setRecovered(false); setDraftBaseline(''); setDraftSaved(false);
+  };
+  const recoveryConflict = recoveringDraft && Boolean(record) && !loading && !readError && draftBaseline !== currentBaseline;
+
   const startEdit = (_mode: 'final', addition?: ChargeLineInput, usePlanned = false) => {
-    setEditing('final'); setEditingVersion(version);
+    setEditing('final'); setEditingVersion(version); setDraftBaseline(currentBaseline); setRecoveringDraft(false); setRecovered(false);
     const existing = state?.final || (usePlanned ? estimate : null);
     setLines([...(existing ? chargeInputFromQuote(existing) : usePlanned ? record?.workItems || seeds : []), ...(addition ? [addition] : [])]);
     setNote(''); setReviewed(false); setCandidateFingerprint(''); setError(''); setSuccess('');
@@ -117,6 +178,12 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   };
   const perform = async (request: { action: string; data: Record<string,unknown> }) => {
     if (inFlight.current) return;
+    const retryingUncertain = Boolean(pending);
+    // Capture a proved fresh fence before this retry, never after its response.
+    const retryFence = !loading && !readError ? editSession.credentials() : null;
+    const retryVersion = version;
+    try { persistRecovery(request); }
+    catch { setError('No se pudo conservar la solicitud para recuperarla con seguridad. No se envió ningún cambio.'); return; }
     inFlight.current = true; setBusy(true); setError(''); setSuccess(''); setPending(request);
     try {
       const result = await mutateAppointmentCharges(request.action, request.data);
@@ -125,17 +192,17 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
       // later state containing other changes; keep that draft stale for review.
       const ownVersion = result.state.version === Number(request.data.expectedVersion) + 1;
       if (request.action === 'finalize_appointment_charges') {
-        setEditing(null);
+        setEditing(null); setRecoveringDraft(false); setRecovered(false);
         if (payment && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
       } else {
         if (request.action === 'record_appointment_payment') setPayment(null);
-        if (editing && ownVersion && editingVersion === request.data.expectedVersion) setEditingVersion(result.state.version);
+        if (editing && ownVersion && editingVersion === request.data.expectedVersion) { setEditingVersion(result.state.version); acknowledgedVersion.current = result.state.version; }
         if (payment && request.action !== 'record_appointment_payment' && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
-      } setSuccess(historyLabels[request.action] || 'Cambios guardados');
+      } setSuccess(request.action === 'record_appointment_payment' && editing ? 'Pago registrado; los trabajos siguen pendientes de confirmar' : historyLabels[request.action] || 'Cambios guardados');
       await reload();
       try { await onChanged(); } catch { /* Monetary commit already succeeded; refresh does not undo it. */ }
     } catch (cause) {
-      if (!officeBookingOutcomeUnknown(cause)) setPending(null);
+      if ((!retryingUncertain && !officeBookingOutcomeUnknown(cause)) || (cause instanceof OfficeBookingRequestError && !cause.outcomeUnknown && chargeRetryWasNotCommitted(cause.code, request, retryFence, retryVersion))) setPending(null);
       setError(cause instanceof Error ? cause.message : 'No se confirmó el resultado. Reintenta la misma operación.');
     } finally { inFlight.current = false; setBusy(false); }
   };
@@ -160,10 +227,12 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
   return <div className={`${styles.workspace} ${!showHistory ? `${styles.overview} ${styles.compactWorkspace}` : ''}`} aria-busy={loading} data-charge-stage={editing === 'final' ? 'final' : 'appointment'}>
     {readError ? <div role="alert" className={styles.error}>{record ? 'No se pudieron actualizar los importes. Los datos visibles corresponden a la última consulta; vuelve a actualizar antes de guardar. ' : ''}{readError}</div> : null}
     {editingConflict || paymentConflict ? <div role="alert" className={styles.error}>Los importes cambiaron desde que abriste el formulario. Conservamos tu borrador: vuelve atrás o cancela y revisa los datos actualizados antes de iniciar otro registro.</div> : null}
-    {error ? <div role="alert" className={styles.error}>{error}</div> : null}{success && active && !showHistory ? <div role="status" className={styles.successToast}><ChargeIcon name="check"/>{success}</div> : null}
+    {error ? <div role="alert" className={styles.error}>{error}</div> : null}{storageError ? <div role="alert" className={styles.error}>{storageError}{invalidRecovery ? <button type="button" className={styles.secondary} onClick={() => { if (!window.confirm('Revisa los pagos del historial antes de descartar esta copia no verificable. ¿Descartar la copia local?')) return; try { persistRecovery(null, false); setInvalidRecovery(false); setStorageError(''); } catch { setError('No se pudo acceder a la copia de recuperación.'); } }}>Descartar copia de recuperación</button> : null}</div> : null}{success && active && !showHistory ? <div role="status" className={styles.successToast}><ChargeIcon name="check"/>{success}</div> : null}
     {pending && !busy ? <div className={styles.notice}><ChargeIcon name="info"/><div>El resultado todavía no está confirmado. Reintentar conserva la misma solicitud y evita duplicados.<div style={{ marginTop: 9 }}><button type="button" className={styles.primary} onClick={() => void perform(pending)}>Reintentar la misma operación</button></div></div></div> : null}
     {!record ? <button type="button" className={styles.secondary} onClick={() => void reload()}>Volver a cargar</button> : <>
-    <div className={styles.refresh}><div className={styles.accessStatus}>{canManage && active && !showHistory && !record.blocker ? <><span role="status"><ChargeIcon name="info"/>{editSession.message}</span>{!editSession.owned && !editSession.loading ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => { void read(); editSession.retry(); }}>Recuperar acceso de edición</button> : null}</> : <span className={styles.muted} role="status">{loading ? 'Consultando datos actuales…' : `Última consulta · ${dateLabel(new Date(updatedAt).toISOString())}`}</span>}</div><button type="button" className={styles.link} disabled={busy || Boolean(pending) || loading} onClick={() => void reload()}>{loading ? 'Actualizando…' : 'Actualizar importes'}</button></div>
+    <div className={styles.refresh}><div className={styles.accessStatus}>{canManage && active && !showHistory && !record.blocker ? <><span role="status"><ChargeIcon name="info"/>{editSession.message}</span>{!editSession.owned && !editSession.loading ? <button type="button" className={styles.link} disabled={busy} onClick={() => { void read(); editSession.retry(); }}>Recuperar acceso de edición</button> : null}</> : <span className={styles.muted} role="status">{loading ? 'Consultando datos actuales…' : `Última consulta · ${dateLabel(new Date(updatedAt).toISOString())}`}</span>}</div><button type="button" className={styles.link} disabled={busy || Boolean(pending) || loading} onClick={() => void reload()}>{loading ? 'Actualizando…' : 'Actualizar importes'}</button></div>
+    {editing ? <div className={styles.draftStatus} role="status">{recovered ? 'Borrador recuperado. ' : ''}Trabajos pendientes de confirmar · {draftSaved ? 'Borrador conservado en esta pestaña' : 'Conservando borrador…'}</div> : null}
+    {recoveryConflict ? <div className={styles.notice}><div><strong>Los datos guardados cambiaron desde este borrador.</strong><p>Compara los trabajos y pagos actuales antes de continuar. Tu selección se conserva.</p><details><summary>Ver trabajos guardados actualmente</summary><ChargeLineSummary record={record}/></details><label className={styles.check}><input type="checkbox" checked={recoveryReviewed} onChange={event => setReviewRecovery(event.target.checked ? currentBaseline : '')}/>Revisé los trabajos y pagos guardados y quiero continuar con este borrador.</label><button type="button" className={styles.secondary} disabled={accessBlocked || !recoveryReviewed} onClick={() => { if (accessBlocked || !recoveryReviewed) return; setDraftBaseline(currentBaseline); setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint(''); setReviewRecovery(''); }}>Continuar con este borrador</button></div></div> : null}
     {record.blocker ? <div className={styles.error} role="alert">{record.blocker}</div> : null}
     {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio y anulación mantiene su responsable, fecha y motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : <>
     {editing ? <div className={styles.metrics}>
@@ -199,7 +268,7 @@ export function AppointmentChargesWorkspace({ appointmentId, seeds, canManage, s
     <footer className={styles.workspaceFooter}>
       <div>{editing ? <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={blocked} onChange={event => setReviewed(event.target.checked)}/>Revisé los trabajos realizados, los adicionales y el importe acordado con el cliente.</label> : <span className={styles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span>}</div>
       <div className={styles.footerActions}>
-        {editing ? <><button type="button" disabled={busy || Boolean(pending)} className={styles.secondary} onClick={() => setEditing(null)}>Volver</button><button type="button" aria-label="Confirmar monto final" disabled={blocked || editingConflict || paymentConflict || quoting || !quote || !reviewed || quote.totalCents === null || (reasonRequired && !note.trim()) || (Boolean(record.candidateEvidence?.records.length) && !candidateReviewed)} className={styles.primary} onClick={() => save('finalize_appointment_charges', { lines, note, scopeReviewed: reviewed, quoteToken: quote?.quoteToken, candidateReviewed, candidateFingerprint })}>{busy ? 'Guardando…' : `Confirmar monto final${quote?.totalCents != null ? ` · ${chargeMoney(quote.totalCents)}` : ''}`}</button></> : <>
+        {editing ? <><button type="button" disabled={busy || Boolean(pending)} className={styles.secondary} onClick={discardDraft}>Descartar borrador</button><button type="button" aria-label="Confirmar monto final" disabled={blocked || editingConflict || paymentConflict || quoting || !quote || !reviewed || quote.totalCents === null || (reasonRequired && !note.trim()) || (Boolean(record.candidateEvidence?.records.length) && !candidateReviewed)} className={styles.primary} onClick={() => save('finalize_appointment_charges', { lines, note, scopeReviewed: reviewed, quoteToken: quote?.quoteToken, candidateReviewed, candidateFingerprint })}>{busy ? 'Guardando…' : `Confirmar monto final${quote?.totalCents != null ? ` · ${chargeMoney(quote.totalCents)}` : ''}`}</button></> : <>
           <button type="button" className={styles.secondary} disabled={!state?.final || Boolean(record.blocker) || busy || Boolean(pending) || loading || Boolean(readError) || pdfBusy || !documentContext} onClick={() => void downloadPdf()} title="Resumen de trabajos y pagos confirmados de esta cita"><ChargeIcon name="receipt"/>{pdfBusy ? 'Preparando PDF…' : 'Descargar PDF'}</button>
           {onClose ? <button type="button" className={styles.secondary} disabled={busy || Boolean(pending)} onClick={onClose}>Cerrar</button> : null}
         </>}
