@@ -30,7 +30,8 @@ function validLine(value: unknown): value is ChargeLineInput {
     && (typeof line.quantity === 'number' ? Number.isFinite(line.quantity) : text(line.quantity, 40))
     && ['workLineId','presetId','serviceId'].every(k => (line as Record<string,unknown>)[k] === undefined || text((line as Record<string,unknown>)[k], 180))
     && [line.btu,line.unitPrice].every(v => v == null || (typeof v === 'number' ? Number.isFinite(v) : text(v, 40)))
-    && (line.reason === undefined || text(line.reason, 1000));
+    && (line.reason === undefined || text(line.reason, 1000))
+    && (line.description === undefined || text(line.description, 1000));
 }
 export function decodeChargeRecovery(raw: string | null, userId: string, appointmentId: string): ChargeRecovery | null {
   if (!raw) return null;

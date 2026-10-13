@@ -1,0 +1,49 @@
+name: Controlled charge line descriptions release
+on:
+  pull_request:
+    paths:
+      - 'scripts/charge-line-descriptions-*'
+      - '.github/workflows/charge-line-descriptions-release.yml'
+  push:
+    branches: [release/charge-line-descriptions-20261013]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/charge-line-descriptions-release.cjs && node --test scripts/charge-line-descriptions-release.test.cjs scripts/appointment-finance-source-update.test.cjs scripts/appointment-finance-transport.test.cjs
+  publish:
+    if: github.ref == 'refs/heads/release/charge-line-descriptions-20261013'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish only reviewed Office source and verify runtime
+        run: node scripts/charge-line-descriptions-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: charge-line-descriptions-release
+          path: ${{ runner.temp }}/charge-line-descriptions-release/summary.json
+          if-no-files-found: error
+          retention-days: 90

@@ -80,7 +80,7 @@ export function buildAppointmentChargesPdf({ appointmentId, customer, dateKey, r
   heading('Trabajos confirmados'); tableHeader();
   for (const line of final.lines) {
     const label = `${line.label}${line.btu ? ` | ${Number(line.btu).toLocaleString('en-US')} BTU` : ''}`;
-    const parts = wrap(label, 47);
+    const parts = [...wrap(label, 47), ...(line.description ? wrap(line.description, 47) : [])];
     for (let index = 0; index < parts.length; index++) {
       if (y + 20 > 766) { newPage(); tableHeader(); }
       text(parts[index], 42, y, 10);
