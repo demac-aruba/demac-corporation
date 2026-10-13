@@ -1,5 +1,8 @@
 # Review: Appointment finance and catalog governance
 
+Current release decision: GO; backend and ERP production activation are complete.
+See the final evidence at the end. Earlier blocked decisions are historical checkpoints.
+
 ## Review mode
 Independent code review by /root/financial_review, implementation by /root, plus builder full-diff/consumer checks. Final late-read correction was independently accepted: favorable code checkpoint with no remaining blockers identified in the reviewed scope. This is not production release approval.
 
@@ -25,7 +28,7 @@ Independent reviewer executed 49/49 tests, reviewed 180/180 integration and 11/1
 
 React review: functional state updates; stale-result fencing; form controls disabled only during dependent save; explicit server acknowledgement; drafts retained on failure; no lease during prefetch; bounded rendered picker results and no network per keystroke. Existing financial styles/icons are retained. Checked real synthetic browser screenshots. Catalog uniqueness scans pages of 200 only when a legacy code has no claim; total work remains O(catalog size) in that transition, not constant time. No claim of measured production latency.
 
-## Release decision: BLOCKED
+## Historical release decision: BLOCKED before preparation
 
 Effective saved tariffs, exact runtime/source recovery of every touched consumer, final exact-head CI, and coordinated backend/ERP/Legacy/rules cutover with old-session handling remain critical. The concurrent dwelling release has a passed source audit but failed resumed publication 38310446182; the live result needs explicit verification. Do not overlay it or assume rollback happened. Do not merge or deploy this candidate until these gates are resolved. Owner approval already exists conditionally.
 
@@ -185,3 +188,33 @@ or absent proof still fail and no PATCH is repeated. Independent reviewer passed
 syntax and the predicate against real completed-operation evidence; GO after exact CI.
 The next run must prove Inventory's current configuration/IAM/source/traffic and reuse
 the successful operation before advancing the remaining sequence.
+
+### Final release and production verification
+
+PR580 final head6fdf4353 passed all three applicable workflows; merge1e3153b6 retained
+the exact reviewed tree and passed merge CI. Independent reviewer verified30/30 focused
+checks and the bounded completion/provenance gate. Run38323120937 then completed both
+safety and publication successfully. The reviewer independently downloaded artifact
+11780885333, matched ZIP SHA599a71c59678c8f02a46d589ab268272cb1551389ee7acab6fe7808375b11325,
+and confirmed complete/readyForErpPromotion, 5/5 runtime proofs, zero repeated Inventory
+updates, 15 saved tariffs, exact governed rules and all transition/propagation intervals.
+No backend blocker remains. The 427 actual-source preparation tests remain applicable.
+
+Direct promotion of the preview was rejected422; it was not treated as successful.
+The reviewer accepted the bounded adaptation to rebuild the exact approved preview
+with production settings, stage it without moving production domains, verify it, then
+promote that exact build. Production dpl_6xLMiVwQrsTozBCLWXke3QiFkepA is READY at a8fa5a9a;
+application/functions/rules trees equal the released source. Before promotion the prior
+domain deployment was confirmed after READY; login/scheduling/catalog, ten JS assets
+and the compiled public Firebase project/auth/storage configuration passed. Explicit
+promotion completed all three aliases, and domain lookup resolved the new production ID.
+Unauthenticated public checks returned200 for the three routes and www login with the
+expected bundle. Immediate scoped error/fatal runtime logs returned no groups. These
+checks did not exercise real customer/payment writes.
+
+The API accepted explicit autoassignment=false for staging and true after promotion;
+the connector omits the field in read responses, so its original value and direct
+readback are not claimed. The reviewer accepted this evidence together with observed
+domain behavior, without an additional test deployment. Final backend and production
+summaries are pinned in docs/ai/releases. Old open-client draft/reload limitations and
+Inventory historical dependency equivalence remain documented, not waived or hidden.
