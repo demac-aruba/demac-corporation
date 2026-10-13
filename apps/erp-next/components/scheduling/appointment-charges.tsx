@@ -78,7 +78,7 @@ function ChargesSkeleton() {
   </div>;
 }
 const historyLabels: Record<string,string> = { initial_estimate: 'Proyección inicial', save_appointment_estimate: 'Proyección actualizada', finalize_appointment_charges: 'Monto final confirmado', record_appointment_payment: 'Pago registrado', void_appointment_payment: 'Registro de pago anulado' };
-export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDraftStateChange, seeds, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; currentUserId: string; onDraftStateChange?: (state: { dirty: boolean; recoverable: boolean }) => void; seeds: ChargeLineInput[]; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
+export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDraftStateChange, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; currentUserId: string; onDraftStateChange?: (state: { dirty: boolean; recoverable: boolean }) => void; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
   const [error, setError] = useState(''), [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false), [editing, setEditing] = useState<'final' | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -168,15 +168,15 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   };
   const recoveryConflict = recoveringDraft && Boolean(record) && !loading && !readError && draftBaseline !== currentBaseline;
 
-  const startEdit = (_mode: 'final', addition?: ChargeLineInput, usePlanned = false) => {
+  const startEdit = (addition?: ChargeLineInput) => {
     setEditing('final'); setEditingVersion(version); setDraftBaseline(currentBaseline); setRecoveringDraft(false); setRecovered(false);
-    const existing = state?.final || (usePlanned ? estimate : null);
-    setLines([...(existing ? chargeInputFromQuote(existing) : usePlanned ? record?.workItems || seeds : []), ...(addition ? [addition] : [])]);
+    const existing = state?.final;
+    setLines([...(existing ? chargeInputFromQuote(existing) : []), ...(addition ? [addition] : [])]);
     setNote(''); setReviewed(false); setCandidateFingerprint(''); setError(''); setSuccess('');
   };
   const addActual = (line: ChargeLineInput) => {
     if (editing) { setLines(current => [...current, line]); setReviewed(false); }
-    else startEdit('final', line);
+    else startEdit(line);
   };
   const perform = async (request: { action: string; data: Record<string,unknown> }) => {
     if (inFlight.current) return;
@@ -245,15 +245,13 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     </div> : <ChargeOverviewMetrics record={record}/>}
 
     <div className={styles.columns}>
-      <section className={`${styles.panel} ${styles.workPanel}`} aria-label="Trabajos e importes"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={styles.tile}><ChargeIcon name="work"/></span><div><h3 className={styles.heading}>{editing ? 'Trabajos realizados y monto final' : 'Trabajos e importes'}</h3>{!editing ? <p>{state?.final ? 'Importe final confirmado' : 'Añade lo que se realizó o vendió al cliente'}</p> : null}</div></div>{!editing && state?.final ? <button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final')}><ChargeIcon name="edit"/>Editar trabajos</button> : null}</div>
+      <section className={`${styles.panel} ${styles.workPanel} ${!editing && !state?.final ? styles.emptyWorkPanel : ''}`} aria-label="Trabajos e importes"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={styles.tile}><ChargeIcon name="work"/></span><div><h3 className={styles.heading}>{editing ? 'Trabajos realizados y monto final' : 'Trabajos e importes'}</h3>{!editing ? <p>{state?.final ? 'Importe final confirmado' : 'Añade los servicios, productos y adicionales realizados'}</p> : null}</div></div>{!editing && state?.final ? <button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit()}><ChargeIcon name="edit"/>Editar trabajos</button> : null}</div>
       <div className={styles.workScroll} tabIndex={0} aria-label="Lista de trabajos y detalles">
       {editing ? <ChargeLinesEditor lines={lines} quote={quote} loading={quoting} disabled={blocked || editingConflict} onChange={value => { setLines(value); setReviewed(false); }}/> : state?.final ? <ChargeLineSummary record={record}/> : null}
 
       {record.candidateEvidence?.records.length ? <ChargeNotice><strong>Trabajos revisados en Field</strong><p>Contrasta estos conceptos con el monto final. No se suman automáticamente.</p>{record.candidateEvidence.records.map(candidate => <div key={candidate.id}><small>Revisión {candidate.revisionNumber}</small>{candidate.lines.map((line, index) => <div key={index}>{line.description} · {line.quantity} · {chargeMoney(Math.round(line.lineTotal * 100))}</div>)}{candidate.blockers.map((blocker, index) => <div key={index}>{blocker.message}</div>)}</div>)}{editing === 'final' ? <label className={styles.check}><input type="checkbox" disabled={blocked} checked={candidateReviewed} onChange={event => setCandidateFingerprint(event.target.checked ? record.candidateEvidence?.fingerprint || '' : '')}/>Concilié los conceptos Field en este total, sin duplicarlos.</label> : null}</ChargeNotice> : null}
       {editing ? <><details className={styles.scopeDetails} open={reasonRequired || undefined}><summary>{reasonRequired ? 'Motivo del cambio (obligatorio)' : 'Añadir nota del trabajo (opcional)'}</summary><label>Motivo / detalle del alcance{reasonRequired ? ' *' : ''}<textarea maxLength={1000} rows={2} value={note} disabled={blocked} onChange={event => setNote(event.target.value)} placeholder="Describe el cambio de servicio o adicionales"/></label></details>{quoteError ? <div className={styles.error} role="alert">{quoteError}</div> : null}</> : <>
-      {!state?.final ? <p className={styles.muted}>Selecciona los artículos realizados del catálogo. Cada selección añade una línea y deja el buscador listo para el siguiente artículo.</p> : null}
-      {estimate ? <details className={styles.priorEstimate}><summary>Ver proyección del booking · {chargeMoney(estimate.totalCents)}</summary><ChargeLineSummary record={{ ...record, state: state ? { ...state, final: null } : null }}/></details> : !state?.final ? <p className={styles.muted}>Esta cita no tiene una proyección original guardada.</p> : null}
-      {!state?.final ? <div className={styles.footer}><div><button type="button" className={styles.primary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final')}>Registrar trabajos realizados</button><button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit('final', undefined, true)}>Usar trabajos agendados</button></div></div> : null}
+      {estimate ? <details className={styles.priorEstimate}><summary>Ver proyección del booking · {chargeMoney(estimate.totalCents)}</summary><ChargeLineSummary record={{ ...record, state: state ? { ...state, final: null } : null }}/></details> : null}
       </>}
       </div>
       <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual}/>
