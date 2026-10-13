@@ -20,12 +20,26 @@ No provider calls, accounting writes, synchronization or secret-payload access o
 in deployment. Identity remains `quickbooksconnection-00002-vic`; sandbox remains separate.
 Do not rerun the initial installer: it deliberately rejects an already existing function.
 
-Next owner action: open https://demac-aruba.com/quickbooks/connect/ while signed into DEMAC,
-scroll to **Informes reales · solo lectura**, select **Ingresos y gastos · Profit and Loss**,
-choose dates and basis, and click **Consultar informe real**. Compare the result directly
-with QuickBooks for the same dates, currency and basis. This first authenticated real
-report remains PENDING; synthetic tests and unauthenticated release probes do not verify
-DEMAC's financial figures. The cloud browser used for the public check was signed out.
+## Authenticated read comparison — follow-up on 2026-10-13
+
+The owner supplied manual Profit and Loss PDF exports and authorized comparison through
+the signed-in ERP. For 2026-09-01 through 2026-09-30, currency AWG, all 33 monetary rows
+in Cash and all 33 monetary rows in Accrual matched the corresponding live ERP report.
+Comparison normalized only the label prefix "Total for" / "Total"; amounts, ordering and
+row count matched. This supersedes the earlier pending first-report status. Private
+PDFs, report values and customer data are intentionally not stored in this repository.
+This is integration-read evidence, not an accounting audit of the underlying books.
+
+AgedReceivables and AgedPayables also returned rendered reports for cutoff 2026-09-30;
+manual figure comparison remains pending. BalanceSheet with the same cutoff and Accrual
+was rejected as invalid-report-response and displayed no figures. Its root cause remains
+unconfirmed; the generic formatter error cannot identify the rejected field or shape.
+No accounting transactions were created, edited or deleted in these checks.
+
+Remaining read acceptance: resolve and retest BalanceSheet, compare the three additional
+manual reports, and verify a real expired-access-token renewal with a successful read.
+Existing synthetic refresh tests are not that live evidence. See the
+[sales/payment design and diagnostic next step](plans/quickbooks-sales-payments-20261013.md).
 
 Current scope: four owner-only read reports, explicit queries and encrypted token refresh.
 No ERP-to-QuickBooks sales/payment/expense/inventory synchronization and no ChatGPT/MCP
