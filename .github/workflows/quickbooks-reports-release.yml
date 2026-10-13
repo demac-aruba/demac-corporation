@@ -1,0 +1,59 @@
+name: QuickBooks production read-only reports
+on:
+  pull_request:
+    paths:
+      - 'functions/quickbooksReports*.js'
+      - 'functions/quickbooksConnectionService.js'
+      - 'scripts/quickbooks-reports-release*.cjs'
+      - 'apps/erp-next/**/quickbooks-*'
+      - '.github/workflows/quickbooks-reports-release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'functions/quickbooksReports*.js'
+      - 'scripts/quickbooks-reports-release*.cjs'
+      - '.github/workflows/quickbooks-reports-release.yml'
+permissions:
+  contents: read
+concurrency:
+  group: quickbooks-production-installation
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --test functions/quickbooksReports.test.js functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js scripts/quickbooks-reports-release.test.cjs
+      - run: node scripts/quickbooks-reports-release.cjs --check
+      - run: npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
+      - run: npm run test:quickbooks-connection --prefix apps/erp-next
+      - run: npm run typecheck --prefix apps/erp-next
+  deploy:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-qbo-reports]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      - run: node scripts/quickbooks-reports-release.cjs --deploy
+# Existing owner permission: continue read-only phase after verified DEMAC authorization.
+# No report is fetched during deployment, and no accounting write is implemented.
