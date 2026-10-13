@@ -31,7 +31,7 @@ jobs:
       - run: node --test scripts/quickbooks-production-prepare.test.cjs functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
       - run: node scripts/quickbooks-production-prepare.cjs --check
   install-disabled:
-    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[prepare-qbo-production]')
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(github.event.head_commit.message, '[prepare-qbo-production]') || contains(github.event.head_commit.message, '[diagnose-qbo-production]'))
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -49,5 +49,9 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
       - name: Verify designated owner and install only the disabled production connector
+        if: contains(github.event.head_commit.message, '[prepare-qbo-production]') && !contains(github.event.head_commit.message, '[diagnose-qbo-production]')
         run: node scripts/quickbooks-production-prepare.cjs --install-disabled
+      - name: Read bounded installation diagnostics without retrying resource creation
+        if: contains(github.event.head_commit.message, '[diagnose-qbo-production]')
+        run: node scripts/quickbooks-production-prepare.cjs --diagnose
 # No frontend gate, OAuth authorization, financial report or accounting write is enabled.

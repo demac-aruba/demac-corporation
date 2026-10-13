@@ -64,3 +64,26 @@ No real Intuit credential validation, consent, company read, financial report, s
 or ChatGPT/MCP access occurs. Country/policy/disclosure review and owner-driven
 authorization/disconnect/reconnect are still required before activation. A new dedicated
 runtime identity is an explicit future security decision, not silently added by this release.
+
+## Cloud result and separate diagnostic review
+
+Main run `38418601440`, merge `43f9ab899ea02621239d91085b71c7de4bbcd976`,
+verified the exact owner identity and active administrative profile. It then failed at
+`create-encryption-key` before reaching the deploy command. No Intuit call occurred.
+The original output intentionally withheld CLI response text, so a permission cause is
+not yet established and must not be invented. Resource creation could have partially
+completed; inspect metadata before retrying or replacing anything.
+
+A separate Solo Maintainer Adversarial Review of the diagnostic follow-up verified:
+`--diagnose` cannot enter installation, create secrets, deploy, change IAM or read payloads.
+Its fixed calls project permission booleans, named key/version metadata, production function
+existence and a tightly timed/key-filtered failed-operation audit. Logs request only method
+and status and emit only numeric codes plus named allowlisted permissions, never messages,
+principals, request bodies or secret data. Missing audit access is reported as unavailable,
+not as an inferred cause. Permission probes are diagnostics, not authorization gates.
+
+The diagnostic marker has precedence over the installation marker, including if both are
+present. This follow-up is merged with `[merge-only] [diagnose-qbo-production]`; no resource
+creation retry is authorized by that marker. Nine installer tests (including two new
+diagnostic/error-redaction tests), source syntax and diff checks passed. Existing 44
+connector tests remain part of CI. No backend/source/configuration change.

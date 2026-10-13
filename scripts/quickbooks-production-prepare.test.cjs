@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ownerFromLookup, checkProfile, resolveOwner, google, environment, checkSecretVersions, checkTokenKey,
-  verifyFunction, boundaries, sourceCheck, stagePackage, OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE } = require('./quickbooks-production-prepare.cjs');
+  verifyFunction, boundaries, diagnose, sourceCheck, stagePackage, OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE } = require('./quickbooks-production-prepare.cjs');
 const UID = 'synthetic_owner';
 const auth = () => ({ users: [{ localId: UID, email: OWNER_EMAIL, disabled: false }] });
 const profile = () => ({ name: `projects/${PROJECT}/databases/(default)/documents/users/${UID}`,
@@ -105,4 +105,39 @@ test('public probes carry no user tokens, OAuth parameters or mutation commands'
   });
   assert.equal(calls.length, 5); assert.ok(calls.every(c => !c.url.includes('?') && !c.options.headers.Authorization));
   assert.deepEqual(calls.filter(c => c.options.method === 'POST').map(c => c.options.body), ['{}']);
+});
+
+test('diagnostic projects only permission booleans, key/function metadata and redacted failure codes', async () => {
+  const calls = [];
+  const result = await diagnose('synthetic-token', async (url, options) => {
+    calls.push({ url, options });
+    if (url.includes('testIamPermissions')) return Response.json({ permissions: ['secretmanager.versions.add'], private: 'private-marker' });
+    if (url.includes('logging.googleapis.com')) return Response.json({ entries: [{ protoPayload: {
+      methodName: 'google.cloud.secretmanager.v1.SecretManagerService.CreateSecret',
+      status: { code: 7, message: 'private-marker secretmanager.secrets.create' }, request: { secret: 'private-marker' },
+    } }] });
+    return new Response('private-marker', { status: 404 });
+  });
+  assert.equal(result.readOnly, true); assert.equal(result.keyExists, false); assert.equal(result.productionFunctionExists, false);
+  assert.equal(result.permissions['secretmanager.secrets.create'], false);
+  assert.equal(result.permissions['secretmanager.versions.add'], true);
+  assert.deepEqual(result.failedOperations, [{ operation: 'create-secret', statusCode: 7, namedPermissions: ['secretmanager.secrets.create'] }]);
+  assert.doesNotMatch(JSON.stringify(result), /private-marker|synthetic-token/);
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every(c => c.options.method === 'GET' || c.url.includes(':testIamPermissions') || c.url.includes('/entries:list')));
+  const logRequest = calls.find(c => c.url.includes('logging.googleapis.com'));
+  assert.match(logRequest.url, /fields=entries\(protoPayload\(methodName,status\(code,message\)\)\)/);
+  assert.match(JSON.parse(logRequest.options.body).filter, /2026-10-13T15:03:30Z/);
+});
+
+test('diagnostic distinguishes an empty created key and tolerates audit permission denial without inventing a cause', async () => {
+  const result = await diagnose('synthetic', async url => {
+    if (url.includes('testIamPermissions')) return Response.json({});
+    if (url.includes('/versions?')) return Response.json({});
+    if (url.includes('secretmanager.googleapis.com')) return Response.json({ name: `projects/${NUMBER}/secrets/${SECRETS[2]}`,
+      labels: { integration: 'qbo-production', 'managed-by': 'reviewed-release' } });
+    return new Response(null, { status: url.includes('logging.googleapis.com') ? 403 : 404 });
+  });
+  assert.equal(result.keyExists, true); assert.equal(result.versionCount, 0); assert.equal(result.enabledVersion1, false);
+  assert.equal(result.auditUnavailable, 'google-http-403'); assert.equal(result.failedOperations, undefined);
 });

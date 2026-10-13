@@ -143,6 +143,38 @@ async function boundaries(fetchImpl = fetch) {
     if (item.error) check((await response.json()).error === item.error, 'http-error-boundary-failed');
   }
 }
+async function diagnose(token, fetchImpl = fetch) {
+  const result = { stage: 'read-only-installation-diagnostic', readOnly: true, secretPayloadsAccessed: false,
+    providerCalls: false, permissions: {}, keyExists: false, enabledVersion1: false, versionCount: 0 };
+  const permissions = ['secretmanager.secrets.create', 'secretmanager.versions.add', 'secretmanager.secrets.getIamPolicy', 'secretmanager.secrets.setIamPolicy'];
+  const tested = await google(`https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:testIamPermissions`,
+    token, { method: 'POST', body: { permissions }, fetchImpl });
+  for (const permission of permissions) result.permissions[permission] = Array.isArray(tested.permissions) && tested.permissions.includes(permission);
+  const keyUrl = `https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${SECRETS[2]}`;
+  const key = await google(keyUrl, token, { allowMissing: true, fetchImpl });
+  if (key) {
+    checkTokenKey(key); result.keyExists = true;
+    const versions = await google(keyUrl + '/versions?pageSize=10', token, { fetchImpl });
+    check(!versions.nextPageToken && Array.isArray(versions.versions || []), 'diagnostic-versions-incomplete');
+    result.versionCount = (versions.versions || []).length;
+    result.enabledVersion1 = (versions.versions || []).some(v =>
+      [`projects/${PROJECT}/secrets/${SECRETS[2]}/versions/1`, `projects/${NUMBER}/secrets/${SECRETS[2]}/versions/1`].includes(v.name) && v.state === 'ENABLED');
+  }
+  const fn = await google(`https://cloudfunctions.googleapis.com/v2/${RESOURCE}${NAME}`, token, { allowMissing: true, fetchImpl });
+  result.productionFunctionExists = Boolean(fn);
+  // A narrowly timed failed-operation audit, projected before delivery; never request secret data.
+  try {
+    const audit = await google('https://logging.googleapis.com/v2/entries:list?fields=entries(protoPayload(methodName,status(code,message)))', token,
+      { method: 'POST', body: { resourceNames: ['projects/' + PROJECT], pageSize: 10, orderBy: 'timestamp desc',
+        filter: 'timestamp>="2026-10-13T15:03:30Z" AND timestamp<="2026-10-13T15:04:10Z" AND protoPayload.serviceName="secretmanager.googleapis.com" AND protoPayload.status.code>0 AND (protoPayload.resourceName:"/secrets/QBO_PRODUCTION_TOKEN_KEY" OR protoPayload.request.secretId="QBO_PRODUCTION_TOKEN_KEY") AND (protoPayload.methodName="google.cloud.secretmanager.v1.SecretManagerService.CreateSecret" OR protoPayload.methodName="google.cloud.secretmanager.v1.SecretManagerService.AddSecretVersion")' }, fetchImpl });
+    result.failedOperations = (audit.entries || []).map(entry => ({
+      operation: entry.protoPayload?.methodName?.endsWith('.CreateSecret') ? 'create-secret' : 'add-version',
+      statusCode: Number.isInteger(entry.protoPayload?.status?.code) ? entry.protoPayload.status.code : null,
+      namedPermissions: permissions.filter(permission => String(entry.protoPayload?.status?.message || '').includes(permission)),
+    }));
+  } catch (error) { result.auditUnavailable = error.safeCode || 'audit-unavailable'; }
+  return result;
+}
 async function install() {
   releaseCheck(); report.stage = 'verify-owner';
   const token = run('gcloud', ['auth', 'print-access-token']).trim(); check(Boolean(token), 'cloud-identity-unavailable');
@@ -196,6 +228,10 @@ async function install() {
 if (require.main === module) {
   Promise.resolve().then(() => {
     if (process.argv[2] === '--check') { sourceCheck(); console.log('Reviewed isolated production source unchanged.'); return; }
+    if (process.argv[2] === '--diagnose') {
+      releaseCheck(); report.stage = 'read-only-installation-diagnostic';
+      return diagnose(run('gcloud', ['auth', 'print-access-token']).trim()).then(result => console.log(JSON.stringify(result)));
+    }
     check(process.argv[2] === '--install-disabled', 'unsupported-mode'); return install();
   }).catch(error => {
     report.error = error.safeCode || 'command-failed';
@@ -204,4 +240,4 @@ if (require.main === module) {
   });
 }
 module.exports = { ownerFromLookup, checkProfile, resolveOwner, google, environment, checkSecretVersions, checkTokenKey,
-  verifyFunction, boundaries, sourceCheck, stagePackage, OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE };
+  verifyFunction, boundaries, diagnose, sourceCheck, stagePackage, OWNER_EMAIL, PROJECT, NUMBER, NAME, REALM, SECRETS, RESOURCE };
