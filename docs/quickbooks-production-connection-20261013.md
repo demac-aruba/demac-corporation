@@ -23,14 +23,30 @@ the entry-page release. The later preparation status is recorded below.
   revision `quickbookssandbox-00002-meb`; no existing function was changed.
 - The isolated source package is prepared with the designated realm and
   `QBO_PRODUCTION_ENABLED=false`. It is not deployed. The frontend gate remains off.
-- Christian supplied his exact ERP sign-in address on 2026-10-13. His Firebase UID is
-  still unverified: resolve that one Firebase Auth identity,
-  and verify the matching active administrative `users/{uid}` profile before assigning
-  `QBO_PRODUCTION_OWNER_UID`. Do not infer it from a GitHub author, company contact,
-  another admin, or the Intuit login. Do not alter users, roles or passwords.
+- Christian supplied his exact ERP sign-in address on 2026-10-13. Installation run
+  `38418601440` verified that exact Firebase Auth identity and its matching active
+  administrative profile before failing at key creation. Reverify both during the
+  resumed installation before assigning `QBO_PRODUCTION_OWNER_UID`. The UID is not
+  logged. Do not infer it from a GitHub author, company contact, another admin, or
+  the Intuit login. Do not alter users, roles or passwords.
 
-Next rollout work after owner identity is verified: securely create the encryption-key
-secret, review and deploy only the isolated disabled backend, verify its boundaries,
+Diagnostic run `38419860300` then confirmed that the deployment identity lacked secret
+creation/version-addition/IAM-write permissions, the encryption key did not exist and no
+production function existed. Its optional audit query returned HTTP 400; no specific
+audit event was established. The permission/metadata results independently identify the
+missing preparation. Neither run made an Intuit request.
+
+The owner's Cloud Shell screenshot at 2026-10-13 16:05 UTC shows creation of token-key
+version 1, successful accessor grants for all three named production secrets and
+`QBO_READY`. The approved bootstrap used a new random 32-byte key and scoped secret IAM
+bindings for the verified existing runtime identity. No project-wide role was granted.
+This is owner-supplied completion evidence; resumed cloud preflight must still verify
+the existing labeled key and exact enabled versions. Do not create another key or rotate
+credentials. A new reviewed merge resumes the original disabled installer from current
+main because replaying the old run would correctly fail its stale-main check.
+
+Next rollout work: verify the completed preparation, deploy only the isolated disabled
+backend, verify its boundaries,
 and complete the activation gates below. Real-company consent remains owner-driven.
 The bounded installer and acceptance criteria are documented in
 `docs/ai/tasks/quickbooks-production-installation-20261013.md`; its cloud result must be

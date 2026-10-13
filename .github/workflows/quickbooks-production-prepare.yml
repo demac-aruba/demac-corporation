@@ -48,6 +48,8 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      # 2026-10-13: owner completed QBO_READY bootstrap. Resume from reviewed current main;
+      # the installer verifies/reuses the existing labeled key/version, without rotation.
       - name: Verify designated owner and install only the disabled production connector
         if: contains(github.event.head_commit.message, '[prepare-qbo-production]') && !contains(github.event.head_commit.message, '[diagnose-qbo-production]')
         run: node scripts/quickbooks-production-prepare.cjs --install-disabled
