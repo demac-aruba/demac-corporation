@@ -1,0 +1,105 @@
+{
+  "sourceSha": "6ed67167debed33b464e4d99fdca9e2bb1ed9902",
+  "mode": "read-only",
+  "productionWrites": false,
+  "customerReads": false,
+  "stage": "complete",
+  "functions": [
+    {
+      "name": "officeBookingAuthority",
+      "revision": "officebookingauthority-00085-bid",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791848962384522",
+        "object": "officeBookingAuthority/function-source.zip"
+      },
+      "sourceHash": "38e152b4ca9ed1134e19e6fd9164af92b03d5e26cf4b171cf08fd106fab7e7d7",
+      "configHash": "1f3068bd669b1ffdd17ef79f170546722a42131d2949a0566852f929d95e6e39",
+      "iamHash": "6ea6e4e297bf9c84cb0dd0386bb594b16b49cb13448749e5f7e28ed2086997a3",
+      "bookingHasInitialCharges": true,
+      "afterHoursHasInitialCharges": true,
+      "alreadyAutomatic": false,
+      "dependenciesPinned": true,
+      "trafficVerified": true,
+      "changed": [
+        "appointmentCharges.js",
+        "appointmentProjectionPricing.js",
+        "bookingAfterHours.js"
+      ],
+      "candidateSourceHash": "32546067bb17be2ff9f414da0207977ba82a3eede510080a4c276f99ed516c1f",
+      "baselineTestsSha": "6689c6f252f795828bbd5f4c7187c05311da2fce",
+      "baselineResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          100
+        ],
+        "testsPassed": 100,
+        "runtimeSmokePassed": true
+      },
+      "candidateResult": {
+        "dependencyLockSha256": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+        "cleanInstall": true,
+        "testCounts": [
+          107
+        ],
+        "testsPassed": 107,
+        "runtimeSmokePassed": true
+      }
+    },
+    {
+      "name": "projectAuthority",
+      "revision": "projectauthority-00005-wip",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791668409358993",
+        "object": "projectAuthority/function-source.zip"
+      },
+      "sourceHash": "5a03a50da353683f9f0095267b6fce7f60029041a5867679c5d7923337517df0",
+      "configHash": "99e0559b54a9d7eaabf8fe260bfe003fd1cae7a4d321b4169495c3773db95dce",
+      "iamHash": "d7bbff6336327e20cc5ecb0cf178e8cee51596683517323b94ac8df842cfec46",
+      "bookingHasInitialCharges": false,
+      "afterHoursHasInitialCharges": false,
+      "alreadyAutomatic": false,
+      "dependenciesPinned": false,
+      "trafficVerified": true
+    },
+    {
+      "name": "processCustomerAgentInbound",
+      "revision": "processcustomeragentinbound-00055-pab",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791848547154094",
+        "object": "processCustomerAgentInbound/function-source.zip"
+      },
+      "sourceHash": "7bd175d53f6b7db37db4b6ac64bc662d0cc1fe412f256055dc377eb7cd4c5b82",
+      "configHash": "d85475935de56693f12d0a5e05d5a5383fd40e488052bd897cd613fc5082a1f7",
+      "iamHash": "de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac",
+      "bookingHasInitialCharges": false,
+      "afterHoursHasInitialCharges": false,
+      "alreadyAutomatic": false,
+      "dependenciesPinned": true,
+      "trafficVerified": true
+    },
+    {
+      "name": "processCustomerAgentReactivation",
+      "revision": "processcustomeragentreactivation-00055-zed",
+      "source": {
+        "bucket": "gcf-v2-sources-1053571783393-us-central1",
+        "generation": "1791848640228462",
+        "object": "processCustomerAgentReactivation/function-source.zip"
+      },
+      "sourceHash": "7bd175d53f6b7db37db4b6ac64bc662d0cc1fe412f256055dc377eb7cd4c5b82",
+      "configHash": "5b809eee9a6801e917d30c7972f35f851770d45278dde002c41aa79709bbd40b",
+      "iamHash": "de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac",
+      "bookingHasInitialCharges": false,
+      "afterHoursHasInitialCharges": false,
+      "alreadyAutomatic": false,
+      "dependenciesPinned": true,
+      "trafficVerified": true
+    }
+  ],
+  "runId": 38333372167,
+  "artifactId": 11784136018,
+  "artifactZipSha256": "854990e504ca049db7519fa4bc85e21dd2772f7749b8ee121ffc32b3697e861e"
+}

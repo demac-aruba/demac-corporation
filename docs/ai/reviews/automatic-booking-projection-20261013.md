@@ -45,5 +45,37 @@ must precede frontend and verify every changed Booking Authority runtime consume
 Once marked forecasts exist, recovery must preserve the projectionOnly final-pricing guard;
 never roll back to a backend that can retain a minimum as a final price.
 
-Production publication remains subject to explicit owner approval in AGENTS.md. CI/production
-release evidence is separate from these local/emulator results.
+The owner explicitly authorized merge and deployment after the requested audit on 2026-10-13.
+CI/production release evidence remains separate from local/emulator results.
+
+
+## Production audit and release scope — 2026-10-13
+
+- Read-only run38333372167, artifact11784136018 inspected Office, Project and both
+  customer-agent runtime packages. Source, runtime settings, IAM and active traffic
+  were verified without customer reads or production data writes.
+- The exact live Office package passed100 baseline tests and107 candidate tests
+  with its unchanged dependency lock and actual bootstrap smoke. The candidate
+  differs in only appointmentCharges.js, bookingAfterHours.js and the new
+  appointmentProjectionPricing.js. Recovery must preserve projectionOnly.
+- This release covers Scheduling/Office booking, including normal booking,
+  temporary holds, overtime and follow-up. Project historical imports and the
+  customer-agent runtimes have older booking code without financial integration;
+  they remain unchanged. Their automatic projection coverage is not claimed.
+- Project's deployed package has no dependency lock. No Project update is part of
+  this release; rebuilding that historical runtime would require separate review.
+- The ordinary Office full-source workflow and prior finance activation workflow
+  are not suitable: they can replace unrelated runtime code or saved settings.
+  The controlled release patches only buildConfig.source, retains private ZIPs,
+  verifies operation provenance/traffic/configuration/IAM and checks both domains.
+- New main8b131db0 adds QuickBooks legal documents only; integrated before final CI.
+- Broader CI exposed two stale test assumptions: booking BTU/manual projection
+  inputs and collection counts including subcollection audit documents. Updated
+  those scenarios to verify automatic tariff refresh, payment-note exact recovery,
+  one saved appointment and one projection audit event. No test skipped or waived.
+- Final local checks:32 booking-modal cases,18 previous/current-client cutover
+  cases,15 independent booking-capacity cases and19 release/transport tests PASS.
+  Earlier failed CI remains historical evidence; final head must pass before merge.
+- Production authentication workflows are verified with synthetic data and real
+  Firestore emulator transactions. Live smoke tests use public pages, assets,
+  CORS and anonymous authorization denial; they do not create real test records.
