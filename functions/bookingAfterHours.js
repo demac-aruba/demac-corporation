@@ -389,7 +389,7 @@ function createAfterHoursAuthority({
       });
       const referencesCommit = await prepareVisitReferencesCommit({ db, transaction, input: visitReferences, actor, appointmentId, now });
       const chargesCommit = await prepareInitialCharges({ db, transaction, input: charges, actor, appointmentId,
-        appointment: { customerId: clientId, propertyId: siteId, status: "confirmed", workOrderIds: [workOrderId] }, now });
+        appointment: { customerId: clientId, propertyId: siteId, status: "confirmed", workOrderIds: [workOrderId], workItems }, now });
       const appointment = compactObject({
         ...(chargesCommit ? { jobCharges: chargesCommit.value } : {}),
         ...(referencesCommit ? { visitReferences: referencesCommit.value } : {}),
