@@ -260,11 +260,12 @@ test('initial booking preparation is atomic, optional, stable and authorizes cur
   assert.equal(db.read('appointments/apt').jobCharges.receivedCents, 10000);
   assert.equal(await prepareInitialCharges({ input: undefined }), null);
 });
-test('canonical accounting role can manage; corrections of final-only legacy amount always require a reason', async () => {
-  const { call } = fixture({ 'users/office': { active: true, role: 'accounting' } });
+test('canonical accounting role can correct finals without a separate reason; automatic history remains', async () => {
+  const { call, db } = fixture({ 'users/office': { active: true, role: 'accounting' } });
   await call('finalize_appointment_charges', { lines: [priced('200')], scopeReviewed: true });
-  await rejectsCode(call('finalize_appointment_charges', { lines: [priced('250')], scopeReviewed: true }), 'charge_change_reason');
-  await call('finalize_appointment_charges', { lines: [priced('250')], scopeReviewed: true, note: 'Corrección documentada' });
+  await call('finalize_appointment_charges', { lines: [priced('250')], scopeReviewed: true });
+  const events = [...db.store].filter(([key]) => key.includes('/chargeEvents/')).map(([,value])=>value);
+  assert.equal(events.at(-1).before.totalCents,20000);assert.equal(events.at(-1).after.totalCents,25000);assert.equal(events.at(-1).actor.id,'office');
 });
 test('Field billing candidates cannot be silently billed a second time', async () => {
   const { call } = fixture({ 'fieldBillingCandidates/review': { appointmentId: 'apt', workOrderId: 'wo', status: 'ready' } });
@@ -275,7 +276,7 @@ test('reviewed Field evidence can be explicitly reconciled without duplicating l
   const { db, call } = fixture({ 'fieldBillingCandidates/candidate': candidate });
   await call('record_appointment_payment', { payment: cash() });
   const view = await call('get_appointment_charges'); assert.equal(view.blocker, '');
-  const input = { lines: [priced('125')], scopeReviewed: true, note: 'Incluye el servicio de Field' };
+  const input = { lines: [priced('125')], scopeReviewed: true };
   await rejectsCode(call('finalize_appointment_charges', input), 'charge_field_review');
   await call('finalize_appointment_charges', { ...input, candidateReviewed: true, candidateFingerprint: view.candidateEvidence.fingerprint });
   assert.equal(db.read('appointments/apt').jobCharges.final.totalCents, 12500);
@@ -444,4 +445,32 @@ test('catalog BTU tiers forecast their validated minimum; final quotes require e
     const { call: invalid } = fixture({ 'services/tiered': { ...service, pricingDefinition: { ...service.pricingDefinition, ...patch } } });
     assert.equal((await invalid('quote_appointment_charges', { lines, purpose: 'projection' })).quote.totalCents, null);
   }
+});
+
+
+test('line descriptions persist independently of tariff tokens, with old-client and replay compatibility', async () => {
+  const {db,call}=fixture();
+  const lines=[priced('125',{quantity:3})];
+  const original=await call('quote_appointment_charges',{lines});
+  const described=[{...lines[0],description:'Indoor and outdoor cleaning\nLiving room'}];
+  const annotated=await call('quote_appointment_charges',{lines:described});
+  assert.equal(annotated.quote.quoteToken,original.quote.quoteToken);
+  assert.equal(annotated.quote.totalCents,37500);assert.equal(annotated.quote.lines[0].description,described[0].description);
+  assert.equal(Object.hasOwn(original.quote.lines[0],'description'),false);
+  assert.notEqual(chargeFingerprint({lines}),chargeFingerprint({lines:described}));
+  const input={lines:described,scopeReviewed:true,quoteToken:original.quote.quoteToken,requestId:'description-save',expectedVersion:0};
+  await call('finalize_appointment_charges',input);
+  assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,described[0].description);
+  assert.equal((await call('finalize_appointment_charges',input)).replayed,true);
+  await rejectsCode(call('finalize_appointment_charges',{...input,lines:[{...described[0],description:'Changed'}]}),'idempotency_conflict');
+  const oldClient=await call('quote_appointment_charges',{lines});
+  assert.equal(oldClient.quote.lines[0].description,described[0].description);
+  await call('finalize_appointment_charges',{lines,scopeReviewed:true,quoteToken:oldClient.quote.quoteToken});
+  assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,described[0].description);
+  await call('finalize_appointment_charges',{lines:[{...lines[0],description:''}],scopeReviewed:true});
+  assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,'');
+  await call('record_appointment_payment',{payment:cash('250')});
+  const view=await call('get_appointment_charges');assert.equal(view.state.final.totalCents-view.state.receivedCents,12500);
+  for(const description of [null,42,{},'x'.repeat(1001)]) await rejectsCode(call('quote_appointment_charges',{lines:[{...lines[0],description}]}),'charge_description');
+  assert.equal((await call('quote_appointment_charges',{lines:[{...lines[0],description:'<script>example</script>'}]})).quote.totalCents,37500);
 });

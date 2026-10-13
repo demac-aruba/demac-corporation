@@ -328,6 +328,11 @@ Production activation remains separately owner-approved through the server-side 
   operators do not reconfigure that article or reconfirm BTU. Final pricing resolves capacity from
   a recognized canonical capacity-specific booking code when needed, never from a name/SKU.
   Quantity and explicit removal remain available; the next catalog search stays below the list.
+  Owner clarification 2026-10-13: each actual-work article has an optional editable description,
+  initialized from catalog metadata, stored with the confirmed line/history and included in the
+  operational PDF. Description edits cannot change tariffs or article identity. Final confirmation
+  and correction require scope review but no separate reason textarea; dated actor history remains.
+  Estimate corrections and receipt voids retain their existing reason requirements.
   Owner clarification 2026-10-13: Importes y pagos opens directly on that catalog row,
   without "Registrar trabajos realizados" or "Usar trabajos agendados" choices. The
   first actual line begins the work draft; planned/forecast lines are never copied into

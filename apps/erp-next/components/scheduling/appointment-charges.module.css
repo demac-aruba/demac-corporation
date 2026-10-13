@@ -116,3 +116,11 @@
 
 /* Start with the catalog row; keep it visible below growing work lists. */
 .emptyWorkPanel .workScroll{order:1;margin-top:10px}
+
+/* Actual-work descriptions remain separate from immutable catalog identity/pricing. */
+.compactWorkspace .invoiceLine{grid-template-columns:minmax(140px,1fr) minmax(180px,1.4fr) 65px minmax(75px,auto) minmax(75px,auto) auto;align-items:start}
+.invoiceDescription{min-width:0}.invoiceDescription textarea{display:block;width:100%;min-height:54px;max-height:140px;resize:vertical;padding:7px!important;font-size:12px!important;line-height:1.45}
+@media(max-width:1200px){.compactWorkspace .invoiceLine{grid-template-columns:minmax(0,1fr) 65px minmax(75px,auto) minmax(75px,auto) auto}.invoiceDescription{grid-column:1/-1;grid-row:2}}
+@media(max-width:600px){.compactWorkspace .invoiceLine{grid-template-columns:repeat(3,minmax(0,1fr))}.invoiceDescription{grid-row:2}.invoiceDescription textarea{font-size:16px!important}}
+
+.savedDescription{white-space:pre-wrap;overflow-wrap:anywhere;max-width:320px}

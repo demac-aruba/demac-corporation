@@ -124,11 +124,11 @@ async function main(){
    await page.evaluate(()=>{window.__readError='';window.__holdReads=false;});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isEnabled(),true);
   });
   await run('draft-version-fingerprint-and-cross-tab-preservation',async page=>{
-   await openFinance(page);await selectActualService(page);await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Alcance de prueba');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
-   await tab(page,'Resumen').click();await focus(page);await tab(page,'Importes y pagos').click();assert.equal(await reads(page),1);assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Alcance de prueba');
+   await openFinance(page);await selectActualService(page);await page.getByLabel('Descripción 1',{exact:true}).fill('Alcance de prueba');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   await tab(page,'Resumen').click();await focus(page);await tab(page,'Importes y pagos').click();assert.equal(await reads(page),1);assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Alcance de prueba');
    await page.evaluate(()=>{window.__record.state.version=2;window.__record.candidateEvidence.fingerprint='field-v2';});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);
    await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();assert.equal(await page.getByLabel('Concilié los conceptos Field',{exact:false}).isChecked(),false);assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
-   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Descartar borrador',exact:true}).click();await selectActualService(page);await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Revisión actualizada');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.waitForFunction(()=>window.__writes.length===1);
+   page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Descartar borrador',exact:true}).click();await selectActualService(page);await page.getByLabel('Descripción 1',{exact:true}).fill('Revisión actualizada');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.waitForFunction(()=>window.__writes.length===1);
    const write=await page.evaluate(()=>window.__writes[0]);assert.equal(write.data.expectedVersion,2);assert.equal(write.data.candidateFingerprint,'field-v2');
   },{__catalogItems:catalogItems});
   await run('payment-conflict-cannot-adopt-new-version',async page=>{
@@ -151,8 +151,8 @@ async function main(){
    const row=page.getByRole('row').filter({hasText:'Deep cleaning'});assert.match(await row.innerText(),/235.00/);assert.doesNotMatch(await row.innerText(),/125.00/);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false);
    await page.screenshot({path:path.join(artifacts,'premium-final-'+viewport.width+'.png'),fullPage:true});
-   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Corrección pendiente');
-   await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos'}).waitFor();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Corrección pendiente');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).fill('Corrección pendiente');
+   await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos'}).waitFor();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Corrección pendiente');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium},viewport);
   const historicalRecord=(()=>{const r=structuredClone(record);r.state.estimate={...quote,lines:[{...work('historic','Acuerdo histórico',6500),manualPrice:true,btu:null}],totalCents:6500,knownTotalCents:6500};r.state.originalEstimate=structuredClone(r.state.estimate);r.candidateEvidence={fingerprint:'empty',records:[]};return r;})();
   await run('historical-estimate-preserved-without-copying-planned-work',async page=>{
@@ -213,9 +213,9 @@ async function main(){
    assert.equal(await page.getByRole('button',{name:'Editar trabajos',exact:true}).isDisabled(),true);
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await page.evaluate(()=>window.__leaseOther=false);await page.getByRole('button',{name:'Recuperar acceso de edición'}).click();
-   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Borrador que se conserva');
+   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).fill('Borrador que se conserva');
    await tab(page,'Resumen').click();await page.evaluate(()=>window.__leaseOther=true);await tab(page,'Importes y pagos').click();
-   await page.getByText(/Scarlet de prueba está editando/).waitFor();assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Borrador que se conserva');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await page.getByText(/Scarlet de prueba está editando/).waitFor();assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Borrador que se conserva');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__leaseOther:true});
   await run('lease-unknown-acquire-retries-same-session-and-invalid-expiry-blocks',async page=>{
    await openFinance(page);await page.getByText('Synthetic lease unavailable',{exact:true}).waitFor();
@@ -232,7 +232,7 @@ async function main(){
    const calls=await page.evaluate(()=>window.__leaseCalls);assert.equal(calls[0].data.editSessionId,calls.at(-1).data.editSessionId);assert.equal(calls.at(-1).data.editToken,'synthetic-lease');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__leaseHold:true});
   await run('lease-hidden-focus-resumes-renewal-and-expiry-keeps-draft',async page=>{
-   await page.clock.install();await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Conservar al vencer');
+   await page.clock.install();await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).fill('Conservar al vencer');
    await page.evaluate(()=>Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>window.__visibility||'visible'}));
    await page.evaluate(()=>window.__visibility='hidden');await page.clock.fastForward(26000);
    assert.equal(await page.evaluate(()=>window.__leaseCalls.filter(c=>c.action==='renew_appointment_charge_edit').length),0);
@@ -240,7 +240,7 @@ async function main(){
    await page.waitForFunction(()=>window.__leaseCalls.filter(c=>c.action==='renew_appointment_charge_edit').length===1);
    await page.clock.fastForward(26000);await page.waitForFunction(()=>window.__leaseCalls.filter(c=>c.action==='renew_appointment_charge_edit').length===2);
    await page.evaluate(()=>window.__visibility='hidden');await page.clock.fastForward(91000);await page.getByText(/La sesión de edición venció. Tu borrador se conserva/).waitFor();
-   assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Conservar al vencer');assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Conservar al vencer');assert.equal(await page.getByLabel('Descripción 1',{exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium});
   const search=page=>page.getByLabel('Añadir servicio o producto',{exact:true});
   const plus=page=>page.getByRole('button',{name:'Añadir',exact:true});
@@ -265,7 +265,7 @@ async function main(){
    await page.evaluate(()=>window.__holdReads=true);await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await page.waitForFunction(()=>window.__reads.length===2);assert.equal(await search(page).isDisabled(),true);assert.equal(await plus(page).isDisabled(),true);await page.evaluate(()=>window.__release[1]());await loaded(page);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__catalogItems:[{id:'legacy',name:'Legacy item'}]});
   await run('catalog-refresh-new-product-retains-draft',async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Alcance que no debe perderse');await plus(page).click();await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).waitFor();await page.evaluate(()=>window.__catalogItems.push({id:'new-product',name:'Producto recién creado',itemType:'Producto',sku:'NEW'}));await page.getByRole('button',{name:'Actualizar catálogo',exact:true}).click();await page.getByRole('button',{name:'Seleccionar Producto recién creado · NEW',exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'2');assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Alcance que no debe perderse');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.getByLabel('Descripción 1',{exact:true}).fill('Alcance que no debe perderse');await plus(page).click();await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).waitFor();await page.evaluate(()=>window.__catalogItems.push({id:'new-product',name:'Producto recién creado',itemType:'Producto',sku:'NEW'}));await page.getByRole('button',{name:'Actualizar catálogo',exact:true}).click();await page.getByRole('button',{name:'Seleccionar Producto recién creado · NEW',exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'2');assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Alcance que no debe perderse');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__catalogItems:catalogItems});
   await run('catalog-failure-keeps-unpriced-without-manual-override',async page=>{
    await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await plus(page).click();await page.getByRole('button',{name:'Reintentar catálogo',exact:true}).waitFor();assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'Standard service');assert.equal(await page.locator('input[aria-label^="Precio unitario"],input[aria-label^="BTU"]').count(),0);await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Por confirmar'}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
@@ -292,7 +292,7 @@ async function main(){
    await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
    const metric=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');
    await metric.getByText('Afl. 125.00',{exact:true}).waitFor();assert.match(await metric.innerText(),/Según este borrador/);
-   await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Confirmación de prueba');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   await page.getByLabel('Descripción 1',{exact:true}).fill('Confirmación de prueba');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
    await page.evaluate(()=>window.__quoteDelay=600);await page.getByLabel('Cantidad 1',{exact:true}).fill('4');
    await metric.getByText('Por confirmar',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
    await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await metric.getByText('Afl. 0.00',{exact:true}).waitFor();
@@ -320,10 +320,10 @@ async function main(){
   },{__record:compactRecord});
 
   for(const closeMethod of ['button','escape','overlay'])await run('draft-close-reopen-'+closeMethod,async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Nota pendiente conservada');await page.getByText(/Borrador conservado en esta pestaña/).waitFor();
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByLabel('Descripción 1',{exact:true}).fill('Nota pendiente conservada');await page.getByText(/Borrador conservado en esta pestaña/).waitFor();
    assert.equal(await page.evaluate(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;}),true);
    if(closeMethod==='button')await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();else if(closeMethod==='escape')await page.getByLabel('Cantidad 1',{exact:true}).press('Escape');else await page.getByRole('presentation').click({position:{x:2,y:2}});
-   await page.getByText('Cita cerrada',{exact:true}).waitFor();await page.evaluate(()=>window.__open());await openFinance(page);await page.getByLabel('Cantidad 1',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('Motivo / detalle del alcance',{exact:false}).inputValue(),'Nota pendiente conservada');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),false);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await page.getByText('Cita cerrada',{exact:true}).waitFor();await page.evaluate(()=>window.__open());await openFinance(page);await page.getByLabel('Cantidad 1',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Nota pendiente conservada');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),false);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium});
   await run('draft-user-and-appointment-isolation',async page=>{
    await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByText(/Borrador conservado en esta pestaña/).waitFor();

@@ -16,6 +16,6 @@ export function ChargeAddSearch({ disabled, onAdd }: { disabled: boolean; onAdd:
   }, [revision]);
   return <ChargeCatalogPicker inline floating index={0} items={items} disabled={disabled} loading={loading} error={error}
     fallbackLabel="" onRetry={() => setRevision(value => value + 1)} onSelect={item => {
-      if (item) onAdd({ id: `actual-${crypto.randomUUID()}`, label: item.name, quantity: 1, serviceId: item.id });
+      if (item) onAdd({ id: `actual-${crypto.randomUUID()}`, label: item.name, description: item.description || '', quantity: 1, serviceId: item.id });
     }}/>;
 }
