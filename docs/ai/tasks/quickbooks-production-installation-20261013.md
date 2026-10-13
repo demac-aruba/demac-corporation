@@ -57,7 +57,18 @@ before enabling real use. Passing local mocks does not establish live interopera
 
 ## Verification
 
-51 focused tests (7 installation tests and 44 existing connector/sandbox tests), syntax,
+53 focused tests (9 installation tests and 44 existing connector/sandbox tests), syntax,
 reviewed-source and workflow/diff checks are required before reviewed merge. The main-only
 installation uses the existing cloud identity after validation; PR jobs receive no cloud
 credentials. Merge markers: `[merge-only] [prepare-qbo-production]`.
+
+## Resumption after owner bootstrap
+
+On 2026-10-13 the owner completed the scoped Cloud Shell bootstrap and supplied the
+`QBO_READY` result. The previous diagnostic run `38419860300` established that the
+deployment identity could not create the key itself and that no production function
+existed. Resume the unchanged installer from a new reviewed current-main merge, using
+the existing-key recovery path. No secret rotation, extra IAM privilege, backend source
+change or frontend activation is part of this resumption. Acceptance remains pending
+until actual deployment and verification succeed; the screenshot alone is not proof of
+a deployed function or a QuickBooks connection.

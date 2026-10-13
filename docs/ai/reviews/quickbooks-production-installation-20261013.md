@@ -87,3 +87,26 @@ present. This follow-up is merged with `[merge-only] [diagnose-qbo-production]`;
 creation retry is authorized by that marker. Nine installer tests (including two new
 diagnostic/error-redaction tests), source syntax and diff checks passed. Existing 44
 connector tests remain part of CI. No backend/source/configuration change.
+
+## Resumption review after QBO_READY — 2026-10-13
+
+Separate Solo Maintainer Adversarial Review against current main
+`5ecb0489298b9ddf02b7af1da7c6b7d03c2e3b5d`. The owner supplied the successful scoped
+bootstrap output. Inspected the complete resumption diff, unchanged installer deploy and
+existing-key paths, disabled backend entry point and HTTP authorization callers. Workflow
+YAML before/after parses identically: only a resumption comment changes. Documentation
+distinguishes observed owner completion, prior metadata evidence and pending cloud proof.
+
+53 focused tests, reviewed-source comparison, script syntax, Functions validation including
+its existing pre-hook, workflow semantic comparison and whitespace checks passed. No source,
+dependency, IAM command, permission, authentication guard, release check or required gate
+was changed. The production backend still equals reviewed PR #584. The current-main pin,
+existing-function stop, key labels/version checks and other-function inventory guards remain.
+
+Pass for the previously authorized isolated disabled installation, merged with
+`[merge-only] [prepare-qbo-production]`. Do not replay the stale earlier installation SHA.
+The installer must report encryptionKeyCreated=false for the completed owner preparation;
+it must not rotate secrets. If any resource appeared or changed, stop and inspect it instead
+of deleting/overwriting or weakening a guard. Cloud deployment/accessor readiness remains
+unverified until this run. No production OAuth, financial write/read or frontend activation
+is included. The existing shared-runtime limitation and separate activation gates remain.
