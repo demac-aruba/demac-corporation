@@ -77,3 +77,27 @@ concurrent console change still requires operator coordination.
 
 Bounded runtime update reference:
 https://docs.cloud.google.com/functions/docs/reference/rest/v2/projects.locations.functions/patch
+
+## Recovery verification after the runtime update
+
+PR #590 merged as `12d99cc228422e2a2ccf3457fde34cc4d35e8922`; reviewed frontend
+`5a75d193bb5deaa2156d9820079e561ac13861c6` is published in
+`dpl_5zAKQFygJ6x5fV84gWhjzbEQbU1Z`. All seven PR CI runs passed, live disclosures
+matched exact bytes, and the entry page requires sign-in and remains noindex.
+
+Cloud run `38435346866` submitted the one-field PATCH at 17:02:53.223Z and completed
+the operation. Owner/realm/runtime/service settings matched afterward, but verification
+stopped at `published-build-changed`. Do not describe this failed run as successful or
+replay activation. Google documents `buildConfig.build` as output-only metadata for the
+latest deployment; the precise changed metadata was not retained by that run.
+
+The follow-up adds a **read-only** audit: verify the currently published source bytes,
+owner, realm and secret versions; compare the original and active Cloud Run revision
+specifications (only gate and separately reported image identity may differ); ensure all
+other current functions predate the activation; check stable inventory through the audit,
+live disclosures and five HTTP boundaries. This complements, rather than fabricates, the
+unavailable pre-update build snapshot. No existing check is deleted or weakened.
+`[audit-qbo-production]` takes precedence over mutation markers and performs no PATCH,
+secret/IAM mutation, financial access or Intuit request. The runtime result remains
+unverified until this audit succeeds. Future runtime changes require a reviewed adjustment
+for provider-generated build metadata; the original activation mode remains fenced.

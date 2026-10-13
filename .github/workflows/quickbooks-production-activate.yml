@@ -32,8 +32,9 @@ jobs:
       - run: node --check scripts/quickbooks-production-activate.cjs
       - run: node --test scripts/quickbooks-production-activate.test.cjs scripts/quickbooks-production-prepare.test.cjs functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js
       - run: node scripts/quickbooks-production-activate.cjs --check
+      - run: node --test scripts/quickbooks-production-audit.test.cjs
   activate-identity-only:
-    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(github.event.head_commit.message, '[activate-qbo-production]') || contains(github.event.head_commit.message, '[disable-qbo-production]'))
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && (contains(github.event.head_commit.message, '[activate-qbo-production]') || contains(github.event.head_commit.message, '[disable-qbo-production]') || contains(github.event.head_commit.message, '[audit-qbo-production]'))
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -51,9 +52,12 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
       - name: Enable owner-only identity connection after published-disclosure verification
-        if: contains(github.event.head_commit.message, '[activate-qbo-production]') && !contains(github.event.head_commit.message, '[disable-qbo-production]')
+        if: contains(github.event.head_commit.message, '[activate-qbo-production]') && !contains(github.event.head_commit.message, '[disable-qbo-production]') && !contains(github.event.head_commit.message, '[audit-qbo-production]')
         run: node scripts/quickbooks-production-activate.cjs --activate
       - name: Suspend production connection without revoking or deleting credentials
-        if: contains(github.event.head_commit.message, '[disable-qbo-production]')
+        if: contains(github.event.head_commit.message, '[disable-qbo-production]') && !contains(github.event.head_commit.message, '[audit-qbo-production]')
         run: node scripts/quickbooks-production-activate.cjs --disable
+      - name: Verify existing active revision without replaying activation
+        if: contains(github.event.head_commit.message, '[audit-qbo-production]')
+        run: node scripts/quickbooks-production-audit.cjs
 # Reviewed runtime configuration only. No accounting, report, IAM or secret-writing command.

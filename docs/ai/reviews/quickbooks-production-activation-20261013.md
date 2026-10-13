@@ -68,3 +68,25 @@ Cloud Functions API without a documented CAS precondition. Main workflow seriali
 source/config checks and a known recovery path mitigate this. Owner must perform real
 OAuth and later disconnect/reconnect to establish provider lifecycle acceptance. No
 financial write/report/synchronization or AI access is authorized by this release.
+
+## Separate adversarial pass: read-only recovery audit
+
+After the submitted runtime update, run `38435346866` failed build-metadata equality;
+its earlier service-configuration equality had passed. Reviewed the added audit script,
+negative tests and workflow precedence as a separate Solo Maintainer Adversarial Review.
+The original failing gate remains intact. No runtime/secret/IAM mutation is retried.
+
+The audit verifies exact published source against the reviewed six-file package, current
+owner/realm/runtime/secrets, historical Cloud Run specs, unchanged other-function update
+times, snapshot stability, public disclosures and HTTP denials. Revision image differences
+are reported rather than hidden; runtime specs must otherwise match except the gate.
+No financial or OAuth request can be produced. The audit marker suppresses both activation
+and disable steps even if multiple markers are present. Two new negative/positive tests
+cover owner/secret/runtime/container drift and missing/concurrent function update times.
+All 60 focused tests are required by the workflow (58 original + 2 recovery cases).
+
+Residual evidence limit: the original pre-update BuildConfig snapshot was not retained;
+the exact metadata field difference cannot be reconstructed from that log. Read-only
+source/revision/config verification is the substantive recovery gate. Other-function
+update times cannot identify a removed function, but the reviewed mutation addresses only
+the one connector and makes no delete request. No public success claim until audit passes.
