@@ -21,7 +21,7 @@
 - Typecheck/build and independent review. Synthetic fixtures only; no real appointments are used.
 - Backend compatibility precedes frontend activation. Prior frontend can use the new backend;
   retain projectionOnly guard and persisted canonical BTU. Do not restore old financial data.
-- This correction is prepared for preview/review; no new production publication is implied.
+- Owner's existing authorization covers reviewed merge/deploy of this update; compatible backend must precede frontend activation.
 
 ## Local verification results
 - 53 pricing/charges/editing tests PASS, no skips.
@@ -29,3 +29,6 @@
 - Typecheck and production build PASS; generated configuration changes restored.
 - Firestore emulator case added; local Java17 cannot run the required Java21 runtime. CI must execute this gate before readiness.
 - See ../evidence/catalog-charge-lines/ for synthetic screenshots and results.
+
+## Final integration evidence
+All five CI workflows passed on9acb620, including13/13 real Firestore/authorization tests with Java21 and no skips. Protected preview returned HTTP200 for ERP HTML and the new catalog-lines bundle. Main00090bb5 metadata-only additions merge cleanly and their4 tests pass. Final release preparation must rerun CI on its resulting head.

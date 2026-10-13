@@ -35,5 +35,8 @@ missing dependency was resolved by using the existing test dependency path; the 
 ## Decision and remaining gate
 Code review: accepted; independent GO for PR/preview. Completion requires the applicable CI/Firestore gate to pass on the final
 head. UI screenshots contain only synthetic records. The main QBO changes remain included.
-No deployment authorization is inferred for this new correction; it is prepared for product review.
+Owner's existing conditional merge/deploy authorization remains in effect; production source audit and controlled publication gates still apply.
 On activation deploy compatible backend first, retain projectionOnly, and never restore old data.
+
+## Final integration evidence
+All five CI workflows passed on9acb620, including13/13 real Firestore/authorization tests with Java21 and no skips. Protected preview returned HTTP200 for ERP HTML and the new catalog-lines bundle. Main00090bb5 metadata-only additions merge cleanly and their4 tests pass. Final release preparation must rerun CI on its resulting head.
