@@ -50,3 +50,12 @@ server rate limit. Read-only observations are discarded when leaving the page.
 Use a `[merge-only]` merge and publish only the reviewed ERP frontend tree; no Functions
 release or runtime flag update is needed. Record preview, CI, merge and production IDs in
 the pull request. The production route is https://demac-aruba.com/quickbooks/compare/.
+
+### Final theme correction
+
+After PR #602 passed CI and merged, final inspection found that fixed white card surfaces
+could conflict with dark-theme text. The in-progress frontend production build was canceled
+before completion. The follow-up uses the ERP's existing surface/text/muted theme variables,
+and the browser regression now verifies table/name colors and screenshots in both themes
+at 1440/375. Both full browser runs passed. This correction changes CSS and synthetic
+verification only; the same read-only behavior and source boundaries apply.
