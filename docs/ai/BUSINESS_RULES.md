@@ -366,7 +366,7 @@ Production activation remains separately owner-approved through the server-side 
 - Owner-approved 2026-10-13 workspace clarification: the original/current projection is
   informational only. Estimated balance during entry uses the current valid actual-work
   quote minus saved receipts; confirmed balance uses only the saved final minus receipts.
-  Missing/invalid totals remain pending. Drafts never mark a visit paid. A local PDF may
+  Missing/invalid totals remain pending. During background validation, current draft quantities may preview server-returned unit prices; confirmation still requires the exact current authority quote and a fresh scope acknowledgment (2026-10-14 owner optimization). Drafts never mark a visit paid. A local PDF may
   export freshly read, reconciled confirmed work and receipts as an operational summary;
   it does not issue an official invoice or write to QBO. See
   `adrs/appointment-charge-balance-pdf-20261013.md`.

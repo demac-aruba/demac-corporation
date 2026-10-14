@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChargeRecord, ChargeQuote } from '../lib/appointment-charges';
+import type { ChargeLineInput, ChargeRecord, ChargeQuote } from '../lib/appointment-charges';
 import { appointmentChargeBalance } from '../lib/appointment-charge-balance';
+import { chargeQuantityMillis, previewChargeQuote, rememberChargePrices } from '../lib/appointment-charge-preview';
 import { buildAppointmentChargesPdf } from '../lib/appointment-charges-pdf';
 
 const quote: ChargeQuote = { currency: 'AWG', capturedAt: '2026-10-13T15:00:00Z', quoteToken: 'synthetic', totalCents: 37500, knownTotalCents: 37500,
@@ -29,6 +30,48 @@ check('loading/error/stale draft never reuses the confirmed or forecast balance'
   for (const draft of [{ quote, unavailable: true }, { quote: null, unavailable: false }, { quote: { ...quote, totalCents: null }, unavailable: false }]) {
     assert.equal(appointmentChargeBalance({ ...record, state: { ...record.state!, final: quote } }, draft).balanceCents, null);
   }
+});
+check('instant preview matches server decimal limits, rounding and totals without a token', () => {
+  const input: ChargeLineInput = { id: 'service', serviceId: 'std12', label: '12k', quantity: 3 };
+  const prices = rememberChargePrices(new Map(), [input], quote);
+  for (const [quantity, expected] of [[1, 12500], ['1.333', 16663], ['0.001', 13], ['0002.5', 31250]] as const) {
+    const preview = previewChargeQuote([{ ...input, quantity }], prices)!;
+    assert.equal(preview.totalCents, expected); assert.equal(preview.quoteToken, '');
+    assert.equal(preview.lines[0].unitCents, 12500);
+  }
+  for (const quantity of ['', 0, -1, '1.', '1e3', '1,5', '0.0001', '10000.001', NaN, Infinity]) {
+    assert.equal(chargeQuantityMillis(quantity), null);
+    assert.equal(previewChargeQuote([{ ...input, quantity }], prices)!.totalCents, null);
+  }
+  assert.equal(chargeQuantityMillis(10000), 10000000);
+  assert.equal(previewChargeQuote([{ ...input, quantity: 10000 }], prices)!.totalCents, null, 'Per-appointment maximum is enforced');
+  assert.equal(previewChargeQuote([input, input], prices)!.totalCents, null, 'Duplicate identities are invalid');
+  assert.equal(previewChargeQuote([], prices), null);
+});
+check('preview identity, repeated catalog selection and agreed price isolation', () => {
+  const input: ChargeLineInput = { id: 'service', serviceId: 'std12', label: '12k', quantity: 1 };
+  const prices = rememberChargePrices(new Map(), [input], quote);
+  assert.equal(previewChargeQuote([{ ...input, id: 'another' }], prices)!.totalCents, 12500);
+  for (const changed of [{ serviceId: 'std18' }, { btu: 18000 }, { workLineId: 'other' }, { presetId: 'deep_cleaning' }, { unitPrice: '20' }]) {
+    assert.equal(previewChargeQuote([{ ...input, ...changed }], prices)!.totalCents, null);
+  }
+  for (const protection of [{ retainedPrice: true }, { manualPrice: true }, { projectionOnly: true }]) {
+    const guarded = rememberChargePrices(new Map(), [input], { ...quote, lines: [{ ...quote.lines[0], ...protection }] });
+    assert.equal(previewChargeQuote([{ ...input, id: 'another' }], guarded)!.totalCents, null);
+    assert.equal(previewChargeQuote([input], guarded)!.lines[0].unitCents, 12500);
+  }
+});
+check('partial preview never invents a full total and missing tariff replaces known rate', () => {
+  const input: ChargeLineInput = { id: 'service', serviceId: 'std12', label: '12k', quantity: 1 };
+  const prices = rememberChargePrices(new Map(), [input], quote);
+  const partial = previewChargeQuote([input, { ...input, id: 'unknown', serviceId: 'unknown' }], prices)!;
+  assert.equal(partial.lines.length, 1); assert.equal(partial.knownTotalCents, 12500); assert.equal(partial.totalCents, null);
+  const unavailable = rememberChargePrices(prices, [input], { ...quote, lines: [{ ...quote.lines[0], unitCents: null, totalCents: null }] });
+  assert.equal(previewChargeQuote([input], unavailable)!.totalCents, null);
+  assert.equal(previewChargeQuote([{ ...input, id: 'new' }], unavailable)!.totalCents, null);
+  let bounded = prices;
+  for (let n = 0; n < 200; n++) bounded = rememberChargePrices(bounded, [{ ...input, id: 'n' + n }], { ...quote, lines: [{ ...quote.lines[0], id: 'n' + n }] });
+  assert.ok(bounded.size <= 180);
 });
 const confirmed = { ...record, state: { ...record.state!, final: quote } };
 check('confirmed partial, zero, overpayment and exact cents', () => {

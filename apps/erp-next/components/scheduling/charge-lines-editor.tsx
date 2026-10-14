@@ -7,9 +7,10 @@ export function ChargeLinesEditor({ lines, onChange, quote, disabled, loading }:
   lines: ChargeLineInput[]; onChange: (lines: ChargeLineInput[]) => void;
   quote: ChargeQuote | null; disabled: boolean; loading: boolean;
 }) {
+  const byId = new Map(quote?.lines.map(line => [line.id, line]));
   return <fieldset disabled={disabled} className={styles.invoiceLines} aria-label="Servicios y productos seleccionados">
     {lines.map((line, index) => {
-      const priced = quote?.lines.find(item => item.id === line.id);
+      const priced = byId.get(line.id);
       const pending = !loading && priced?.unitCents === null;
       return <div className={styles.invoiceLine} key={line.id}>
         <div className={styles.invoiceConcept}>
@@ -21,8 +22,8 @@ export function ChargeLinesEditor({ lines, onChange, quote, disabled, loading }:
           placeholder="Descripción del servicio o producto" onChange={event => onChange(lines.map(item => item.id === line.id ? { ...item, description: event.target.value } : item))}/></label>
         <label>Cantidad<input aria-label={`Cantidad ${index + 1}`} inputMode="decimal" value={line.quantity}
           onChange={event => onChange(lines.map(item => item.id === line.id ? { ...item, quantity: event.target.value } : item))}/></label>
-        <div className={styles.invoiceMoney}><span>Precio unitario</span><strong aria-label={`Precio unitario ${index + 1}`}>{loading ? 'Consultando…' : chargeMoney(priced?.unitCents)}</strong></div>
-        <div className={styles.invoiceMoney}><span>Importe</span><strong aria-label={`Importe ${index + 1}`}>{loading ? 'Consultando…' : chargeMoney(priced?.totalCents)}</strong></div>
+        <div className={styles.invoiceMoney}><span>Precio unitario</span><strong aria-label={`Precio unitario ${index + 1}`}>{loading && !priced ? 'Consultando…' : chargeMoney(priced?.unitCents)}</strong></div>
+        <div className={styles.invoiceMoney}><span>Importe</span><strong aria-label={`Importe ${index + 1}`}>{loading && !priced ? 'Consultando…' : chargeMoney(priced?.totalCents)}</strong></div>
         <button type="button" className={styles.removeLine} aria-label={`Eliminar concepto ${index + 1}`} onClick={() => onChange(lines.filter(item => item.id !== line.id))}>Eliminar</button>
         {pending ? <p className={styles.invoicePending}>{line.serviceId
           ? 'No hay una tarifa final disponible. Elige el artículo específico del catálogo o revisa su tarifa antes de confirmar.'
