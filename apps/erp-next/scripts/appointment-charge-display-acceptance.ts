@@ -6,7 +6,7 @@ import { appointmentChargeBalance } from '../lib/appointment-charge-balance';
 import { buildAppointmentChargesPdf } from '../lib/appointment-charges-pdf';
 
 const quote: ChargeQuote = { currency: 'AWG', capturedAt: '2026-10-13T15:00:00Z', quoteToken: 'synthetic', totalCents: 37500, knownTotalCents: 37500,
-  lines: [{ id: 'service', serviceId: 'std12', label: 'Servicio estándar - 12 mil BTU', btu: 12000, quantity: 3, quantityMillis: 3000, unitCents: 12500, totalCents: 37500, baseUnitCents: 12500, manualPrice: false, pendingReason: '', pricingVersion: 'synthetic', overrideCents: null }] };
+  lines: [{ id: 'service', serviceId: 'std12', label: 'Servicio estándar - 12 mil BTU', description: 'Limpieza interior y exterior de sala', btu: 12000, quantity: 3, quantityMillis: 3000, unitCents: 12500, totalCents: 37500, baseUnitCents: 12500, manualPrice: false, pendingReason: '', pricingVersion: 'synthetic', overrideCents: null }] };
 const record: ChargeRecord = { success: true, blocker: '', appointmentStatus: 'confirmed', history: [], state: { schemaVersion: 1, version: 2, final: null, originalEstimate: null, estimate: null, receivedCents: 25000, paymentCount: 1 },
   payments: [{ id: 'receipt', source: 'appointment-operational', amountCents: 25000, method: 'transfer', reference: 'PRUEBA-250', receivedAt: '2026-10-13T15:00:00Z', createdAt: '2026-10-13T15:00:00Z', createdByName: 'Oficina de prueba', status: 'recorded' }] };
 let checks = 0;
@@ -51,7 +51,7 @@ const source = new TextDecoder().decode(pdf);
 check('valid PDF uses only confirmed final and receipt, with no invoice numbering', () => {
   assert.ok(source.startsWith('%PDF-1.4')); assert.ok(source.endsWith('%%EOF'));
   assert.match(source, /Afl\. 375.00/); assert.match(source, /Afl\. 250.00/); assert.match(source, /Afl\. 125.00/);
-  assert.match(source, /Comprobante operativo/); assert.match(source, /QuickBooks/); assert.match(source, /PRUEBA-250/);
+  assert.match(source, /Limpieza interior y exterior de sala/);assert.match(source, /Comprobante operativo/); assert.match(source, /QuickBooks/); assert.match(source, /PRUEBA-250/);
   assert.doesNotMatch(source, /quoteToken|synthetic-lease|Factura N/);
   const withForecast = buildAppointmentChargesPdf({ ...options, record: { ...confirmed, state: { ...confirmed.state, originalEstimate: { ...quote, totalCents: 99999 }, estimate: { ...quote, totalCents: 99999 } } } }, '2026-10-13T16:00:00Z');
   assert.deepEqual(withForecast, pdf);
@@ -65,11 +65,11 @@ check('voided receipts remain identified without changing recorded total', () =>
   const bytes = buildAppointmentChargesPdf({ ...options, record: { ...confirmed, payments: [...confirmed.payments, { ...confirmed.payments[0], id: 'void', amountCents: 9900, status: 'voided' }] } });
   assert.match(new TextDecoder().decode(bytes), /ANULADO - no incluido en total/);
 });
-const longQuote = { ...quote, totalCents: 2250000, lines: Array.from({ length: 60 }, (_, index) => ({ ...quote.lines[0], id: `line-${index}`, label: `Concepto ${index + 1}: ${'Servicio de limpieza y mantenimiento con descripción extensa. '.repeat(6)}FIN-${index + 1}` })) };
+const longQuote = { ...quote, totalCents: 2250000, lines: Array.from({ length: 60 }, (_, index) => ({ ...quote.lines[0], id: `line-${index}`, description: 'Detalle extenso '.repeat(60) + `DESC-${index + 1}`, label: `Concepto ${index + 1}: ${'Servicio de limpieza y mantenimiento con descripción extensa. '.repeat(6)}FIN-${index + 1}` })) };
 const longPdf = buildAppointmentChargesPdf({ ...options, customer: 'Cliente de prueba (paréntesis) \\ María «Prueba» 😀', record: { ...confirmed, state: { ...confirmed.state, final: longQuote } } });
 check('60 long concepts wrap across pages; special text is escaped, never truncated', () => {
   const value = new TextDecoder().decode(longPdf);
-  assert.ok((value.match(/\/Type \/Page /g) || []).length > 1); assert.match(value, /FIN-60/);
+  assert.ok((value.match(/\/Type \/Page /g) || []).length > 1); assert.match(value, /FIN-60/);assert.match(value,/DESC-60/);
   assert.match(value, /Afl\. 22,500.00/); assert.match(value, /U\+1F600/); assert.match(value, /\\\(par/);
 });
 check('continuation appointment reference is above the table background', () => {

@@ -17,6 +17,8 @@ export function ChargeLinesEditor({ lines, onChange, quote, disabled, loading }:
           {priced?.btu || line.btu ? <small>{Number(priced?.btu || line.btu).toLocaleString('en-US')} BTU</small> : null}
           {priced?.manualPrice ? <small>Precio acordado conservado</small> : null}
         </div>
+        <label className={styles.invoiceDescription}>Descripción<textarea aria-label={`Descripción ${index + 1}`} rows={2} maxLength={1000} value={line.description || ''}
+          placeholder="Descripción del servicio o producto" onChange={event => onChange(lines.map(item => item.id === line.id ? { ...item, description: event.target.value } : item))}/></label>
         <label>Cantidad<input aria-label={`Cantidad ${index + 1}`} inputMode="decimal" value={line.quantity}
           onChange={event => onChange(lines.map(item => item.id === line.id ? { ...item, quantity: event.target.value } : item))}/></label>
         <div className={styles.invoiceMoney}><span>Precio unitario</span><strong aria-label={`Precio unitario ${index + 1}`}>{loading ? 'Consultando…' : chargeMoney(priced?.unitCents)}</strong></div>

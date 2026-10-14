@@ -6,7 +6,7 @@ export type AppointmentQuickBooksPreview = {
   sourceVersion: number | null;
   sourceIssues: PreparationIssue[];
   setupIssues: PreparationIssue[];
-  invoice: null | { currency: 'AWG'; totalCents: number; lines: { id: string; serviceId: string; label: string; quantityMillis: number; unitCents: number; totalCents: number }[] };
+  invoice: null | { currency: 'AWG'; totalCents: number; lines: { id: string; serviceId: string; label: string; description: string; quantityMillis: number; unitCents: number; totalCents: number }[] };
   receipts: { id: string; amountCents: number; method: string; reference: string; receivedDate: string }[];
   receivedCents: number | null;
   operationalBalanceCents: number | null;
@@ -42,6 +42,7 @@ export function prepareAppointmentQuickBooksPreview(record: ChargeRecord): Appoi
   if (final.currency !== 'AWG') return block('currency', 'La moneda requiere revisión; esta primera fase contempla AWG.');
   if (!integer(final.totalCents) || !Array.isArray(final.lines) || !final.lines.length || final.lines.length > 60 ||
     final.lines.some(line => !line || !identity(line.id) || typeof line.label !== 'string' || !line.label.trim() ||
+      (line.description != null && (typeof line.description !== 'string' || line.description.length > 1000)) ||
       !integer(line.unitCents) || !integer(line.totalCents) || !integer(line.quantityMillis) || line.quantityMillis === 0 ||
       line.projectionOnly || line.pendingReason || !Number.isSafeInteger(line.unitCents * line.quantityMillis) ||
       Math.round(line.unitCents * line.quantityMillis / 1000) !== line.totalCents) ||
@@ -73,7 +74,7 @@ export function prepareAppointmentQuickBooksPreview(record: ChargeRecord): Appoi
     return block('receipt_total', 'El total recibido no coincide con los recibos guardados. Actualiza y concilia los importes.');
   }
   result.invoice = { currency: 'AWG', totalCents: final.totalCents, lines: final.lines.map(line => ({
-    id: line.id, serviceId: line.serviceId || '', label: line.label, quantityMillis: line.quantityMillis,
+    id: line.id, serviceId: line.serviceId || '', label: line.label, description: line.description || '', quantityMillis: line.quantityMillis,
     unitCents: line.unitCents!, totalCents: line.totalCents!,
   })) };
   result.receipts = receipts.map(payment => ({ id: payment.id, amountCents: payment.amountCents, method: payment.method,

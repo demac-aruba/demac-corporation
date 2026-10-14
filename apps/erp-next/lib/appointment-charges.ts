@@ -1,6 +1,6 @@
 import { callOfficeBookingAuthority } from './office-booking-authority';
 
-export type ChargeLineInput = { id: string; workLineId?: string; presetId?: string; serviceId?: string; label: string; btu?: number | string | null; quantity: number | string; unitPrice?: number | string | null; reason?: string };
+export type ChargeLineInput = { id: string; workLineId?: string; presetId?: string; serviceId?: string; label: string; description?: string; btu?: number | string | null; quantity: number | string; unitPrice?: number | string | null; reason?: string };
 export type PaymentMethod = 'cash' | 'transfer' | 'pos' | 'suave';
 export type PaymentInput = { method: PaymentMethod; amount: string; reference: string; receivedAt?: string; note?: string };
 export type ChargeDraft = { lines: ChargeLineInput[]; quoteToken?: string; note?: string; payment?: PaymentInput | null; purpose?: 'projection' };
@@ -15,7 +15,7 @@ export const paymentMethods: { id: PaymentMethod; label: string }[] = [{ id: 'ca
 export const chargeMoney = (cents: number | null | undefined) => cents === null || cents === undefined ? 'Por confirmar' : `Afl. ${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export function chargeInputFromQuote(quote: ChargeQuote | null | undefined): ChargeLineInput[] {
   return (quote?.lines || []).map(line => ({ id: line.id, workLineId: line.workLineId, presetId: line.presetId, serviceId: line.serviceId,
-    label: line.label, btu: line.btu, quantity: line.quantityMillis / 1000,
+    label: line.label, ...(line.description !== undefined ? { description: line.description } : {}), btu: line.btu, quantity: line.quantityMillis / 1000,
     // Freeze the last agreed price when editing an existing monetary record.
     unitPrice: line.unitCents === null || line.projectionOnly ? '' : (line.unitCents / 100).toFixed(2),
     reason: line.reason || 'Precio conservado del registro anterior' }));

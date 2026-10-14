@@ -43,9 +43,11 @@ function inputLines(value) {
     if (!quantityMillis) fail('charge_quantity', 'La cantidad debe ser mayor que cero.');
     const btu = line.btu === '' || line.btu === undefined || line.btu === null ? null : Number(line.btu);
     if (btu !== null && (!Number.isSafeInteger(btu) || btu <= 0 || btu > 10000000)) fail('charge_btu', 'BTU no válido.');
+    if (line.description !== undefined && (typeof line.description !== 'string' || line.description.length > 1000)) fail('charge_description', 'La descripción admite hasta 1000 caracteres.');
     return { id: id(line.id, 'Concepto'), workLineId: line.workLineId ? id(line.workLineId) : '',
       presetId: clean(line.presetId, 120), serviceId: line.serviceId ? id(line.serviceId) : '',
       label: clean(line.label, 220), btu, quantityMillis,
+      ...(line.description !== undefined ? { description: clean(line.description, 1000) } : {}),
       overrideCents: line.unitPrice === undefined || line.unitPrice === null || line.unitPrice === '' ? null : decimal(line.unitPrice, 2, MAX_CENTS, 'Precio'),
       reason: clean(line.reason, 700) };
   });
@@ -95,6 +97,8 @@ async function quoteLines({ db, get, lines, now, previous, purpose = 'final', al
     let line = input;
     const saved = previous?.lines?.find(item => item.id === line.id && (item.serviceId || '') === line.serviceId
       && (item.presetId || '') === line.presetId && (item.workLineId || '') === line.workLineId && (item.btu ?? null) === line.btu);
+    // An older client omitting this optional field must not erase a saved description.
+    if (line.description === undefined && typeof saved?.description === 'string') line = { ...line, description: saved.description };
     if (saved && (!saved.projectionOnly || purpose === 'projection') && Number.isSafeInteger(saved.unitCents) && saved.unitCents >= 0) {
       if (line.overrideCents !== null && line.overrideCents !== saved.unitCents) fail('charge_managed_price', 'Selecciona el servicio realizado y sus BTU; el precio no se modifica directamente.');
       result.push({ ...line, label: saved.label, baseUnitCents: saved.baseUnitCents ?? saved.unitCents, unitCents: saved.unitCents,
@@ -147,7 +151,10 @@ async function quoteLines({ db, get, lines, now, previous, purpose = 'final', al
   const knownTotalCents = result.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
   if (!Number.isSafeInteger(knownTotalCents) || knownTotalCents > MAX_CENTS) fail('charge_total', 'El total supera el límite por cita.');
   const value = { lines: result, totalCents: result.every(line => line.unitCents !== null) ? knownTotalCents : null, knownTotalCents, currency: 'AWG' };
-  return { ...value, quoteToken: hash(stable(value)), capturedAt: now.toISOString() };
+  // Descriptions are invoice text, not pricing authority. Excluding only this new
+  // optional field also preserves quote tokens issued to clients before this release.
+  const pricingValue = { ...value, lines: result.map(({ description, ...line }) => line) };
+  return { ...value, quoteToken: hash(stable(pricingValue)), capturedAt: now.toISOString() };
 }
 function assertQuote(quote, token) {
   if (token && quote.quoteToken !== token) fail('charge_quote_changed', 'La tarifa cambió. Revisa la proyección actualizada antes de guardar.', 409);
@@ -351,13 +358,13 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
           purpose: action === 'save_appointment_estimate' && data.purpose === 'projection' ? 'projection' : 'final' });
         assertQuote(quote, data.quoteToken);
         const note = clean(data.note, 1000);
-        if ((current.originalEstimate || current.estimate || current.final) && !note) fail('charge_change_reason', 'Explica el cambio respecto al importe anterior.');
+        if (action === 'save_appointment_estimate' && (current.originalEstimate || current.estimate || current.final) && !note) fail('charge_change_reason', 'Explica el cambio respecto al importe anterior.');
         const value = { ...quote, note, actor };
         if (action === 'finalize_appointment_charges') {
           if (appointment.status === 'temporary_hold') fail('charge_hold', 'Confirma la cita antes de cerrar sus importes.');
           if (quote.totalCents === null) fail('charge_unpriced', 'Completa todos los precios antes de confirmar el monto final.');
           if (data.scopeReviewed !== true) fail('charge_scope', 'Confirma que revisaste los trabajos realizados y los adicionales.');
-          if (candidates.records.length && (data.candidateReviewed !== true || data.candidateFingerprint !== candidates.fingerprint || !note)) fail('charge_field_review', 'Revisa los conceptos Field y confirma que están conciliados en el monto final, con una nota.', 409);
+          if (candidates.records.length && (data.candidateReviewed !== true || data.candidateFingerprint !== candidates.fingerprint)) fail('charge_field_review', 'Revisa los conceptos Field y confirma que están conciliados en el monto final.', 409);
           next.final = { ...value, candidateEvidence: candidates };
           audit.candidateEvidence = candidates;
         } else { next.estimate = value; next.originalEstimate ||= value; }

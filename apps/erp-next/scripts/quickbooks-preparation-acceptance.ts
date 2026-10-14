@@ -25,6 +25,12 @@ check('forecasts never replace a confirmed final or make an unconfirmed sale', (
   assert.equal(prepare(r).invoice?.totalCents, 37500); r.state!.final = null;
   assert.equal(prepare(r).invoice, null); assert.equal(prepare(r).sourceIssues[0].code, 'final_missing');
 });
+check('confirmed editable descriptions remain separate from canonical article identity', () => {
+  const record = fixture(); record.state!.final!.lines[0].description = 'Trabajo confirmado en oficina';
+  const result = prepare(record); assert.equal(result.invoice?.lines[0].description, 'Trabajo confirmado en oficina');
+  assert.equal(result.invoice?.lines[0].label, 'Servicio de prueba 12k'); assert.equal(result.invoice?.lines[0].serviceId, 'service-12');
+  record.state!.final!.lines[0].description = {} as unknown as string; assert.equal(prepare(record).invoice, null);
+});
 check('a blocker or missing state never exposes amounts as prepared', () => {
   for (const r of [{ ...fixture(), blocker: 'Legacy' }, { ...fixture(), state: null }]) {
     const p = prepare(r); assert.equal(p.invoice, null); assert.equal(p.receivedCents, null); assert.equal(p.receipts.length, 0);

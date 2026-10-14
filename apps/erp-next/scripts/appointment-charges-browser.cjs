@@ -82,6 +82,8 @@ await page.getByRole('button',{name:'Añadir',exact:true}).click();
 await add('18KDEEP','Seleccionar 18K BTU Deep Cleaning · 18KDEEP');
 assert.equal(await page.locator('input[aria-label^="BTU"],select[aria-label^="Servicio realizado"]').count(),0,'Selected catalog specifications are immutable');
 assert.equal(await page.getByRole('button',{name:/Tarifa del catálogo/}).count(),0,'No second selector inside a selected item');
+assert.equal(await page.getByText('Motivo del cambio (obligatorio)',{exact:true}).count(),0);
+await page.getByLabel('Descripción 1',{exact:true}).fill('Bedroom service description');
 await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 125.00'}).waitFor();
 assert.equal(catalogReads,1,'Adding lines does not reload the entire catalog');
 await page.getByLabel('Concepto 1',{exact:true}).scrollIntoViewIfNeeded();
@@ -108,10 +110,12 @@ await page.getByLabel('Precio unitario 3',{exact:true}).filter({hasText:'Afl. 55
 assert.equal(await page.locator('input[aria-label^="Precio unitario"]').count(),0,'Unit prices cannot be edited');
 await add('Tiempo adicional','Seleccionar Tiempo adicional de prueba');await page.getByLabel('Cantidad 4',{exact:true}).fill('1.5');
 await add('GAS-DEMO','Seleccionar Refrigerante de prueba · GAS-DEMO');await page.getByLabel('Cantidad 5',{exact:true}).fill('1.5');await page.getByText('Afl. 580.00',{exact:true}).first().waitFor();assert.equal(await page.getByLabel('Concepto 5',{exact:true}).textContent(),'Refrigerante de prueba');await page.getByRole('button',{name:'Eliminar concepto 5',exact:true}).click();
-await page.getByLabel('Motivo / detalle del alcance',{exact:false}).fill('Deep cleaning, chequeo y 1.5 horas adicionales acordadas');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByText('Afl. 497.50',{exact:true}).first().waitFor();
+assert.equal(await page.getByLabel('Descripción 3',{exact:true}).inputValue(),'Diagnóstico y revisión del equipo');
+await page.getByLabel('Descripción 1',{exact:true}).fill('Limpieza interior y exterior - sala');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByText('Afl. 497.50',{exact:true}).first().waitFor();
 await page.screenshot({path:path.join(evidence,`catalog-lines-${viewport.width}.png`),fullPage:true});
 await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();await page.getByRole('status').filter({hasText:'Monto final confirmado'}).waitFor();
 assert.deepEqual(db.read('appointments/apt').jobCharges.final.lines.map(line=>line.serviceId),['std12','deep18','check','time']);assert.deepEqual(db.read('appointments/apt').jobCharges.final.lines.map(line=>line.btu),[12000,18000,null,null],'Specific catalog codes supply capacity automatically; fixed prices need none');
+assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,'Limpieza interior y exterior - sala');assert.equal(db.read('appointments/apt').jobCharges.final.lines[2].description,'Diagnóstico y revisión del equipo');
 assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,49750);assert.equal(db.read('workOrders/wo').status,'Confirmada');
 for(const [method,amount,reference] of [['Efectivo','180',''],['POS','150','POS-TEST-150'],['SUAVE','47.50','SUAVE-TEST-47']]){
 await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('button',{name:method,exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill(amount);if(reference)await page.getByLabel('Referencia / comprobante',{exact:false}).fill(reference);
@@ -126,7 +130,8 @@ await page.screenshot({path:path.join(evidence,`final-${viewport.width}.png`),fu
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'No document horizontal overflow');
 assert.ok(await page.locator('svg').count()>=12,'Visual icons retained');
 await page.getByRole('button',{name:'Historial',exact:true}).click();await page.getByText('Monto final confirmado',{exact:true}).waitFor();assert.equal(await page.getByText('Pago registrado',{exact:true}).count(),5);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-await page.reload();await page.getByText('✓ Pagado',{exact:true}).waitFor();assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,49750);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,49750);
+await page.reload();await page.getByText('✓ Pagado',{exact:true}).waitFor();assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,'Limpieza interior y exterior - sala');assert.equal(db.read('appointments/apt').jobCharges.final.lines[2].description,'Diagnóstico y revisión del equipo');
+assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,49750);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,49750);
 results.push({viewport,status:'PASS',receiptCount:6,finalCents:49750});console.log('PASS financial flow '+viewport.width);
 }catch(error){await page.screenshot({path:path.join(evidence,`failure-${viewport.width}.png`),fullPage:true});console.error((await page.locator('body').innerText()).slice(0,6000));throw error;}finally{await context.close();}
 }

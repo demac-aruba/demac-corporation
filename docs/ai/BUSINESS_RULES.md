@@ -328,6 +328,11 @@ Production activation remains separately owner-approved through the server-side 
   operators do not reconfigure that article or reconfirm BTU. Final pricing resolves capacity from
   a recognized canonical capacity-specific booking code when needed, never from a name/SKU.
   Quantity and explicit removal remain available; the next catalog search stays below the list.
+  Owner clarification 2026-10-13: each actual-work article has an optional editable description,
+  initialized from catalog metadata, stored with the confirmed line/history and included in the
+  operational PDF. Description edits cannot change tariffs or article identity. Final confirmation
+  and correction require scope review but no separate reason textarea; dated actor history remains.
+  Estimate corrections and receipt voids retain their existing reason requirements.
   Owner clarification 2026-10-13: Importes y pagos opens directly on that catalog row,
   without "Registrar trabajos realizados" or "Usar trabajos agendados" choices. The
   first actual line begins the work draft; planned/forecast lines are never copied into
@@ -398,6 +403,13 @@ Production activation remains separately owner-approved through the server-side 
 - No bulk rewrite/backfill is implied. Direct-write closure requires verified backend, ERP, Legacy and old-session cutover plus forward recovery. See the finance governance task/review.
 
 ## QuickBooks production reporting
+
+- `FIN-QBO-CATALOG-READ-001` — Candidate authorized for implementation 2026-10-14;
+  production activation pending. The designated active owner may explicitly compare
+  ERP customers/articles against a bounded QBO Customer/Item/Account page. Matching
+  names, email or SKU suggest review only. Inactive records remain visible; missing
+  matches in a partial page never authorize creation. No persistent mapping or
+  accounting/inventory write is introduced. See `adrs/quickbooks-catalog-20261014.md`.
 
 - `FIN-QBO-PRODUCTION-READ-001` — Owner authorized continuation on 2026-10-13 after
   confirming DEMAC realm 9130352327074466 (CompanyInfo country AW). Only the designated

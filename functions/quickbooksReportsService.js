@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const { fault, hash, seal, open, validateConfig } = require('./quickbooksConnectionService');
 const { validDate, normalizeReport } = require('./quickbooksReportsFormat');
+const { catalogInput, catalogUrl, normalizeCatalog } = require('./quickbooksCatalogFormat');
 const REALM = '9130352327074466';
 const REPORTS = new Set(['ProfitAndLoss', 'BalanceSheet', 'AgedReceivables', 'AgedPayables']);
 const TOKEN = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
@@ -39,17 +40,22 @@ function createReportsService({ db, config, requireOwner, fetchImpl = fetch, now
     if (!record?.credentials || record.connection?.realmId !== REALM || record.configId !== configId || record.disconnect) throw fault(409, 'production-not-connected');
     if (record.attempt && record.attempt.status !== 'completed') throw fault(409, 'authorization-cleanup-required');
   }
-  async function report(uid, body) {
+  async function read(uid, body, kind) {
     validateConfig(config);
     if (config.realmId !== REALM) throw fault(503, 'not-configured');
-    const input = reportInput(body); const id = crypto.randomBytes(24).toString('hex'); let lease;
+    const isCatalog = kind === 'catalog';
+    if (isCatalog && config.catalogEnabled !== true) throw fault(503, 'catalog-not-configured');
+    const input = isCatalog ? catalogInput(body) : reportInput(body);
+    const auditInput = isCatalog ? { entity: input.entity, startPosition: input.startPosition } : {
+      report: input.report, startDate: input.report === 'ProfitAndLoss' ? input.startDate : null, endDate: input.endDate, basis: input.basis };
+    const id = crypto.randomBytes(24).toString('hex'); let lease;
     const record = await db.runTransaction(async tx => {
       await requireOwner(uid, tx);
       const current = (await tx.get(ref)).data(); checkConnected(current);
       if (current.operation?.expiresAt > now()) throw fault(409, 'report-busy');
       if (current.reportRecoveryDigest === digest(current) || current.operation?.refreshing) throw fault(409, 'reauthorization-required');
       if (current.lastReportAttemptAt > now() - 5000) throw fault(429, 'report-rate-limited');
-      lease = { id, kind: 'report', expiresAt: now() + LEASE_MS, credentialDigest: digest(current),
+      lease = { id, kind, expiresAt: now() + LEASE_MS, credentialDigest: digest(current),
         connectionVersion: current.connection.version, refreshing: false };
       tx.set(ref, { ...current, operation: lease, lastReportAttemptAt: now() }); return current;
     });
@@ -87,35 +93,34 @@ function createReportsService({ db, config, requireOwner, fetchImpl = fetch, now
       }
       await requireOwner(uid);
       // No configurable host, tenant, path, query language or accounting mutation is accepted.
-      const url = new URL(`https://quickbooks.api.intuit.com/v3/company/${REALM}/reports/${input.report}`);
-      if (input.report.startsWith('Aged')) { url.searchParams.set('report_date', input.endDate); url.searchParams.set('aging_method', 'Report_Date'); }
-      else {
+      const url = isCatalog ? catalogUrl(REALM, input) : new URL(`https://quickbooks.api.intuit.com/v3/company/${REALM}/reports/${input.report}`);
+      if (!isCatalog && input.report.startsWith('Aged')) { url.searchParams.set('report_date', input.endDate); url.searchParams.set('aging_method', 'Report_Date'); }
+      else if (!isCatalog) {
         url.searchParams.set('end_date', input.endDate); url.searchParams.set('accounting_method', input.basis);
         if (input.report === 'ProfitAndLoss') url.searchParams.set('start_date', input.startDate);
       }
-      const result = normalizeReport(await providerJson(fetchImpl, url.toString(), { method: 'GET',
+      const result = (isCatalog ? normalizeCatalog : normalizeReport)(await providerJson(fetchImpl, url.toString(), { method: 'GET',
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'application/json' } }, 2 * 1024 * 1024), input);
       const fetchedAt = new Date(now()).toISOString();
       await db.runTransaction(async tx => {
         await requireOwner(uid, tx); const current = (await tx.get(ref)).data(); sameOperation(current);
         tx.set(ref, { ...current, operation: null });
-        tx.create(ref.collection('audit').doc(`${id}-report`), { actorId: uid, action: 'production-report-read',
-          report: input.report, startDate: input.report === 'ProfitAndLoss' ? input.startDate : null,
-          endDate: input.endDate, basis: input.basis, outcome: 'read-only', at: fetchedAt });
+        tx.create(ref.collection('audit').doc(`${id}-${kind}`), { actorId: uid, action: `production-${kind}-read`,
+          ...auditInput, outcome: 'read-only', at: fetchedAt });
       });
       return { environment: 'production', syncEnabled: false, accountingWritesEnabled: false, realmId: REALM,
-        companyName: record.connection.companyName, fetchedAt, request: input, report: result };
+        companyName: record.connection.companyName, fetchedAt, request: input, [kind]: result };
     } catch (error) {
       if (['reauthorization-required', 'credential-recovery-required'].includes(error.safeCode)) recovery = true;
       await db.runTransaction(async tx => {
         const current = (await tx.get(ref)).data(); if (current?.operation?.id !== id) return;
         tx.set(ref, { ...current, operation: null, ...(recovery ? { reportRecoveryDigest: lease.credentialDigest } : {}) });
-        tx.create(ref.collection('audit').doc(`${id}-report-failed`), { actorId: uid, action: 'production-report-failed',
-          report: input.report, outcome: recovery ? 'reauthorization-required' : error.safeCode || 'report-failed', at: new Date(now()).toISOString() });
+        tx.create(ref.collection('audit').doc(`${id}-${kind}-failed`), { actorId: uid, action: `production-${kind}-failed`,
+          ...auditInput, outcome: recovery ? 'reauthorization-required' : error.safeCode || 'report-failed', at: new Date(now()).toISOString() });
       });
       throw recovery ? fault(409, 'reauthorization-required') : error;
     }
   }
-  return { report };
+  return { report: (uid, body) => read(uid, body, 'report'), catalog: (uid, body) => read(uid, body, 'catalog') };
 }
 module.exports = { createReportsService, reportInput, REALM };

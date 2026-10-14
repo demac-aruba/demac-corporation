@@ -15,7 +15,7 @@ function createReportsHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now
       response.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       response.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
       if (request.method === 'OPTIONS') return response.status(204).send('');
-      if (!['/', ''].includes(request.path)) throw fault(404, 'not-found');
+      if (!['/', '', '/catalog'].includes(request.path)) throw fault(404, 'not-found');
       if (request.method !== 'POST') throw fault(405, 'method-not-allowed');
       const token = /^Bearer (\S+)$/i.exec(request.get('authorization') || '')?.[1];
       if (!token) throw fault(401, 'sign-in-required');
@@ -27,7 +27,8 @@ function createReportsHttpHandler({ db, verifyIdToken, getConfig, fetchImpl, now
       await requireOwner(uid);
       if (!/^application\/json(?:;|$)/i.test(request.get('content-type') || '') || Number(request.get('content-length')) > 8192 ||
         request.rawBody?.length > 8192 || !request.body || typeof request.body !== 'object' || Array.isArray(request.body)) throw fault(400, 'invalid-report-request');
-      return response.json(await createReportsService({ db, config, requireOwner, fetchImpl, now }).report(uid, request.body));
+      const service = createReportsService({ db, config, requireOwner, fetchImpl, now });
+      return response.json(await service[request.path === '/catalog' ? 'catalog' : 'report'](uid, request.body));
     } catch (error) {
       const code = error.safeCode || 'report-failed'; const status = error.safeCode ? error.status : 503;
       const validationIssue = reportValidationIssue(error);
