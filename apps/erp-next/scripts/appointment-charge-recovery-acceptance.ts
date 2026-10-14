@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict';
 import { chargeRetryWasNotCommitted, chargeRecoveryBaseline, clearChargeRecovery, decodeChargeRecovery, type ChargeRecovery } from '../lib/appointment-charge-recovery';
-import type { ChargeRecord } from '../lib/appointment-charges';
+import { fillMissingChargeDescriptions, type ChargeLineInput, type ChargeRecord } from '../lib/appointment-charges';
 let checks = 0;
 const check = (name: string, run: () => void) => { run(); checks++; console.log('PASS ' + name); };
 const empty: ChargeRecord = { success: true, state: null, payments: [], history: [], blocker: '', appointmentStatus: 'confirmed' };
 const owned = { ...empty, state: { schemaVersion: 1 as const, version: 7, originalEstimate: null, estimate: null, final: null, receivedCents: 0, paymentCount: 0 } };
 const saved: ChargeRecovery = { schema: 1, userId: 'operator', appointmentId: 'apt', savedAt: Date.now(),
   draft: { lines: [{ id: 'line', serviceId: 'std12', label: 'Servicio 12k', quantity: 3 }], note: 'Pendiente', version: 7, baseline: chargeRecoveryBaseline(owned) }, pending: null };
+check('old draft descriptions copy by catalog identity without changing source or explicit invoice edits', () => {
+  const catalog = [{ id: 'std12', name: 'Servicio 12k', description: 'Descripción original del servicio' },
+    { id: 'product', name: 'Producto', description: 'Descripción original del producto' }];
+  const lines: ChargeLineInput[] = [...saved.draft!.lines,
+    { id: 'edited', serviceId: 'std12', label: 'Servicio 12k', quantity: 1, description: 'Sólo esta factura' },
+    { id: 'cleared', serviceId: 'std12', label: 'Servicio 12k', quantity: 1, description: '' },
+    { id: 'product', serviceId: 'product', label: 'Producto', quantity: 2 },
+    { id: 'missing', serviceId: 'retired', label: 'Servicio 12k', quantity: 1 }];
+  const before = structuredClone({ lines, catalog });
+  const described = fillMissingChargeDescriptions(lines, catalog);
+  assert.deepEqual(described.map(line => line.description), ['Descripción original del servicio', 'Sólo esta factura', '', 'Descripción original del producto', undefined]);
+  assert.deepEqual({ lines, catalog }, before);
+  assert.equal(fillMissingChargeDescriptions(described, catalog), described);
+  assert.equal(fillMissingChargeDescriptions(lines, []), lines);
+  assert.equal(described[0].quantity, 3);
+  const recovered = decodeChargeRecovery(JSON.stringify({ ...saved, draft: { ...saved.draft, lines: described } }), 'operator', 'apt');
+  assert.deepEqual(recovered?.draft?.lines, described);
+});
 check('only lease version changes preserve the full financial baseline', () => {
   assert.equal(chargeRecoveryBaseline(empty), chargeRecoveryBaseline(owned));
   assert.equal(chargeRecoveryBaseline(owned), chargeRecoveryBaseline({ ...owned, state: { ...owned.state, version: 8 } }));

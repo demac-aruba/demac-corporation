@@ -40,4 +40,19 @@ export function newChargeRequestId() { return `charge-${crypto.randomUUID()}`; }
 // Optional metadata keeps clients compatible with the previous read response.
 // Prices always come from quoteAppointmentCharges, never from this search list.
 export type ChargeCatalogItem = { id: string; name: string; itemType?: 'Servicio' | 'Producto'; description?: string; category?: string; sku?: string; durationMinutes?: number | null; presetId?: string };
+
+// Old drafts predate descriptions. Copy catalog text into those draft lines once;
+// an explicit empty string is an intentional invoice edit and must stay empty.
+export function fillMissingChargeDescriptions(lines: ChargeLineInput[], catalog: ChargeCatalogItem[]) {
+  if (!lines.some(line => line.description === undefined && line.serviceId)) return lines;
+  const byId = new Map(catalog.map(item => [item.id, item]));
+  let changed = false;
+  const next = lines.map(line => {
+    const item = line.description === undefined && line.serviceId ? byId.get(line.serviceId) : undefined;
+    if (!item || typeof item.description !== 'string') return line;
+    changed = true;
+    return { ...line, description: item.description };
+  });
+  return changed ? next : lines;
+}
 export function listChargeServices() { return callOfficeBookingAuthority<{ success: true; services: ChargeCatalogItem[] }>('list_charge_services', {}); }
