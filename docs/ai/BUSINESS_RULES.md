@@ -404,8 +404,8 @@ Production activation remains separately owner-approved through the server-side 
 
 ## QuickBooks production reporting
 
-- `FIN-QBO-CATALOG-READ-001` — Candidate authorized for implementation 2026-10-14;
-  production activation pending. The designated active owner may explicitly compare
+- `FIN-QBO-CATALOG-READ-001` — Owner-only reads deployed 2026-10-14;
+  live owner-session acceptance pending. The designated active owner may explicitly compare
   ERP customers/articles against a bounded QBO Customer/Item/Account page. Matching
   names, email or SKU suggest review only. Inactive records remain visible; missing
   matches in a partial page never authorize creation. No persistent mapping or

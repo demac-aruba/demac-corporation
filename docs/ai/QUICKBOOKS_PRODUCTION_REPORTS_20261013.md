@@ -46,13 +46,13 @@ No ERP-to-QuickBooks sales/payment/expense/inventory synchronization and no Chat
 financial access are enabled. Suspend only the new reports gate if needed; do not delete
 the existing authorization or redeploy the original identity installer for recovery.
 
-## Prepared diagnostic change — not deployed
+## Diagnostic change — deployed with catalog reader 2026-10-14
 
 The continuation in PR #597 adds fixed validation classifications to the report formatter
 and HTTP error response, plus compatible frontend messages. Tests verify that no provider
 values, report amounts or arbitrary classification strings leave the error boundary.
-This has not changed production revision `quickbooksreports-00001-liy`; Balance Sheet's
+Published in revision `quickbooksreports-00002-gaf` with PR597; Balance Sheet's
 actual rejected condition remains unknown. Source pins follow the candidate, while the
-initial installer's existing-function rejection remains unchanged. A separately reviewed
-update path and authenticated read are still required; this is not a Balance Sheet fix.
+initial installer's existing-function rejection remains unchanged. The reviewed update path is complete;
+an authenticated diagnostic read is still required. This is not a Balance Sheet fix.
 See the [preparation review](reviews/quickbooks-preparation-20261013.md).

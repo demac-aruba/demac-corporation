@@ -1,6 +1,6 @@
 # ADR: bounded catalog reads and provisional comparison
 
-Date: 2026-10-14. Status: implemented candidate; production activation pending.
+Date: 2026-10-14. Status: read stage deployed; live catalog acceptance pending. See ../QUICKBOOKS_CATALOG_PUBLICATION_20261014.md.
 
 The owner intends to reuse existing QuickBooks customers and articles instead of
 duplicating them. Before any persistent mappings or accounting writes, expose a
@@ -18,8 +18,9 @@ credential rotation and owner checks before acquisition, provider call and deliv
 Refactoring stays inside the current service to avoid two divergent token owners.
 Existing report requests and response contracts remain compatible. Catalog access
 additionally requires `QBO_PRODUCTION_CATALOG_ENABLED=true`; absent/false is disabled.
-The existing first-install release guard remains intact. This change does not update
-the live backend, activate that flag, or relax CORS/rules/owner permissions.
+The existing first-install release guard remains intact. The initial candidate did not update
+the live backend or activate that flag. The subsequent reviewed release enabled reads;
+see the publication record above. CORS/rules/owner permissions are unchanged.
 
 Read ERP customers and services through existing authorized APIs only after the QBO
 read succeeds. Exact normalized names/email/SKU generate provisional review candidates,
@@ -45,7 +46,7 @@ Intuit references inspected 2026-10-14:
 - https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/account
 - https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/master/docs/_sources/quickstart.rst.txt
 
-Remaining gates: reviewed existing-function update/source/revision verification,
-explicit activation, live catalog response validation, mapping persistence and approval
+Completed release gates: existing-function update/source/revision verification and
+explicit read activation. Remaining gates: live catalog response validation, mapping persistence and approval
 workflow, accounting setup/cutoff, then Sandbox invoice/partial-payment tests. None is
 represented as complete by synthetic catalog tests.

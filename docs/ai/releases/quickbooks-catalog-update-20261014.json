@@ -1,0 +1,88 @@
+{
+  "sourceSha": "3b4da611164439b841a6bc909b36069b3de4f686",
+  "stage": "complete",
+  "accountingWrites": false,
+  "providerCalls": false,
+  "customerReads": false,
+  "secretPayloadsAccessed": false,
+  "operations": [
+    {
+      "name": "projects/demac-corporation/locations/us-central1/functions/quickbooksReports",
+      "error": false,
+      "intent": true
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": false,
+      "error": false,
+      "intent": false
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": false,
+      "error": false,
+      "intent": false
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": false,
+      "error": false,
+      "intent": false
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": false,
+      "error": false,
+      "intent": false
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": false,
+      "error": false,
+      "intent": false
+    },
+    {
+      "name": "projects/demac-corporation/locations/us-central1/operations/operation-1791984975482-65dcd03e81011-dac1c7e0-dac59202",
+      "done": true,
+      "error": false,
+      "intent": false
+    }
+  ],
+  "baselineHash": "a913dbca0d793bb1c89c374876999c9c3261d8c112f04b6034665cc23b6db5b0",
+  "candidateHash": "52ccf3ddea01b3b2f4dee6d21389e7b4df7b05e7f08c45fe497661a95c7088f2",
+  "recovery": {
+    "label": "candidate",
+    "format": "zip",
+    "sha256": "1088df19b54812ca395367a6a26b160c9540b9a55f8dc5a1bbcb26657524560c",
+    "fullManifestHash": "a913dbca0d793bb1c89c374876999c9c3261d8c112f04b6034665cc23b6db5b0",
+    "extractionVerified": true,
+    "recoverySha256": "a913dbca0d793bb1c89c374876999c9c3261d8c112f04b6034665cc23b6db5b0",
+    "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/3b4da611164439b841a6bc909b36069b3de4f686/quickbooksReportsBaseline-candidate.zip",
+    "generation": "1791984941786317",
+    "createdAt": "2026-10-14T13:35:41+0000",
+    "privateRetained": true,
+    "anonymousAccessDenied": true,
+    "reused": false
+  },
+  "transport": {
+    "label": "candidate",
+    "format": "zip",
+    "sha256": "86028aceadb039c21188a0afeddd131a8511b1d86d8dc00a4a5c807e403473c9",
+    "fullManifestHash": "52ccf3ddea01b3b2f4dee6d21389e7b4df7b05e7f08c45fe497661a95c7088f2",
+    "extractionVerified": true,
+    "recoverySha256": "52ccf3ddea01b3b2f4dee6d21389e7b4df7b05e7f08c45fe497661a95c7088f2",
+    "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/3b4da611164439b841a6bc909b36069b3de4f686/quickbooksReports-candidate.zip",
+    "generation": "1791984959630431",
+    "createdAt": "2026-10-14T13:35:59+0000",
+    "privateRetained": true,
+    "anonymousAccessDenied": true,
+    "reused": false
+  },
+  "revision": "quickbooksreports-00002-gaf",
+  "sourceVerified": true,
+  "iamPreserved": true,
+  "otherConfigurationPreserved": true,
+  "otherFunctionsUnchanged": true,
+  "catalogReadEnabled": true,
+  "anonymousBoundaries": "passed"
+}
