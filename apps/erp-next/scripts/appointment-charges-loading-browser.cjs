@@ -22,10 +22,11 @@ export async function callOfficeBookingAuthority(action,data){
  if(action==='quote_appointment_charges'){
   window.__lastQuoteInput=structuredClone(data);
   if(window.__quoteError)throw Error('Synthetic quote failure');
-  const saved=window.__record.state.final||window.__record.state.estimate;
-  const lines=data.lines.map(line=>{const old=saved.lines.find(x=>x.id===line.id&&(x.serviceId||'')===(line.serviceId||'')&&(x.presetId||'')===(line.presetId||'')&&(x.btu||null)===(line.btu||null));const unitCents=old?old.unitCents:line.serviceId?5500:null;return {...line,quantityMillis:Number(line.quantity)*1000,unitCents,baseUnitCents:unitCents,totalCents:unitCents===null?null:Math.round(unitCents*Number(line.quantity)),pendingReason:unitCents===null?'Selecciona un servicio con tarifa':'',manualPrice:!!old?.manualPrice};});
+  const saved=window.__record.state.final||window.__record.state.estimate||{lines:[],currency:'AWG'};
+  const lines=data.lines.map(line=>{const old=saved.lines.find(x=>x.id===line.id&&(x.serviceId||'')===(line.serviceId||'')&&(x.presetId||'')===(line.presetId||'')&&(x.btu||null)===(line.btu||null));const unitCents=old?old.unitCents:line.serviceId?(window.__unitCents??5500):null;return {...line,quantityMillis:Number(line.quantity)*1000,unitCents,baseUnitCents:unitCents,totalCents:unitCents===null?null:Math.round(unitCents*Number(line.quantity)),pendingReason:unitCents===null?'Selecciona un servicio con tarifa':'',retainedPrice:!!old,manualPrice:!!old?.manualPrice};});
   const knownTotalCents=lines.reduce((n,line)=>n+(line.totalCents||0),0);
   const result={success:true,quote:{...saved,lines,totalCents:lines.every(l=>l.unitCents!==null)?knownTotalCents:null,knownTotalCents,quoteToken:'synthetic-quote'}};
+  if(window.__holdQuotes)await new Promise(resolve=>(window.__quoteReleases||=[]).push(resolve));
   if(window.__quoteDelay)await new Promise(resolve=>setTimeout(resolve,window.__quoteDelay));
   return result;
  }
@@ -61,6 +62,7 @@ const largeCatalog=Array.from({length:1000},(_,index)=>({id:`perf-${index}`,name
 const largeRecord=structuredClone(premium);largeRecord.state.final.lines=Array.from({length:60},(_,index)=>({...work(`perf-line-${index}`,`Concepto de prueba ${index+1}`,12500),serviceId:`perf-${index}`}));largeRecord.state.final.totalCents=750000;largeRecord.state.final.knownTotalCents=750000;
 const catalogPerformanceOnly=process.argv.includes('--catalog-performance-only');
 const descriptionRecoveryOnly=process.argv.includes('--description-recovery-only');
+const invoicePerformanceOnly=process.argv.includes('--invoice-performance-only'), baselinePerformance=process.argv.includes('--baseline-performance');
 const desktop={width:1440,height:1000};
 const tab=(page,name)=>page.getByRole('navigation',{name:'Secciones de la cita'}).getByRole('button',{name,exact:true});
 const finance=page=>page.locator('[data-charge-stage]');
@@ -74,7 +76,7 @@ async function main(){
  const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://local').pathname;if(['/app.js','/app.css'].includes(name)){res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':'text/css');return res.end(fs.readFileSync(path.join(output,name.slice(1))));}res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div><script src="/app.js"></script></body></html>');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  const browser=await chromium.launch({headless:true,...(process.env.BOOKING_MODAL_CHROMIUM?{executablePath:process.env.BOOKING_MODAL_CHROMIUM}:{})});const results=[];
- async function run(name,test,flags={},viewport=desktop){if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
+ async function run(name,test,flags={},viewport=desktop){if(baselinePerformance&&name!=='invoice-performance-known-quantity')return;if(invoicePerformanceOnly&&!name.startsWith('invoice-performance-'))return;if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
  try{
   const legacyDescriptions=structuredClone(premium);
   legacyDescriptions.state.final.lines[0].serviceId='line-service';
@@ -336,13 +338,86 @@ async function main(){
    const samples=await page.evaluate(()=>window.__searchFrames),sorted=[...samples].sort((a,b)=>a-b);const metrics={name:'catalog-1000-synthetic-performance',catalogItems:1000,chargeLines:59,maximumLinesVerified:60,renderedResultsLimit:40,payloadBytes:Buffer.byteLength(JSON.stringify({success:true,services:largeCatalog})),editorReadyMs,inputToTwoAnimationFramesMs:{samples:samples.length,median:sorted[Math.floor(sorted.length/2)],p95:sorted[Math.ceil(sorted.length*.95)-1],max:sorted.at(-1)},authorityRequestsWhileTyping:0,networkRequestsWhileTyping:0,productionWrites:0};results.push(metrics);console.log(JSON.stringify(metrics));
   },{__record:largeRecord,__catalogItems:largeCatalog});
   const compactRecord=(()=>{const r=structuredClone(premium);r.state.originalEstimate=null;r.state.estimate=null;r.state.final={...quote,totalCents:37500,knownTotalCents:37500,lines:[{...work('actual','Servicio estándar de prueba',12500,12000),quantity:3,quantityMillis:3000,totalCents:37500}]};r.state.receivedCents=25000;r.state.paymentCount=1;r.payments=[{...premium.payments[0],amountCents:25000}];r.candidateEvidence={fingerprint:'empty',records:[]};return r;})();
+  await run('invoice-performance-known-quantity',async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
+   await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 125.00'}).waitFor();
+   await page.evaluate(()=>window.__quoteDelay=1200);
+   const before=await page.evaluate(()=>({at:performance.now(),reads:window.__quoteReads}));
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('4');
+   const masked=await page.getByLabel('Precio unitario 1',{exact:true}).textContent();
+   await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 500.00'}).waitFor();
+   const ms=await page.evaluate(t=>performance.now()-t,before.at);
+   assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+   if(!baselinePerformance){assert.notEqual(masked,'Consultando…');assert.ok(ms<500,'Known price quantity updates must not wait for the server: '+ms);}
+   const metric={name:'invoice-quantity-latency',mode:baselinePerformance?'before':'after',serverDelayMs:1200,visibleAmountMs:ms,unitPriceImmediately:masked};results.push(metric);console.log(JSON.stringify(metric));
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:compactRecord});
+  await run('invoice-performance-add-repeat-delete-and-coalesce',async page=>{
+   await openFinance(page);await selectActualService(page);
+   await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   const before=await page.evaluate(()=>{window.__quoteDelay=1200;return {quotes:window.__quoteReads,reads:window.__reads.length,catalog:window.__catalogReads};});
+   const start=await page.evaluate(()=>performance.now());await selectActualService(page);
+   assert.equal(await page.getByLabel('Precio unitario 1',{exact:true}).textContent(),'Afl. 55.00');
+   await page.getByLabel('Importe 2',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   const repeatMs=await page.evaluate(t=>performance.now()-t,start);assert.ok(repeatMs<600,'Repeat selection should not wait for the 1200ms server');
+   await page.getByLabel('Cantidad 2',{exact:true}).fill('2');
+   assert.equal(await page.getByLabel('Importe 2',{exact:true}).textContent(),'Afl. 110.00');
+   await page.getByLabel('Eliminar concepto 1',{exact:true}).click();
+   assert.equal(await page.getByLabel('Importe 1',{exact:true}).textContent(),'Afl. 110.00');
+   assert.equal(await page.getByLabel('Precio unitario 1',{exact:true}).textContent(),'Afl. 55.00');
+   await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   const settled=await page.evaluate(()=>window.__quoteReads);
+   // One burst of edits coalesces into one full validation. It does not reload the visit/catalog.
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByLabel('Cantidad 1',{exact:true}).fill('4');await page.getByLabel('Cantidad 1',{exact:true}).fill('5');
+   assert.equal(await page.getByLabel('Importe 1',{exact:true}).textContent(),'Afl. 275.00');
+   assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+   await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   assert.equal(await page.evaluate(()=>window.__quoteReads),settled+1);
+   const after=await page.evaluate(()=>({reads:window.__reads.length,catalog:window.__catalogReads,writes:window.__writes}));
+   assert.equal(after.reads,before.reads);assert.equal(after.catalog,before.catalog);assert.deepEqual(after.writes,[]);
+   results.push({name:'invoice-repeat-latency',serverDelayMs:1200,visibleAmountMs:repeatMs,fullVisitReloads:0,catalogReloads:0,quoteRequestsPerThreeRapidEdits:1});
+   await page.screenshot({path:path.join(artifacts,'instant-invoice-preview.png'),fullPage:true});
+  },{__record:{...premium,state:{...premium.state,final:null,estimate:null}},__catalogItems:catalogItems});
+  await run('invoice-performance-unknown-line-and-error-isolation',async page=>{
+   await openFinance(page);await selectActualService(page);
+   await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   await page.evaluate(()=>window.__quoteDelay=900);
+   await page.getByLabel('Añadir servicio o producto',{exact:true}).fill('R410A-DEMO');await page.getByRole('button',{name:'Seleccionar Refrigerante de prueba · R410A-DEMO',exact:true}).click();
+   assert.equal(await page.getByLabel('Precio unitario 1',{exact:true}).textContent(),'Afl. 55.00');
+   assert.equal(await page.getByLabel('Precio unitario 2',{exact:true}).textContent(),'Consultando…');
+   await page.getByText('TOTAL DE TRABAJOS',{exact:true}).locator('..').getByText('Por confirmar',{exact:true}).waitFor();
+   await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   await page.evaluate(()=>{window.__quoteError=true;window.__quoteDelay=0;});
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.getByRole('alert').filter({hasText:'Synthetic quote failure'}).waitFor();
+   await page.getByText('TOTAL DE TRABAJOS',{exact:true}).locator('..').getByText('Por confirmar',{exact:true}).waitFor();
+   await page.evaluate(()=>{window.__quoteError=false;window.__quoteDelay=900;});await page.getByLabel('Cantidad 1',{exact:true}).fill('3');
+   assert.equal(await page.getByLabel('Precio unitario 1',{exact:true}).textContent(),'Consultando…','A failed validation clears all provisional prices');
+   assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:{...premium,state:{...premium.state,final:null,estimate:null}},__catalogItems:catalogItems});
+  await run('invoice-performance-late-response-never-authorizes-current-draft',async page=>{
+   await openFinance(page);await selectActualService(page);await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
+   await page.evaluate(()=>window.__holdQuotes=true);
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.waitForFunction(()=>window.__quoteReleases?.length===1);
+   await page.evaluate(()=>window.__unitCents=6000);await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.waitForFunction(()=>window.__quoteReleases?.length===2);
+   assert.equal(await page.getByLabel('Importe 1',{exact:true}).textContent(),'Afl. 165.00');
+   await page.evaluate(()=>window.__quoteReleases[1]());await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   assert.equal(await page.getByLabel('Importe 1',{exact:true}).textContent(),'Afl. 180.00','Canonical tariff replaces preview before acknowledgment');
+   await page.evaluate(()=>window.__quoteReleases[0]());await page.waitForTimeout(100);
+   assert.equal(await page.getByLabel('Importe 1',{exact:true}).textContent(),'Afl. 180.00');
+   assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isEnabled(),true);
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('2');assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+   assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),false);
+   await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();
+   assert.equal(await page.getByLabel('Precio unitario 1',{exact:true}).textContent(),'Consultando…','Explicit refresh invalidates cached tariffs');
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:{...premium,state:{...premium.state,final:null,estimate:null}},__catalogItems:catalogItems});
   await run('draft-balance-independent-and-stale-quote-fails-closed',async page=>{
    await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
    const metric=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');
    await metric.getByText('Afl. 125.00',{exact:true}).waitFor();assert.match(await metric.innerText(),/Según este borrador/);
    await page.getByLabel('Descripción 1',{exact:true}).fill('Confirmación de prueba');await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
    await page.evaluate(()=>window.__quoteDelay=600);await page.getByLabel('Cantidad 1',{exact:true}).fill('4');
-   await metric.getByText('Por confirmar',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+   await metric.getByText('Afl. 250.00',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
    await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await metric.getByText('Afl. 0.00',{exact:true}).waitFor();
    assert.doesNotMatch(await finance(page).innerText(),/✓ Pagado/,'A zero draft balance is not a paid confirmed amount');
    await page.evaluate(()=>{window.__quoteDelay=0;window.__quoteError=true;});await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByRole('alert').filter({hasText:'Synthetic quote failure'}).waitFor();await metric.getByText('Por confirmar',{exact:true}).waitFor();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);

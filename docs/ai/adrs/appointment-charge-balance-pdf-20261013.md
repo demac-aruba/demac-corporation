@@ -38,3 +38,16 @@ browser gates precede review, merge and production publication. No migration, ba
 security rules, configuration or customer communication change. Roll back the frontend
 deployment if needed; retain receipts and final snapshots saved during the release.
 Review again before official invoice issuance, tax or automated customer delivery.
+
+## 2026-10-14 refinement: immediate draft arithmetic
+Owner requested fluid invoice entry without replacing every price with a loading state.
+During background validation, the editor may show provisional amounts calculated from
+server-returned unit prices and the current exact line quantities, using the same integer
+rounding and limits. Unknown lines and invalid/incomplete drafts have no total. This is
+explicitly a draft, with “Validando tarifas…” while the canonical request is pending.
+Only a response for the exact current inputs enables acknowledgment and confirmation;
+provisional quotes carry no token. Errors clear the ephemeral price evidence, and changes
+to appointment, financial version, explicit refresh or purpose invalidate it. Historical
+agreements and forecasts cannot seed prices for other line identities. Confirmed balances,
+receipts, paid status, PDF and server write validation remain unchanged. See
+`../tasks/instant-invoice-pricing-20261014.md` for measurements and verification scope.

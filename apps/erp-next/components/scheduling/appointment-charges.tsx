@@ -5,38 +5,20 @@ import { chargeRetryWasNotCommitted, chargeRecoveryBaseline, readChargeRecovery,
 import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
 import { OfficeBookingRequestError, officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
 import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, fillMissingChargeDescriptions, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
-  paymentMethods, quoteAppointmentCharges, type ChargeCatalogItem, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
+  paymentMethods, type ChargeCatalogItem, type ChargeDraft, type ChargeLineInput, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
 import { useAppointmentCharges } from './use-appointment-charges';
 import { ChargeLineSummary, ChargeOverviewMetrics } from './appointment-charge-overview';
 import { ChargeLinesEditor } from './charge-lines-editor';
 import { useChargeEditSession } from './use-charge-edit-session';
+import { useChargeQuote } from './use-charge-quote';
 import { ChargeAddSearch } from './charge-add-search';
 import { AppointmentQuickBooksPreviewButton } from './appointment-quickbooks-preview';
 
 const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', transfer: 'bank', pos: 'card', suave: 'phone' };
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', receivedAt: new Date().toISOString(), note: '' });
-function useQuote(lines: ChargeLineInput[], revision = 0, appointmentId?: string, expectedVersion?: number, purpose: 'projection' | 'final' = 'final') {
-  // Line descriptions do not change tariffs; typing must not trigger price requests.
-  const signature = JSON.stringify(lines.map(({ description: _description, ...line }) => line));
-  const key = JSON.stringify([signature, revision, appointmentId, expectedVersion, purpose]);
-  const [result, setResult] = useState<{ key: string; quote: ChargeQuote | null; error: string; loading: boolean }>({ key: '', quote: null, error: '', loading: false });
-  useEffect(() => {
-    let active = true;
-    setResult({ key, quote: null, error: '', loading: Boolean(lines.length) });
-    if (!lines.length) return;
-    const timer = window.setTimeout(() => { void quoteAppointmentCharges(JSON.parse(signature), appointmentId ? { appointmentId, expectedVersion: expectedVersion ?? 0 } : undefined, purpose).then(result => {
-      if (active) setResult({ key, quote: result.quote, error: '', loading: false });
-    }).catch(cause => { if (active) setResult({ key, quote: null, error: cause instanceof Error ? cause.message : 'No se pudo consultar el precio.', loading: false }); }); }, 300);
-    return () => { active = false; window.clearTimeout(timer); };
-  // The serialized immutable input prevents stale quote responses from replacing edits.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, revision, appointmentId, expectedVersion, purpose]);
-  // Invalidate during render too: no frame may expose the previous input's price.
-  return result.key === key ? result : { quote: null, error: '', loading: Boolean(lines.length) };
-}
 export function ChargeNotice({ children }: { children: React.ReactNode }) { return <div className={styles.notice}><ChargeIcon name="info"/><div>{children}</div></div>; }
 function PaymentFields({ value, onChange, disabled = false }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean }) {
   return <fieldset disabled={disabled} style={{ padding: 0, margin: 0, border: 0, minWidth: 0 }}>
@@ -49,7 +31,7 @@ function PaymentFields({ value, onChange, disabled = false }: { value: PaymentIn
 export function BookingChargesEditor({ seeds, value, onChange, disabled }: { seeds: ChargeLineInput[]; value: ChargeDraft | null; onChange: (draft: ChargeDraft) => void; disabled: boolean }) {
   const draft = bookingChargeDraft(seeds, value);
   const [quoteRevision, setQuoteRevision] = useState(0);
-  const { quote, error, loading } = useQuote(draft?.lines || [], quoteRevision, undefined, undefined, 'projection');
+  const { quote, error, loading } = useChargeQuote(draft?.lines || [], quoteRevision, undefined, undefined, 'projection');
   const quoteDraft = useRef({ draft, onChange });
   quoteDraft.current = { draft, onChange };
   useEffect(() => {
@@ -99,7 +81,8 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const acknowledgedVersion = useRef<number | null>(null);
   const inFlight = useRef(false);
   const [quoteRevision, setQuoteRevision] = useState(0);
-  const { quote, error: quoteError, loading: quoting } = useQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
+  const { quote, displayQuote, error: quoteError, loading: quoting } = useChargeQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
+  useEffect(() => { if (quoting) setReviewed(false); }, [quoting]);
   const { record, error: readError, loading, updatedAt, reload: read, ensureVersion } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending));
   const editSession = useChargeEditSession(appointmentId, canManage && active && !showHistory && Boolean(record) && !record?.blocker, ensureVersion);
   const reload = () => { setQuoteRevision(value => value + 1); return read(); };
@@ -113,7 +96,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const recoveryReviewed = Boolean(reviewRecovery) && reviewRecovery === currentBaseline;
   const editingConflict = Boolean(editing) && editingVersion !== version;
   const paymentConflict = Boolean(payment) && paymentVersion !== version;
-  const totals = record ? appointmentChargeBalance(record, editing ? { quote, unavailable: recoveringDraft || quoting || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
+  const totals = record ? appointmentChargeBalance(record, editing ? { quote: displayQuote, unavailable: recoveringDraft || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
   const balance = totals?.balanceCents ?? null;
   const candidateReviewed = Boolean(candidateFingerprint) && candidateFingerprint === record?.candidateEvidence?.fingerprint;
   useEffect(() => {
@@ -248,7 +231,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio conserva su responsable y fecha. Las anulaciones incluyen el motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : <>
     {editing ? <div className={styles.metrics}>
       <Metric icon="receipt" label="PROYECCIÓN ORIGINAL" value={state?.originalEstimate?.totalCents} note="Solo referencia del booking"/>
-      <Metric icon="receipt" label="TOTAL DE TRABAJOS" value={totals?.totalCents ?? null} note={quoting ? 'Consultando tarifas…' : 'Borrador · sin confirmar'} color={styles.violet}/>
+      <Metric icon="receipt" label="TOTAL DE TRABAJOS" value={totals?.totalCents ?? null} note={quoting ? 'Validando tarifas…' : 'Borrador · sin confirmar'} color={styles.violet}/>
       <Metric icon="money" label="TOTAL RECIBIDO" value={totals?.receivedCents} note="Pagos guardados" color={styles.green}/>
       <Metric icon="clock" label={balance !== null && balance < 0 ? 'A FAVOR ESTIMADO' : 'SALDO ESTIMADO'} value={balance === null ? null : Math.abs(balance)} color={styles.amber} note={balance === null ? 'Requiere un borrador válido' : 'Según este borrador'}/>
     </div> : <ChargeOverviewMetrics record={record}/>}
@@ -256,7 +239,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     <div className={styles.columns}>
       <section className={`${styles.panel} ${styles.workPanel} ${!editing && !state?.final ? styles.emptyWorkPanel : ''}`} aria-label="Trabajos e importes"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={styles.tile}><ChargeIcon name="work"/></span><div><h3 className={styles.heading}>{editing ? 'Trabajos realizados y monto final' : 'Trabajos e importes'}</h3>{!editing ? <p>{state?.final ? 'Importe final confirmado' : 'Añade los servicios, productos y adicionales realizados'}</p> : null}</div></div>{!editing && state?.final ? <button type="button" className={styles.secondary} disabled={blocked || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onClick={() => startEdit()}><ChargeIcon name="edit"/>Editar trabajos</button> : null}</div>
       <div className={styles.workScroll} tabIndex={0} aria-label="Lista de trabajos y detalles">
-      {editing ? <ChargeLinesEditor lines={lines} quote={quote} loading={quoting} disabled={blocked || editingConflict} onChange={value => { setLines(value); setReviewed(false); }}/> : state?.final ? <ChargeLineSummary record={record}/> : null}
+      {editing ? <ChargeLinesEditor lines={lines} quote={displayQuote} loading={quoting} disabled={blocked || editingConflict} onChange={value => { setLines(value); setReviewed(false); }}/> : state?.final ? <ChargeLineSummary record={record}/> : null}
 
       {record.candidateEvidence?.records.length ? <ChargeNotice><strong>Trabajos revisados en Field</strong><p>Contrasta estos conceptos con el monto final. No se suman automáticamente.</p>{record.candidateEvidence.records.map(candidate => <div key={candidate.id}><small>Revisión {candidate.revisionNumber}</small>{candidate.lines.map((line, index) => <div key={index}>{line.description} · {line.quantity} · {chargeMoney(Math.round(line.lineTotal * 100))}</div>)}{candidate.blockers.map((blocker, index) => <div key={index}>{blocker.message}</div>)}</div>)}{editing === 'final' ? <label className={styles.check}><input type="checkbox" disabled={blocked} checked={candidateReviewed} onChange={event => setCandidateFingerprint(event.target.checked ? record.candidateEvidence?.fingerprint || '' : '')}/>Concilié los conceptos Field en este total, sin duplicarlos.</label> : null}</ChargeNotice> : null}
       {editing ? <>{quoteError ? <div className={styles.error} role="alert">{quoteError}</div> : null}</> : <>
@@ -275,7 +258,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
       </section>
     </div>
     <footer className={styles.workspaceFooter}>
-      <div>{editing ? <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={blocked} onChange={event => setReviewed(event.target.checked)}/>Revisé los trabajos realizados, los adicionales y el importe acordado con el cliente.</label> : <span className={styles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span>}</div>
+      <div>{editing ? <label className={styles.check}><input type="checkbox" checked={reviewed} disabled={blocked || quoting || !quote} onChange={event => setReviewed(event.target.checked)}/>Revisé los trabajos realizados, los adicionales y el importe acordado con el cliente.</label> : <span className={styles.auditFooter}><ChargeIcon name="info"/>Todos los cambios quedan en el historial.</span>}</div>
       <div className={styles.footerActions}>
         {editing ? <><button type="button" disabled={busy || Boolean(pending)} className={styles.secondary} onClick={discardDraft}>Descartar borrador</button><button type="button" aria-label="Confirmar monto final" disabled={blocked || editingConflict || paymentConflict || quoting || !quote || !reviewed || quote.totalCents === null || (Boolean(record.candidateEvidence?.records.length) && !candidateReviewed)} className={styles.primary} onClick={() => save('finalize_appointment_charges', { lines, note, scopeReviewed: reviewed, quoteToken: quote?.quoteToken, candidateReviewed, candidateFingerprint })}>{busy ? 'Guardando…' : `Confirmar monto final${quote?.totalCents != null ? ` · ${chargeMoney(quote.totalCents)}` : ''}`}</button></> : <>
           <button type="button" className={styles.secondary} disabled={!state?.final || Boolean(record.blocker) || busy || Boolean(pending) || loading || Boolean(readError) || pdfBusy || !documentContext} onClick={() => void downloadPdf()} title="Resumen de trabajos y pagos confirmados de esta cita"><ChargeIcon name="receipt"/>{pdfBusy ? 'Preparando PDF…' : 'Descargar PDF'}</button>
