@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { quickBooksLoginDestination } from '../lib/quickbooks-entry';
 import { defaultAuthenticatedRoute } from '../lib/role-routing';
 import type { QuickBooksConnectionStatus } from '../lib/firebase/quickbooks-connection';
+import { scanCatalogs, comparisonRows, type CatalogCollection } from '../lib/quickbooks-catalog-scan';
 import { suggestCatalogMatches, validateCatalogResult, type CatalogResult } from '../lib/quickbooks-catalog';
 async function run() {
-  for (const next of ['/quickbooks/connect/', '/quickbooks/disconnect/', '/integrations/']) {
+  for (const next of ['/quickbooks/connect/', '/quickbooks/disconnect/', '/quickbooks/compare/', '/integrations/']) {
     assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'super_admin'), next);
     assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'technician'), defaultAuthenticatedRoute('technician'));
   }
@@ -118,6 +119,37 @@ async function run() {
   assert.equal(suggestCatalogMatches('Item', [{ ...source[0], name: 'Different', sku: 'demo' }], [{ id: 'item1', name: 'Other', active: false, type: 'Group', sku: 'DEMO' }])[0].status, 'review');
   assert.deepEqual(suggestCatalogMatches('Account', source, candidates), []);
   assert.doesNotMatch(JSON.stringify([...storage.values()]), /Synthetic customer|Synthetic company/);
+  const observed: CatalogCollection[] = [], pageCalls: string[] = [], erpCalls: string[] = [], waits: number[] = [];
+  const late = { ...catalogResult.catalog.records[0], id: 'late', name: 'Zoe Demonstration' };
+  const sourceRows = Array.from({ length: 250 }, (_, i) => ({ id: `erp-${i}`, name: `ERP Demo ${i}`, active: true }));
+  sourceRows.push({ id: 'erp-late', name: late.name, active: true });
+  const pageFor = (input: { entity: 'Customer' | 'Item' | 'Account'; startPosition: number }): CatalogResult => {
+    const records = input.entity === 'Customer' ? input.startPosition === 1 ? Array.from({ length: 100 }, (_, i) => ({ ...late, id: `qbo-${i}`, name: `QBO Demo ${i}` })) : [late] : [];
+    return { ...structuredClone(catalogResult), request: input, catalog: { records, pageSize: 100, nextStartPosition: records.length === 100 ? 101 : null, endOfCurrentQuery: records.length < 100, atLimit: false } };
+  };
+  await scanCatalogs({ entities: ['Customer','Item','Account'], current: () => true, wait: async ms => { waits.push(ms); }, started: () => {},
+    readPage: async input => { pageCalls.push(`${input.entity}:${input.startPosition}`); return pageFor(input); },
+    readErp: async entity => { erpCalls.push(entity); return entity === 'Customer' ? sourceRows : []; }, progress: value => observed.push(value) });
+  assert.deepEqual(pageCalls, ['Customer:1','Customer:101','Item:1','Account:1']); assert.deepEqual(erpCalls, ['Customer','Item','Account']); assert.deepEqual(waits, [5100,5100,5100]);
+  assert.equal(observed[0].complete, false); assert.equal(observed[0].records.length, 100); assert.equal(observed[1].records.length, 101);
+  assert.equal(observed[1].source.length, 251); assert.equal(observed[1].complete, true);
+  const combined = comparisonRows('Customer', observed[1]);
+  assert.equal(combined.find(row => row.source?.id === 'erp-late')?.candidates[0]?.id, 'late');
+  assert.equal(combined.filter(row => row.source).length, 251, 'ERP records beyond 100 remain searchable');
+  assert.ok(combined.some(row => !row.source && row.candidates[0].id === 'qbo-99'), 'QBO-only records are visible too');
+  assert.equal(combined.filter(row => row.search.includes('zoe demonstration')).length, 1);
+  let stillCurrent = true, afterRevocationReads = 0;
+  await scanCatalogs({ entities: ['Customer'], current: () => stillCurrent, started: () => {}, wait: async () => {},
+    readPage: async input => { stillCurrent = false; return pageFor(input); }, readErp: async () => { afterRevocationReads++; return []; }, progress: () => assert.fail('stale response shown') });
+  assert.equal(afterRevocationReads, 0);
+  stillCurrent = true; let cancelledPages = 0;
+  await scanCatalogs({ entities: ['Customer','Item'], current: () => stillCurrent, started: () => {}, wait: async () => { stillCurrent = false; },
+    readPage: async input => { cancelledPages++; return pageFor(input); }, readErp: async () => [], progress: () => {} });
+  assert.equal(cancelledPages, 1, 'closing/cancelling prevents queued pages and later catalogs');
+  for (const drift of ['duplicate', 'company']) await assert.rejects(scanCatalogs({ entities: ['Customer'], current: () => true, started: () => {}, wait: async () => {},
+    readPage: async input => { const page = pageFor(input); if (input.startPosition > 1) { if (drift === 'duplicate') page.catalog.records[0].id = 'qbo-0'; else page.companyName = 'Different company'; } return page; },
+    readErp: async () => [], progress: () => {} }), /catalog-observation-changed/);
+  console.log('Continuous catalog scan: PASS (all pages, 251 ERP rows, late matching, QBO-only search, one ERP read per catalog, rate spacing, cancellation and observation drift).');
   console.log('QuickBooks production entry and catalog acceptance: PASS (isolation, owner identity race, report compatibility, strict catalog responses, provisional matching and no private persistence).');
 }
 void run().catch(error => { console.error(error); process.exitCode = 1; });

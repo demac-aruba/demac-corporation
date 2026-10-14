@@ -11,13 +11,19 @@ export type MatchSuggestion = { source: ErpMatchRow; candidates: QuickBooksCatal
 const normalize = (text?: string | null) => (text || '').normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 export function suggestCatalogMatches(entity: CatalogEntity, source: ErpMatchRow[], records: QuickBooksCatalogRow[]): MatchSuggestion[] {
   if (entity === 'Account') return [];
+  // Index once; matching rules remain exact normalized name/email/SKU suggestions.
+  const indexes = { name: new Map<string, number[]>(), email: new Map<string, number[]>(), sku: new Map<string, number[]>() };
+  records.forEach((row, index) => {
+    for (const field of ['name', 'email', 'sku'] as const) {
+      const key = normalize(row[field]); if (!key) continue;
+      const matches = indexes[field].get(key) || []; matches.push(index); indexes[field].set(key, matches);
+    }
+  });
   return source.map(row => {
-    const candidates = records.filter(target => {
-      const name = normalize(row.name); const email = normalize(row.email); const sku = normalize(row.sku);
-      // Evidence to review only: even an exact email/SKU is not an approved identity mapping.
-      return (name && name === normalize(target.name)) || (entity === 'Customer' && email && email === normalize(target.email)) ||
-        (entity === 'Item' && sku && sku === normalize(target.sku));
-    });
+    const positions = new Set(indexes.name.get(normalize(row.name)) || []);
+    const field = entity === 'Customer' ? 'email' : 'sku';
+    for (const index of indexes[field].get(normalize(row[field])) || []) positions.add(index);
+    const candidates = [...positions].sort((a,b) => a-b).map(index => records[index]);
     return { source: row, candidates, status: !row.active ? 'inactive' : candidates.length > 1 ? 'ambiguous' : candidates.length ? 'review' : 'not-seen' };
   });
 }
