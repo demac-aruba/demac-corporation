@@ -6,7 +6,6 @@ import { captureConnectionReturn, disconnectConnection, hasPendingConnection, lo
   type QuickBooksConnectionStatus } from '@/lib/firebase/quickbooks-connection';
 import styles from './quickbooks-connection-page.module.css';
 import { QuickBooksProductionReports } from './quickbooks-production-reports';
-import { QuickBooksCatalog } from './quickbooks-catalog';
 
 type Intent = 'connect' | 'disconnect';
 function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
@@ -71,7 +70,7 @@ function ConnectionActions({ uid, intent }: { uid: string; intent: Intent }) {
     </div>
     {checkedAt && !busy ? <p className={styles.success} role="status">Estado consultado a las {checkedAt}.</p> : null}
     {intent === 'connect' && phase === 'connected' && snapshot?.connection ? <QuickBooksProductionReports key={snapshot.connection.connectedAt} uid={uid} /> : null}
-    {intent === 'connect' && phase === 'connected' && snapshot?.connection ? <QuickBooksCatalog key={`${uid}-${snapshot.connection.connectedAt}`} uid={uid} /> : null}
+    {intent === 'connect' && phase === 'connected' && snapshot?.connection ? <section className={styles.catalogLink}><h2>Comparar clientes, productos y servicios</h2><p>Abre la página completa para buscar en ambos sistemas y recorrer todos los resultados.</p><Link className="btn primary" href="/quickbooks/compare/">Abrir comparación de catálogos</Link></section> : null}
   </section>;
 }
 export function QuickBooksConnectionPage({ intent }: { intent: Intent }) {
