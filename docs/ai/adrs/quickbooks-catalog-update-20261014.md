@@ -1,6 +1,6 @@
 # ADR: guarded update of the installed QuickBooks reader
 
-Date: 2026-10-14. Status: reviewed candidate; publication evidence pending.
+Date: 2026-10-14. Status: deployed and verified. See ../QUICKBOOKS_CATALOG_PUBLICATION_20261014.md.
 
 Use a separate updater; the initial-install script continues rejecting an existing
 function. The only Cloud Functions PATCH fields are `buildConfig.source` and
