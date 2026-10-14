@@ -60,6 +60,7 @@ const catalogItems=[{id:'line-service',name:'Deep cleaning',itemType:'Servicio',
 const largeCatalog=Array.from({length:1000},(_,index)=>({id:`perf-${index}`,name:`Artículo de prueba ${String(index).padStart(4,'0')} `.padEnd(220,'n'),itemType:index%2?'Producto':'Servicio',description:'Descripción sintética para buscar aplicación '.padEnd(600,'d'),category:'Categoría de prueba '.padEnd(120,'c'),sku:`SKU-PERF-${String(index).padStart(4,'0')} `.padEnd(120,'s'),durationMinutes:index%2?null:60}));
 const largeRecord=structuredClone(premium);largeRecord.state.final.lines=Array.from({length:60},(_,index)=>({...work(`perf-line-${index}`,`Concepto de prueba ${index+1}`,12500),serviceId:`perf-${index}`}));largeRecord.state.final.totalCents=750000;largeRecord.state.final.knownTotalCents=750000;
 const catalogPerformanceOnly=process.argv.includes('--catalog-performance-only');
+const descriptionRecoveryOnly=process.argv.includes('--description-recovery-only');
 const desktop={width:1440,height:1000};
 const tab=(page,name)=>page.getByRole('navigation',{name:'Secciones de la cita'}).getByRole('button',{name,exact:true});
 const finance=page=>page.locator('[data-charge-stage]');
@@ -73,8 +74,55 @@ async function main(){
  const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://local').pathname;if(['/app.js','/app.css'].includes(name)){res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':'text/css');return res.end(fs.readFileSync(path.join(output,name.slice(1))));}res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div><script src="/app.js"></script></body></html>');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  const browser=await chromium.launch({headless:true,...(process.env.BOOKING_MODAL_CHROMIUM?{executablePath:process.env.BOOKING_MODAL_CHROMIUM}:{})});const results=[];
- async function run(name,test,flags={},viewport=desktop){if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
+ async function run(name,test,flags={},viewport=desktop){if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
  try{
+  const legacyDescriptions=structuredClone(premium);
+  legacyDescriptions.state.final.lines[0].serviceId='line-service';
+  Object.assign(legacyDescriptions.state.final.lines[1],{serviceId:'gas',description:'Texto exclusivo de esta factura'});
+  Object.assign(legacyDescriptions.state.final.lines[2],{serviceId:'other-gas',description:''});
+  for(const viewport of [desktop,{width:1366,height:768},{width:390,height:844}])await run('description-recovery-catalog-snapshot-'+viewport.width,async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
+   await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();
+   // A pre-description draft has no property, unlike a deliberate empty string.
+   await page.evaluate(()=>{const key='demac.erp-next.charge-recovery.v1:synthetic-office:APPOINTMENT-TEST';const copy=JSON.parse(sessionStorage.getItem(key));delete copy.draft.lines[0].description;sessionStorage.setItem(key,JSON.stringify(copy));window.__open();});
+   await openFinance(page);await page.getByText(/Borrador recuperado/).waitFor();
+   await page.waitForFunction(()=>typeof window.__catalogRelease==='function');
+   await page.evaluate(()=>{window.__catalogHold=false;window.__catalogRelease();});
+   await page.waitForFunction(()=>document.querySelector('[aria-label="Descripción 1"]')?.value==='Limpieza profunda con desmontaje del equipo');
+   assert.equal(await page.getByLabel('Descripción 2',{exact:true}).inputValue(),'Texto exclusivo de esta factura');
+   assert.equal(await page.getByLabel('Descripción 3',{exact:true}).inputValue(),'');
+   assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');
+   await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 375.00'}).waitFor();
+   assert.equal(await page.evaluate(()=>Object.hasOwn(window.__record.state.final.lines[0],'description')),false,'Reading never backfills the confirmed record');
+   const catalogBefore=await page.evaluate(()=>structuredClone(window.__catalogItems));
+   const quoteReads=await page.evaluate(()=>window.__quoteReads);
+   await page.getByLabel('Descripción 1',{exact:true}).fill('Detalle cambiado solamente para este cliente');
+   await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,400)));
+   assert.equal(await page.evaluate(()=>window.__quoteReads),quoteReads,'Description typing does not quote again');
+   await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();await page.evaluate(()=>window.__open());await openFinance(page);
+   await page.getByLabel('Descripción 1',{exact:true}).waitFor();assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Detalle cambiado solamente para este cliente');
+   assert.equal(await page.getByLabel('Descripción 3',{exact:true}).inputValue(),'');
+   await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 375.00'}).waitFor();
+   await page.screenshot({path:path.join(artifacts,'description-recovery-'+viewport.width+'.png'),fullPage:true});
+   await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();
+   await page.waitForFunction(()=>window.__writes.length===1);
+   const saved=await page.evaluate(()=>window.__writes[0]);assert.equal(saved.action,'finalize_appointment_charges');assert.equal(saved.data.lines[0].description,'Detalle cambiado solamente para este cliente');assert.equal(saved.data.lines[1].description,'Texto exclusivo de esta factura');assert.equal(saved.data.lines[2].description,'');
+   assert.deepEqual(await page.evaluate(()=>window.__catalogItems),catalogBefore,'Invoice edits never modify catalog metadata');
+  },{__record:legacyDescriptions,__catalogItems:catalogItems,__catalogHold:true},viewport);
+  await run('description-recovery-catalog-before-editor-and-late-user-edit',async page=>{
+   await openFinance(page);await page.getByLabel('Añadir servicio o producto',{exact:true}).fill('DEEP-DEMO');await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).waitFor();await page.getByLabel('Añadir servicio o producto',{exact:true}).press('Escape');
+   await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[aria-label="Descripción 1"]')?.value==='Limpieza profunda con desmontaje del equipo');
+   await page.getByLabel('Descripción 1',{exact:true}).fill('');await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();
+   await page.evaluate(()=>{window.__catalogHold=true;window.__open();});await openFinance(page);await page.getByLabel('Descripción 1',{exact:true}).waitFor();
+   await page.getByLabel('Descripción 1',{exact:true}).fill('Edición antes de recibir el catálogo');await page.waitForFunction(()=>typeof window.__catalogRelease==='function');await page.evaluate(()=>window.__catalogRelease());
+   assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Edición antes de recibir el catálogo');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:legacyDescriptions,__catalogItems:catalogItems});
+  await run('description-recovery-pending-request-is-immutable',async page=>{
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();await page.getByRole('button',{name:'Confirmar monto final',exact:true}).click();
+   await page.getByRole('alert').filter({hasText:'Synthetic unknown outcome'}).waitFor();const before=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('demac.erp-next.charge-recovery.v1:synthetic-office:APPOINTMENT-TEST')));
+   await page.evaluate(()=>window.__catalogRelease());await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,100)));
+   const after=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('demac.erp-next.charge-recovery.v1:synthetic-office:APPOINTMENT-TEST')));assert.deepEqual(after.pending,before.pending);assert.deepEqual(after.draft.lines,before.draft.lines);assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'');
+  },{__record:legacyDescriptions,__catalogItems:catalogItems,__catalogHold:true,__unknown:true});
   for(const viewport of [desktop,{width:390,height:844}])await run('preload-retention-'+viewport.width,async page=>{
    await page.waitForFunction(()=>window.__reads.length===1);assert.equal(await tab(page,'Resumen').getAttribute('aria-current'),'page');await loaded(page);
    const start=Date.now();await openFinance(page);const clickToVisibleMs=Date.now()-start;assert.ok(clickToVisibleMs<600,'Preloaded tab should not wait for the synthetic 1200ms server delay');

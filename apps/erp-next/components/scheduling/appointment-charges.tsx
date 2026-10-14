@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { chargeRetryWasNotCommitted, chargeRecoveryBaseline, readChargeRecovery, writeChargeRecovery, type PendingChargeOperation } from '../../lib/appointment-charge-recovery';
 import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
 import { OfficeBookingRequestError, officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
-import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
-  paymentMethods, quoteAppointmentCharges, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
+import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, fillMissingChargeDescriptions, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
+  paymentMethods, quoteAppointmentCharges, type ChargeCatalogItem, type ChargeDraft, type ChargeLineInput, type ChargeQuote, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
 import { useAppointmentCharges } from './use-appointment-charges';
@@ -91,6 +91,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const [candidateFingerprint, setCandidateFingerprint] = useState('');
   const [editingVersion, setEditingVersion] = useState(0), [paymentVersion, setPaymentVersion] = useState(0);
   const [pending, setPending] = useState<PendingChargeOperation | null>(null);
+  const [catalogItems, setCatalogItems] = useState<ChargeCatalogItem[]>([]);
   const [recoveryReady, setRecoveryReady] = useState(false), [recoveringDraft, setRecoveringDraft] = useState(false);
   const [draftBaseline, setDraftBaseline] = useState(''), [storageError, setStorageError] = useState('');
   const [draftSaved, setDraftSaved] = useState(false), [recovered, setRecovered] = useState(false);
@@ -115,6 +116,13 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const totals = record ? appointmentChargeBalance(record, editing ? { quote, unavailable: recoveringDraft || quoting || Boolean(quoteError) || editingConflict || paymentConflict || Boolean(pending) || Boolean(readError) || loading } : undefined) : null;
   const balance = totals?.balanceCents ?? null;
   const candidateReviewed = Boolean(candidateFingerprint) && candidateFingerprint === record?.candidateEvidence?.fingerprint;
+  useEffect(() => {
+    // Never alter a pending request, confirmed record, or a user's existing text.
+    // Reuse the add-row catalog read regardless of whether it or recovery arrives first.
+    if (!editing || pending || busy || !catalogItems.length) return;
+    const described = fillMissingChargeDescriptions(lines, catalogItems);
+    if (described !== lines) { setLines(described); setReviewed(false); }
+  }, [editing, lines, catalogItems, pending, busy]);
   const persistRecovery = (nextPending = pending, keepDraft = Boolean(editing)) => {
     if (!currentUserId) throw Error('No se pudo verificar el usuario del borrador.');
     writeChargeRecovery({ schema: 1, userId: currentUserId, appointmentId, savedAt: Date.now(),
@@ -255,7 +263,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
       {estimate ? <details className={styles.priorEstimate}><summary>Ver proyección del booking · {chargeMoney(estimate.totalCents)}</summary><ChargeLineSummary record={{ ...record, state: state ? { ...state, final: null } : null }}/></details> : null}
       </>}
       </div>
-      <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual}/>
+      <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual} onCatalogLoaded={setCatalogItems}/>
       </section>
       <section className={`${styles.panel} ${styles.paymentsPanel}`} aria-label="Pagos de la visita"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={`${styles.tile} ${styles.green}`}><ChargeIcon name="money"/></span><div><h3 className={styles.heading}>Pagos de la visita</h3><p>Pagos registrados para esta cita</p></div></div><span className={`${styles.paymentStatus} ${!editing && totals?.paymentStatus === '✓ Pagado' ? styles.paidStatus : ''}`}>{record.blocker ? 'Por conciliar' : editing ? 'Borrador en edición' : totals?.paymentStatus}</span></div>
         {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
