@@ -53,7 +53,7 @@ async function main() {
   const env = { NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: PROJECT, NEXT_PUBLIC_FIREBASE_API_KEY: 'synthetic', NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'synthetic.invalid', NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'synthetic.invalid', NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: 'synthetic', NEXT_PUBLIC_FIREBASE_APP_ID: 'synthetic' };
   const stubs = {
     auth: `const principal={userId:'demo-owner',displayName:'Synthetic owner',role:'super_admin',active:true,capabilities:new Set(['projects.view','projects.manage','work_orders.view'])};export function useAuth(){return {principal};}`,
-    session: `export async function requireFirebaseWebSession(){return {uid:'demo-owner',idToken:'demo-owner'};}`,
+    session: `export function loadFirebaseWebSession(){return {uid:'demo-owner',idToken:'demo-owner'};}export async function requireFirebaseWebSession(){return {uid:'demo-owner',idToken:'demo-owner'};}`,
     transport: `export function firebaseTransportUrl(url){return '/transport?url='+encodeURIComponent(url);}`,
   };
   await build({ absWorkingDir: APP, stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import ProjectsPage from './app/(erp)/projects/page';import './app/globals.css';createRoot(document.getElementById('app')).render(<ProjectsPage/>);`, loader: 'tsx', resolveDir: APP },

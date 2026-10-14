@@ -404,6 +404,13 @@ Production activation remains separately owner-approved through the server-side 
 
 ## QuickBooks production reporting
 
+- `FIN-QBO-CATALOG-READ-001` — Candidate authorized for implementation 2026-10-14;
+  production activation pending. The designated active owner may explicitly compare
+  ERP customers/articles against a bounded QBO Customer/Item/Account page. Matching
+  names, email or SKU suggest review only. Inactive records remain visible; missing
+  matches in a partial page never authorize creation. No persistent mapping or
+  accounting/inventory write is introduced. See `adrs/quickbooks-catalog-20261014.md`.
+
 - `FIN-QBO-PRODUCTION-READ-001` — Owner authorized continuation on 2026-10-13 after
   confirming DEMAC realm 9130352327074466 (CompanyInfo country AW). Only the designated
   owner with a currently active administrative profile may request four fixed reports:

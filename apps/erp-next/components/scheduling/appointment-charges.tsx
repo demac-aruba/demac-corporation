@@ -13,6 +13,7 @@ import { ChargeLineSummary, ChargeOverviewMetrics } from './appointment-charge-o
 import { ChargeLinesEditor } from './charge-lines-editor';
 import { useChargeEditSession } from './use-charge-edit-session';
 import { ChargeAddSearch } from './charge-add-search';
+import { AppointmentQuickBooksPreviewButton } from './appointment-quickbooks-preview';
 
 const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', transfer: 'bank', pos: 'card', suave: 'phone' };
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -280,6 +281,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
           <button type="button" className={styles.secondary} disabled={!state?.final || Boolean(record.blocker) || busy || Boolean(pending) || loading || Boolean(readError) || pdfBusy || !documentContext} onClick={() => void downloadPdf()} title="Resumen de trabajos y pagos confirmados de esta cita"><ChargeIcon name="receipt"/>{pdfBusy ? 'Preparando PDF…' : 'Descargar PDF'}</button>
           {onClose ? <button type="button" className={styles.secondary} disabled={busy || Boolean(pending)} onClick={onClose}>Cerrar</button> : null}
         </>}
+        {!editing && !payment && !busy && !pending && !loading && !readError && active && !showHistory ? <AppointmentQuickBooksPreviewButton key={`${currentUserId}:${appointmentId}:${version}`} appointmentId={appointmentId} currentUserId={currentUserId} expectedVersion={version}/> : null}
       </div>
     </footer></>}
     </>}

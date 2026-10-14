@@ -96,6 +96,11 @@ jobs:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/appointment-charges-loading-evidence
         run: node apps/erp-next/scripts/appointment-charges-loading-browser.cjs
+      - name: Read-only QuickBooks appointment preparation and stale-read recovery
+        env:
+          BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/quickbooks-preparation-evidence
+        run: node apps/erp-next/scripts/quickbooks-preparation-browser.cjs
       - name: Booking reference files, metadata and recovery
         env:
           REFERENCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools/node_modules
@@ -111,6 +116,7 @@ jobs:
             ${{ runner.temp }}/booking-reference-evidence/
             ${{ runner.temp }}/appointment-detail-evidence/
             ${{ runner.temp }}/appointment-charges-loading-evidence/
+            ${{ runner.temp }}/quickbooks-preparation-evidence/
           if-no-files-found: warn
           retention-days: 7
       - name: Retain synthetic property address browser evidence

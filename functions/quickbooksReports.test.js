@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { ReferenceDb, response } = require('./test-support/referenceDb.cjs');
 const { createConnectionService, seal, open, hash, RETURN, CALLBACK } = require('./quickbooksConnectionService');
 const { createReportsService, REALM } = require('./quickbooksReportsService');
-const { normalizeReport } = require('./quickbooksReportsFormat');
+const { normalizeReport, reportValidationIssue, VALIDATION_ISSUES } = require('./quickbooksReportsFormat');
 const { createReportsHttpHandler } = require('./quickbooksReportsHttp');
 const PATH = 'integrationPrivate/quickbooksProduction';
 const config = { enabled: true, ownerUid: 'owner', clientId: 'synthetic-client', clientSecret: 'synthetic-secret',
@@ -161,4 +161,39 @@ test('documented A/P rows without type and without ReportBasis preserve leaf/sum
   const result = normalizeReport(data, request); assert.equal(result.basis, null);
   assert.deepEqual(result.rows.map(r => r.kind), ['heading', 'data', 'total']);
   assert.equal(result.rows.at(-1).values[1], '1234.50');
+});
+
+test('safe report diagnostics distinguish header/shape checks without exposing provider values', async () => {
+  for (const [issue, mutate] of [
+    ['header_name', data => { data.Header.ReportName = 'private-company-value'; }],
+    ['header_currency', data => { data.Header.Currency = 'private-currency-value'; }],
+    ['header_end_period', data => { data.Header.EndPeriod = '2026-09-30'; }],
+    ['header_start_period', data => { data.Header.StartPeriod = '2026-09-01'; }],
+    ['header_basis', data => { data.Header.ReportBasis = 'Cash'; }],
+    ['columns', data => { data.Columns.Column = []; }],
+    ['column_shape', data => { data.Columns.Column[0] = null; }],
+    ['cell_count', data => { data.Rows.Row[0].Header.ColData.pop(); }],
+    ['cell_value', data => { data.Rows.Row[0].Header.ColData[0].value = { secret: 'private' }; }],
+    ['row_shape', data => { data.Rows.Row[0] = null; }],
+    ['row_type', data => { data.Rows.Row[0].type = 'private-type'; }],
+    ['header_options', data => { data.Header.Option = [null]; }],
+    ['no_report_data', data => { data.Header.Option[0].Value = 'private'; }],
+    ['missing_rows', data => { delete data.Rows; }],
+    ['empty_rows', data => { data.Rows.Row = []; }],
+  ]) {
+    const data = reportData(); mutate(data);
+    const f = fixture(); f.provider(async () => Response.json(data));
+    const res = await f.http(); assert.equal(res.statusCode, 502);
+    assert.deepEqual(res.body, { error: 'invalid-report-response', validationIssue: issue });
+    assert.deepEqual(f.logs, [{ code: 'invalid-report-response', status: 502, validationIssue: issue }]);
+    assert.doesNotMatch(JSON.stringify([res.body, f.logs, [...f.db.records]]), /private-company-value|private-currency-value|private-type|1234.50|Synthetic service/);
+  }
+});
+test('diagnostics reject arbitrary classification text and retain authorization boundaries', async () => {
+  assert.equal(new Set(VALIDATION_ISSUES).size, VALIDATION_ISSUES.length);
+  for (const value of ['private-value', '__proto__', {}, null]) assert.equal(reportValidationIssue({ safeCode: 'invalid-report-response', validationIssue: value }), undefined);
+  assert.equal(reportValidationIssue({ safeCode: 'owner-required', validationIssue: 'header_name' }), undefined);
+  const f = fixture(); f.provider(async () => Response.json({ Header: 'private' }));
+  for (const uid of ['', 'revoked', 'finance']) { const r = await f.http(uid); assert.equal(r.body.validationIssue, undefined); }
+  assert.equal(f.calls.length, 0);
 });

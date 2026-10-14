@@ -3,15 +3,19 @@ on:
   pull_request:
     paths:
       - 'functions/quickbooksReports*.js'
+      - 'functions/quickbooksCatalog*.js'
       - 'functions/quickbooksConnectionService.js'
       - 'scripts/quickbooks-reports-release*.cjs'
+      - 'scripts/quickbooks-catalog-update*.cjs'
       - 'apps/erp-next/**/quickbooks-*'
       - '.github/workflows/quickbooks-reports-release.yml'
   push:
     branches: [main]
     paths:
       - 'functions/quickbooksReports*.js'
+      - 'functions/quickbooksCatalog*.js'
       - 'scripts/quickbooks-reports-release*.cjs'
+      - 'scripts/quickbooks-catalog-update*.cjs'
       - '.github/workflows/quickbooks-reports-release.yml'
 permissions:
   contents: read
@@ -31,11 +35,16 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: node --test functions/quickbooksReports.test.js functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js scripts/quickbooks-reports-release.test.cjs
+      - run: node --test functions/quickbooksCatalog.test.js functions/quickbooksReports.test.js functions/quickbooksConnection.test.js functions/quickbooksSandbox.test.js functions/quickbooksSandboxReports.test.js scripts/quickbooks-reports-release.test.cjs scripts/quickbooks-catalog-update.test.cjs scripts/appointment-finance-source-update.test.cjs
       - run: node scripts/quickbooks-reports-release.cjs --check
       - run: npm install --prefix apps/erp-next --ignore-scripts --no-audit --no-fund
       - run: npm run test:quickbooks-connection --prefix apps/erp-next
       - run: npm run typecheck --prefix apps/erp-next
+      - name: Verify catalog comparison in desktop and mobile isolation
+        run: |
+          npm install --prefix "$RUNNER_TEMP/qbo-catalog-tools" --ignore-scripts --no-audit --no-fund esbuild@0.27.3 playwright@1.58.2
+          "$RUNNER_TEMP/qbo-catalog-tools/node_modules/.bin/playwright" install --with-deps chromium
+          QBO_TEST_TOOLS="$RUNNER_TEMP/qbo-catalog-tools" QBO_TEST_OUTPUT="$RUNNER_TEMP/qbo-catalog-evidence" node apps/erp-next/scripts/quickbooks-catalog-browser.cjs
   deploy:
     if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[deploy-qbo-reports]')
     needs: validate
@@ -57,3 +66,32 @@ jobs:
       - run: node scripts/quickbooks-reports-release.cjs --deploy
 # Existing owner permission: continue read-only phase after verified DEMAC authorization.
 # No report is fetched during deployment, and no accounting write is implemented.
+
+  update-catalog-reader:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[update-qbo-catalog]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      - run: node scripts/quickbooks-catalog-update.cjs --deploy
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: qbo-catalog-update-evidence
+          path: ${{ runner.temp }}/qbo-catalog-update/summary.json
+          if-no-files-found: error
+          retention-days: 30
+# Updates only the existing reader source and its catalog flag. No signed-in
+# provider request is made by CI. Initial-install refusal remains unchanged.

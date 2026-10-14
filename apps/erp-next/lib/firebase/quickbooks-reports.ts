@@ -1,6 +1,7 @@
 import { firebaseClientConfig } from './client-config';
 import { requireFirebaseWebSession, loadFirebaseWebSession } from './session';
 import { connectionAvailable } from './quickbooks-connection';
+import { reportDiagnosticMessage } from '../quickbooks-report-diagnostics';
 export type ProductionReportInput = { report: 'ProfitAndLoss' | 'BalanceSheet' | 'AgedReceivables' | 'AgedPayables'; startDate: string; endDate: string; basis: 'Cash' | 'Accrual' };
 export type ProductionReport = {
   environment: 'production'; syncEnabled: false; accountingWritesEnabled: false; realmId: string; companyName: string; fetchedAt: string; request: ProductionReportInput;
@@ -32,7 +33,7 @@ export async function readProductionReport(uid: string, input: ProductionReportI
   }); } catch { throw Error('No se pudo completar la consulta. Vuelve a intentarlo; no se modificaron movimientos contables.'); }
   const result = await response.json().catch(() => ({}));
   if (loadFirebaseWebSession()?.uid !== uid) throw Error(messages['sign-in-required']);
-  if (!response.ok) throw Error(messages[result.error] || 'QuickBooks no pudo entregar el informe. Inténtalo más tarde.');
+  if (!response.ok) throw Error((messages[result.error] || 'QuickBooks no pudo entregar el informe. Inténtalo más tarde.') + reportDiagnosticMessage(result.error, result.validationIssue));
   if (result.environment !== 'production' || result.realmId !== '9130352327074466' || result.syncEnabled !== false || result.accountingWritesEnabled !== false ||
     result.report?.name !== input.report || result.report?.endPeriod !== input.endDate || !Array.isArray(result.report?.rows) || !Array.isArray(result.report?.columns)) throw Error(messages['invalid-report-response']);
   return result;

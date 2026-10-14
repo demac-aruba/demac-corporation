@@ -30,7 +30,7 @@ for (let i = 1; i <= 3; i++) docs[`staffProfiles/TECH-${i}`] = { id: `TECH-${i}`
 docs['employeeTimesheets/TECH-1_2026-09-01'] = { id: 'TECH-1_2026-09-01', employeeId: 'TECH-1', date: '2026-09-01', attendanceStatus: 'Present', clockInTime: '08:00', clockOutTime: '17:00' };
 const stubs = {
   auth: `import {useState,useEffect} from 'react'; export function useAuth(){const [p,setP]=useState(window.__principal);useEffect(()=>{const fn=()=>setP({...window.__principal,capabilities:new Set(window.__principal.capabilities)});window.addEventListener('auth-test',fn);return()=>window.removeEventListener('auth-test',fn);},[]);return {principal:p};}`,
-  session: `export async function requireFirebaseWebSession(){return {uid:window.__principal.userId,idToken:'synthetic-test-token'};}`,
+  session: `export function loadFirebaseWebSession(){return {uid:window.__principal.userId,idToken:'synthetic-test-token'};}export async function requireFirebaseWebSession(){return {uid:window.__principal.userId,idToken:'synthetic-test-token'};}`,
 };
 async function main() {
   await build({ absWorkingDir: APP, stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import ProjectsPage from './app/(erp)/projects/page';import './app/globals.css';createRoot(document.getElementById('app')).render(<ProjectsPage/>);`, loader: 'tsx', resolveDir: APP },

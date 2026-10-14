@@ -26,7 +26,7 @@ async function bundle(kind, old) {
       b.onResolve({ filter: /firebase\/(session|principal|client-config|isolated-preview|firestore-rest)$/ }, a => ({ path: path.basename(a.path), namespace: 'stub' }));
       b.onResolve({ filter: /services\/firebase$|^\.\/firebase$/ }, () => ({ path: 'legacy', namespace: 'stub' }));
       b.onResolve({ filter: /^@react-native-async-storage\/async-storage$/ }, () => ({ path: 'storage', namespace: 'stub' }));
-      b.onLoad({ filter: /.*/, namespace: 'stub' }, a => ({ loader: 'js', contents: a.path === 'session' ? `export async function requireFirebaseWebSession(){return ${session};}`
+      b.onLoad({ filter: /.*/, namespace: 'stub' }, a => ({ loader: 'js', contents: a.path === 'session' ? `export const loadFirebaseWebSession=()=>${session};export async function requireFirebaseWebSession(){return ${session};}`
         : a.path === 'principal' ? "export async function loadFirebasePrincipal(){return {userId:'office',displayName:'Synthetic operator',role:'office_operator'};}"
         : a.path === 'client-config' ? "export const firebaseClientConfig={projectId:'demo-demac-charges'};"
         : a.path === 'isolated-preview' ? "export const firebaseTransportUrl=()=>'/authority';"

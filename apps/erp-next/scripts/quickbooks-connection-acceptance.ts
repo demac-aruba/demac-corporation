@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { quickBooksLoginDestination } from '../lib/quickbooks-entry';
 import { defaultAuthenticatedRoute } from '../lib/role-routing';
 import type { QuickBooksConnectionStatus } from '../lib/firebase/quickbooks-connection';
+import { suggestCatalogMatches, validateCatalogResult, type CatalogResult } from '../lib/quickbooks-catalog';
 async function run() {
   for (const next of ['/quickbooks/connect/', '/quickbooks/disconnect/', '/integrations/']) {
     assert.equal(quickBooksLoginDestination(`?next=${encodeURIComponent(next)}`, 'super_admin'), next);
@@ -81,6 +82,42 @@ async function run() {
   }
   fetcher = async () => { signIn('other'); return Response.json(reportResult); };
   await assert.rejects(reports.readProductionReport('owner', reportInput), /sesión/); signIn();
-  console.log('QuickBooks production entry acceptance: PASS (allowlisted login, isolation, proof, read-only landing, completion, recovery, identity race, redirect, explicit disconnect).');
+  const catalog = await import('../lib/firebase/quickbooks-catalog');
+  const catalogInput = { entity: 'Customer' as const, startPosition: 1 };
+  const catalogResult: CatalogResult = { environment: 'production', realmId: '9130352327074466', companyName: 'Synthetic company',
+    accountingWritesEnabled: false, syncEnabled: false, fetchedAt: '2026-10-14T12:00:00Z', request: catalogInput,
+    catalog: { pageSize: 100, nextStartPosition: null, atLimit: false, endOfCurrentQuery: true,
+      records: [{ id: '1', name: 'Synthetic customer', active: true, email: 'synthetic@example.test', company: null, currency: 'AWG', parentId: null, isJob: false }] } };
+  fetcher = async body => { assert.deepEqual(body, catalogInput); return Response.json(catalogResult); };
+  await catalog.readProductionCatalog('owner', catalogInput); assert.match(calls.at(-1)!.url, /\/quickbooksReports\/catalog$/);
+  for (const mutate of [
+    (data: CatalogResult) => { data.realmId = 'wrong'; },
+    (data: CatalogResult) => { data.request.startPosition = 101; },
+    (data: CatalogResult) => { data.catalog.nextStartPosition = 101; },
+    (data: CatalogResult) => { data.catalog.records.push(data.catalog.records[0]); },
+    (data: CatalogResult) => { data.catalog.records[0].id = ''; },
+    (data: CatalogResult) => { data.catalog.records[0].currency = 123 as unknown as string; },
+  ]) {
+    const data = structuredClone(catalogResult); mutate(data); assert.throws(() => validateCatalogResult(data, catalogInput));
+    fetcher = async () => Response.json(data); await assert.rejects(catalog.readProductionCatalog('owner', catalogInput), /verificar/);
+  }
+  fetcher = async () => { signIn('other'); return Response.json(catalogResult); };
+  await assert.rejects(catalog.readProductionCatalog('owner', catalogInput), /sesión/); signIn();
+  for (const error of ['catalog-not-configured', 'not-found', 'owner-required']) {
+    fetcher = async () => Response.json({ error, detail: 'private provider text' }, { status: 503 });
+    await assert.rejects(catalog.readProductionCatalog('owner', catalogInput), e => e instanceof Error && !e.message.includes('private provider text'));
+  }
+  assert.doesNotMatch(catalog.catalogFailureMessage(Error('private ERP detail')), /private ERP/);
+  const source = [{ id: 'erp1', name: ' synthetic customer ', active: true }];
+  const candidates = catalogResult.catalog.records;
+  assert.equal(suggestCatalogMatches('Customer', source, candidates)[0].status, 'review');
+  assert.equal(suggestCatalogMatches('Customer', source, [...candidates, { ...candidates[0], id: '2' }])[0].status, 'ambiguous');
+  assert.equal(suggestCatalogMatches('Customer', source, [])[0].status, 'not-seen');
+  assert.equal(suggestCatalogMatches('Customer', [{ ...source[0], active: false }], candidates)[0].status, 'inactive');
+  assert.equal(suggestCatalogMatches('Customer', [{ ...source[0], name: 'Other', email: 'SYNTHETIC@example.test' }], candidates)[0].status, 'review');
+  assert.equal(suggestCatalogMatches('Item', [{ ...source[0], name: 'Different', sku: 'demo' }], [{ id: 'item1', name: 'Other', active: false, type: 'Group', sku: 'DEMO' }])[0].status, 'review');
+  assert.deepEqual(suggestCatalogMatches('Account', source, candidates), []);
+  assert.doesNotMatch(JSON.stringify([...storage.values()]), /Synthetic customer|Synthetic company/);
+  console.log('QuickBooks production entry and catalog acceptance: PASS (isolation, owner identity race, report compatibility, strict catalog responses, provisional matching and no private persistence).');
 }
 void run().catch(error => { console.error(error); process.exitCode = 1; });

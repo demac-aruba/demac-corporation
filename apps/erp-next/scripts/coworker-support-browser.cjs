@@ -35,7 +35,7 @@ let pastDate = addDays(today, -1);
 if (new Date(`${pastDate}T12:00:00Z`).getUTCDay() === 0) pastDate = addDays(pastDate, -1);
 const stubs = {
   'auth-provider': `const principal={userId:'demo-office',displayName:'Synthetic dispatcher',active:true,capabilities:new Set(['scheduling.view','scheduling.manage'])};const refreshPrincipal=async()=>{};export function useAuth(){return {principal,refreshPrincipal};}`,
-  'session': `export async function requireFirebaseWebSession(){return {uid:'demo-office',idToken:'synthetic-support-token'};}`,
+  'session': `export function loadFirebaseWebSession(){return {uid:'demo-office',idToken:'synthetic-support-token'};}export async function requireFirebaseWebSession(){return {uid:'demo-office',idToken:'synthetic-support-token'};}`,
   'isolated-preview': `export function firebaseTransportUrl(url){const u=new URL(url);if(u.hostname==='firestore.googleapis.com')return '/firestore'+u.pathname+u.search;if(u.hostname==='us-central1-${PROJECT}.cloudfunctions.net'&&u.pathname==='/officeBookingAuthority')return '/authority';throw Error('Non-synthetic destination rejected: '+u.hostname);}`,
 };
 const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {LiveSchedulingOverview} from './components/scheduling/live-scheduling-overview';import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';createRoot(document.getElementById('app')).render(<div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}><LiveSchedulingOverview/></div>);`;

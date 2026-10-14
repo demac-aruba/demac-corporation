@@ -10,18 +10,19 @@ const { resolveOwner, google, sourceCheck: identitySourceCheck, stagePackage: id
 const { validateExisting, disclosures } = require('./quickbooks-production-activate.cjs');
 const NAME = 'quickbooksReports';
 const PINS = {
-  "quickbooksReports.js": "0ef83be98a7fd96fecd6b5dd70ba379520f734cf68b433b56e5de43d77fd2622",
-  "quickbooksReportsHttp.js": "5d3ac3b65caebe95d7fe39e85ed9528d72296719fac47427a1206a9d90893e64",
-  "quickbooksReportsService.js": "46b4befc0fb17a7743f54b3334e2f211e595d9b5211b1b788c019b632c8c62de",
-  "quickbooksReportsFormat.js": "2714a0a48bbbb643e016dc7e02acf68b69c2ef551f3d071e512725242906d45f",
+  "quickbooksReports.js": "460d51aff608eb1327bf2ed037eef68d9c02972323cf99d392cee1de5eb3f553",
+  "quickbooksReportsHttp.js": "997e4e4fccabe7b8b29ba6a4e858ecd9acb128a34fe644a0c5afb7e6ed80b208",
+  "quickbooksReportsService.js": "e5ac462e843f85c5d44439a24ad13ae6146cf8d6739ad3207ba571c6ec7dc825",
+  "quickbooksReportsFormat.js": "2ddaf7671c22b20b45c4aeb155b96c93479115830ccc44e28443d28012b4afb5",
   "quickbooksConnectionService.js": "322a06542c71894a27994b89c4daa28bd848e08b6f3ef2231c9749a13533d1ed",
-  "package-lock.json": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb"
+  "package-lock.json": "e1717de07337e4a4fbe3d4b7ec8c82c190372798fd26ba557967d8223a6269bb",
+  "quickbooksCatalogFormat.js": "fbbf95c34faf60dbf87729c46711c8531b0539bd0909e9c35f1b4ebbb8d0e41f"
 };
 const check = (condition, code) => { if (!condition) throw Object.assign(Error(code), { safeCode: code }); };
 const run = (command, args, options = {}) => execFileSync(command, args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024, ...options });
 const git = args => run('git', args).trim();
 const cloud = args => JSON.parse(run('gcloud', [...args, '--project=' + PROJECT, '--format=json']));
-const FILES = ['quickbooksReports.js', 'quickbooksReportsHttp.js', 'quickbooksReportsService.js', 'quickbooksReportsFormat.js', 'quickbooksConnectionService.js', 'package-lock.json'];
+const FILES = ['quickbooksReports.js', 'quickbooksReportsHttp.js', 'quickbooksReportsService.js', 'quickbooksReportsFormat.js', 'quickbooksCatalogFormat.js', 'quickbooksConnectionService.js', 'package-lock.json'];
 const report = { stage: 'source-check', accountingWrites: false, syncEnabled: false, providerCalls: false, secretPayloadsAccessed: false };
 function sourceCheck() {
   const manifest = identitySourceCheck(); // Preserves the original authorization source/dependency pin.

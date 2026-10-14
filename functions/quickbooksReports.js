@@ -19,7 +19,8 @@ exports.quickbooksReports = onRequest({ region: 'us-central1', timeoutSeconds: 6
     handler = createReportsHttpHandler({ db: getFirestore(), verifyIdToken: token => getAuth().verifyIdToken(token, true),
       getConfig: () => {
         const enabled = process.env.QBO_PRODUCTION_REPORTS_ENABLED === 'true';
-        return { enabled, ownerUid: process.env.QBO_PRODUCTION_OWNER_UID, realmId: process.env.QBO_PRODUCTION_REALM_ID,
+        return { enabled, catalogEnabled: process.env.QBO_PRODUCTION_CATALOG_ENABLED === 'true',
+          ownerUid: process.env.QBO_PRODUCTION_OWNER_UID, realmId: process.env.QBO_PRODUCTION_REALM_ID,
           ...(enabled ? { clientId: clientId.value(), clientSecret: clientSecret.value(), encryptionKey: tokenKey.value() } : {}),
           redirectUri: CALLBACK, returnUrl: RETURN };
       }, log: event => logger.warn('QuickBooks report diagnostic', event) });
