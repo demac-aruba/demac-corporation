@@ -48,6 +48,9 @@ async function main() {
       assert.equal(await page.getByRole('button',{name:'Página siguiente'}).count(),0);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'No page horizontal overflow');
       await page.getByRole('row').filter({hasText:'Zoe Demonstration'}).scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,`comparison-customer-${width}.png`),fullPage:true});
+      await page.evaluate(()=>document.documentElement.dataset.theme='dark');
+      const theme=await page.getByRole('table').evaluate(el=>({background:getComputedStyle(el).backgroundColor,color:getComputedStyle(el.querySelector('strong')).color}));assert.equal(theme.background,'rgb(16, 28, 45)');assert.equal(theme.color,'rgb(244, 248, 253)');
+      await page.screenshot({path:path.join(output,`comparison-customer-dark-${width}.png`),fullPage:true});await page.evaluate(()=>document.documentElement.dataset.theme='light');
       await page.getByRole('searchbox').fill('');await page.getByRole('button',{name:'Inactivos 1',exact:true}).click();await page.getByText('Inactivo',{exact:true}).waitFor();await page.getByRole('button',{name:/Varias coincidencias/}).click();await page.getByText('Varias coincidencias',{exact:true}).waitFor();
       await page.getByRole('button',{name:/^Todos /}).click();
       const table=page.getByRole('table',{name:'Comparación provisional'});await page.waitForFunction(()=>document.querySelectorAll('[role=table] [role=row]').length===101);
