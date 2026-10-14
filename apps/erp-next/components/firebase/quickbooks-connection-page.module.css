@@ -6,3 +6,5 @@
 .actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:20px}.confirmation{padding:18px;border:1px solid #ddb8b8;border-radius:10px;margin-top:20px}.confirmation label{display:flex;gap:12px;align-items:flex-start;line-height:1.5}.confirmation input{flex:none;margin-top:5px}.confirmation button{margin-top:16px}
 .error{color:#9c2727}.success{color:#186b48}.card footer{margin-top:30px;padding-top:20px;border-top:1px solid var(--border,#dce4ee);display:flex;gap:14px;flex-wrap:wrap;font-size:13px}.card a{color:#175c9c;text-decoration:underline}.card a:global(.btn){text-decoration:none;color:white}.card button:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:600px){.page{padding:20px 12px}.card{padding:22px 18px}.card h1{font-size:25px}.status dl{grid-template-columns:1fr;gap:5px}.status dd{margin-bottom:10px}.actions{align-items:flex-start;flex-direction:column}.card footer{flex-direction:column}}
+
+.catalogLink{margin-top:26px;padding-top:24px;border-top:1px solid var(--border,#dce4ee)}.catalogLink a{display:inline-flex;margin-top:8px}
