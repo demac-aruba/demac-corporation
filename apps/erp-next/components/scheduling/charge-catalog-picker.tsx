@@ -8,10 +8,10 @@ import styles from './charge-catalog-picker.module.css';
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 type Filter = 'Todos' | 'Servicio' | 'Producto';
 
-export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, disabled, loading, error, onRetry, onSelect, inline = false, floating = false }: {
+export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, disabled, loading, error, onRetry, onSelect, inline = false, floating = false, active = true }: {
   items: ChargeCatalogItem[]; selectedId?: string; index: number; fallbackLabel: string; disabled: boolean;
   loading: boolean; error: string; onRetry: () => void; onSelect: (item: ChargeCatalogItem | null) => void;
-  inline?: boolean; floating?: boolean;
+  inline?: boolean; floating?: boolean; active?: boolean;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [filter, setFilter] = useState<Filter>('Todos');
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -22,6 +22,9 @@ export function ChargeCatalogPicker({ items, selectedId, index, fallbackLabel, d
   const words = normalize(query).trim().split(/\s+/).filter(Boolean);
   const matches = searchIndex.filter(({ item, text }) => (filter === 'Todos' || item.itemType === filter) && words.every(word => text.includes(word))).map(({ item }) => item);
   const metadataAvailable = items.some(item => item.itemType);
+  // A retained hidden tab keeps its query/catalog but not a floating popup whose
+  // geometry could be measured against hidden elements during a resize.
+  useEffect(() => { if (!active) setOpen(false); }, [active]);
   useEffect(() => { if (open && !disabled && !inline) inputRef.current?.focus(); }, [open, disabled, inline]);
   useLayoutEffect(() => {
     if (!open || !floating) return;
