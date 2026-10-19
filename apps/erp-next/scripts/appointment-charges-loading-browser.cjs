@@ -39,6 +39,7 @@ export async function callOfficeBookingAuthority(action,data){
  }
  if(action==='list_charge_services'){window.__catalogReads=(window.__catalogReads||0)+1;if(window.__catalogHold)await new Promise(resolve=>window.__catalogRelease=resolve);if(window.__catalogError)throw Error('Synthetic catalog read failed');return {success:true,services:structuredClone(window.__catalogItems||[])};}
  window.__writes.push({action,data:structuredClone(data)});
+ if(window.__holdWrite)await new Promise(resolve=>window.__releaseWrite=resolve);
  if(window.__unknown)throw Object.assign(Error('Synthetic unknown outcome'),{unknown:true});
  if(data.expectedVersion!==window.__record.state.version)throw Error('Synthetic version conflict');
  window.__record.state.version++;return {success:true,state:window.__record.state};
@@ -78,6 +79,34 @@ async function main(){
  const browser=await chromium.launch({headless:true,...(process.env.BOOKING_MODAL_CHROMIUM?{executablePath:process.env.BOOKING_MODAL_CHROMIUM}:{})});const results=[];
  async function run(name,test,flags={},viewport=desktop){if(baselinePerformance&&name!=='invoice-performance-known-quantity')return;if(invoicePerformanceOnly&&!name.startsWith('invoice-performance-'))return;if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
  try{
+  for(const viewport of [desktop,{width:1366,height:768},{width:390,height:844}])await run('single-step-payment-visible-'+viewport.width,async page=>{
+   await openFinance(page);
+   const amount=page.getByLabel('Monto recibido (Afl.)',{exact:true}), submit=page.getByRole('button',{name:'Registrar pago',exact:true});
+   assert.equal(await amount.isVisible(),true);assert.equal(await amount.inputValue(),'');assert.equal(await submit.count(),1);assert.equal(await submit.isDisabled(),true);
+   for(const method of ['Efectivo','Transferencia','POS','SUAVE'])assert.equal(await page.getByRole('button',{name:method,exact:true}).count(),1,'Exactly one method selector');
+   const date=page.getByLabel('Fecha y hora de recepción · Aruba',{exact:true});
+   assert.ok(Math.abs(Date.now()-Date.parse((await date.inputValue())+':00-04:00'))<65000,'Default date is current Aruba time');
+   assert.equal(await page.getByLabel('Nota del pago',{exact:true}).isVisible(),false);
+   // Real sequential typing catches remounts/focus loss on the first edit.
+   await amount.focus();await amount.pressSequentially('250');assert.equal(await amount.inputValue(),'250');assert.equal(await amount.evaluate(el=>document.activeElement===el),true);
+   await page.getByRole('button',{name:'Transferencia',exact:true}).click();assert.equal(await submit.isDisabled(),true,'Transfer needs a reference');
+   await page.getByLabel('Referencia / comprobante',{exact:false}).fill('REF-PRUEBA-250');
+   await date.fill('2026-10-18T09:30');await page.getByRole('button',{name:'POS',exact:true}).click();assert.equal(await date.inputValue(),'2026-10-18T09:30','Selecting a method keeps backdated receipt time');
+   await page.getByText('Añadir nota (opcional)',{exact:true}).click();await page.getByLabel('Nota del pago',{exact:true}).fill('Nota de prueba');await page.getByText('Añadir nota (opcional)',{exact:true}).click();
+   assert.equal(await submit.isEnabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[],'Editing does not write');
+   await page.screenshot({path:path.join(artifacts,'single-step-payment-'+viewport.width+'.png'),fullPage:true});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+   // Clear returns to the visible pristine form without navigation or a write.
+   await page.getByRole('button',{name:'Limpiar',exact:true}).click();assert.equal(await amount.inputValue(),'');assert.equal(await submit.isDisabled(),true);
+   let dialogs=0;page.on('dialog',dialog=>{dialogs++;void dialog.dismiss();});await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();await page.getByText('Cita cerrada',{exact:true}).waitFor();assert.equal(dialogs,0,'Pristine payment form does not block closing');
+  },{__record:{...record,candidateEvidence:{fingerprint:'empty',records:[]}}},viewport);
+  await run('single-step-payment-saves-once-with-original-date-and-note',async page=>{
+   await openFinance(page);await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Referencia / comprobante',{exact:false}).fill('REF-PRUEBA-250');await page.getByLabel('Fecha y hora de recepción · Aruba',{exact:true}).fill('2026-10-18T09:30');await page.getByText('Añadir nota (opcional)',{exact:true}).click();await page.getByLabel('Nota del pago',{exact:true}).fill('Pago recibido ayer');await page.getByText('Añadir nota (opcional)',{exact:true}).click();
+   await page.getByRole('button',{name:'Registrar pago',exact:true}).evaluate(button=>{button.click();button.click();});await page.waitForFunction(()=>window.__writes.length===1);
+   assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);assert.equal(await page.getByRole('button',{name:'Limpiar',exact:true}).isDisabled(),true);assert.match(await finance(page).innerText(),/Registrando pago/);assert.doesNotMatch(await finance(page).innerText(),/Pago registrado/);
+   assert.deepEqual(await page.evaluate(()=>window.__writes[0].data.payment),{method:'transfer',amount:'250',reference:'REF-PRUEBA-250',receivedAt:'2026-10-18T13:30:00.000Z',note:'Pago recibido ayer'});
+   await page.evaluate(()=>{window.__holdWrite=false;window.__releaseWrite();});await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();await loaded(page);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'');assert.equal(await page.evaluate(()=>window.__writes.length),1);
+  },{__holdWrite:true});
   const legacyDescriptions=structuredClone(premium);
   legacyDescriptions.state.final.lines[0].serviceId='line-service';
   Object.assign(legacyDescriptions.state.final.lines[1],{serviceId:'gas',description:'Texto exclusivo de esta factura'});
@@ -171,7 +200,7 @@ async function main(){
    assert.match(await finance(page).innerText(),/CheckUp de ejemplo/);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await focus(page);assert.equal(await reads(page),2);await page.evaluate(()=>window.__release[1]());await page.getByRole('alert').filter({hasText:'Synthetic read unavailable'}).waitFor();
    assert.match(await finance(page).innerText(),/última consulta/);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
-   await page.evaluate(()=>{window.__readError='';window.__holdReads=false;});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isEnabled(),true);
+   await page.evaluate(()=>{window.__readError='';window.__holdReads=false;});await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).isEnabled(),true);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true,'Empty form cannot submit');
   });
   await run('draft-version-fingerprint-and-cross-tab-preservation',async page=>{
    await openFinance(page);await selectActualService(page);await page.getByLabel('Descripción 1',{exact:true}).fill('Alcance de prueba');await page.getByLabel('Concilié los conceptos Field',{exact:false}).check();await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
@@ -182,10 +211,10 @@ async function main(){
    const write=await page.evaluate(()=>window.__writes[0]);assert.equal(write.data.expectedVersion,2);assert.equal(write.data.candidateFingerprint,'field-v2');
   },{__catalogItems:catalogItems});
   await run('payment-conflict-cannot-adopt-new-version',async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('50');await page.evaluate(()=>window.__record.state.version=2);await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Guardar pago',exact:true}).isDisabled(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'50');await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   await openFinance(page);await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('50');await page.evaluate(()=>window.__record.state.version=2);await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await loaded(page);assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'50');await page.getByRole('button',{name:'Limpiar',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   });
   await run('unknown-payment-preserves-exact-retry',async page=>{
-   await openFinance(page);await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('50');await page.getByRole('button',{name:'Guardar pago',exact:true}).click();await page.getByRole('button',{name:'Reintentar la misma operación'}).waitFor();await focus(page);assert.equal(await reads(page),1);assert.equal(await page.getByRole('button',{name:'Cerrar cita'}).isDisabled(),true);await page.evaluate(()=>window.__unknown=false);await page.getByRole('button',{name:'Reintentar la misma operación'}).click();await page.waitForFunction(()=>window.__writes.length===2&&window.__reads.length===2);assert.deepEqual(await page.evaluate(()=>window.__writes[0]),await page.evaluate(()=>window.__writes[1]));
+   await openFinance(page);await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('50');await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('button',{name:'Reintentar la misma operación'}).waitFor();await focus(page);assert.equal(await reads(page),1);assert.equal(await page.getByRole('button',{name:'Cerrar cita'}).isDisabled(),true);await page.evaluate(()=>window.__unknown=false);await page.getByRole('button',{name:'Reintentar la misma operación'}).click();await page.waitForFunction(()=>window.__writes.length===2&&window.__reads.length===2);assert.deepEqual(await page.evaluate(()=>window.__writes[0]),await page.evaluate(()=>window.__writes[1]));
   },{__unknown:true});
   await run('appointment-session-isolation-late-response',async page=>{
    await page.waitForFunction(()=>window.__reads.length===1);await page.evaluate(()=>{window.__record.state.estimate.lines[0].label='Segunda cita de ejemplo';window.__select('APPOINTMENT-SECOND');});await page.waitForFunction(()=>window.__reads.length===2);await page.evaluate(()=>window.__release[1]());await openFinance(page);await page.getByText(/Ver proyección del booking/).click();await page.evaluate(()=>window.__release[0]());assert.match(await finance(page).innerText(),/Segunda cita de ejemplo/);assert.doesNotMatch(await finance(page).innerText(),/CheckUp de ejemplo/);
@@ -222,16 +251,16 @@ async function main(){
    await page.getByLabel('Cantidad 1',{exact:true}).fill('2');await page.getByText('Afl. 130.00',{exact:true}).first().waitFor();
    assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:{...historicalRecord,state:{...historicalRecord.state,final:historicalRecord.state.estimate}}});
-  await run('method-shortcuts-preserve-payment-draft',async page=>{
+  await run('single-step-methods-preserve-payment-draft',async page=>{
    await openFinance(page);
    for(const method of ['Efectivo','Transferencia','POS','SUAVE']){
     await page.getByRole('button',{name:method,exact:true}).click();assert.equal(await page.getByRole('button',{name:method,exact:true}).getAttribute('aria-pressed'),'true');await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('25');
-    await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'25');assert.equal(await page.getByRole('button',{name:method,exact:true}).getAttribute('aria-pressed'),'true');await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+    await page.getByRole('button',{name:'Ver movimientos',exact:true}).click();await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'25');assert.equal(await page.getByRole('button',{name:method,exact:true}).getAttribute('aria-pressed'),'true');await page.getByRole('button',{name:'Limpiar',exact:true}).click();
    }assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   });
   for(const scenario of ['read-only','blocker','hold','cancelled'])await run('premium-restriction-'+scenario,async page=>{
    await openFinance(page);if(scenario==='blocker'){assert.match(await finance(page).innerText(),/Pagos pendientes de conciliación/);assert.match(await finance(page).innerText(),/Por conciliar/);assert.doesNotMatch(await finance(page).innerText(),/0 pagos vigentes|✓ Pagado/);}assert.equal(await page.getByRole('button',{name:'Editar trabajos',exact:true}).isDisabled(),true);
-   for(const name of ['Efectivo','Transferencia','POS','SUAVE','Registrar pago'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),scenario!=='cancelled','Cancelled visits retain authorized outstanding-payment behavior');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   for(const name of ['Efectivo','Transferencia','POS','SUAVE'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),scenario!=='cancelled','Cancelled visits retain authorized outstanding-payment behavior');assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true,'Empty form cannot submit');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__canManage:scenario!=='read-only',__record:{...premium,blocker:scenario==='blocker'?'Synthetic legacy blocker':'',appointmentStatus:scenario==='hold'?'temporary_hold':scenario==='cancelled'?'cancelled':'confirmed'}});
   for(const scenario of ['unknown','zero','credit','empty','fractional','final-only'])await run('premium-amount-'+scenario,async page=>{
    await openFinance(page);if(scenario==='unknown')await page.getByText(/Ver proyección del booking/).click();const text=await finance(page).innerText();
@@ -252,11 +281,11 @@ async function main(){
    await page.waitForFunction(()=>window.__reads.length===3);
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await page.evaluate(()=>{window.__holdReads=false;window.__release[2]();});
-   await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('42');
+   await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('42');
    await tab(page,'Resumen').click();await page.evaluate(()=>{window.__record.state.version=3;window.__leaseVersion=3;});await tab(page,'Importes y pagos').click();
    await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();
    assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'42');
-   assert.equal(await page.getByRole('button',{name:'Guardar pago',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   });
   await run('lease-other-operator-read-only-and-recovery-preserves-draft',async page=>{
    await openFinance(page);await page.getByText(/Scarlet de prueba está editando/).waitFor();
@@ -463,7 +492,7 @@ async function main(){
   },{__record:premium});
   await run('draft-storage-failure-close-and-payment-guard',async page=>{
    await openFinance(page);await page.evaluate(()=>Storage.prototype.setItem=function(){throw new DOMException('synthetic quota','QuotaExceededError');});await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('3');await page.getByRole('alert').filter({hasText:'No se pudo conservar el borrador'}).waitFor();
-   page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');await page.getByRole('button',{name:'Efectivo',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByRole('button',{name:'Guardar pago',exact:true}).click();await page.getByRole('alert').filter({hasText:'No se envió ningún cambio'}).waitFor();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+   page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');await page.getByRole('button',{name:'Efectivo',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('alert').filter({hasText:'No se envió ningún cambio'}).waitFor();assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium});
   for(const action of ['Editar cita','Registrar resultado','Reprogramar','Cancelar cita','Confirmar reserva'])await run('draft-lifecycle-close-guard-'+action,async page=>{
    await openFinance(page);await page.getByRole('button',{name:'Efectivo',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await tab(page,'Resumen').click();
