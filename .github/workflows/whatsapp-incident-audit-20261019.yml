@@ -1,0 +1,59 @@
+name: WhatsApp incident read-only audit 20261019
+on:
+  push:
+    branches: [chore/whatsapp-incident-audit-20261019]
+    paths:
+      - scripts/whatsapp-incident-audit-20261019.cjs
+      - .github/workflows/whatsapp-incident-audit-20261019.yml
+permissions:
+  contents: read
+jobs:
+  read-only-firebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci --prefix functions --ignore-scripts --no-audit --no-fund
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Read bounded incident metadata without messages or production writes
+        run: node scripts/whatsapp-incident-audit-20261019.cjs
+  read-only-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read existing bridge health and service state without restart or send
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H 159.223.160.239 >> "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 demac-deploy@159.223.160.239 'python3 -' <<'PY'
+          import json,subprocess,urllib.request,datetime,re
+          result={'readOnly':True,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          for name in ['demac-whatsapp-bridge-v8-test.service','demac-wacli-sync-v8-test.service']:
+              p=subprocess.run(['systemctl','is-active',name],capture_output=True,text=True,timeout=10)
+              result[name]=p.stdout.strip()
+          try:
+              h=json.load(urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=10))
+              for key in ['ok','connectorMode','startedAt','pendingWebhookEvents','pendingDeadLetterEvents','pendingOutboundAcks','lastOutboundPollAt','lastOutboundAckAt','lastSendSuccessAt','lastForwardSuccessAt']:
+                  result[key]=h.get(key)
+              for key in ['lastSendError','lastOutboundError','lastForwardError']:
+                  value=str(h.get(key) or '').lower()
+                  result[key+'Present']=bool(value)
+                  result[key+'Category']=next((label for label,pattern in [('unauthorized',r'401|unauthorized|invalid.*token'),('disconnected',r'logged.out|not logged|not authenticated|not connected|disconnected'),('timeout',r'timeout|timed out|deadline'),('network',r'econn|enotfound|socket|fetch failed'),('backend',r'500|outbound poll failed')] if re.search(pattern,value)), 'redacted_other' if value else None)
+          except Exception as e:
+              result['healthReadErrorType']=type(e).__name__
+          print(json.dumps(result))
+          PY
