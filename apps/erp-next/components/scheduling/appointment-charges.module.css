@@ -124,3 +124,15 @@
 @media(max-width:600px){.compactWorkspace .invoiceLine{grid-template-columns:repeat(3,minmax(0,1fr))}.invoiceDescription{grid-row:2}.invoiceDescription textarea{font-size:16px!important}}
 
 .savedDescription{white-space:pre-wrap;overflow-wrap:anywhere;max-width:320px}
+
+/* One-step receipt entry; the booking deposit editor keeps its existing layout. */
+.paymentEntryHeading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.paymentEntryHeading h4{margin:0}.paymentEntryHeading .link{padding:0;font-size:11px!important}
+.paymentEntry .two{gap:8px;margin-bottom:8px}.paymentEntry label{font-size:11px!important}
+.paymentEntry input{padding:8px;font-size:12px!important}.paymentEntry .methods{margin:5px 0 9px}
+.paymentEntry .methods button{min-height:42px;gap:3px;font-size:10px!important}
+.paymentEntry .methods svg{width:18px;height:18px}.paymentEntry>.primary{margin-top:9px}
+.paymentHint{display:block;color:#687d99;font-size:10px!important;line-height:1.4;margin-top:4px}
+.paymentNote{margin-top:8px;font-size:11px!important;color:#1268ff}.paymentNote summary{cursor:pointer}
+.compactWorkspace .paymentsPanel>.empty{padding:7px 9px;font-size:11px!important}
+@media(max-width:600px){.paymentEntry input{font-size:16px!important}}

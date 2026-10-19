@@ -20,12 +20,15 @@ const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', trans
 const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', receivedAt: new Date().toISOString(), note: '' });
 export function ChargeNotice({ children }: { children: React.ReactNode }) { return <div className={styles.notice}><ChargeIcon name="info"/><div>{children}</div></div>; }
-function PaymentFields({ value, onChange, disabled = false }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean }) {
+function PaymentFields({ value, onChange, disabled = false, compact = false }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean; compact?: boolean }) {
+  const amounts = <div className={styles.two}><label>Monto recibido (Afl.)<input inputMode="decimal" value={value.amount} onChange={event => onChange({ ...value, amount: event.target.value })} placeholder="0.00"/></label><label>Referencia / comprobante{value.method !== 'cash' ? ' *' : ''}<input maxLength={180} value={value.reference} onChange={event => onChange({ ...value, reference: event.target.value })} placeholder={value.method === 'cash' ? 'N.º de recibo (opcional)' : 'Referencia de la transacción'}/></label></div>;
+  const paymentNote = <label style={{ marginTop: compact ? 6 : 12 }}>Nota del pago<input maxLength={700} value={value.note || ''} onChange={event => onChange({ ...value, note: event.target.value })} placeholder="Información para contabilidad"/></label>;
   return <fieldset disabled={disabled} style={{ padding: 0, margin: 0, border: 0, minWidth: 0 }}>
+    {compact ? amounts : null}
     <span className={styles.muted}>Método de pago</span><div className={styles.methods}>{paymentMethods.map(method => <button key={method.id} type="button" aria-pressed={value.method === method.id} className={value.method === method.id ? styles.selected : ''} onClick={() => onChange({ ...value, method: method.id })}><ChargeIcon name={methodIcon[method.id]}/>{method.label}</button>)}</div>
-    <div className={styles.two}><label>Monto recibido (Afl.)<input inputMode="decimal" value={value.amount} onChange={event => onChange({ ...value, amount: event.target.value })} placeholder="0.00"/></label><label>Referencia / comprobante{value.method !== 'cash' ? ' *' : ''}<input maxLength={180} value={value.reference} onChange={event => onChange({ ...value, reference: event.target.value })} placeholder={value.method === 'cash' ? 'N.º de recibo (opcional)' : 'Referencia de la transacción'}/></label></div>
-    <label style={{ marginTop: 12 }}>Fecha y hora de recepción · Aruba<input type="datetime-local" value={value.receivedAt ? new Date(Date.parse(value.receivedAt) - 4 * 3600000).toISOString().slice(0,16) : ''} onChange={event => onChange({ ...value, receivedAt: event.target.value ? new Date(`${event.target.value}:00-04:00`).toISOString() : '' })}/></label>
-    <label style={{ marginTop: 12 }}>Nota del pago<input maxLength={700} value={value.note || ''} onChange={event => onChange({ ...value, note: event.target.value })} placeholder="Información para contabilidad"/></label>
+    {!compact ? amounts : null}
+    <label style={{ marginTop: compact ? 0 : 12 }}>Fecha y hora de recepción · Aruba<input type="datetime-local" value={value.receivedAt ? new Date(Date.parse(value.receivedAt) - 4 * 3600000).toISOString().slice(0,16) : ''} onChange={event => onChange({ ...value, receivedAt: event.target.value ? new Date(`${event.target.value}:00-04:00`).toISOString() : '' })}/></label>
+    {compact ? <><small className={styles.paymentHint}>Fecha actual por defecto · editable</small><details className={styles.paymentNote}><summary>Añadir nota (opcional)</summary>{paymentNote}</details></> : paymentNote}
   </fieldset>;
 }
 export function BookingChargesEditor({ seeds, value, onChange, disabled }: { seeds: ChargeLineInput[]; value: ChargeDraft | null; onChange: (draft: ChargeDraft) => void; disabled: boolean }) {
@@ -70,6 +73,15 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   useEffect(() => { pdfGeneration.current++; return () => { pdfGeneration.current++; }; }, [appointmentId, active, showHistory, editing, busy]);
   useEffect(() => { if (!success) return; const timer = window.setTimeout(() => setSuccess(''), 4500); return () => window.clearTimeout(timer); }, [success]);
   const [lines, setLines] = useState<ChargeLineInput[]>([]), [note, setNote] = useState(''), [reviewed, setReviewed] = useState(false), [payment, setPayment] = useState<PaymentInput | null>(null);
+  const [emptyPayment, setEmptyPayment] = useState(newPayment);
+  useEffect(() => {
+    // A visible empty form is not a draft. Keep its default date fresh without
+    // suspending revalidation/close or changing a date the operator has entered.
+    if (!active || showHistory || payment) return;
+    setEmptyPayment(newPayment());
+    const timer = window.setInterval(() => setEmptyPayment(newPayment()), 60000);
+    return () => window.clearInterval(timer);
+  }, [active, showHistory, payment]);
   const [candidateFingerprint, setCandidateFingerprint] = useState('');
   const [editingVersion, setEditingVersion] = useState(0), [paymentVersion, setPaymentVersion] = useState(0);
   const [pending, setPending] = useState<PendingChargeOperation | null>(null);
@@ -205,7 +217,11 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     if (!lease) { setError('Recupera el acceso de edición antes de guardar. Tu borrador se conserva.'); return; }
     void perform({ action, data: { ...values, ...lease, appointmentId, expectedVersion: action === 'record_appointment_payment' ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } });
   };
-  const startPayment = (method: PaymentMethod = 'cash') => { setPaymentVersion(version); setPayment({ ...newPayment(), method }); setSuccess(''); };
+  const updatePayment = (value: PaymentInput) => {
+    // Capture the version at the first edit, not when the empty form appears.
+    if (!payment) { setPaymentVersion(version); setSuccess(''); }
+    setPayment(value);
+  };
   const downloadPdf = async () => {
     if (pdfFlight.current || editing || pending || busy || loading || readError || !record?.state?.final || record.blocker || !documentContext) return;
     pdfFlight.current = true; setPdfBusy(true); setError('');
@@ -252,9 +268,12 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
         {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
         <div className={styles.receivedStrip}><strong>Total recibido</strong><strong>{chargeMoney(totals?.receivedCents)}</strong></div>
         {balance !== null ? <div className={`${styles.balanceStrip} ${!editing && balance === 0 ? styles.settledStrip : ''}`}><strong>{editing ? balance < 0 ? 'A favor estimado' : 'Saldo estimado' : balance < 0 ? 'Saldo a favor' : 'Saldo por cobrar'}</strong><strong>{chargeMoney(Math.abs(balance))}</strong></div> : null}
-        {payment ? <div className={styles.paymentForm}><PaymentFields value={payment} onChange={setPayment} disabled={blocked}/><div className={styles.footer}><button type="button" className={styles.secondary} disabled={busy || Boolean(pending)} onClick={() => setPayment(null)}>Cancelar</button><button type="button" className={styles.primary} disabled={blocked || paymentConflict || editingConflict || !payment.amount} onClick={() => save('record_appointment_payment', { payment })}>Guardar pago</button></div></div> : <div className={styles.paymentEntry}><h4>Registrar depósito, abono o pago</h4><div className={styles.methodShortcuts}>{paymentMethods.map(method => <button key={method.id} type="button" disabled={blocked || editingConflict || record.appointmentStatus === 'temporary_hold'} onClick={() => startPayment(method.id)}><ChargeIcon name={methodIcon[method.id]}/>{method.label}</button>)}</div><button type="button" className={styles.primary} disabled={blocked || editingConflict || record.appointmentStatus === 'temporary_hold'} onClick={() => startPayment()}><ChargeIcon name="plus"/>Registrar pago</button></div>}
+        <div className={styles.paymentEntry}><div className={styles.paymentEntryHeading}><h4>Registrar depósito, abono o pago</h4>{payment ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => setPayment(null)}>Limpiar</button> : null}</div>
+          <PaymentFields compact value={payment || emptyPayment} onChange={updatePayment} disabled={blocked || editingConflict || paymentConflict || record.appointmentStatus === 'temporary_hold'}/>
+          <button type="button" className={styles.primary} aria-label="Registrar pago" disabled={blocked || paymentConflict || editingConflict || record.appointmentStatus === 'temporary_hold' || !payment?.amount.trim() || !payment.receivedAt || (payment.method !== 'cash' && !payment.reference.trim())} onClick={() => { if (payment) save('record_appointment_payment', { payment }); }}>{busy && pending?.action === 'record_appointment_payment' ? 'Registrando pago…' : 'Registrar pago'}</button>
+          <small className={styles.paymentHint}>Registra un pago ya recibido. No realiza cargos en POS o SUAVE.</small>
+        </div>
         {onShowHistory ? <button type="button" className={styles.historyShortcut} disabled={busy || Boolean(pending)} onClick={onShowHistory}><ChargeIcon name="history"/>Ver movimientos</button> : null}
-        {payment ? <ChargeNotice>Registra un pago ya recibido. Este formulario no realiza cargos en POS o SUAVE.</ChargeNotice> : null}
       </section>
     </div>
     <footer className={styles.workspaceFooter}>
