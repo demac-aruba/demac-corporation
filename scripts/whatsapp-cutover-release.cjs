@@ -71,8 +71,23 @@ async function main() {
   }
   const livePackage=JSON.parse(readZip(archive,'package.json'));
   const reviewedPackage=JSON.parse(git(['show',reviewed+':functions/package.json']));
-  assert.deepEqual(livePackage.dependencies,reviewedPackage.dependencies,'Live dependencies differ');
   assert.equal(livePackage.main,reviewedPackage.main,'Live bootstrap differs');
+  // This is a source-only repair, not a dependency upgrade. Validate against the
+  // deployed lock instead of replacing live dependencies with newer repo ones.
+  const validation=path.join(out,'live-dependency-validation');
+  fs.cpSync(stage,validation,{recursive:true});
+  for(const file of ['whatsappReferenceBundle.test.js','whatsappWacliGateway.test.js','wacliOutboundMediaUpload.test.js','test-support/referenceDb.cjs']) {
+    const target=path.join(validation,file); fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.copyFileSync(path.join('functions',file),target);
+  }
+  record('validating-exact-live-dependencies');
+  run('npm',['ci','--prefix',validation,'--ignore-scripts','--no-audit','--no-fund'],{timeout:300000});
+  run(process.execPath,['--test',...['whatsappReferenceBundle.test.js','whatsappWacliGateway.test.js','wacliOutboundMediaUpload.test.js'].map(file=>path.join(validation,file))],{timeout:60000});
+  const probeEnv={...process.env};
+  for(const key of ['GCLOUD_PROJECT','GOOGLE_CLOUD_PROJECT','GCP_PROJECT']) delete probeEnv[key];
+  const probe="const assert=require('node:assert/strict');const r=require('node:module').createRequire(require('node:path').join(process.argv[1],'package.json'));r('firebase-admin/app').initializeApp({projectId:process.argv[2],storageBucket:process.argv[2]+'.firebasestorage.app'});r('firebase-admin/storage').getStorage().bucket().storage.getProjectId().then(id=>assert.equal(id,process.argv[2])).catch(()=>process.exitCode=1);";
+  run(process.execPath,['-e',probe,validation,project],{env:probeEnv,timeout:20000});
+  record('live-sdk-project-discovery-verified',{liveLockPreserved:true});
   initializeApp({projectId:project}); const db=getFirestore();
   const preview=await discardBacklog({db,FieldValue});
   record('queue-dry-run',{queuePreview:preview,previousRevision:before.serviceConfig.revision});
