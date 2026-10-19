@@ -167,6 +167,17 @@ test('a terminal failure does not lock tomorrow or unrelated messages for the sa
   assert.equal((await poll()).text, 'Tomorrow');
 });
 
+test('owner-discarded backlog releases new dependencies without replaying old content', async () => {
+  const { db, poll } = fixture();
+  const old = db.records.get('whatsappOutboundQueue/WORK-1');
+  db.records.set('whatsappOutboundQueue/WORK-1', { to: old.to, provider: 'wacli', status: 'cancelled', cancellationReason: 'owner-requested-20261019-cutover' });
+  assert.equal((await poll()).text, 'Work 2');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'cancelled');
+  const { db: otherDb, poll: otherPoll } = fixture();
+  otherDb.records.set('whatsappOutboundQueue/WORK-1', { to: 'different-recipient', provider: 'wacli', status: 'cancelled', cancellationReason: 'owner-requested-20261019-cutover' });
+  assert.equal(await otherPoll(), null, 'Cutover cannot bypass recipient isolation');
+});
+
 test('stale recipient reservations are recovered without changing the original queue record', async () => {
   for (const state of ['sent', 'failed', 'cancelled', 'missing']) {
     const { db, poll } = fixture();
