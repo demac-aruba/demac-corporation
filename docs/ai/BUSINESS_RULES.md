@@ -381,6 +381,12 @@ Production activation remains separately owner-approved through the server-side 
   copies for the same user's authorized reconciliation. See
   `adrs/appointment-charge-draft-recovery-20261013.md` for proven no-commit fencing.
 
+- Owner-approved receipt UX clarification (2026-10-19): appointment payments open directly
+  with amount, reference, one cash/transfer/POS/SUAVE selector and editable current Aruba
+  date/time. The note is optional and collapsed. Displaying the empty form is not an edit;
+  the first input captures its financial version. Registration remains one explicit,
+  authority-confirmed operation; uncertain retries retain the exact original payload.
+
 ## Booking Spots and workload support
 
 - `OPS-SCHED-SPOTS-001` — Effective 2026-10-10, owner-requested Scheduling rule: display service workload as Spots using the existing canonical duration and capacity policy. Live remaining capacity is a dated Van snapshot; only Booking Authority can confirm it. An overloaded mixed/manual booking reuses selected helper windows or explicit possible-overtime consent. Primary Work Order owns customer service quantities exactly once; marked helpers are nonbillable operational support and do not inherit the full planned Field scope. Preserve the existing Standard full-day exception and Project policy. Morning capacity overflow skips protected lunch, keeps exact minute estimates, and never creates payroll actuals. No migration of existing records. Acceptance and tests: `tasks/booking-spots-capacity-20261010.md` and `functions/bookingSpotsIndependentReview.test.js`.
