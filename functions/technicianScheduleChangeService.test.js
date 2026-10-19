@@ -46,10 +46,12 @@ test('same-day and support reference bundles retain their version and cannot ret
     if (support) await service.queueAdhocSupportChange({ order, eventId: 'synthetic-support-event' });
     else await service.queueSameDayChange({ order, eventId: 'synthetic-change-event' });
     const [key, queued] = [...db.records.entries()].find(([path, value]) => path.startsWith('whatsappOutboundQueue/') && value.type === 'booking-reference-bundle');
-    assert.match(queued.messages[0].text, /Complejo de prueba · Apartamento 4 · A-04/);
+    assert.match(queued.messages[0].text, /\*Dirección:\* Complejo de prueba · Apartamento 4/);
+    assert.doesNotMatch(queued.messages[0].text, /A-04/);
     if (support) {
       const primaryAlert = [...db.records.entries()].find(([path, value]) => path.startsWith('whatsappOutboundQueue/') && value.type !== 'booking-reference-bundle')[1];
-      assert.match(primaryAlert.text, /\*Ubicación:\* Complejo de prueba · Apartamento 4 · A-04/);
+      assert.match(primaryAlert.text, /\*Dirección:\* Complejo de prueba · Apartamento 4/);
+      assert.doesNotMatch(primaryAlert.text, /A-04/);
     }
     assert.equal(queued.referencesVersion, 2, 'Producer must capture the immutable reference version');
     db.records.set(key, { ...queued, status: 'failed', messageIndex: 1, sentMessageIds: ['synthetic-sent'], partAttempts: 3 });
