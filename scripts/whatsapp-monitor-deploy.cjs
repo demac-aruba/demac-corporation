@@ -14,6 +14,15 @@ const NAMES=['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsapp
 const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer'];
 const GROUPS={monitorExpectations:['targets'],monitorDays:['entries'],monitorIncidents:['items'],monitorAudit:[],monitorSnapshots:['queue','incidents','unverifiedIncidents']};
 const CONTROL='businessSettings/whatsapp/monitorControl/active';
+async function listIndexes(api,indexUrl) {
+  const found=[];let next;
+  do {
+    // Firestore Admin rejects nonzero pageSize, despite exposing the parameter.
+    const page=await api(indexUrl+(next?'?pageToken='+encodeURIComponent(next):''));
+    found.push(...(page.indexes||[]));next=page.nextPageToken;
+  } while(next);
+  return found;
+}
 function verifyIdentityPolicy(account,policy) {
   assert.equal(account?.email,ACCOUNT,'Administrator must provision the dedicated monitor identity');
   assert.notEqual(account.disabled,true,'Monitor identity is disabled');
@@ -97,7 +106,7 @@ async function main() {
       step('additive-index');
       const indexUrl=adminBase+'whatsappOutboundQueue/indexes';
       const matches=index=>index.queryScope==='COLLECTION'&&index.fields?.length===3&&index.fields[0].fieldPath==='status'&&index.fields[0].order==='ASCENDING'&&index.fields[1].fieldPath==='createdAt'&&index.fields[1].order==='ASCENDING'&&index.fields[2].fieldPath==='__name__';
-      const allIndexes=async()=>{const found=[];let next;do{const page=await api(indexUrl+'?pageSize=100'+(next?'&pageToken='+encodeURIComponent(next):''));found.push(...(page.indexes||[]));next=page.nextPageToken;}while(next);return found;};
+      const allIndexes=()=>listIndexes(api,indexUrl);
       if(!(await allIndexes()).some(matches))await api(indexUrl,'POST',{queryScope:'COLLECTION',fields:[{fieldPath:'status',order:'ASCENDING'},{fieldPath:'createdAt',order:'ASCENDING'}]});
       const until=Date.now()+20*60000;
       while(true){const index=(await allIndexes()).find(matches);assert.notEqual(index?.state,'NEEDS_REPAIR');if(index?.state==='READY'){summary.indexName=index.name;break;}assert.ok(Date.now()<until,'Index readiness timeout');await sleep(15000);}
@@ -149,5 +158,5 @@ async function main() {
     save();console.error(summary.failure);process.exitCode=1;
   }
 }
-module.exports={validateControl,validateFunction,verifyIdentityPolicy,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
+module.exports={validateControl,validateFunction,verifyIdentityPolicy,listIndexes,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
 if(require.main===module)main();
