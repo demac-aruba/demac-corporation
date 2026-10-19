@@ -65,3 +65,22 @@ permitted. If no session is available, report that remaining UI acceptance limit
 Multi-function deployment is sequential, not atomic: a partial failure keeps the
 previous UI deployed and permits resumption after source/configuration verification.
 Prior immutable source generations remain available for a reviewed rollback.
+
+## Historical reminder compatibility correction
+
+Run 39322476161 stopped during candidate preparation, before API creation or any
+producer update. Its first two candidates passed; the reminder transport predates
+reference bundles and therefore cannot accept the modern module's contextual patch.
+Reproduced against the immutable earlier-release candidate retained locally. Its
+only difference from the reviewed base transport is the absence of reference-bundle
+handling. An exact-hash-gated reminder patch adds the identical message-copy reader,
+composer and revision attribution while retaining its existing text-only contract.
+Unknown module hashes and all other functions still require the standard patch.
+No gate, runtime file allowlist, dependency check or source/configuration comparison
+is relaxed. Fresh adversarial pass verifies before/after hashes, target scoping and
+unchanged surrounding patch sections; the real historical archive is tested below.
+
+Node 22 validation of the exact reconstructed earlier-release archives: reminder
+96/96 tests; technician daily 88/88; reference update 88/88. Each actual historical
+bootstrap and custom-copy synthetic queue smoke passed. The reminder output hash
+is `15fb9443e052c9d31be7428bd2c89e347dd73b665e1ac02204931a05ab5ae1cf`.

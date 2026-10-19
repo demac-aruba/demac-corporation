@@ -54,6 +54,18 @@ function patchFor(name, transport) {
     bucket: BUCKET, object: transport.uri.slice(('gs://' + BUCKET + '/').length), generation: transport.generation,
   } } } };
 }
+function patchForArchive(name, patch, files) {
+  // This exact deployed reminder variant predates reference bundles. Preserve
+  // that contract while adding the same reviewed text-copy composition.
+  if (name !== 'sendDailyAppointmentReminders' || ![
+    '15b59ed6d516e807f4165e663c106979c4f11cc6ef30334daaf629321c667f1a',
+    '15fb9443e052c9d31be7428bd2c89e347dd73b665e1ac02204931a05ab5ae1cf',
+  ].includes(files['whatsappTransactionalService.js'])) return patch;
+  const parts = patch.split(/(?=^diff --git )/m);
+  const header = 'diff --git a/functions/whatsappTransactionalService.js b/functions/whatsappTransactionalService.js\n';
+  assert.equal(parts.filter(part => part.startsWith(header)).length, 1);
+  return parts.map(part => part.startsWith(header) ? fs.readFileSync(path.join(__dirname, 'message-template-legacy-reminder.patch'), 'utf8') : part).join('');
+}
 async function main() {
   assert.equal(process.versions.node.split('.')[0], '22');
   assert.equal(process.env.GITHUB_REPOSITORY, 'demac-aruba/demac-corporation');
@@ -128,6 +140,7 @@ async function main() {
       checkpoint('download-source');
       const before = download(fn.buildConfig.source.storageSource, name + '-baseline');
       const candidate = path.join(out, name + '-candidate'); fs.cpSync(before.directory, candidate, { recursive: true });
+      fs.writeFileSync(patchPath, patchForArchive(name, fs.readFileSync(patchPath, 'utf8'), before.files));
       checkpoint('verify-reviewed-patch');
       let alreadyApplied = false;
       try { run('git', ['apply', '--reverse', '--check', '-p2', patchPath], candidate); alreadyApplied = true; } catch { /* The complete forward patch must apply below. */ }
@@ -198,8 +211,9 @@ async function main() {
     console.log('PASS: settings API and eight producer sources verified; existing configuration, IAM, scheduler and traffic preserved. No messages replayed.');
   } catch (error) {
     summary.error = error.code === 'ERR_ASSERTION' ? String(error.message).split('\n')[0] : 'Release failed at ' + summary.stage;
+    summary.patchFailures = [...String(error.stderr || '').matchAll(/error: patch failed: ([a-zA-Z0-9_.\/-]+:\d+)/g)].map(match => match[1]);
     save(); console.error(summary.error); process.exitCode = 1;
   }
 }
-module.exports = { verifyDelta, patchFor, filesForFunction, testsForFunction, FILES, TARGETS, TESTS, SHARED };
+module.exports = { verifyDelta, patchFor, patchForArchive, filesForFunction, testsForFunction, FILES, TARGETS, TESTS, SHARED };
 if (require.main === module) main();
