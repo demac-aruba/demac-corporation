@@ -1,0 +1,26 @@
+name: WhatsApp reference recovery validation
+on:
+  push:
+    branches: [fix/whatsapp-delivery-recovery]
+  pull_request:
+    paths:
+      - functions/whatsappWacliGateway.js
+      - functions/whatsappReferenceBundle.js
+      - functions/whatsappReferenceBundle.test.js
+      - .github/workflows/whatsapp-reference-recovery-validation.yml
+permissions:
+  contents: read
+jobs:
+  recovery-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci --prefix functions --ignore-scripts --no-audit --no-fund
+      - run: npm run validate:firebase --prefix functions
+      - run: npm run test:transactional-whatsapp --prefix functions
+      - run: node --test functions/bookingVisitReferences.test.js functions/bookingVisitReferencesHttp.test.js functions/whatsappReferenceBundle.test.js functions/whatsappWacliGateway.test.js functions/wacliOutboundMediaUpload.test.js
