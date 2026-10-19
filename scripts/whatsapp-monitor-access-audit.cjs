@@ -31,6 +31,16 @@ async function main(){
     const indexes=await api('https://firestore.googleapis.com/v1/projects/demac-corporation/databases/(default)/collectionGroups/'+suffix);
     result.indexInspection.push({suffix,httpStatus:indexes.response.status,errorCode:indexes.data.error?.status||null,errorMessage:String(indexes.data.error?.message||'').slice(0,500),returnedCount:(indexes.data.indexes||[]).length,nextPage:Boolean(indexes.data.nextPageToken),queueIndexes:(indexes.data.indexes||[]).filter(x=>x.name?.includes('/collectionGroups/whatsappOutboundQueue/')).map(x=>({state:x.state,queryScope:x.queryScope,fields:x.fields}))});
   }
+  result.monitorFunctions=[];
+  for(const name of ['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsappMessagingObserveOrder']) {
+    const fn=await api('https://cloudfunctions.googleapis.com/v2/projects/demac-corporation/locations/us-central1/functions/'+name);
+    result.monitorFunctions.push({name,httpStatus:fn.response.status,state:fn.data.state||null,runtimeAccount:fn.data.serviceConfig?.serviceAccountEmail||null,triggerAccount:fn.data.eventTrigger?.serviceAccountEmail||null,stateMessages:(fn.data.stateMessages||[]).map(x=>({severity:x.severity,type:x.type,message:String(x.message||'').slice(0,500)}))});
+  }
+  result.requiredApis=[];
+  for(const service of ['cloudfunctions','cloudbuild','artifactregistry','run','eventarc','pubsub','cloudscheduler','firebase','firebaseextensions']) {
+    const svc=await api('https://serviceusage.googleapis.com/v1/projects/1053571783393/services/'+service+'.googleapis.com');
+    result.requiredApis.push({service,httpStatus:svc.response.status,state:svc.data.state||null});
+  }
   fs.writeFileSync(path.join(process.env.RUNNER_TEMP,'whatsapp-monitor-access.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify(result,null,2));
 }
