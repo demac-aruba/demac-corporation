@@ -22,10 +22,24 @@ const TARGETS = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'send
 const TESTS = ['appointmentCommunicationRenderer.test.js', 'appointmentNotificationService.test.js', 'technicianDailyScheduleService.test.js', 'technicianScheduleChangeService.test.js', 'whatsappTransactionalService.test.js', 'appointmentCommunicationAuthority.test.js', 'vanScheduleCommunicationAuthority.test.js', 'officeBookingAuthorityCommunication.test.js'];
 const stable = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(stable) : Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(stable(v))).digest('hex');
-function verifyDelta(before, after) {
+function filesForFunction(name) {
+  assert.ok(TARGETS.includes(name), 'Unapproved function');
+  // Historical bundles have different versions of unrelated producers. Patch
+  // only the message modules called by this deployed entry point.
+  if (name === 'sendDailyAppointmentReminders') return FILES.filter(f => !f.startsWith('technician'));
+  if (['sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'].includes(name)) return ['bookingLocationDisplay.js', 'technicianDailyScheduleService.js', 'whatsappTransactionalService.js'];
+  return [...FILES];
+}
+function testsForFunction(name) {
+  if (['officeBookingAuthority', 'queueAppointmentConfirmation'].includes(name)) return [...TESTS];
+  const files = filesForFunction(name);
+  return TESTS.filter(f => files.includes(f.replace('.test.js', '.js')));
+}
+function verifyDelta(before, after, name) {
+  const selected = filesForFunction(name);
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(f => before[f] !== after[f]).sort();
-  assert.deepEqual(changed, [...FILES].sort(), 'Unexpected message source delta');
-  for (const f of FILES) assert.ok(before[f] && after[f], 'Existing source module required');
+  assert.deepEqual(changed, [...selected].sort(), 'Unexpected message source delta');
+  for (const f of selected) assert.ok(before[f] && after[f], 'Existing source module required');
   return changed;
 }
 function patchFor(name, transport) {
@@ -91,26 +105,36 @@ async function main() {
       const policies = ancestors.map(a => { const kind = String(a.type).toLowerCase(); assert.ok(['project','folder','organization'].includes(kind)); return JSON.parse(cloud([...(kind === 'project' ? ['projects'] : kind === 'folder' ? ['resource-manager','folders'] : ['organizations']), 'get-iam-policy', String(a.id), '--format=json'])); });
       verifyInheritedPolicies(ancestors, policies); prepared.inheritedPrivacy = { mode: 'complete-ancestry-iam', levels: ancestors.length, policyHashes: policies.map(hash) };
     }
-    const patchPath = path.join(out, 'message-source.patch');
-    fs.writeFileSync(patchPath, run('git', ['diff', '--binary', BASE, 'HEAD', '--', ...FILES.map(f => 'functions/' + f)]));
-    assert.ok(fs.statSync(patchPath).size > 0);
     const candidates = [];
     // Validate and retain all five candidates before the first production patch.
     for (const name of TARGETS) {
-      summary.stage = 'prepare-' + name; save(); sourceGate();
+      const checkpoint = step => { summary.stage = 'prepare-' + name + '-' + step; save(); };
+      checkpoint('source-gate'); sourceGate();
+      const selectedFiles = filesForFunction(name);
+      const patchPath = path.join(out, name + '-message-source.patch');
+      fs.writeFileSync(patchPath, run('git', ['diff', '--binary', BASE, 'HEAD', '--', ...selectedFiles.map(f => 'functions/' + f)]));
+      assert.ok(fs.statSync(patchPath).size > 0);
+      checkpoint('describe');
       const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
+      checkpoint('traffic');
       verifyTraffic(service(fn), fn.serviceConfig.revision);
+      checkpoint('download-source');
       const before = download(fn.buildConfig.source.storageSource, name + '-baseline');
       const candidate = path.join(out, name + '-candidate'); fs.cpSync(before.directory, candidate, { recursive: true });
+      checkpoint('verify-reviewed-patch');
       run('git', ['apply', '--check', '-p2', patchPath], candidate);
       run('git', ['apply', '-p2', patchPath], candidate);
-      const files = manifest(candidate); verifyDelta(before.files, files);
-      const entry = { name, beforeRevision: fn.serviceConfig.revision, beforeSourceHash: runtimeSourceHash(before.files), candidateSourceHash: runtimeSourceHash(files), configHash: hash(releaseConfig(fn)), iamHash: iam(fn), schedulerHash: scheduler(name), operations: [] };
+      const files = manifest(candidate); verifyDelta(before.files, files, name);
+      checkpoint('configuration');
+      const entry = { name, changedFiles: selectedFiles, beforeRevision: fn.serviceConfig.revision, beforeSourceHash: runtimeSourceHash(before.files), candidateSourceHash: runtimeSourceHash(files), configHash: hash(releaseConfig(fn)), iamHash: iam(fn), schedulerHash: scheduler(name), operations: [] };
       summary.functions.push(entry); save();
-      entry.validation = validateCandidate({ source: candidate, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: TESTS });
+      checkpoint('test-candidate');
+      entry.validation = validateCandidate({ source: candidate, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: TESTS, updatedTests: testsForFunction(name) });
       assert.deepEqual(manifest(candidate), files);
+      checkpoint('retain-baseline');
       entry.recovery = await retainZip({ name: name + 'Baseline', directory: before.directory, archive: { sha256: before.archiveHash }, out, prepared, cloud });
       const zipped = createZip(candidate, path.join(out, name + '-proof.zip'));
+      checkpoint('retain-candidate');
       entry.transport = await retainZip({ name, directory: candidate, archive: { sha256: zipped.sha256 }, out, prepared, cloud });
       candidates.push({ entry, patch: patchFor(name, entry.transport) }); save();
     }
@@ -158,5 +182,5 @@ async function main() {
     save(); console.error(summary.error); process.exitCode = 1;
   }
 }
-module.exports = { verifyDelta, patchFor, FILES, TARGETS };
+module.exports = { verifyDelta, patchFor, filesForFunction, testsForFunction, FILES, TARGETS, TESTS };
 if (require.main === module) main();
