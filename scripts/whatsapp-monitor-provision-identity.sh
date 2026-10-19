@@ -4,10 +4,10 @@
 # deployment-account grants, queue access or message sends are performed.
 set -euo pipefail
 monitor_project='demac-corporation'
-monitor_account="demac-messaging-monitor@${monitor_project}.iam.gserviceaccount.com"
+monitor_account="demac-messaging-health-monitor@${monitor_project}.iam.gserviceaccount.com"
 monitor_existing="$(gcloud iam service-accounts list --project="$monitor_project" --filter="email=$monitor_account" --format='value(email)')"
 if [[ -z "$monitor_existing" ]]; then
-  gcloud iam service-accounts create demac-messaging-monitor \
+  gcloud iam service-accounts create demac-messaging-health-monitor \
     --project="$monitor_project" --display-name='DEMAC messaging health monitor'
 elif [[ "$monitor_existing" != "$monitor_account" ]]; then
   echo 'Unexpected service-account identity.' >&2
