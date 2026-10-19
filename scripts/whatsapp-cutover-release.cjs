@@ -15,7 +15,7 @@ const baseline = 'dccb8b43772a03714acb90db61d34cbd25bbca63';
 const reviewed = '51225bcc1370b9ad424823d3d91496c508b37971';
 const branch = 'release/whatsapp-cutover-20261019';
 const execute = process.argv.includes('--execute');
-const run = (cmd, args, options = {}) => execFileSync(cmd, args, { encoding:'utf8', stdio:['ignore','pipe','pipe'], maxBuffer:40e6, timeout:60000, ...options });
+const run = (cmd, args, options = {}) => execFileSync(cmd, args, { encoding:'utf8', stdio:[options.input === undefined ? 'ignore' : 'pipe','pipe','pipe'], maxBuffer:40e6, timeout:60000, ...options });
 const git = args => run('git',args).trim();
 const cloud = args => run('gcloud',args);
 const describe = name => JSON.parse(cloud(['functions','describe',name,'--project='+project,'--region=us-central1','--gen2','--format=json']));
@@ -122,7 +122,8 @@ async function main() {
 function cloudDeploy(stage,before) {
   run('gcloud',['functions','deploy',functionName,'--project='+project,'--region=us-central1','--gen2','--source='+stage,'--entry-point='+functionName,'--runtime=nodejs22','--run-service-account='+before.serviceConfig.serviceAccountEmail,'--quiet','--format=value(state)'],{timeout:1200000});
 }
-main().catch(error=>{
+module.exports = { run };
+if (require.main === module) main().catch(error=>{
   // Cloud command errors may contain runtime configuration. Never print stderr.
   const details={errorType:error.code==='ERR_ASSERTION'?'verification_failed':'operation_failed',exitCode:typeof error.status==='number'?error.status:null,
     verification:error.code==='ERR_ASSERTION'?error.message.split('\n')[0]:null,
