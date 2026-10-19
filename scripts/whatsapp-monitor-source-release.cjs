@@ -12,6 +12,7 @@ const { verifyPrivateBucket, verifyInheritedPolicies } = require('./appointment-
 const { retainZip, sourceVerifier, createZip } = require('./appointment-finance-transport.cjs');
 const { updateSource } = require('./appointment-finance-source-update.cjs');
 const { verifyTraffic } = require('./appointment-finance-release.cjs');
+const PUBLISHED = require('./whatsapp-monitor-published-sources.json');
 const PROJECT = 'demac-corporation', REGION = 'us-central1';
 const BUCKET = 'gcf-v2-sources-1053571783393-us-central1';
 const BRANCH = 'release/whatsapp-monitor-20261019';
@@ -22,6 +23,19 @@ const TARGETS = ['queueAppointmentConfirmation', 'wacliOutboundPoll'];
 const TESTS = ['appointmentNotificationService.test.js', 'technicianScheduleChangeService.test.js', 'appointmentCommunicationAuthority.test.js', 'vanScheduleCommunicationAuthority.test.js', 'whatsappWacliGateway.test.js', 'bookingVisitReferences.test.js', 'bookingVisitReferencesHttp.test.js', 'whatsappReferenceBundle.test.js'];
 const stable = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(stable) : Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(stable(v))).digest('hex');
+function resumedTransport(entry,published=PUBLISHED) {
+  assert.equal(published.releaseSha,'60ace9a86228fe5132fa0bf4e1a32847ec4c449b');
+  assert.equal(published.runId,39328826817);assert.equal(entry.alreadyPresent,true);
+  const proof=published.functions.find(value=>value.name===entry.name);
+  assert.ok(proof,'Missing prior publication evidence');
+  assert.equal(entry.beforeRevision,proof.afterRevision,'Published source revision advanced');
+  assert.equal(entry.beforeSourceHash,proof.candidateSourceHash,'Published source content changed');
+  for(const key of ['configHash','iamHash','schedulerHash'])assert.equal(entry[key],proof[key],'Published configuration changed');
+  for(const key of ['sourceVerified','configPreserved','iamPreserved','schedulerPreserved','trafficVerified'])assert.equal(proof[key],true);
+  assert.equal(proof.transport.fullManifestHash,entry.beforeSourceHash);
+  patchFor(entry.name,proof.transport);
+  return proof.transport;
+}
 function filesForFunction(name) {
   assert.ok(TARGETS.includes(name), 'Unapproved function');
   return name === 'wacliOutboundPoll' ? ['whatsappWacliGateway.js'] : FILES.filter(f => f !== 'whatsappWacliGateway.js');
@@ -133,7 +147,7 @@ async function main() {
       entry.recovery = await retainZip({ name: name + 'Baseline', directory: before.directory, archive: { sha256: before.archiveHash }, out, prepared, cloud });
       const zipped = createZip(candidate, path.join(out, name + '-proof.zip'));
       checkpoint('retain-candidate');
-      entry.transport = await retainZip({ name, directory: candidate, archive: { sha256: zipped.sha256 }, out, prepared, cloud });
+      entry.transport = entry.alreadyPresent ? resumedTransport(entry) : await retainZip({ name, directory: candidate, archive: { sha256: zipped.sha256 }, out, prepared, cloud });
       candidates.push({ entry, patch: patchFor(name, entry.transport) }); save();
     }
     for (const { entry, patch } of candidates) {
@@ -173,5 +187,5 @@ async function main() {
     save(); console.error(summary.error); process.exitCode = 1;
   }
 }
-module.exports = { verifyDelta, patchFor, filesForFunction, testsForFunction, FILES, TARGETS, TESTS };
+module.exports = { verifyDelta, patchFor, filesForFunction, testsForFunction, resumedTransport, FILES, TARGETS, TESTS };
 if (require.main === module) main();

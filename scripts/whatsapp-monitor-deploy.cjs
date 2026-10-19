@@ -11,9 +11,35 @@ const PROJECT='demac-corporation', REGION='us-central1';
 const BRANCH='release/whatsapp-monitor-20261019';
 const ACCOUNT=`demac-messaging-health-monitor@${PROJECT}.iam.gserviceaccount.com`;
 const NAMES=['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsappMessagingObserveOrder'];
-const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer'];
+const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer','roles/eventarc.eventReceiver'];
+const OBSERVER_SERVICE='whatsappmessagingobserveorder';
+const ARTIFACT_REPOSITORY=`https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts`;
 const GROUPS={monitorExpectations:['targets'],monitorDays:['entries'],monitorIncidents:['items'],monitorAudit:[],monitorSnapshots:['queue','incidents','unverifiedIncidents']};
 const CONTROL='businessSettings/whatsapp/monitorControl/active';
+function validateDeployInventory(functions) {
+  for(const fn of functions.filter(fn=>fn.labels?.['deployment-codebase']==='messaging-monitor')) {
+    const name=fn.name?.split('/').pop();assert.ok(NAMES.includes(name),'Unexpected monitor function; no deletion authorized');
+    assert.equal(fn.name,`projects/${PROJECT}/locations/${REGION}/functions/${name}`,'Unexpected monitor region');
+    assert.equal(fn.buildConfig.entryPoint,name);assert.equal(fn.buildConfig.runtime,'nodejs22');
+    assert.equal(fn.serviceConfig.serviceAccountEmail,ACCOUNT);
+    assert.ok(!fn.serviceConfig.minInstanceCount,'Reserved instances are not authorized');
+    if(fn.state==='ACTIVE')validateFunction(fn,name);
+  }
+}
+function validateArtifactRetention(repository) {
+  assert.ok([PROJECT,'1053571783393'].some(project=>repository.name===`projects/${project}/locations/${REGION}/repositories/gcf-artifacts`),'Unexpected artifact repository');
+  assert.ok(Object.keys(repository.cleanupPolicies||{}).length || repository.labels?.['firebase-functions-cleanup-opted-out']==='true',
+    'Preserve registry retention; automatic cleanup changes are not authorized');
+}
+function observerInvokerArgs(service) {
+  assert.equal(service,OBSERVER_SERVICE,'Only the dedicated observer can receive invocation permission');
+  return ['run','services','add-iam-policy-binding',OBSERVER_SERVICE,'--project='+PROJECT,'--region='+REGION,'--member=serviceAccount:'+ACCOUNT,'--role=roles/run.invoker','--quiet'];
+}
+function validateObserverPolicy(policy,requireMember=true) {
+  const bindings=(policy.bindings||[]).filter(binding=>binding.role==='roles/run.invoker');
+  assert.ok(!bindings.some(binding=>binding.members?.some(member=>['allUsers','allAuthenticatedUsers'].includes(member))),'Observer must remain private');
+  if(requireMember)assert.ok(bindings.some(binding=>!binding.condition&&binding.members?.includes('serviceAccount:'+ACCOUNT)),'Observer invocation is not authorized');
+}
 function firebaseDiagnostic(error) {
   // Only CLI error headings: never retain debug logs, environment or tool output wholesale.
   return [error.stdout,error.stderr].filter(Boolean).flatMap(value=>String(value).split(/\r?\n/))
@@ -54,6 +80,7 @@ function validateFunction(fn,name) {
   assert.equal(fn.serviceConfig.environmentVariables.WHATSAPP_MONITOR_ENABLED,'true');
   assert.equal(fn.serviceConfig.environmentVariables.WHATSAPP_MONITOR_SERVICE_ACCOUNT,ACCOUNT);
   if(name==='whatsappMessagingObserveOrder') {
+    assert.equal(fn.eventTrigger.serviceAccountEmail,ACCOUNT,'Observer trigger must use the dedicated identity');
     assert.equal(fn.eventTrigger.eventType,'google.cloud.firestore.document.v1.written');
     assert.equal(fn.eventTrigger.retryPolicy,'RETRY_POLICY_RETRY');
     const filters=fn.eventTrigger.eventFilters;
@@ -90,6 +117,7 @@ async function main() {
   };
   const adminBase=`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/collectionGroups/`;
   const describe=name=>JSON.parse(cloud(['functions','describe',name,'--gen2','--project='+PROJECT,'--region='+REGION,'--format=json']));
+  const observerPolicy=()=>JSON.parse(cloud(['run','services','get-iam-policy',OBSERVER_SERVICE,'--project='+PROJECT,'--region='+REGION,'--format=json']));
   const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   try {
     gate();step('preflight');
@@ -129,16 +157,30 @@ async function main() {
     }
     if(phase==='deploy') {
       assert.equal(summary.prepared,true);step('isolated-functions');gate();
+      const inventory=[];let next;
+      do {const page=await api(`https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/-/functions`+(next?'?pageToken='+encodeURIComponent(next):''));assert.ok(!page.unreachable?.length,'Function inventory incomplete');inventory.push(...(page.functions||[]));next=page.nextPageToken;}while(next);
+      validateDeployInventory(inventory);
+      const retention=await api(ARTIFACT_REPOSITORY);validateArtifactRetention(retention);
       const cli=path.join(process.env.RUNNER_TEMP,'monitor-tools/node_modules/.bin/firebase');
       assert.ok(fs.existsSync(cli));
       try {
-        run(cli,['deploy','--only','functions:messaging-monitor','--project',PROJECT,'--config',path.join(out,'firebase.json'),'--non-interactive'],out);
+        // --force acknowledges the reviewed observer retry policy. Exact selectors,
+        // inventory and retention guards prevent unrelated deletion/cleanup changes.
+        const only=NAMES.map(name=>'functions:messaging-monitor:'+name).join(',');
+        run(cli,['deploy','--only',only,'--project',PROJECT,'--config',path.join(out,'firebase.json'),'--non-interactive','--force'],out);
       } catch(error) {
         summary.firebaseErrors=firebaseDiagnostic(error);save();
         for(const line of summary.firebaseErrors)console.error('Firebase diagnostic: '+line);
         throw error;
       }
       summary.functions=NAMES.map(name=>{const fn=describe(name);validateFunction(fn,name);return {name,revision:fn.serviceConfig.revision,serviceAccount:fn.serviceConfig.serviceAccountEmail};});
+      const afterRetention=await api(ARTIFACT_REPOSITORY);
+      for(const key of ['cleanupPolicies','cleanupPolicyDryRun','labels'])assert.deepEqual(afterRetention[key],retention[key],'Registry retention changed');
+      const policy=observerPolicy();validateObserverPolicy(policy,false);
+      if(!(policy.bindings||[]).some(b=>b.role==='roles/run.invoker'&&!b.condition&&b.members?.includes('serviceAccount:'+ACCOUNT))) {
+        gate();cloud(observerInvokerArgs(OBSERVER_SERVICE));
+      }
+      validateObserverPolicy(observerPolicy());summary.observerInvocationVerified=true;
       const scheduler=JSON.parse(cloud(['scheduler','jobs','describe','firebase-schedule-whatsappMessagingMonitorTick-us-central1','--project='+PROJECT,'--location='+REGION,'--format=json']));
       assert.equal(scheduler.state,'ENABLED');assert.equal(scheduler.schedule,'every 1 minutes');assert.equal(scheduler.timeZone,'America/Aruba');
       assert.ok(scheduler.httpTarget.uri.includes('whatsappmessagingmonitortick')||scheduler.httpTarget.uri.includes('whatsappMessagingMonitorTick'));
@@ -150,6 +192,7 @@ async function main() {
     if(phase==='activate') {
       assert.equal(summary.deployed,true);step('activation');gate();
       for(const name of NAMES)validateFunction(describe(name),name);
+      validateObserverPolicy(observerPolicy());
       const load=createRequire(path.join(source,'package.json'));
       const {initializeApp,getApps}=load('firebase-admin/app');if(!getApps().length)initializeApp({projectId:PROJECT});
       const {getFirestore}=load('firebase-admin/firestore');const db=getFirestore(),ref=db.doc(CONTROL);
@@ -174,5 +217,5 @@ async function main() {
     save();console.error(summary.failure);process.exitCode=1;
   }
 }
-module.exports={validateControl,validateFunction,verifyIdentityPolicy,listIndexes,firebaseDiagnostic,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
+module.exports={validateControl,validateFunction,verifyIdentityPolicy,listIndexes,firebaseDiagnostic,validateDeployInventory,validateArtifactRetention,observerInvokerArgs,validateObserverPolicy,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
 if(require.main===module)main();

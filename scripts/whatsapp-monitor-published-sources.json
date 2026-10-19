@@ -1,0 +1,61 @@
+{
+  "releaseSha": "60ace9a86228fe5132fa0bf4e1a32847ec4c449b",
+  "runId": 39328826817,
+  "artifactId": 12222689243,
+  "functions": [
+    {
+      "name": "queueAppointmentConfirmation",
+      "afterRevision": "queueappointmentconfirmation-00049-xew",
+      "candidateSourceHash": "6723245aa1b27305d67191cd91ee442e09823b06f0c023160d11a11b8cd96d57",
+      "configHash": "8b7f2699c512d05c5939c324a176875c5b7f5189936ceb20216468769feed90e",
+      "iamHash": "de8e97540ca3499319bd4571ad89c465fd68328a4c4f26d143ca6f58d31816ac",
+      "schedulerHash": null,
+      "transport": {
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "dcd1dcb0acd04ab81a414dc3a57115bcd3f1ef672900b0d8fc32923864ca4235",
+        "fullManifestHash": "6723245aa1b27305d67191cd91ee442e09823b06f0c023160d11a11b8cd96d57",
+        "extractionVerified": true,
+        "recoverySha256": "dcd1dcb0acd04ab81a414dc3a57115bcd3f1ef672900b0d8fc32923864ca4235",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/60ace9a86228fe5132fa0bf4e1a32847ec4c449b/queueAppointmentConfirmation-candidate.zip",
+        "generation": "1792446181664321",
+        "createdAt": "2026-10-19T21:43:01+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "schedulerPreserved": true,
+      "trafficVerified": true
+    },
+    {
+      "name": "wacliOutboundPoll",
+      "afterRevision": "waclioutboundpoll-00029-muc",
+      "candidateSourceHash": "e2d866fb7841de00a7fae80142b0ba17e4cf6d1cafc4ffb00101f373f70f7267",
+      "configHash": "af08e82f6cd9aa6e0391b894aa83b30cf55204dce5937068b9ce8458669c7121",
+      "iamHash": "7e4860de24e19e9cac650dc580615f1222962663283b16915fda273045ca7b53",
+      "schedulerHash": null,
+      "transport": {
+        "label": "candidate",
+        "format": "zip",
+        "sha256": "03e02889fb6e8cfd171199c6efb70039788da79a5733059d261a452a9e2db2d9",
+        "fullManifestHash": "e2d866fb7841de00a7fae80142b0ba17e4cf6d1cafc4ffb00101f373f70f7267",
+        "extractionVerified": true,
+        "recoverySha256": "03e02889fb6e8cfd171199c6efb70039788da79a5733059d261a452a9e2db2d9",
+        "uri": "gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/60ace9a86228fe5132fa0bf4e1a32847ec4c449b/wacliOutboundPoll-candidate.zip",
+        "generation": "1792446229332745",
+        "createdAt": "2026-10-19T21:43:49+0000",
+        "privateRetained": true,
+        "anonymousAccessDenied": true,
+        "reused": false
+      },
+      "sourceVerified": true,
+      "configPreserved": true,
+      "iamPreserved": true,
+      "schedulerPreserved": true,
+      "trafficVerified": true
+    }
+  ]
+}

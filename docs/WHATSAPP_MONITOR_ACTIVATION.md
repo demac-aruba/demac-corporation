@@ -10,8 +10,13 @@ El propietario creó por consola `demac-messaging-health-monitor@demac-corporati
 y mostró los cuatro roles requeridos el 2026-10-19 a las 17:23 UTC-4. Se adapta el release a esa
 identidad existente. El script opcional `scripts/whatsapp-monitor-provision-identity.sh` queda
 alineado con el mismo nombre; no se necesita una segunda cuenta. CI verifica la cuenta, sus
-cuatro roles incondicionales y Cloud Monitoring API habilitada antes de realizar mutaciones.
+roles incondicionales y Cloud Monitoring API habilitada antes de realizar mutaciones.
 No modifica permisos de proyecto ni habilita APIs.
+La revisión del instalador añadió un quinto requisito: `roles/eventarc.eventReceiver` en
+esa misma cuenta, pendiente de asignación por el propietario. Firebase CLI usa la identidad
+de ejecución también para el trigger Firestore. El release concede `roles/run.invoker`
+únicamente en el servicio del observador y comprueba que no tenga invocación pública.
+No concede ese rol sobre todo el proyecto.
 La captura aprobada se conserva en `docs/ai/previews/whatsapp-monitoring/`.
 El monitor no envía WhatsApps, no reclama la cola y no tiene una acción de reintento.
 
