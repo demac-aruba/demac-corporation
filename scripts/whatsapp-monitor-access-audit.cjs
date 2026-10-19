@@ -20,8 +20,12 @@ async function main(){
   if(check.response.ok){result.granted=PERMISSIONS.filter(p=>check.data.permissions?.includes(p));result.missing=PERMISSIONS.filter(p=>!check.data.permissions?.includes(p));}
   const usage=await api(`https://serviceusage.googleapis.com/v1/projects/1053571783393/services/iam.googleapis.com`);
   result.iamApi={httpStatus:usage.response.status,state:usage.data.state||null,errorStatus:usage.data.error?.status||null,reasons:(usage.data.error?.details||[]).map(x=>x.reason).filter(Boolean)};
-  const account=await api(`https://iam.googleapis.com/v1/projects/${PROJECT}/serviceAccounts/demac-messaging-monitor@${PROJECT}.iam.gserviceaccount.com`);
+  const account=await api(`https://iam.googleapis.com/v1/projects/${PROJECT}/serviceAccounts/demac-messaging-health-monitor@${PROJECT}.iam.gserviceaccount.com`);
   result.monitorAccount={httpStatus:account.response.status,exists:account.response.ok,errorStatus:account.data.error?.status||null,reasons:(account.data.error?.details||[]).map(x=>x.reason).filter(Boolean)};
+  const monitoring=await api('https://serviceusage.googleapis.com/v1/projects/1053571783393/services/monitoring.googleapis.com');
+  result.monitoringApi={httpStatus:monitoring.response.status,state:monitoring.data.state||null,errorStatus:monitoring.data.error?.status||null};
+  const policy=await api(`https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,{options:{requestedPolicyVersion:3}});
+  result.monitorRoles={httpStatus:policy.response.status,bindings:(policy.data.bindings||[]).filter(b=>b.members?.includes('serviceAccount:demac-messaging-health-monitor@'+PROJECT+'.iam.gserviceaccount.com')).map(b=>({role:b.role,conditional:Boolean(b.condition)}))};
   fs.writeFileSync(path.join(process.env.RUNNER_TEMP,'whatsapp-monitor-access.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify(result,null,2));
 }
