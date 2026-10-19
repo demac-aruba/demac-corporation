@@ -408,8 +408,8 @@ Production activation remains separately owner-approved through the server-side 
   live owner-session acceptance pending. The designated active owner may explicitly compare
   ERP customers/articles against a bounded QBO Customer/Item/Account page. Matching
   names, email or SKU suggest review only. Inactive records remain visible; missing
-  matches in a partial page never authorize creation. No persistent mapping or
-  accounting/inventory write is introduced. See `adrs/quickbooks-catalog-20261014.md`.
+  matches in a partial page never authorize creation. This read stage introduces no persistent mapping or
+  accounting/inventory write. Persistent identity confirmation is governed separately below. See `adrs/quickbooks-catalog-20261014.md`.
 
 - `FIN-QBO-PRODUCTION-READ-001` — Owner authorized continuation on 2026-10-13 after
   confirming DEMAC realm 9130352327074466 (CompanyInfo country AW). Only the designated
@@ -420,3 +420,23 @@ Production activation remains separately owner-approved through the server-side 
   credentials encrypted, and fails closed on uncertain refresh or identity changes. No
   accounting writes, synchronization, financial export to AI, or MCP access is authorized
   by this reporting release. See `adrs/quickbooks-production-reports-20261013.md`.
+
+
+## QuickBooks explicitly confirmed identities (2026-10-19)
+
+- `FIN-QBO-LINKS-001` — The designated active owner may prepare and explicitly confirm
+  existing Customer/Item identities for fixed production realm `9130352327074466`.
+  Suggestions never save automatically. The server re-reads canonical ERP identity and
+  the selected fixed provider page, compares observation fingerprints and holds a private
+  intent for five minutes. Confirmation revalidates owner, connection, ERP source and
+  mapping version; it never issues a provider accounting write.
+- One active ERP identity per provider identity, scoped by entity and company/environment.
+  Concurrent claims conflict; retries reuse the same version. Another target requires
+  explicit revocation, preserving versioned history and both underlying records.
+- Inactive records, subcustomer/project hierarchies and incompatible service/product types
+  are blocked. A changed/deleted source, changed connection, or changed provider observation
+  is review-required. Currency, taxation, accounts, units, prices and inventory treatment
+  are not approved by identity confirmation; future sends must validate them separately.
+- No invoice, payment, customer/item creation, inventory movement, historical import or
+  synchronization is authorized. Expired intent metadata remains private; no destructive
+  cleanup or TTL policy is introduced. See `adrs/quickbooks-confirmed-links-20261019.md`.

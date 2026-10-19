@@ -42,15 +42,19 @@ export async function scanCatalogs(options: {
     }
   }
 }
-export function comparisonRows(entity: CatalogEntity, collection?: CatalogCollection): ComparisonRow[] {
+export function comparisonRows(entity: CatalogEntity, collection?: CatalogCollection, links?: Record<string, { status: string; qboId?: string }>): ComparisonRow[] {
   if (!collection) return [];
   const matched = new Set<string>();
   const searchable = (source: ErpMatchRow | undefined, candidates: QuickBooksCatalogRow[]) => catalogSearchText([
     source?.name, source?.id, source?.email, source?.sku, ...candidates.flatMap(row => [row.name, row.id, row.email, row.sku, row.company]),
   ].filter(Boolean).join(' '));
-  const result: ComparisonRow[] = suggestCatalogMatches(entity, collection.source, collection.records).map(row => {
+  const byId = new Map(collection.records.map(row => [row.id, row]));
+  const result: ComparisonRow[] = suggestCatalogMatches(entity, collection.source, collection.records).map(suggestion => {
+    const link = links?.[suggestion.source.id];
+    const target = link?.status === 'confirmed' && link.qboId ? byId.get(link.qboId) : undefined;
+    const row = link?.status === 'confirmed' ? { ...suggestion, candidates: target ? [target] : [], status: (!suggestion.source.active ? 'inactive' : target ? 'review' : 'not-seen') as ComparisonRow['status'] } : suggestion;
     row.candidates.forEach(candidate => matched.add(candidate.id));
-    return { key: 'erp-' + row.source.id, ...row, search: searchable(row.source, row.candidates) };
+    return { key: 'erp-' + row.source.id, ...row, search: searchable(row.source, row.candidates) + (link?.status === 'confirmed' ? ' ' + catalogSearchText(link.qboId || '') : '') };
   });
   for (const row of collection.records) if (!matched.has(row.id)) result.push({ key: 'qbo-' + row.id, candidates: [row],
     status: row.active ? 'qbo-only' : 'inactive', search: searchable(undefined, [row]) });

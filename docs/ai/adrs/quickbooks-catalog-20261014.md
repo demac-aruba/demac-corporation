@@ -2,6 +2,12 @@
 
 Date: 2026-10-14. Status: read stage deployed; live catalog acceptance pending. See ../QUICKBOOKS_CATALOG_PUBLICATION_20261014.md.
 
+Partial supersession 2026-10-19: the earlier no-persistence restriction is superseded only
+for explicitly owner-confirmed identity metadata by
+[confirmed links](quickbooks-confirmed-links-20261019.md). The GET-only reader, fixed tenant
+and no accounting-write boundaries remain. The continuous comparison workspace separately
+replaced the original 100-row display cap; see `../QUICKBOOKS_COMPARISON_WORKSPACE_20261014.md`.
+
 The owner intends to reuse existing QuickBooks customers and articles instead of
 duplicating them. Before any persistent mappings or accounting writes, expose a
 designated-owner catalog comparison at the existing authenticated connection page.
