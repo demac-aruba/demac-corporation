@@ -31,4 +31,22 @@ Reviewed: complete new workflow/script, affected authentication boundaries, outp
 The workflow cannot deploy and cannot trigger any sender. All Firestore calls are reads. Cloud commands are describe/read. SSH executes service status and localhost GET /health only. Output errors are categorized rather than echoed. No production credentials are copied outside the existing ephemeral runner authentication flow.
 Residual risk: unavailable IAM or SSH rights may leave a diagnostic section unverified; local source may differ from deployed functions. No production repair is asserted before runtime evidence.
 
-Runtime results: pending the branch-only read-only audit.
+## Runtime results and correction
+
+Confirmed at 09:20 Aruba on 19 October: the Scheduler queued its 17 automatic records;
+52 total records remained queued. The bridge and sync services were active, but outbound
+polling repeatedly failed after 08:11. Twenty sampled application errors all identified
+missing Firebase project identity at whatsappWacliGateway.js:594. Neither project
+environment variable was configured, although Firestore was accessible. An attachment
+therefore aborted polling for unrelated customers and Vans too.
+
+The approved read-only runs are 39252900340, 39258643408, 39258886301 and 39259223058.
+Their output contains aggregate counts and error categories. The later bounded recovery
+inventory found old entries and potentially repeated schedules; it did not send, cancel
+or modify them.
+
+The reviewed correction is isolated in PR #605:
+https://github.com/demac-aruba/demac-corporation/pull/605
+It uses public Admin Storage project discovery, a bounded lookup and failure isolation.
+192 tests pass locally and in Node 22 CI (run 39260162299). Production activation and
+queue recovery remain subject to explicit owner approval; no production fix is claimed.
