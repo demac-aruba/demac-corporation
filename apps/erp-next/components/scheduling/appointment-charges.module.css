@@ -136,3 +136,7 @@
 .paymentNote{margin-top:8px;font-size:11px!important;color:#1268ff}.paymentNote summary{cursor:pointer}
 .compactWorkspace .paymentsPanel>.empty{padding:7px 9px;font-size:11px!important}
 @media(max-width:600px){.paymentEntry input{font-size:16px!important}}
+
+/* Preserve catalog, scroll and inputs when the appointment shows its history. */
+.retainedView{display:contents}
+.hiddenView{display:none}

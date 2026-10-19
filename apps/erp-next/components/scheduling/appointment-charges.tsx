@@ -95,8 +95,19 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const [quoteRevision, setQuoteRevision] = useState(0);
   const { quote, displayQuote, error: quoteError, loading: quoting } = useChargeQuote(editing ? lines : [], quoteRevision, appointmentId, editingVersion);
   useEffect(() => { if (quoting) setReviewed(false); }, [quoting]);
-  const { record, error: readError, loading, updatedAt, reload: read, ensureVersion } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending));
-  const editSession = useChargeEditSession(appointmentId, canManage && active && !showHistory && Boolean(record) && !record?.blocker, ensureVersion);
+  const { record, error: readError, loading, updatedAt, reload: read, ensureVersion } = useAppointmentCharges(appointmentId, active, Boolean(editing || payment || busy || pending), showHistory ? 'history' : 'charges');
+  // Internal tabs belong to the same open appointment. Releasing on each tab
+  // change fences the unchanged draft and forces a read + quote on every return.
+  // Start only on an explicit finance visit, then retain until this owner closes
+  // the dialog or loses permission. The existing hook still renews/expires safely.
+  const editSessionOwner = `${currentUserId}:${appointmentId}`;
+  const [editSessionVisit, setEditSessionVisit] = useState<string | null>(null);
+  const requestingEdit = active && !showHistory;
+  useEffect(() => {
+    if (!canManage || record?.blocker) setEditSessionVisit(null);
+    else if (requestingEdit) setEditSessionVisit(editSessionOwner);
+  }, [canManage, record?.blocker, requestingEdit, editSessionOwner]);
+  const editSession = useChargeEditSession(appointmentId, canManage && (requestingEdit || editSessionVisit === editSessionOwner) && Boolean(record) && !record?.blocker, ensureVersion);
   const reload = () => { setQuoteRevision(value => value + 1); return read(); };
   useEffect(() => { onBusyChange(busy || Boolean(pending)); return () => onBusyChange(false); }, [busy, pending, onBusyChange]);
   const state = record?.state;
@@ -141,8 +152,8 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     if (acknowledgedVersion.current === version) {
       setDraftBaseline(currentBaseline); acknowledgedVersion.current = null;
     } else if (acknowledgedVersion.current !== null && version > acknowledgedVersion.current) acknowledgedVersion.current = null;
-    // Returning from History reacquires a lease and advances version even for a
-    // fresh draft. Rebase only when all financial evidence is still identical.
+    // Recovering an expired lease can advance the version even for a fresh draft.
+    // Rebase only when all financial evidence is still identical.
     if ((recoveringDraft || (editing && version > editingVersion)) && !busy && !pending && !record.blocker && draftBaseline === currentBaseline) {
       setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint('');
     }
@@ -244,7 +255,8 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     {editing ? <div className={styles.draftStatus} role="status">{recovered ? 'Borrador recuperado. ' : ''}Trabajos pendientes de confirmar · {draftSaved ? 'Borrador conservado en esta pestaña' : 'Conservando borrador…'}</div> : null}
     {recoveryConflict ? <div className={styles.notice}><div><strong>Los datos guardados cambiaron desde este borrador.</strong><p>Compara los trabajos y pagos actuales antes de continuar. Tu selección se conserva.</p><details><summary>Ver trabajos guardados actualmente</summary><ChargeLineSummary record={record}/></details><label className={styles.check}><input type="checkbox" checked={recoveryReviewed} onChange={event => setReviewRecovery(event.target.checked ? currentBaseline : '')}/>Revisé los trabajos y pagos guardados y quiero continuar con este borrador.</label><button type="button" className={styles.secondary} disabled={accessBlocked || !recoveryReviewed} onClick={() => { if (accessBlocked || !recoveryReviewed) return; setDraftBaseline(currentBaseline); setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint(''); setReviewRecovery(''); }}>Continuar con este borrador</button></div></div> : null}
     {record.blocker ? <div className={styles.error} role="alert">{record.blocker}</div> : null}
-    {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio conserva su responsable y fecha. Las anulaciones incluyen el motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : <>
+    {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio conserva su responsable y fecha. Las anulaciones incluyen el motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : null}
+    <div className={showHistory ? styles.hiddenView : styles.retainedView}>
     {editing ? <div className={styles.metrics}>
       <Metric icon="receipt" label="PROYECCIÓN ORIGINAL" value={state?.originalEstimate?.totalCents} note="Solo referencia del booking"/>
       <Metric icon="receipt" label="TOTAL DE TRABAJOS" value={totals?.totalCents ?? null} note={quoting ? 'Validando tarifas…' : 'Borrador · sin confirmar'} color={styles.violet}/>
@@ -262,7 +274,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
       {estimate ? <details className={styles.priorEstimate}><summary>Ver proyección del booking · {chargeMoney(estimate.totalCents)}</summary><ChargeLineSummary record={{ ...record, state: state ? { ...state, final: null } : null }}/></details> : null}
       </>}
       </div>
-      <ChargeAddSearch disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual} onCatalogLoaded={setCatalogItems}/>
+      <ChargeAddSearch active={active && !showHistory} disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual} onCatalogLoaded={setCatalogItems}/>
       </section>
       <section className={`${styles.panel} ${styles.paymentsPanel}`} aria-label="Pagos de la visita"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={`${styles.tile} ${styles.green}`}><ChargeIcon name="money"/></span><div><h3 className={styles.heading}>Pagos de la visita</h3><p>Pagos registrados para esta cita</p></div></div><span className={`${styles.paymentStatus} ${!editing && totals?.paymentStatus === '✓ Pagado' ? styles.paidStatus : ''}`}>{record.blocker ? 'Por conciliar' : editing ? 'Borrador en edición' : totals?.paymentStatus}</span></div>
         {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
@@ -285,7 +297,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
         </>}
         {!editing && !payment && !busy && !pending && !loading && !readError && active && !showHistory ? <AppointmentQuickBooksPreviewButton key={`${currentUserId}:${appointmentId}:${version}`} appointmentId={appointmentId} currentUserId={currentUserId} expectedVersion={version}/> : null}
       </div>
-    </footer></>}
+    </footer></div>
     </>}
   </div>;
 }

@@ -149,15 +149,15 @@ await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 375.00'}).
 await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('OWNER-CASE-250');await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
 const balance=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');await balance.getByText('Afl. 125.00',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal(db.read('appointments/apt').jobCharges.originalEstimate,null);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,25000);
 await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor({state:'hidden',timeout:6000});assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3','Success feedback disappears; the draft remains');
-// A fresh draft must survive a lease-only version change when visiting History.
+// Internal History navigation retains the same lease, version, draft and review.
 await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
 await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.getAttribute('aria-label')==='Confirmar monto final'&&!button.disabled));
 const beforeHistoryVersion=db.read('appointments/apt').jobCharges.version;
 await page.getByRole('button',{name:'Historial',exact:true}).click();await page.getByRole('heading',{name:'Historial de importes y pagos',exact:true}).waitFor();
 await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();await page.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
 await page.getByText('SALDO ESTIMADO',{exact:true}).locator('..').getByText('Afl. 125.00',{exact:true}).waitFor();
-assert.ok(db.read('appointments/apt').jobCharges.version>beforeHistoryVersion,'History return acquires a fresh edit fence');
-assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),false,'Lease-only rebase resets scope review');
+assert.equal(db.read('appointments/apt').jobCharges.version,beforeHistoryVersion,'Internal tabs must not fence an unchanged draft');
+assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),true,'Internal tabs preserve a reviewed unchanged draft');
 await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
 await page.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.getAttribute('aria-label')==='Confirmar monto final'&&!button.disabled));
 assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,1);
@@ -201,8 +201,10 @@ await changed.getByRole('button',{name:'Historial',exact:true}).click();await ch
 const state=db.read('appointments/apt').jobCharges;
 db.store.set('appointments/apt',{...db.read('appointments/apt'),jobCharges:{...state,version:state.version+1,updatedBy:'another-office',updatedAt:'2026-10-13T19:00:00.000Z'}});
 await changed.getByRole('button',{name:'Importes y pagos',exact:true}).click();await changed.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
+// Simulate explicit reconciliation of external evidence; tab navigation itself is not a write.
+await changed.getByRole('button',{name:'Actualizar importes',exact:true}).click();
 await changed.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();
-await changed.getByLabel('Revisé los trabajos realizados',{exact:false}).check();assert.equal(await changed.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
+assert.equal(await changed.getByLabel('Revisé los trabajos realizados',{exact:false}).isDisabled(),true,'A failed stale-version quote cannot be reviewed');assert.equal(await changed.getByRole('button',{name:'Confirmar monto final',exact:true}).isDisabled(),true);
 assert.equal(await changed.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal(writes.length,0,'Changed financial evidence is never silently overwritten');
 results.push({name:'fresh-draft-history-foreign-baseline-stays-blocked',status:'PASS'});console.log('PASS fresh draft remains blocked after foreign same-amount history change');
 }finally{await changedContext.close();}
