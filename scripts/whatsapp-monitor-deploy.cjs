@@ -14,6 +14,16 @@ const NAMES=['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsapp
 const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer'];
 const GROUPS={monitorExpectations:['targets'],monitorDays:['entries'],monitorIncidents:['items'],monitorAudit:[],monitorSnapshots:['queue','incidents','unverifiedIncidents']};
 const CONTROL='businessSettings/whatsapp/monitorControl/active';
+function firebaseDiagnostic(error) {
+  // Only CLI error headings: never retain debug logs, environment or tool output wholesale.
+  return [error.stdout,error.stderr].filter(Boolean).flatMap(value=>String(value).split(/\r?\n/))
+    .map(line=>line.replace(/\u001b\[[0-9;]*m/g,''))
+    .filter(line=>/^Error:|HTTP Error:|Missing required permissions/.test(line))
+    .slice(-8).map(line=>line.replace(/https?:\/\/\S+/g,'[URL]')
+      .replace(/Bearer\s+\S+/gi,'Bearer [REDACTED]')
+      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[REDACTED]')
+      .replace(/((?:access_token|refresh_token|private_key|client_secret|password)\s*[:=]\s*)\S+/gi,'$1[REDACTED]').slice(0,700));
+}
 async function listIndexes(api,indexUrl) {
   const found=[];let next;
   do {
@@ -121,7 +131,13 @@ async function main() {
       assert.equal(summary.prepared,true);step('isolated-functions');gate();
       const cli=path.join(process.env.RUNNER_TEMP,'monitor-tools/node_modules/.bin/firebase');
       assert.ok(fs.existsSync(cli));
-      run(cli,['deploy','--only','functions:messaging-monitor','--project',PROJECT,'--config',path.join(out,'firebase.json'),'--non-interactive'],out);
+      try {
+        run(cli,['deploy','--only','functions:messaging-monitor','--project',PROJECT,'--config',path.join(out,'firebase.json'),'--non-interactive'],out);
+      } catch(error) {
+        summary.firebaseErrors=firebaseDiagnostic(error);save();
+        for(const line of summary.firebaseErrors)console.error('Firebase diagnostic: '+line);
+        throw error;
+      }
       summary.functions=NAMES.map(name=>{const fn=describe(name);validateFunction(fn,name);return {name,revision:fn.serviceConfig.revision,serviceAccount:fn.serviceConfig.serviceAccountEmail};});
       const scheduler=JSON.parse(cloud(['scheduler','jobs','describe','firebase-schedule-whatsappMessagingMonitorTick-us-central1','--project='+PROJECT,'--location='+REGION,'--format=json']));
       assert.equal(scheduler.state,'ENABLED');assert.equal(scheduler.schedule,'every 1 minutes');assert.equal(scheduler.timeZone,'America/Aruba');
@@ -158,5 +174,5 @@ async function main() {
     save();console.error(summary.failure);process.exitCode=1;
   }
 }
-module.exports={validateControl,validateFunction,verifyIdentityPolicy,listIndexes,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
+module.exports={validateControl,validateFunction,verifyIdentityPolicy,listIndexes,firebaseDiagnostic,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
 if(require.main===module)main();

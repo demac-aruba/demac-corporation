@@ -1,8 +1,17 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
 const {patchFor,verifyDelta,filesForFunction,TARGETS,FILES}=require('./whatsapp-monitor-source-release.cjs');
-const {validateControl,validateFunction,verifyIdentityPolicy,listIndexes,ROLES,GROUPS,ACCOUNT,NAMES}=require('./whatsapp-monitor-deploy.cjs');
+const {validateControl,validateFunction,verifyIdentityPolicy,listIndexes,firebaseDiagnostic,ROLES,GROUPS,ACCOUNT,NAMES}=require('./whatsapp-monitor-deploy.cjs');
 const transport=name=>({format:'zip',privateRetained:true,extractionVerified:true,anonymousAccessDenied:true,uri:'gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/'+'a'.repeat(40)+'/'+name+'-candidate.zip',generation:'123',sha256:'b'.repeat(64)});
+test('Firebase failure diagnostics retain bounded error headings and redact credentials',()=>{
+  const secret='private-value';
+  const output=firebaseDiagnostic({stdout:'environment='+secret+'\nError: Permission denied. https://example.test/?access_token='+secret,stderr:'Bearer '+secret+'\nError: access_token='+secret+' Bearer '+secret+' eyJfake.fake.fake\n'+('Error: x\n'.repeat(10))});
+  assert.equal(output.length,8);assert.ok(output.every(line=>line.startsWith('Error:')));
+  const detail=firebaseDiagnostic({stderr:'Error: access_token='+secret+' Bearer '+secret+' eyJfake.fake.fake https://example.test/?password='+secret});
+  assert.ok(detail[0].includes('[REDACTED]'));assert.ok(!JSON.stringify(detail).includes(secret));
+  assert.deepEqual(firebaseDiagnostic({stderr:'debug only '+secret}),[]);
+  assert.equal(firebaseDiagnostic({stderr:'Error: '+'x'.repeat(1000)})[0].length,700);
+});
 test('Firestore index inspection uses provider default size and preserves every returned page',async()=>{
   const url='https://firestore.googleapis.com/v1/projects/demo/databases/(default)/collectionGroups/queue/indexes';
   const calls=[];
