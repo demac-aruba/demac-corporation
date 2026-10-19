@@ -12,6 +12,7 @@ const emit = (section, data) => console.log(JSON.stringify({ section, ...data })
 function category(value) {
   const text = String(value || '').toLowerCase();
   for (const [label, pattern] of [
+    ['missing_project_identity', /firebase project identity is required/],
     ['invalid_reference_bundle', /invalid booking reference/],
     ['transaction_read_after_write', /reads.*before.*writes|read.*after.*writ/],
     ['invalid_firestore_value', /undefined|invalid.*document|documentpath|invalid.*argument/],
@@ -81,6 +82,12 @@ async function main() {
   for (const name of ['queueAppointmentConfirmation','sendDailyTechnicianSchedules','wacliOutboundPoll','wacliOutboundAck']) {
     await section('function_'+name, async () => cloud(['functions','describe',name,'--project='+project,'--region=us-central1','--gen2','--format=json(state,updateTime,serviceConfig.revision,eventTrigger.retryPolicy)']));
   }
+  await section('poll_project_identity', async () => {
+    const d = cloud(['functions','describe','wacliOutboundPoll','--project='+project,'--region=us-central1','--gen2','--format=json(serviceConfig.environmentVariables.GCLOUD_PROJECT,serviceConfig.environmentVariables.GOOGLE_CLOUD_PROJECT,serviceConfig.environmentVariables.FIREBASE_CONFIG)']);
+    const env = d.serviceConfig?.environmentVariables || {};
+    let config = {}; try { config = JSON.parse(env.FIREBASE_CONFIG || '{}'); } catch {}
+    return { gcloudProjectPresent: Boolean(env.GCLOUD_PROJECT), googleCloudProjectPresent: Boolean(env.GOOGLE_CLOUD_PROJECT), firebaseConfigProjectPresent: Boolean(config.projectId), firestoreProjectMatches: db.projectId === project };
+  });
   await section('runtime_errors', async () => {
     const filter = 'timestamp>="2026-10-19T04:00:00Z" AND timestamp<"2026-10-20T04:00:00Z" AND severity>=ERROR AND (resource.labels.service_name="waclioutboundpoll" OR resource.labels.service_name="waclioutboundack" OR resource.labels.service_name="queueappointmentconfirmation" OR resource.labels.service_name="senddailytechnicianschedules")';
     const rows = cloud(['logging','read',filter,'--project='+project,'--limit=80','--format=json']);
