@@ -68,3 +68,16 @@ for task workers). Meta-approved message bodies remain outside this editor.
 Owner: DEMAC maintainer and business owner. Due: before the separately authorized
 production release. No unresolved critical/high technical finding; no production
 action is authorized by this self-review.
+
+## Approved-release integration check
+
+The owner approved merge and deployment on 2026-10-19. Main subsequently included
+PRs 607/611 (messaging monitor). The menu conflict was resolved by retaining both
+entries. The 150-test transactional suite and ERP typecheck passed on the combined
+source. A focused monitor packaging test exposed its explicit JSON allowlist, which
+needed the new shared catalog; only that exact path was added, with regression
+coverage verifying the monitor package still excludes the settings HTTP entry.
+All 13 focused monitor tests passed. An initial broad test command also attempted
+the emulator-only suite without emulator endpoints; its guarded refusal is recorded,
+not treated as a pass. The GitHub monitor workflow supplies the required real Auth
+and Firestore emulators for that release gate.

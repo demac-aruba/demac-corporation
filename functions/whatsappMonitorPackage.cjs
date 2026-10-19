@@ -7,7 +7,7 @@ function packageMonitor(destination){
   const files=new Map();
   function visit(name){
     if(files.has(name))return;
-    if(!/^[A-Za-z0-9]+\.js$/.test(name) && name!=='data/papiamento-aruba-vocabulary-2009.json')throw Error('Unexpected local dependency.');
+    if(!/^[A-Za-z0-9]+\.js$/.test(name) && !['data/papiamento-aruba-vocabulary-2009.json','data/message-copy-catalog.json'].includes(name))throw Error('Unexpected local dependency.');
     const content=fs.readFileSync(path.join(__dirname,name),'utf8');files.set(name,content);
     for(const match of content.matchAll(/require\(['"]\.\/([^'"]+)['"]\)/g))visit(/\.(js|json)$/.test(match[1])?match[1]:`${match[1]}.js`);
   }
