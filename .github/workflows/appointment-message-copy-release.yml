@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/appointment-message-copy-*'
+      - 'scripts/booking-dwelling-candidate-validation.cjs'
       - '.github/workflows/appointment-message-copy-release.yml'
   push:
     branches: [release/appointment-message-copy-20261019]

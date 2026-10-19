@@ -23,7 +23,8 @@ function validateLock(content, manifest) {
   for (const name of Object.keys(manifest.dependencies)) assert.ok(lock.packages['node_modules/' + name], 'Missing direct dependency');
   return lock;
 }
-function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, smokeScript = 'booking-dwelling-runtime-smoke.cjs', testFixtures = [] }) {
+function validateCandidate({ source, root, out, env, candidate, reconstruct, name, selectedTests = focused, updatedTests = selectedTests, smokeScript = 'booking-dwelling-runtime-smoke.cjs', testFixtures = [] }) {
+  for (const file of updatedTests) assert.ok(selectedTests.includes(file), 'Updated test must still run');
   const lockBytes = fs.readFileSync(path.join(source, 'package-lock.json'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   validateLock(lockBytes, pkg);
@@ -56,7 +57,9 @@ function validateCandidate({ source, root, out, env, candidate, reconstruct, nam
   }
   const validation = source + '-test'; fs.cpSync(source, validation, { recursive: true });
   if (candidate) {
-    for (const file of selectedTests) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
+    // Keep the archived regression tests of unrelated historical modules. All
+    // selected tests still run; only changed modules receive current assertions.
+    for (const file of updatedTests) fs.copyFileSync(path.join(root, 'functions', file), path.join(validation, file));
     fs.cpSync(path.join(root, 'functions/test-support'), path.join(validation, 'test-support'), { recursive: true });
     if (reconstruct) fs.copyFileSync(path.join(root, 'functions/propertyLocations.emulator.test.cjs'), path.join(validation, 'propertyLocations.emulator.test.cjs'));
   }

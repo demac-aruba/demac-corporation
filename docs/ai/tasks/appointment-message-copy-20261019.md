@@ -14,7 +14,7 @@ Application code uses Fast Product Validation. The controlled release receives D
 - Technician daily, same-day, support and reference-update paths use the same saved destination.
 
 ## Release and recovery
-Only officeBookingAuthority, queueAppointmentConfirmation, sendDailyAppointmentReminders, sendDailyTechnicianSchedules and notifyBookingReferenceUpdate may be patched. Only six message modules may differ in each live source bundle. The approved application files are pinned to commit 86eb8679e7ef87e3be0d7d797c02549044645e7e. The release branch must equal main and its checkout SHA. Merge uses [merge-only]; a separate release branch activates the guarded workflow.
+Only officeBookingAuthority, queueAppointmentConfirmation, sendDailyAppointmentReminders, sendDailyTechnicianSchedules and notifyBookingReferenceUpdate may be patched. Only the exact per-entry-point subset of the six approved message modules may differ in each live source bundle. Office and confirmation use all six; reminders use the renderer, notification service, location helper and transactional service; daily technicians and reference updates use the daily service, location helper and transactional service. Unrelated historical producers stay byte-identical. The approved application files are pinned to commit 86eb8679e7ef87e3be0d7d797c02549044645e7e. The release branch must equal main and its checkout SHA. Merge uses [merge-only]; a separate release branch activates the guarded workflow.
 
 Before any function mutation, all five live bundles are patched without replacing unrelated files, checked with their exact dependency locks and real bootstrap, and retained with their baselines in the existing private recovery bucket. Source-only PATCH preserves configuration, IAM, triggers and schedules. Existing operation recovery handles lost PATCH responses and polls the exact accepted operation. Post-publication checks require exact candidate bytes, successful operation provenance, ready revision/traffic, unchanged configuration/IAM/scheduler, and Office CORS/authentication denial.
 
@@ -27,3 +27,8 @@ A partial failure stops. Retained baseline/candidate ZIPs and operation identiti
 - CI and exact deployed-bundle validation are required before rollout. Live delivery is not tested by sending synthetic messages to real recipients.
 
 Architecture decision: no new domain, authority, storage system or deployment platform. Existing audited source-publication utilities are reused; no new ADR is needed.
+
+## Pre-publication correction
+Run 39292284655 stopped while preparing reminders, before any production PATCH. Its summary records two validated candidates and zero operations. Reproducing the patch against retained artifact 11774320564 confirmed that the unrelated historical technician modules cannot accept the current patch. The three historical runtime manifests exactly match the previously verified published hashes in booking-dwelling-release.cjs.
+
+The corrected publisher maps the patch to each function's actual producer dependencies, as the previous dwelling release did. All eight regression files still run in every bundle. Changed producers receive the new assertions; unrelated historical producers retain their own archived tests. The current 136-test application gate remains unchanged. All five real bootstraps and exact dependency locks are validated again before publication. Checkpoints now identify the precise failing preparation step without exposing configuration or credentials.
