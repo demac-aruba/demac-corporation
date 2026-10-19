@@ -358,6 +358,9 @@ async function main(){
    await page.getByRole('button',{name:'Eliminar concepto 60',exact:true}).click();await plus(page).click();await page.getByText('1000 resultados · Mostrando los primeros 40; precisa la búsqueda',{exact:true}).waitFor();
    const editorReadyMs=await page.evaluate(start=>performance.now()-start,editorStart);const panel=page.getByRole('region',{name:'Buscar en catálogo 0',exact:true});assert.equal(await panel.getByRole('button',{name:/^Seleccionar /}).count(),40);
    await page.getByLabel('Precio unitario 1',{exact:true}).filter({hasText:'Afl. 125.00'}).waitFor();
+   // Removing row 60 schedules a legitimate quote. Its retained price may render
+   // before validation finishes; measure search only after that prior edit settles.
+   await page.waitForFunction(()=>window.__lastQuoteInput?.lines.length===59&&!document.querySelector('[data-charge-stage]')?.textContent.includes('Validando tarifas…'));
    const before=await page.evaluate(()=>({catalog:window.__catalogReads,charge:window.__reads.length,quote:window.__quoteReads,writes:window.__writes.length,resources:performance.getEntriesByType('resource').length}));
    await page.evaluate(()=>{window.__searchFrames=[];document.addEventListener('input',event=>{if(event.target.getAttribute('aria-label')!=='Añadir servicio o producto')return;const started=performance.now();requestAnimationFrame(()=>requestAnimationFrame(()=>window.__searchFrames.push(performance.now()-started)));},true);});
    const queries=['sku-perf-0999','sku-perf-0000','aplicacion categoria','missing-perf-result',''];
