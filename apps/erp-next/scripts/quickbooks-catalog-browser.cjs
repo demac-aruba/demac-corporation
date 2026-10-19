@@ -11,11 +11,19 @@ async function main() {
     stdin: { resolveDir: app, loader: 'tsx', contents: `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{QuickBooksComparisonPage}from'./components/firebase/quickbooks-comparison-page';import'./app/globals.css';
       function Harness(){const[visible,setVisible]=useState(true);window.hide=()=>setVisible(false);return visible?<QuickBooksComparisonPage/>:<p>Cerrado</p>;}createRoot(document.getElementById('root')).render(<React.StrictMode><Harness/></React.StrictMode>);` },
     plugins: [{ name: 'synthetic-catalog', setup(builder) {
+      builder.onResolve({ filter: /lib\/firebase\/quickbooks-links$/ }, () => ({ path: 'links', namespace: 'synthetic' }));
       builder.onResolve({ filter: /lib\/firebase\/quickbooks-catalog$/ }, () => ({ path: 'catalog', namespace: 'synthetic' }));
       builder.onResolve({ filter: /lib\/firebase\/quickbooks-connection$/ }, () => ({ path: 'connection', namespace: 'synthetic' }));
       builder.onResolve({ filter: /components\/auth\/auth-provider$/ }, () => ({ path: 'auth', namespace: 'synthetic' }));
       builder.onResolve({ filter: /^next\/link$/ }, () => ({ path: 'link', namespace: 'synthetic' }));
-      builder.onLoad({ filter: /.*/, namespace: 'synthetic' }, args => ({ loader: 'js', resolveDir: app, contents: args.path === 'link' ? `import React from'react';export default function Link({children,...props}){return React.createElement('a',props,children);}` : args.path === 'auth' ? `import{useState}from'react';export function useAuth(){const[uid,setUid]=useState('owner');window.changeUid=setUid;return{mode:'firebase',status:'ready',principal:{userId:uid,active:uid!=='signed-out',role:uid==='unauthorized'?'technician':'super_admin'}};}` : args.path === 'connection' ? `export async function readConnectionStatus(){window.statusReads++;return{configured:true,phase:window.disconnected?'disconnected':'connected',connection:{companyName:'DEMAC · Ficticio',connectedAt:'2026-10-14T12:00:00Z'}};}` : `
+      builder.onLoad({ filter: /.*/, namespace: 'synthetic' }, args => ({ loader: 'js', resolveDir: app, contents: args.path === 'link' ? `import React from'react';export default function Link({children,...props}){return React.createElement('a',props,children);}` : args.path === 'auth' ? `import{useState}from'react';export function useAuth(){const[uid,setUid]=useState('owner');window.changeUid=setUid;return{mode:'firebase',status:'ready',principal:{userId:uid,active:uid!=='signed-out',role:uid==='unauthorized'?'technician':'super_admin'}};}` : args.path === 'links' ? `
+        import{erpLinkHash,qboLinkHash}from'./lib/quickbooks-links';
+        export const linkAccessLost=()=>false,linkFailureMessage=()=> 'Resultado incierto. Consulta el estado.';
+        export async function readCatalogLinks(uid,entity,ids){window.linkReads++;return ids.map(erpId=>window.links[entity+erpId]||{entity,erpId,status:'unlinked',version:0});}
+        export async function prepareCatalogLink(uid,entity,source,target,startPosition,expectedVersion){window.prepares.push({entity,startPosition});return{entity,source,target,expectedVersion,intentId:'a'.repeat(48),verifiedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()};}
+        export async function confirmCatalogLink(uid,p){window.confirms++;await new Promise(r=>setTimeout(r,30));const link={entity:p.entity,erpId:p.source.id,qboId:p.target.id,status:'confirmed',version:p.expectedVersion+1,sourceHash:await erpLinkHash(p.source),targetHash:await qboLinkHash(p.target),updatedAt:new Date().toISOString(),verifiedAt:p.verifiedAt,needsReview:false};window.links[p.entity+p.source.id]=link;if(window.loseResponse){window.loseResponse=false;throw Error('lost response');}return link;}
+        export async function revokeCatalogLink(uid,entity,link,id){window.revokes++;return window.links[entity+link.erpId]={...link,status:'revoked',version:link.version+1};}
+      ` : args.path === 'connection' ? `export async function readConnectionStatus(){window.statusReads++;return{configured:true,phase:window.disconnected?'disconnected':'connected',connection:{companyName:'DEMAC · Ficticio',connectedAt:'2026-10-14T12:00:00Z'}};}` : `
         export const catalogFailureMessage=()=> 'No se pudo preparar la comparación. Revisa la conexión y vuelve a consultar.';
         const customer=(id,name)=>({id,name,active:true,email:null,company:null,currency:'AWG',parentId:null,isJob:false});
         const item=(id,name,sku,type)=>({id,name,sku,type,active:true,incomeAccountId:'demo-income',expenseAccountId:null,assetAccountId:null});
@@ -36,7 +44,7 @@ async function main() {
     for(const width of [1440,375]) {
       const context=await browser.newContext({viewport:{width,height:1000}}), page=await context.newPage(), errors=[],external=[];
       page.on('pageerror',e=>errors.push(e.message));await page.route('**/*',r=>{if(r.request().url().startsWith(origin))return r.continue();external.push(r.request().url());return r.abort();});
-      await page.addInitScript(()=>{window.calls=[];window.erpReads=[];window.statusReads=0;window.fail=false;window.waiting=false;window.holdLater=true;const original=window.setTimeout;window.setTimeout=(fn,ms,...args)=>original(fn,ms===5100?10:ms,...args);});
+      await page.addInitScript(()=>{window.links={};window.linkReads=0;window.prepares=[];window.confirms=0;window.revokes=0;window.calls=[];window.erpReads=[];window.statusReads=0;window.fail=false;window.waiting=false;window.holdLater=true;const original=window.setTimeout;window.setTimeout=(fn,ms,...args)=>original(fn,ms===5100?10:ms,...args);});
       await page.goto(origin);await page.getByRole('button',{name:'Cargar catálogos',exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.calls.length),0);
       await page.evaluate(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent==='Cargar catálogos');button.click();button.click();});
       await page.waitForFunction(()=>typeof window.releaseLater==='function');assert.equal(await page.evaluate(()=>window.calls.length),2);
@@ -51,6 +59,20 @@ async function main() {
       await page.evaluate(()=>document.documentElement.dataset.theme='dark');
       const theme=await page.getByRole('table').evaluate(el=>({background:getComputedStyle(el).backgroundColor,color:getComputedStyle(el.querySelector('strong')).color}));assert.equal(theme.background,'rgb(16, 28, 45)');assert.equal(theme.color,'rgb(244, 248, 253)');
       await page.screenshot({path:path.join(output,`comparison-customer-dark-${width}.png`),fullPage:true});await page.evaluate(()=>document.documentElement.dataset.theme='light');
+      const customerRow=page.getByRole('row').filter({hasText:'Zoe Demonstration'});
+      await customerRow.getByRole('button',{name:'Revisar vínculo',exact:true}).click();
+      const dialog=page.getByRole('dialog');await dialog.waitFor();
+      await dialog.getByRole('button',{name:'Verificar selección',exact:true}).click();
+      const confirm=dialog.getByRole('button',{name:'Confirmar vínculo en ERP',exact:true});assert.equal(await confirm.isDisabled(),true);
+      await dialog.getByRole('checkbox').check();await dialog.screenshot({path:path.join(output,`link-review-${width}.png`)});
+      assert.ok(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Dialog has no horizontal overflow');
+      await confirm.evaluate(b=>{b.click();b.click();});await dialog.getByText('Vínculo guardado en el ERP.',{exact:true}).waitFor();
+      assert.equal(await page.evaluate(()=>window.confirms),1);assert.equal(await page.evaluate(()=>window.prepares[0].startPosition),101,'Late-page verification uses fixed correct page');
+      await dialog.getByRole('button',{name:'Volver a la comparación'}).click();await customerRow.getByText('Vínculo guardado',{exact:true}).waitFor();
+      await page.getByRole('button',{name:'Actualizar vínculos',exact:true}).click();await customerRow.getByText('Vínculo guardado',{exact:true}).waitFor();
+      await customerRow.getByRole('button',{name:'Revisar vínculo',exact:true}).click();await dialog.getByRole('button',{name:'Desvincular en ERP',exact:true}).click();
+      await dialog.getByRole('button',{name:'Confirmar desvinculación en ERP',exact:true}).click();await dialog.getByText('Vínculo desvinculado. El historial se conserva.',{exact:true}).waitFor();
+      await dialog.getByRole('button',{name:'Volver a la comparación'}).click();assert.equal(await page.evaluate(()=>window.revokes),1);
       await page.getByRole('searchbox').fill('');await page.getByRole('button',{name:'Inactivos 1',exact:true}).click();await page.getByText('Inactivo',{exact:true}).waitFor();await page.getByRole('button',{name:/Varias coincidencias/}).click();await page.getByText('Varias coincidencias',{exact:true}).waitFor();
       await page.getByRole('button',{name:/^Todos /}).click();
       const table=page.getByRole('table',{name:'Comparación provisional'});await page.waitForFunction(()=>document.querySelectorAll('[role=table] [role=row]').length===101);
@@ -63,6 +85,11 @@ async function main() {
       await page.getByLabel('Tipo de artículo',{exact:true}).selectOption('Producto');await page.getByText('Producto ERP',{exact:true}).waitFor();assert.equal(await page.getByText('Servicio ERP',{exact:true}).count(),0);
       await page.getByLabel('Tipo de artículo',{exact:true}).selectOption('all');await page.getByRole('searchbox').fill('svc-demo');await page.getByText('Mantenimiento QBO',{exact:true}).waitFor();
       await page.getByRole('row').filter({hasText:'Mantenimiento QBO'}).scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,`comparison-items-${width}.png`),fullPage:true});
+      await page.getByRole('row').filter({hasText:'Servicio ERP'}).getByRole('button',{name:'Revisar vínculo',exact:true}).click();
+      await dialog.getByRole('button',{name:'Verificar selección',exact:true}).click();await dialog.getByRole('checkbox').check();
+      await page.evaluate(()=>window.loseResponse=true);await dialog.getByRole('button',{name:'Confirmar vínculo en ERP',exact:true}).click();
+      await dialog.getByRole('alert').waitFor();await dialog.getByRole('button',{name:'Consultar estado del vínculo',exact:true}).click();await dialog.getByText('Vínculo guardado en el ERP.',{exact:true}).waitFor();
+      await dialog.getByRole('button',{name:'Volver a la comparación'}).click();assert.equal(await page.evaluate(()=>window.confirms),2,'Lost response recovers without repeat mutation');
       assert.equal(await page.evaluate(()=>window.calls.length),beforeTabs,'Tabs/search reuse in-memory observations');
       await page.getByRole('searchbox').fill('');await page.getByRole('button',{name:/^Cuentas contables/}).click();await page.getByRole('table',{name:'Cuentas de QuickBooks'}).waitFor();
       await page.evaluate(()=>window.fail=true);await page.getByRole('button',{name:'Actualizar catálogos',exact:true}).click();await page.getByRole('alert').waitFor();assert.equal(await page.getByRole('table').count(),0);assert.equal(await page.getByText('private provider text').count(),0);
@@ -73,7 +100,7 @@ async function main() {
       await page.getByRole('button',{name:'Detener carga',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Cargando catálogos…',exact:true}).isDisabled(),true);await page.evaluate(()=>{window.waiting=false;window.release();});await page.getByText('Carga detenida. Los resultados recibidos son parciales.',{exact:true}).waitFor();
       const beforeDenied=await page.evaluate(()=>window.calls.length);await page.evaluate(()=>window.changeUid('unauthorized'));await page.getByRole('alert').waitFor();assert.equal(await page.getByRole('button',{name:'Cargar catálogos',exact:true}).count(),0);await page.evaluate(()=>window.changeUid('signed-out'));await page.getByRole('link',{name:'Iniciar sesión en DEMAC ERP'}).waitFor();await page.evaluate(()=>{window.disconnected=true;window.changeUid('disconnected-owner');});await page.getByRole('link',{name:'Ver conexión',exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.calls.length),beforeDenied);await page.evaluate(()=>{window.disconnected=false;window.changeUid('owner');});await page.getByRole('button',{name:'Cargar catálogos',exact:true}).waitFor();
       await page.evaluate(()=>{window.waiting=true;window.release=undefined;});await page.getByRole('button',{name:'Cargar catálogos',exact:true}).click();await page.waitForFunction(()=>typeof window.release==='function');await page.evaluate(()=>window.hide());await page.getByText('Cerrado',{exact:true}).waitFor();await page.evaluate(()=>window.release());
-      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);await context.close();console.log(`Comparison page ${width}: PASS (all-page late match, 251 ERP rows, full scroll, products/SKU/type review, cached tabs, cancellation, identity/unmount/privacy, no external traffic).`);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);await context.close();console.log(`Comparison page ${width}: PASS (all-page late match, 251 ERP rows, full scroll, products/SKU/type review, confirm/ack/double-click/reload/revoke/lost-response, cached tabs, cancellation, identity/unmount/privacy, no external traffic).`);
     }
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(folder,{recursive:true,force:true});}
 }

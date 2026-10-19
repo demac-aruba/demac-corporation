@@ -44,10 +44,12 @@ Reglas existentes: [Authority Matrix](../AUTHORITY_MATRIX.md),
 
 ## 3. Relación entre los datos de ambos sistemas
 
-La siguiente configuración aún **no se ha leído ni aprobado para producción**. El lector
-actual admite cuatro informes; no ofrece consultas de clientes, artículos o cuentas.
-Se necesita una ampliación de lectura específica, revisada y con permisos del backend,
-antes de presentar listas reales para relacionarlas. No inventar IDs ni inferirlos por nombres.
+Actualización 2026-10-19: el lector ya permite consultas de clientes, artículos y cuentas,
+y la comparación completa está en `/quickbooks/compare/`. La etapa de confirmación explícita
+se implementa en `quickbooksLinks`: guarda referencias privadas con versión e historial,
+sin escrituras contables. Consulta su ADR y registro de publicación para el estado desplegado.
+La selección de identidades reales y la configuración contable siguiente siguen pendientes
+de revisión del propietario. No inventar IDs ni aprobar identidades por nombres.
 
 | Relación necesaria | Verificación antes de permitir un envío |
 | --- | --- |

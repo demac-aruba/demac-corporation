@@ -26,3 +26,13 @@ production deployments, Firestore/security-rule access changes, secret or creden
 changes, irreversible operations, production-data deletion, or creation of a new system of
 record/source of truth. These actions must also have scoped targets, recovery planning where
 possible, and audit evidence. Automated approval or another agent's assent is insufficient.
+
+## QuickBooks identity metadata boundary (2026-10-19)
+
+`quickbooksLinks` verifies revoked Firebase tokens, canonical CORS and the fresh designated
+owner/profile in every transaction. New link/claim/intent/history subcollections remain
+under the existing default-deny Firestore rules; no browser document write is introduced.
+Only opaque identity references, fingerprints, actor/time and versions are persisted.
+Provider payloads, names, emails and credentials never enter these records or diagnostics.
+The isolated deployment verifies unchanged reader/auth sources and installed revisions,
+fixed realm/owner, exact published package and denial probes without a signed-in provider call.

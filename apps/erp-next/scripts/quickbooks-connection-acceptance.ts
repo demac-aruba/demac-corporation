@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { erpLinkHash, qboLinkHash, validCatalogLink } from '../lib/quickbooks-links';
 import { quickBooksLoginDestination } from '../lib/quickbooks-entry';
 import { defaultAuthenticatedRoute } from '../lib/role-routing';
 import type { QuickBooksConnectionStatus } from '../lib/firebase/quickbooks-connection';
@@ -138,6 +140,11 @@ async function run() {
   assert.equal(combined.filter(row => row.source).length, 251, 'ERP records beyond 100 remain searchable');
   assert.ok(combined.some(row => !row.source && row.candidates[0].id === 'qbo-99'), 'QBO-only records are visible too');
   assert.equal(combined.filter(row => row.search.includes('zoe demonstration')).length, 1);
+  const manuallyLinked = comparisonRows('Customer', observed[1], { 'erp-late': { status: 'confirmed', qboId: 'qbo-99' } });
+  assert.equal(manuallyLinked.find(row => row.source?.id === 'erp-late')?.candidates[0].id, 'qbo-99');
+  assert.equal(manuallyLinked.some(row => !row.source && row.candidates[0].id === 'qbo-99'), false);
+  assert.equal(manuallyLinked.some(row => !row.source && row.candidates[0].id === 'late'), true, 'Displaced suggested target remains visible');
+  assert.ok(comparisonRows('Customer', observed[1], { 'erp-late': { status: 'confirmed', qboId: 'missing-target' } }).find(row => row.source?.id === 'erp-late')?.search.includes('missing-target'));
   let stillCurrent = true, afterRevocationReads = 0;
   await scanCatalogs({ entities: ['Customer'], current: () => stillCurrent, started: () => {}, wait: async () => {},
     readPage: async input => { stillCurrent = false; return pageFor(input); }, readErp: async () => { afterRevocationReads++; return []; }, progress: () => assert.fail('stale response shown') });
@@ -149,6 +156,28 @@ async function run() {
   for (const drift of ['duplicate', 'company']) await assert.rejects(scanCatalogs({ entities: ['Customer'], current: () => true, started: () => {}, wait: async () => {},
     readPage: async input => { const page = pageFor(input); if (input.startPosition > 1) { if (drift === 'duplicate') page.catalog.records[0].id = 'qbo-0'; else page.companyName = 'Different company'; } return page; },
     readErp: async () => [], progress: () => {} }), /catalog-observation-changed/);
+  signIn(); const links = await import('../lib/firebase/quickbooks-links');
+  const metadata = { environment: 'production', realmId: '9130352327074466', accountingWritesEnabled: false, syncEnabled: false };
+  const syntheticSource = { id: 'erp1', name: 'Synthetic customer', active: true, email: 'synthetic@example.test' };
+  const syntheticTarget = catalogResult.catalog.records[0];
+  const sourceHash = await erpLinkHash(syntheticSource), targetHash = await qboLinkHash(syntheticTarget);
+  assert.equal(sourceHash, createHash('sha256').update(JSON.stringify(['erp1','Synthetic customer',true,'synthetic@example.test',null,null])).digest('hex'));
+  assert.equal(targetHash, createHash('sha256').update(JSON.stringify([syntheticTarget.id,syntheticTarget.name,true,syntheticTarget.email??null,syntheticTarget.company??null,syntheticTarget.currency??null,syntheticTarget.parentId??null,syntheticTarget.isJob??null,null,null,null,null,null])).digest('hex'));
+  const savedLink = { entity: 'Customer' as const, erpId: 'erp1', qboId: syntheticTarget.id, status: 'confirmed' as const, version: 1, sourceHash, targetHash, updatedAt: new Date().toISOString(), verifiedAt: new Date().toISOString(), needsReview: false };
+  assert.equal(validCatalogLink(savedLink,'Customer','erp1'),true);assert.equal(validCatalogLink({...savedLink,sourceHash:'bad'},'Customer','erp1'),false);
+  fetcher=async()=>Response.json({...metadata,records:[savedLink]});assert.equal((await links.readCatalogLinks('owner','Customer',['erp1']))[0].version,1);
+  assert.ok(calls.at(-1)?.url.endsWith('/quickbooksLinks'));
+  fetcher=async()=>Response.json({...metadata,records:[{...savedLink,erpId:'other'}]});await assert.rejects(links.readCatalogLinks('owner','Customer',['erp1']));
+  fetcher=async()=>Response.json({...metadata,realmId:'other',records:[savedLink]});await assert.rejects(links.readCatalogLinks('owner','Customer',['erp1']));
+  const prepared = {...metadata,entity:'Customer',intentId:'a'.repeat(48),source:syntheticSource,target:syntheticTarget,expectedVersion:0,verifiedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()};
+  fetcher=async()=>Response.json(prepared);const verified=await links.prepareCatalogLink('owner','Customer',syntheticSource,syntheticTarget,1,0);
+  assert.equal(calls.at(-1)?.body?.sourceHash,sourceHash);assert.equal(calls.at(-1)?.body?.targetHash,targetHash);
+  fetcher=async()=>Response.json({...metadata,link:savedLink,replayed:false});await links.confirmCatalogLink('owner',verified);
+  assert.deepEqual(calls.at(-1)?.body,{action:'confirm',intentId:prepared.intentId,acknowledgeIdentity:true});
+  fetcher=async()=>{signIn('other');return Response.json({...metadata,records:[savedLink]});};await assert.rejects(links.readCatalogLinks('owner','Customer',['erp1']));signIn();
+  fetcher=async()=>Response.json({error:'private unexpected provider text'},{status:503});try{await links.readCatalogLinks('owner','Customer',['erp1']);assert.fail('should reject');}catch(error){assert.doesNotMatch(links.linkFailureMessage(error),/private unexpected/);}
+  assert.doesNotMatch(JSON.stringify([...storage.values()]), /sourceHash|targetHash|Synthetic customer/);
+  console.log('Identity-link adapter: PASS (fingerprints, strict identities/tenant, session race, manual mapping union, no business persistence).');
   console.log('Continuous catalog scan: PASS (all pages, 251 ERP rows, late matching, QBO-only search, one ERP read per catalog, rate spacing, cancellation and observation drift).');
   console.log('QuickBooks production entry and catalog acceptance: PASS (isolation, owner identity race, report compatibility, strict catalog responses, provisional matching and no private persistence).');
 }
