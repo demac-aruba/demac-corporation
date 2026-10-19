@@ -48,16 +48,20 @@ async function main() {
   const before=describe(functionName);
   assert.equal(before.state,'ACTIVE'); assert.equal(before.buildConfig.runtime,'nodejs22');
   assert.equal(before.buildConfig.entryPoint,functionName);
+  record('poll-description-verified');
   const peers={};
   for (const name of ['wacliOutboundAck','wacliBookingReferenceMedia','queueAppointmentConfirmation','sendDailyTechnicianSchedules']) {
     const fn=describe(name); peers[name]={revision:fn.serviceConfig.revision,updated:fn.updateTime};
   }
+  record('peer-descriptions-verified');
   const beforeScheduler=JSON.parse(cloud(['scheduler','jobs','describe','firebase-schedule-sendDailyTechnicianSchedules-us-central1','--project='+project,'--location=us-central1','--format=json']));
   const beforeHealth=bridgeHealth();
   assert.equal(beforeHealth.ok,true); assert.equal(beforeHealth.pendingOutboundAcks,0,'Unacknowledged sends must be reconciled first');
+  record('bridge-idle-verified',{sourceShape:Object.keys(before.buildConfig.source || {}),provenanceShape:Object.keys(before.buildConfig.sourceProvenance || {})});
   const archive=sourceArchive(before,'before');
   const stage=path.join(out,'source'); fs.mkdirSync(stage,{recursive:true});
   run('unzip',['-q',archive,'-d',stage]);
+  record('live-source-downloaded');
   // Preserve the live dependency lock and every unrelated source file. Only these
   // two audited files change in the uploaded source for this single endpoint.
   for (const file of ['whatsappWacliGateway.js','whatsappReferenceBundle.js']) {
@@ -121,7 +125,9 @@ function cloudDeploy(stage,before) {
 main().catch(error=>{
   // Cloud command errors may contain runtime configuration. Never print stderr.
   const details={errorType:error.code==='ERR_ASSERTION'?'verification_failed':'operation_failed',exitCode:typeof error.status==='number'?error.status:null,
-    verification:error.code==='ERR_ASSERTION'?error.message.split('\n')[0]:null};
+    verification:error.code==='ERR_ASSERTION'?error.message.split('\n')[0]:null,
+    exception:['TypeError','SyntaxError','Error','RangeError'].includes(error.name)?error.name:null,
+    frames:[...String(error.stack || '').matchAll(/whatsapp-cutover-release\.cjs:\d+:\d+/g)].map(x=>x[0])};
   if(fs.existsSync(out))record('stopped-at-'+summary.stage,details);
   process.exitCode=1;
 });
