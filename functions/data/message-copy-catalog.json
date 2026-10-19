@@ -1,0 +1,369 @@
+[
+  {
+    "id": "appointment_confirmation",
+    "label": "Appointment confirmation",
+    "group": "Customers",
+    "description": "Sent when an appointment is confirmed.",
+    "variables": [
+      "name",
+      "company",
+      "time_greeting"
+    ],
+    "languages": [
+      "en",
+      "es",
+      "nl",
+      "pap"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "Hello {name},",
+        "introduction": "Your appointment with *{company}* has been confirmed.",
+        "closing": "If you have any questions or need to make a change to your appointment, please feel free to reply to this message. We’re happy to help!"
+      },
+      "es": {
+        "greeting": "Hola {name},",
+        "introduction": "Tu cita con *{company}* ha sido confirmada.",
+        "closing": "Si necesitas hacer algún cambio, responde a este mensaje."
+      },
+      "nl": {
+        "greeting": "Hallo {name},",
+        "introduction": "Uw afspraak met *{company}* is bevestigd.",
+        "closing": "Als u iets wilt wijzigen, kunt u op dit bericht reageren."
+      },
+      "pap": {
+        "greeting": "{time_greeting} {name},",
+        "introduction": "Nos ta confirma bo cita cu *{company}*.",
+        "closing": "Si bo mester haci algun cambio, contesta e mensahe aki."
+      }
+    },
+    "sampleDetails": {
+      "en": "*Date:* Monday, October 26, 2026\n*Time:* 8:30 AM\n*Address:* Wayaca Residence 217\n*Address:* Apartment 1\n*Service:* Standard Service × 3",
+      "es": "*Fecha:* lunes, 26 de octubre de 2026\n*Hora:* 8:30 a. m.\n*Dirección:* Wayaca Residence 217\n*Dirección:* Apartamento 1\n*Servicio:* Servicio estándar × 3",
+      "nl": "*Datum:* maandag 26 oktober 2026\n*Tijd:* 08:30\n*Adres:* Wayaca Residence 217\n*Adres:* Appartement 1\n*Service:* Standaard service × 3",
+      "pap": "*Fecha:* dialuna, 26 di october 2026\n*Ora:* 8:30 AM\n*Adres:* Wayaca Residence 217\n*Adres:* Apartamento 1\n*Servicio:* Servicio standard × 3"
+    }
+  },
+  {
+    "id": "appointment_reminder",
+    "label": "Appointment reminder",
+    "group": "Customers",
+    "description": "A reminder before the next appointment.",
+    "variables": [
+      "name",
+      "company",
+      "time_greeting"
+    ],
+    "languages": [
+      "en",
+      "es",
+      "nl",
+      "pap"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "Hello {name},",
+        "introduction": "This is a reminder for your appointment with *{company}*.",
+        "closing": "If you have any questions or need to make a change to your appointment, please feel free to reply to this message. We’re happy to help!"
+      },
+      "es": {
+        "greeting": "Hola {name},",
+        "introduction": "Este es un recordatorio de tu cita con *{company}*.",
+        "closing": "Si necesitas hacer algún cambio, responde a este mensaje."
+      },
+      "nl": {
+        "greeting": "Hallo {name},",
+        "introduction": "Dit is een herinnering voor uw afspraak met *{company}*.",
+        "closing": "Als u iets wilt wijzigen, kunt u op dit bericht reageren."
+      },
+      "pap": {
+        "greeting": "{time_greeting} {name},",
+        "introduction": "Esaki ta un recordatorio pa bo cita cu *{company}*.",
+        "closing": "Si bo mester haci algun cambio, contesta e mensahe aki."
+      }
+    },
+    "sampleDetails": {
+      "en": "*Date:* Monday, October 26, 2026\n*Time:* 8:30 AM\n*Address:* Wayaca Residence 217\n*Address:* Apartment 1\n*Service:* Standard Service × 3",
+      "es": "*Fecha:* lunes, 26 de octubre de 2026\n*Hora:* 8:30 a. m.\n*Dirección:* Wayaca Residence 217\n*Dirección:* Apartamento 1\n*Servicio:* Servicio estándar × 3",
+      "nl": "*Datum:* maandag 26 oktober 2026\n*Tijd:* 08:30\n*Adres:* Wayaca Residence 217\n*Adres:* Appartement 1\n*Service:* Standaard service × 3",
+      "pap": "*Fecha:* dialuna, 26 di october 2026\n*Ora:* 8:30 AM\n*Adres:* Wayaca Residence 217\n*Adres:* Apartamento 1\n*Servicio:* Servicio standard × 3"
+    }
+  },
+  {
+    "id": "van_work_order",
+    "label": "Technician work order",
+    "description": "Daily schedule and individual work details.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "*TRABAJO 1 · VAN 2*\n*Cliente:* Cliente de ejemplo\n*Direccion:* Wayaca Residence 217\n*Direccion:* Apartamento 1\n*Hora:* 8:30 AM\n*Trabajo:* Servicio estándar × 3"
+    }
+  },
+  {
+    "id": "van_same_day_change",
+    "label": "Same-day schedule change",
+    "description": "Changes to today’s technician schedule.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "🚨 *ACTUALIZACIÓN DE AGENDA · MISMO DÍA*\n*Cliente:* Cliente de ejemplo\n*Direccion:* Wayaca Residence 217\n*Direccion:* Apartamento 1\n*Hora:* 8:30 AM\n*Trabajo:* Servicio estándar × 3"
+    }
+  },
+  {
+    "id": "van_support_requested",
+    "label": "Support team assignment",
+    "description": "Instructions for the team providing support.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "🚨 *APOYO A COMPAÑERO · MISMO DÍA*\n*Cliente:* Cliente de ejemplo\n*Direccion:* Wayaca Residence 217\n*Direccion:* Apartamento 1\n*Hora:* 8:30 AM\n*Trabajo:* Servicio estándar × 3"
+    }
+  },
+  {
+    "id": "van_support_assigned",
+    "label": "Support assigned to your team",
+    "description": "Notification for the team receiving support.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "🚨 *APOYO ASIGNADO · MISMO DÍA*\n*Cliente:* Cliente de ejemplo\n*Direccion:* Wayaca Residence 217\n*Direccion:* Apartamento 1\n*Hora:* 8:30 AM\n*Trabajo:* Servicio estándar × 3"
+    }
+  },
+  {
+    "id": "van_references_updated",
+    "label": "Updated visit references",
+    "description": "Updated instructions, photos and access references.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "*REFERENCIAS ACTUALIZADAS*\n*Cliente:* Cliente de ejemplo\n*Direccion:* Wayaca Residence 217\n*Direccion:* Apartamento 1\n*Hora:* 8:30 AM\n*Trabajo:* Servicio estándar × 3"
+    }
+  },
+  {
+    "id": "van_lunch",
+    "label": "Lunch break",
+    "description": "The lunch break shown in the daily schedule.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "*ALMUERZO*\n12:00 PM – 1:00 PM"
+    }
+  },
+  {
+    "id": "van_pending",
+    "label": "Available schedule period",
+    "description": "An unassigned period in the technician schedule.",
+    "group": "Technicians",
+    "languages": [
+      "es"
+    ],
+    "variables": [
+      "van",
+      "company"
+    ],
+    "defaults": {
+      "es": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "es": "*ESPACIO DISPONIBLE*\n2:00 PM – 3:00 PM"
+    }
+  },
+  {
+    "id": "task_assignment",
+    "label": "New task assigned",
+    "description": "Automatic Task Tracker message.",
+    "group": "Tasks",
+    "languages": [
+      "en"
+    ],
+    "variables": [
+      "name",
+      "company"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "Hi {name}, you have a new DEMAC task.",
+        "introduction": "",
+        "closing": "Please open DEMAC ERP to review and acknowledge this task.\n\n— DEMAC ERP"
+      }
+    },
+    "sampleDetails": {
+      "en": "TASK-0123\n*Prepare tomorrow’s route*\n\n*Deadline:* Oct 26, 2026, 4:00 PM\n\n────────────"
+    }
+  },
+  {
+    "id": "task_reminder",
+    "label": "Task deadline reminder",
+    "description": "Automatic Task Tracker message.",
+    "group": "Tasks",
+    "languages": [
+      "en"
+    ],
+    "variables": [
+      "name",
+      "company"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "Hi {name},",
+        "introduction": "",
+        "closing": "Please update the checkpoint progress in DEMAC ERP."
+      }
+    },
+    "sampleDetails": {
+      "en": "TASK-0123 – Prepare tomorrow’s route is due in 24 hours. Deadline: Oct 26, 2026, 4:00 PM.\n\n*Pending checkpoints:*\nConfirm access instructions."
+    },
+    "inlineGreeting": true
+  },
+  {
+    "id": "task_daily_greeting",
+    "label": "Daily task greeting",
+    "description": "Automatic Task Tracker message.",
+    "group": "Tasks",
+    "languages": [
+      "en"
+    ],
+    "variables": [
+      "name",
+      "company"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "Good morning, {name}.\nHere are your pending DEMAC tasks for today.",
+        "introduction": "",
+        "closing": "Please check the following messages."
+      }
+    },
+    "sampleDetails": {
+      "en": ""
+    }
+  },
+  {
+    "id": "task_daily_item",
+    "label": "Daily task details",
+    "description": "Automatic Task Tracker message.",
+    "group": "Tasks",
+    "languages": [
+      "en"
+    ],
+    "variables": [
+      "name",
+      "company"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "",
+        "introduction": "",
+        "closing": ""
+      }
+    },
+    "sampleDetails": {
+      "en": "TASK-0123\n*Prepare tomorrow’s route*\n\n*Deadline:* Oct 26, 2026, 4:00 PM\n\n*Pending:*\nConfirm access instructions."
+    }
+  },
+  {
+    "id": "task_daily_closing",
+    "label": "Daily task closing",
+    "description": "Automatic Task Tracker message.",
+    "group": "Tasks",
+    "languages": [
+      "en"
+    ],
+    "variables": [
+      "name",
+      "company"
+    ],
+    "defaults": {
+      "en": {
+        "greeting": "",
+        "introduction": "",
+        "closing": "Please open DEMAC ERP to update your progress or add any new information.\n\n— DEMAC ERP"
+      }
+    },
+    "sampleDetails": {
+      "en": ""
+    }
+  }
+]

@@ -1,4 +1,5 @@
 'use strict';
+const { loadMessageCopy } = require('./messageCopyStore');
 
 const { getApps, initializeApp } = require('firebase-admin/app');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
@@ -54,7 +55,8 @@ async function queueAssignmentNotification(task) {
   const eventId = assignmentEventId(task.id);
   const queueRef = db.collection(OUTBOUND_QUEUE_COLLECTION).doc(queueId);
   const eventRef = db.collection(EVENT_COLLECTION).doc(eventId);
-  const text = assignmentNotificationMessage(task, contact.name);
+  const copy = await loadMessageCopy(db, 'task_assignment', 'en');
+  const text = assignmentNotificationMessage(task, contact.name, copy.fields);
   let created = false;
 
   await db.runTransaction(async (transaction) => {
@@ -70,6 +72,9 @@ async function queueAssignmentNotification(task) {
       text,
       reason: 'task_assigned',
       source: 'task-tracker-assignment',
+      messageTemplateId: 'task_assignment',
+      messageTemplateLanguage: 'en',
+      messageTemplateRevision: copy.revision,
       taskId: task.id,
       taskNumber: task.taskNumber || null,
       createdByUserId: task.createdByUserId || 'task-tracker',

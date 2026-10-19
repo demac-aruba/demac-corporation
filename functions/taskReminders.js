@@ -1,3 +1,4 @@
+const { loadMessageCopy } = require('./messageCopyStore');
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
@@ -77,7 +78,7 @@ function createContactResolver() {
   };
 }
 
-async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFor, taskIds = null, batchKey = null, sequence = null }) {
+async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFor, taskIds = null, batchKey = null, sequence = null, messageTemplateId = null, messageTemplateRevision = 0 }) {
   if (!to || !text) return { queued: false, reason: !to ? "missing-phone" : "empty-message" };
   const queueRef = db.collection("whatsappOutboundQueue").doc(queueId);
   const eventRef = task?.id ? db.collection("taskEvents").doc(queueDocumentId("task-event", queueId)) : null;
@@ -93,6 +94,9 @@ async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFo
       type: "text",
       to,
       text,
+      messageTemplateId,
+      messageTemplateLanguage: 'en',
+      messageTemplateRevision,
       reason: kind,
       source: "task-tracker-automation",
       taskId: task?.id || null,
@@ -131,6 +135,7 @@ async function processDeadlineReminderBatch({ now = new Date() } = {}) {
   let skipped = 0;
   const errors = [];
 
+  let reminderCopy;
   for (const task of tasks) {
     const opportunities = dueReminderOpportunities(task, { now, automation: settings, windowMinutes: 20 });
     if (!opportunities.length) continue;
@@ -139,13 +144,16 @@ async function processDeadlineReminderBatch({ now = new Date() } = {}) {
       skipped += opportunities.length;
       continue;
     }
+    const copy = await (reminderCopy ||= loadMessageCopy(db, 'task_reminder', 'en'));
     for (const opportunity of opportunities) {
       try {
         const queueId = queueDocumentId("task-reminder", opportunity.key);
         const result = await queueTextOnce({
           queueId,
           to: contact.phone,
-          text: reminderMessage(task, opportunity, contact.name),
+          text: reminderMessage(task, opportunity, contact.name, now, copy.fields),
+          messageTemplateId: 'task_reminder',
+          messageTemplateRevision: copy.revision,
           task,
           kind: opportunity.kind,
           scheduledFor: opportunity.scheduledFor,
@@ -221,6 +229,7 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
   let skipped = 0;
   const errors = [];
 
+  let dailyCopies;
   for (const [staffId, rawAssignedTasks] of byStaff.entries()) {
     const assignedTasks = sortTasksByAttention(rawAssignedTasks, now);
     const contact = await resolveContact(assignedTasks[0]);
@@ -231,10 +240,13 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
 
     const batchKey = `task-morning-${dateKey}-${staffId}`;
     const allTaskIds = assignedTasks.map((task) => task.id);
+    const [greetingCopy, itemCopy, closingCopy] = await (dailyCopies ||= Promise.all(['task_daily_greeting', 'task_daily_item', 'task_daily_closing'].map(id => loadMessageCopy(db, id, 'en'))));
     const messages = [
       {
         queueId: queueDocumentId("task-digest-greeting", `${dateKey}-${staffId}`),
-        text: dailyGreetingMessage(contact.name),
+        text: dailyGreetingMessage(contact.name, greetingCopy.fields),
+        messageTemplateId: 'task_daily_greeting',
+        messageTemplateRevision: greetingCopy.revision,
         kind: "daily_task_greeting",
         task: null,
         taskIds: allTaskIds,
@@ -242,7 +254,9 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
       },
       ...assignedTasks.map((task, index) => ({
         queueId: queueDocumentId("task-digest-task", `${dateKey}-${staffId}-${task.id}`),
-        text: dailyTaskReminderMessage(task, now),
+        text: dailyTaskReminderMessage(task, now, itemCopy.fields, contact.name),
+        messageTemplateId: 'task_daily_item',
+        messageTemplateRevision: itemCopy.revision,
         kind: "daily_task_summary",
         task,
         taskIds: [task.id],
@@ -250,7 +264,9 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
       })),
       {
         queueId: queueDocumentId("task-digest-closing", `${dateKey}-${staffId}`),
-        text: dailyClosingMessage(),
+        text: dailyClosingMessage(closingCopy.fields, contact.name),
+        messageTemplateId: 'task_daily_closing',
+        messageTemplateRevision: closingCopy.revision,
         kind: "daily_task_closing",
         task: null,
         taskIds: allTaskIds,
