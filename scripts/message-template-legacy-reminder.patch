@@ -1,0 +1,40 @@
+diff --git a/functions/whatsappTransactionalService.js b/functions/whatsappTransactionalService.js
+--- a/functions/whatsappTransactionalService.js
++++ b/functions/whatsappTransactionalService.js
+@@ -1,4 +1,15 @@
+ const { FieldValue } = require("firebase-admin/firestore");
++const { renderMessageCopy } = require('./messageCopy');
++const { loadMessageCopy } = require('./messageCopyStore');
++
++function technicianCopy(metadata, text) {
++  const type = metadata.notificationType;
++  const id = type === 'van-daily-work-order' ? (metadata.reason === 'visit-references-updated' ? 'van_references_updated' : 'van_work_order')
++    : type === 'van-same-day-schedule-change' ? 'van_same_day_change'
++    : type === 'van-adhoc-support-change' ? (metadata.supportNotificationRole === 'primary' ? 'van_support_assigned' : 'van_support_requested')
++    : type === 'van-daily-lunch-break' ? 'van_lunch' : type === 'van-daily-pending-period' ? 'van_pending' : null;
++  return id ? { id, language: 'es', variables: { van: metadata.vanName || metadata.vanId || '', company: 'DEMAC Professional Cooling Solutions' }, details: text } : null;
++}
+ 
+ const ARUBA_COUNTRY_CODE = "297";
+ const DEFAULT_TRANSACTIONAL_PROVIDER = "wacli";
+@@ -289,6 +300,7 @@
+   }
+ 
+   async function queueTransactionalMessage({
++    messageCopy,
+     queueId,
+     to,
+     text,
+@@ -300,6 +312,12 @@
+     const settings = await getTransportSettings();
+     if (settings.transactionalProvider === "meta") {
+       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
++    }
++    const copy = messageCopy || technicianCopy(metadata, text);
++    if (copy) {
++      const saved = await loadMessageCopy(db, copy.id, copy.language);
++      text = renderMessageCopy(copy.id, copy.language, copy.variables, copy.details, saved.fields);
++      metadata = { ...metadata, messageTemplateId: copy.id, messageTemplateLanguage: copy.language, messageTemplateRevision: saved.revision };
+     }
+     const explicitText = String(text || "").trim();
+     const fallbackText = explicitText ? "" : renderTransactionalText({ templateName, bodyParameters, languageCode });

@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {verifyDelta,patchFor,filesForFunction,TARGETS,FILES,SHARED}=require('./message-template-editor-release.cjs');
+const {verifyDelta,patchFor,patchForArchive,filesForFunction,TARGETS,FILES,SHARED}=require('./message-template-editor-release.cjs');
 const {createBody,verifyFunction,boundaries,API_FILES}=require('./message-template-settings-install.cjs');
 const transport=name=>({format:'zip',privateRetained:true,extractionVerified:true,anonymousAccessDenied:true,uri:'gs://gcf-v2-sources-1053571783393-us-central1/codex-release-recovery/appointment-finance/'+'a'.repeat(40)+'/'+name+'-candidate.zip',generation:'123',sha256:'b'.repeat(64)});
 test('existing functions can change only source; arbitrary targets and public/unverified archives are denied',()=>{
@@ -42,4 +42,14 @@ test('HTTP acceptance requires CORS, private caching and application denial, not
   await boundaries(good);
   await assert.rejects(boundaries(async(url,options)=>({...await good(url,options),status:200})));
   await assert.rejects(boundaries(async(url,options)=>({...await good(url,options),headers:new Headers()})));
+});
+test('historical reminder adaptation requires exact module bytes and cannot alter another target or patch section',()=>{
+  const header='diff --git a/functions/whatsappTransactionalService.js b/functions/whatsappTransactionalService.js\n';
+  const other='diff --git a/functions/messageCopy.js b/functions/messageCopy.js\nother patch\n';
+  const normal=other+header+'normal patch\n',files={'whatsappTransactionalService.js':'15b59ed6d516e807f4165e663c106979c4f11cc6ef30334daaf629321c667f1a'};
+  const adapted=patchForArchive('sendDailyAppointmentReminders',normal,files);
+  assert.ok(adapted.startsWith(other));assert.ok(adapted.includes('+    messageCopy,'));assert.ok(!adapted.includes('queueWacliReferenceBundle'));
+  assert.equal(patchForArchive('officeBookingAuthority',normal,files),normal);
+  assert.equal(patchForArchive('sendDailyAppointmentReminders',normal,{'whatsappTransactionalService.js':'unreviewed'}),normal);
+  assert.throws(()=>patchForArchive('sendDailyAppointmentReminders',other,files));
 });
