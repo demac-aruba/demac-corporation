@@ -5,6 +5,9 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { TextSizeControl } from '@/components/accessibility/text-size-control';
 import { principalRoleLabel, useAuth } from '@/components/auth/auth-provider';
+import { MessagingMonitorChip, MessagingScheduleAlert } from '@/components/communications/messaging-monitor';
+import { useMessagingMonitor } from '@/components/communications/messaging-monitor-provider';
+import { MONITOR_PATH } from '@/lib/messaging-monitor-types';
 import { navigationGroups } from '@/lib/navigation';
 
 function ThemeControl() {
@@ -51,6 +54,7 @@ function initials(name: string) {
 
 export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
+  const monitor = useMessagingMonitor();
   const router = useRouter();
   const { status, principal, firebaseConfigured, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -163,10 +167,10 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
             <kbd>⌘ K</kbd>
           </label>
           <div className="topbar-actions">
-            <ThemeControl />
+            <MessagingMonitorChip /><ThemeControl />
             <div className="notification-anchor">
-              <button className="icon-action" type="button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((current) => !current); setCommandOpen(false); setSessionOpen(false); }}>◌<b>{visibleNotifications.length}</b></button>
-              {notificationsOpen ? <div className="notification-popover"><header><div><strong>Management Alerts</strong><span>Exception-first attention queue</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>×</button></header>{visibleNotifications.map((item) => <button type="button" className={`notification-row notification-${item.tone}`} key={item.title} onClick={() => navigate(item.href)}><i /><div><strong>{item.title}</strong><span>{item.detail}</span></div></button>)}<button className="notification-footer" type="button" onClick={() => navigate('/kpis')}>Open full attention queue →</button></div> : null}
+              <button className="icon-action" type="button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((current) => !current); setCommandOpen(false); setSessionOpen(false); }}>◌<b>{visibleNotifications.length + (monitor.available && monitor.health !== 'healthy' ? 1 : 0)}</b></button>
+              {notificationsOpen ? <div className="notification-popover"><header><div><strong>Management Alerts</strong><span>Exception-first attention queue</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>×</button></header>{monitor.available && monitor.health !== 'healthy' ? <button type="button" className="notification-row notification-critical" onClick={() => navigate(MONITOR_PATH)}><i /><div><strong>Mensajería · {monitor.health === 'unknown' ? 'Sin verificar' : 'Requiere atención'}</strong><span>Revisar confirmaciones de clientes y agendas de técnicos.</span></div></button> : null}{visibleNotifications.map((item) => <button type="button" className={`notification-row notification-${item.tone}`} key={item.title} onClick={() => navigate(item.href)}><i /><div><strong>{item.title}</strong><span>{item.detail}</span></div></button>)}<button className="notification-footer" type="button" onClick={() => navigate('/kpis')}>Open full attention queue →</button></div> : null}
             </div>
             <div className="notification-anchor">
               <button className="owner-chip" type="button" aria-label="Account and session" aria-expanded={sessionOpen} onClick={() => { setSessionOpen((current) => !current); setNotificationsOpen(false); setCommandOpen(false); }} style={{ border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer' }}>
@@ -178,7 +182,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
           </div>
         </header>
 
-        <main className="erp-content">{children}</main>
+        <main className="erp-content">{pathname?.startsWith('/scheduling') ? <MessagingScheduleAlert /> : null}{children}</main>
       </div>
 
       {commandOpen ? <div className="command-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommandOpen(false); }}>

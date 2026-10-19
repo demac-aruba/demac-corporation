@@ -1,0 +1,60 @@
+name: Controlled WhatsApp monitor release
+on:
+  pull_request:
+    paths:
+      - 'scripts/whatsapp-monitor-*'
+      - '.github/workflows/whatsapp-monitor-release.yml'
+  push:
+    branches: [release/whatsapp-monitor-20261019]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/whatsapp-monitor-source-release.cjs && node --check scripts/whatsapp-monitor-deploy.cjs
+      - run: node --test scripts/whatsapp-monitor-release.test.cjs scripts/appointment-finance-source-update.test.cjs scripts/appointment-finance-transport.test.cjs
+  publish:
+    if: github.ref == 'refs/heads/release/whatsapp-monitor-20261019'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Install isolated Firebase tooling
+        run: npm install --prefix "$RUNNER_TEMP/monitor-tools" --no-audit --no-fund firebase-tools@15.30.0
+      - name: Prepare dedicated identity, additive index and monitor-only package
+        run: node scripts/whatsapp-monitor-deploy.cjs prepare
+      - name: Publish only metadata and transport observation to live sources
+        run: node scripts/whatsapp-monitor-source-release.cjs
+      - name: Deploy three isolated monitoring functions
+        run: node scripts/whatsapp-monitor-deploy.cjs deploy
+      - name: Activate from now and verify snapshot and heartbeat
+        run: node scripts/whatsapp-monitor-deploy.cjs activate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: whatsapp-monitor-release
+          path: |
+            ${{ runner.temp }}/whatsapp-monitor-release/summary.json
+            ${{ runner.temp }}/whatsapp-monitor-source-release/summary.json
+          if-no-files-found: error
+          retention-days: 90

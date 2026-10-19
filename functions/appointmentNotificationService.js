@@ -139,7 +139,7 @@ function createAppointmentNotificationService({ db } = {}) {
     ];
   }
 
-  async function queueAppointmentMessage({ order, client, recipient, eventId, templateName, notificationType, reason, requestedById, requestedByName }) {
+  async function queueAppointmentMessage({ order, client, recipient, eventId, templateName, notificationType, reason, requestedById, requestedByName, sourceVersionMs }) {
     const to = recipient?.whatsapp || recipient?.phone;
     const languageCode = templateLanguageForRecipient(recipient, client);
     const bodyParameters = await buildTemplateParameters(order, client, recipient, languageCode);
@@ -160,6 +160,7 @@ function createAppointmentNotificationService({ db } = {}) {
         appointmentId: order.appointmentId || null,
         workOrderId: order.id,
         notificationType,
+        ...(Number.isFinite(sourceVersionMs) ? { monitoringSourceVersionMs: sourceVersionMs, monitoringRecipientKey: String(recipientKey) } : {}),
         reason,
         recipientId: recipient?.id || null,
         recipientSourceId: recipient?.sourceId || null,
@@ -193,7 +194,7 @@ function createAppointmentNotificationService({ db } = {}) {
     };
   }
 
-  async function queueAppointmentMessages({ order, client, recipients, eventId, templateName, notificationType, reason, requestedById, requestedByName }) {
+  async function queueAppointmentMessages({ order, client, recipients, eventId, templateName, notificationType, reason, requestedById, requestedByName, sourceVersionMs }) {
     const notifications = [];
     for (const recipient of recipients) {
       const notification = await queueAppointmentMessage({
@@ -201,6 +202,7 @@ function createAppointmentNotificationService({ db } = {}) {
         client,
         recipient,
         eventId,
+        sourceVersionMs,
         templateName,
         notificationType,
         reason,
@@ -212,7 +214,7 @@ function createAppointmentNotificationService({ db } = {}) {
     return notifications;
   }
 
-  async function queueConfirmationForOrder({ order, eventId, reason, changedFields = [] }) {
+  async function queueConfirmationForOrder({ order, eventId, reason, changedFields = [], sourceVersionMs }) {
     if (!confirmationEligible(order)) return { queued: false, reason: "confirmation-not-eligible", notifications: [] };
     const client = await getClient(order.clientId);
     if (!client) return { queued: false, reason: "client-not-found", notifications: [] };
@@ -223,6 +225,7 @@ function createAppointmentNotificationService({ db } = {}) {
       client,
       recipients,
       eventId,
+      sourceVersionMs,
       templateName: "appointment_confirmation",
       notificationType: "appointment-confirmation",
       reason,

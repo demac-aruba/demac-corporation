@@ -41,6 +41,8 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
     const before = beforeSnapshot?.exists ? { id: beforeSnapshot.id, ...beforeSnapshot.data() } : null;
     const order = { id: afterSnapshot.id, ...afterSnapshot.data() };
     const created = !beforeSnapshot?.exists;
+    // Correlate observability with the canonical write, not a delivery-attempt ID.
+    const sourceVersionMs = afterSnapshot.updateTime?.toMillis();
 
     // The Work Order write remains the single event boundary for customer
     // communication and internal Van schedule changes. Ad-hoc support is a SUPPORT
@@ -53,11 +55,13 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
           ? await technicianScheduleChanges.queueAdhocSupportChange({
             order,
             eventId: event.id,
+            sourceVersionMs,
             reason: created ? "same-day-adhoc-support-created" : "same-day-adhoc-support-updated",
           })
           : await technicianScheduleChanges.queueSameDayChange({
             order,
             eventId: event.id,
+            sourceVersionMs,
             reason: created ? "same-day-work-created" : "same-day-schedule-updated",
           });
         if (!result.queued) {
@@ -86,6 +90,7 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
       const result = await notificationService.queueConfirmationForOrder({
         order,
         eventId: event.id,
+        sourceVersionMs,
         reason,
         changedFields,
       });
