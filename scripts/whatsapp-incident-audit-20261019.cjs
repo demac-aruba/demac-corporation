@@ -78,6 +78,28 @@ async function main() {
   await section('today_van_queue', async () => summarize((await db.collection('whatsappOutboundQueue').where('scheduleDate','==',day).select(...fields).limit(500).get()).docs,500));
   await section('recent_queue', async () => summarize((await db.collection('whatsappOutboundQueue').where('createdAt','>=',Timestamp.fromDate(new Date(start))).where('createdAt','<',Timestamp.fromDate(new Date(end))).select(...fields).limit(1000).get()).docs,1000));
   await section('pending_queue', async () => summarize((await db.collection('whatsappOutboundQueue').where('status','in',['queued','processing']).select(...fields).limit(500).get()).docs,500));
+  await section('pending_recovery_scope', async () => {
+    const docs = (await db.collection('whatsappOutboundQueue').where('status','in',['queued','processing'])
+      .select('status','provider','notificationType','scheduleDate','reason','vanId','workOrderId','pendingStart','pendingEnd','lunchStart','lunchEnd','type','messageIndex','dependsOnQueueId','createdAt').limit(500).get()).docs;
+    const dates = {}, reasons = {}, signatures = new Map(); let startedBundles = 0, olderThanToday = 0, automaticToday = 0;
+    for (const doc of docs) {
+      const d = doc.data();
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(d.scheduleDate || '') ? d.scheduleDate : 'none';
+      dates[date] = (dates[date] || 0) + 1;
+      const reason = ['daily-van-schedule','manual-van-schedule','manual-van-schedule-send','same-day-work-created','same-day-schedule-updated','appointment-created','appointment-updated'].includes(d.reason) ? d.reason : 'other';
+      reasons[reason] = (reasons[reason] || 0) + 1;
+      if (d.type === 'booking-reference-bundle' && Number(d.messageIndex || 0) > 0) startedBundles++;
+      if ((iso(d.createdAt) || '') < day+'T04:00:00Z') olderThanToday++;
+      if (d.scheduleDate === day && d.reason === 'daily-van-schedule') automaticToday++;
+      if (date !== 'none' && d.vanId && String(d.notificationType || '').startsWith('van-daily-')) {
+        const key = JSON.stringify([date,d.vanId,d.notificationType,d.workOrderId || '',d.pendingStart || '',d.pendingEnd || '',d.lunchStart || '',d.lunchEnd || '']);
+        signatures.set(key, (signatures.get(key) || 0) + 1);
+      }
+    }
+    return { count: docs.length, limitReached: docs.length===500, dates, reasons, startedBundles, olderThanToday, automaticToday,
+      repeatedScheduleGroups: [...signatures.values()].filter(n => n > 1).length,
+      extraScheduleRecords: [...signatures.values()].reduce((sum,n) => sum + Math.max(0,n-1),0) };
+  });
   await section('scheduler', async () => cloud(['scheduler','jobs','describe','firebase-schedule-sendDailyTechnicianSchedules-us-central1','--project='+project,'--location=us-central1','--format=json(state,schedule,timeZone,lastAttemptTime,scheduleTime,status)']));
   for (const name of ['queueAppointmentConfirmation','sendDailyTechnicianSchedules','wacliOutboundPoll','wacliOutboundAck']) {
     await section('function_'+name, async () => cloud(['functions','describe',name,'--project='+project,'--region=us-central1','--gen2','--format=json(state,updateTime,serviceConfig.revision,eventTrigger.retryPolicy)']));
