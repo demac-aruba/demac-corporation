@@ -47,7 +47,8 @@ is required; owner visual approval is separate from technical verification.
 - [x] Text/attachment order and captions remain unchanged in reference bundles.
 - [x] Built-in defaults remain the producer fallback if copy configuration cannot
   be read. The editor blocks malformed stored configuration instead of overwriting it.
-- [ ] Business owner validates the interactive preview and authorizes production.
+- [x] Business owner validates the interactive preview and authorizes production:
+  “excelente puedes hacer merge y deploy”, 2026-10-19.
 
 ## Limits and failure/recovery
 
@@ -67,6 +68,11 @@ provider-managed authentication email templates and manually composed messages a
 outside this operational catalog.
 
 ## Release and recovery
+
+Owner approval has now been received. PR #610 was merged after all applicable
+checks passed; the controlled release is documented in
+[the release review](../reviews/message-template-release-20261019.md).
+The original preparation scope below remains the release safety baseline.
 
 This task prepares code and an isolated synthetic preview only. No production
 configuration is seeded, no client messages are sent and no historical queue replay
