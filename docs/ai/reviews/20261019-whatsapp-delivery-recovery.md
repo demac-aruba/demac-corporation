@@ -1,5 +1,29 @@
 # WhatsApp delivery recovery — 19 October 2026
 
+## Final authorized disposition
+
+The original diagnostic and review notes below describe the pre-authorization phase.
+They are superseded for deployment and backlog handling by the owner's 09:34:15 Aruba
+authorization to deploy and **discard every earlier unsent message without replay**.
+
+Production release completed at 09:54:38 Aruba on 19 October. The sending payloads of
+133 earlier queue records (52 queued, 81 failed) were atomically removed before activating
+the repair. Minimal cancelled records preserve idempotency and prevent retries. No earlier
+record was sent after the cutoff; no earlier unsent payload remained at final verification.
+Sent history and all work created at/after the cutoff were preserved.
+
+Only `wacliOutboundPoll` was deployed, revision `waclioutboundpoll-00028-xoz`.
+The bridge resumed fresh successful polls, with no outbound error or pending ACKs.
+Runtime configuration, the live dependency lock, four peer functions and Scheduler were
+verified unchanged. The release passed 198 Node 22 tests plus focused checks against
+the exact live dependency lock. No real new message existed during verification, so
+end-to-end delivery of new work remains unobserved; no synthetic customer send was made.
+
+Evidence: [successful release](https://github.com/demac-aruba/demac-corporation/actions/runs/39263814043),
+[merged correction #605](https://github.com/demac-aruba/demac-corporation/pull/605), and
+[cutover review and outcome](20261019-whatsapp-cutover-release.md).
+The additional reliability findings at the end remain open follow-up work.
+
 ## Task and evidence
 
 Owner requested an audit of missing appointment confirmations and technician schedules,

@@ -4,6 +4,33 @@ Authorization: 19 October 2026 at 09:34:15 Aruba (13:34:15 UTC). The owner expli
 authorized deploying the fix and removing all older queued messages without sending them.
 This replaces the earlier proposal to recover accumulated messages.
 
+## Production outcome
+
+Completed successfully on 19 October 2026 at 09:54:38 Aruba (13:54:38 UTC).
+[Release run 39263814043](https://github.com/demac-aruba/demac-corporation/actions/runs/39263814043)
+used release commit `6b21444c1ebe8f41c53b4acb082c4e81175574f0` and reviewed runtime
+commit `51225bcc1370b9ad424823d3d91496c508b37971`, merged in
+[PR #605](https://github.com/demac-aruba/demac-corporation/pull/605).
+
+- Atomically removed the sending payloads of **133 old queue records** at 09:53:04 Aruba:
+  52 queued and 81 failed. One obsolete recipient lock was released. Minimal cancelled
+  tombstones prevent old event retries from recreating these records. A queue record can
+  contain multiple message parts; 133 is not an individual-message count.
+- Preserved sent history. No new record existed at cutover; new records remain eligible.
+- Deployed only `wacliOutboundPoll`, revision `waclioutboundpoll-00028-xoz`, replacing
+  `waclioutboundpoll-00027-leh`. The deployed two-file source matched the reviewed commit.
+  The live dependency lock and runtime configuration were preserved.
+- The bridge successfully polled at 09:54:37 Aruba, with no outbound error and zero pending
+  ACKs. An invalid bearer was rejected with HTTP 401. Peer functions and Scheduler were
+  unchanged.
+- Final query found **zero old unsent records and zero old records sent after the cutoff**.
+  There were zero new sends and zero new pending records at verification. Therefore this
+  confirms restored backend polling and eligibility for new work, not a real new delivery.
+
+The cutoff is creation time strictly before `2026-10-19T13:34:15.000Z`; records at or
+after it are preserved. No old customer confirmation, technician agenda or attachment was
+replayed. No synthetic message was sent. Future delivery still depends on provider availability.
+
 ## Task and acceptance
 
 Deep Review; Communication Authority remains the existing outbound queue. No appointment,
@@ -47,11 +74,26 @@ covered the full helper, release driver, workflow, gateway dependency handling a
 
 - Four cutover tests pass: exclusive cutoff/missing timestamp, read-only dry-run and
   idempotent apply, changed/in-flight queue rejection, and complete removal of sending content.
+- A fifth release regression verifies that the SSH health script receives stdin and that
+  importing the command wrapper does not perform external operations.
 - Existing bundle tests plus owner-discarded dependency/recipient isolation regression pass.
 - Existing 23 prevalidation, 133 transactional and 37 reference/gateway/media tests are the
   mandatory Node 22 release gates; none may be skipped.
 - Syntax, workflow YAML parsing and whitespace checks pass.
 - No test or diagnostic sends WhatsApp messages to customers or technicians.
+
+The successful Node 22 release ran **198 tests**, zero failures: five cutover/release,
+23 prevalidation, 133 transactional, and 37 reference/gateway/media. It additionally
+installed the exact production lock in a separate validation directory, passed the focused
+bundle/gateway/media suites against it, and verified the real public SDK project-discovery
+call with project environment variables removed. The uploaded production source did not
+include this validation directory or a dependency upgrade.
+
+Earlier preflight attempts stopped before queue reads/writes or deployment. The health
+probe exposed a child-process stdin configuration error, which was reproduced and fixed
+with a regression test. A subsequent comparison found production dependencies differ from
+the repository. The release therefore preserved the live lock and added exact-live testing;
+it did not replace production dependencies or waive the required tests.
 
 Concurrency review: a competing claim changes the transactional read and causes a retry;
 the in-flight check then blocks withdrawal. No transaction writes occur before all reads.
@@ -61,6 +103,7 @@ If deployment fails after withdrawal, old content stays cancelled and the releas
 rerun. New pending records remain preserved. No automatic rollback can reintroduce old work.
 
 Residual risk: successful submission of a new message still depends on WhatsApp availability.
-The release verifies backend/bridge operation and observes natural new sends; it does not
-manufacture a customer appointment or send a synthetic customer message. Runtime results
-will be recorded in the release summary and final incident report.
+The release verifies backend/bridge operation and checks for natural new sends; it does not
+manufacture a customer appointment or send a synthetic customer message. The existing retry,
+trigger-coupling, delivery-health and inbound-dead-letter findings in the incident report
+remain separate follow-up work. No failure-proof or exactly-once guarantee is claimed.
