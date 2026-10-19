@@ -1,0 +1,50 @@
+name: Controlled appointment message copy release
+on:
+  pull_request:
+    paths:
+      - 'scripts/appointment-message-copy-*'
+      - '.github/workflows/appointment-message-copy-release.yml'
+  push:
+    branches: [release/appointment-message-copy-20261019]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/appointment-message-copy-release.cjs
+      - run: node --test scripts/appointment-message-copy-release.test.cjs scripts/appointment-finance-source-update.test.cjs scripts/appointment-finance-transport.test.cjs
+  publish:
+    if: github.ref == 'refs/heads/release/appointment-message-copy-20261019'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish reviewed message source and verify all five functions
+        run: node scripts/appointment-message-copy-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appointment-message-copy-release
+          path: ${{ runner.temp }}/appointment-message-copy-release/summary.json
+          if-no-files-found: error
+          retention-days: 90
