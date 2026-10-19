@@ -39,6 +39,16 @@ function referenceMediaProjectId() {
   return referenceProjectPromise;
 }
 let lastReferenceProjectErrorAt = 0;
+let lastMonitorPollLog = { ok: 0, error: 0 };
+function observeOutboundPoll(ok) {
+  // Logs only: observability never waits on a database/network or changes delivery.
+  const key = ok ? 'ok' : 'error';
+  const at = Date.now();
+  if (at - lastMonitorPollLog[key] < 30000) return;
+  lastMonitorPollLog[key] = at;
+  try { logger.info('WhatsApp outbound transport observation.', { monitorSignal: 'wacli-poll-v1', outcome: key }); }
+  catch { /* Logging must never turn an otherwise successful claim into a failure. */ }
+}
 
 function safeDocumentId(value) {
   return String(value || "unknown")
@@ -711,8 +721,10 @@ exports.wacliOutboundPoll = onRequest(
     try {
       const bridgeId = String(request.body?.bridgeId || "demac-wacli-bridge").trim().slice(0, 120);
       const command = await claimOutboundCommand(bridgeId);
+      observeOutboundPoll(true);
       response.status(200).json({ ok: true, command });
     } catch (error) {
+      observeOutboundPoll(false);
       logger.error("Could not poll wacli outbound queue.", error);
       response.status(500).json({ error: "Outbound poll failed" });
     }

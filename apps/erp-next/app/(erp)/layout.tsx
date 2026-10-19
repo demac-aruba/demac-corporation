@@ -4,6 +4,7 @@ import { AuthGate } from '@/components/auth/auth-gate';
 import { ErpShell } from '@/components/erp-shell';
 import { PerformanceTelemetryProvider } from '@/components/performance/performance-telemetry-provider';
 import '../mobile-shell-fixes.css';
+import { MessagingMonitorProvider } from '@/components/communications/messaging-monitor-provider';
 
 export const metadata: Metadata = {
   title: 'ERP',
@@ -14,7 +15,7 @@ export default function ErpLayout({ children }: Readonly<{ children: React.React
   return (
     <AuthGate>
       <PerformanceTelemetryProvider>
-        <AccessibilityTextProvider><ErpShell>{children}</ErpShell></AccessibilityTextProvider>
+        <MessagingMonitorProvider><AccessibilityTextProvider><ErpShell>{children}</ErpShell></AccessibilityTextProvider></MessagingMonitorProvider>
       </PerformanceTelemetryProvider>
     </AuthGate>
   );

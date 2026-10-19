@@ -1,0 +1,86 @@
+name: WhatsApp Messaging Monitor
+on:
+  pull_request:
+    paths:
+      - 'functions/whatsappMonitor*'
+      - 'functions/appointmentNotification*'
+      - 'functions/technician*Schedule*'
+      - 'functions/whatsappWacliGateway.js'
+      - 'apps/erp-next/components/communications/messaging-monitor*'
+      - 'apps/erp-next/components/communications/monitor-icon.tsx'
+      - 'apps/erp-next/lib/messaging-monitor*'
+      - 'apps/erp-next/app/(erp)/settings/system/messaging/**'
+      - 'apps/erp-next/scripts/messaging-monitor*'
+      - '.github/workflows/whatsapp-monitor.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  monitor-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-health
+      NEXT_PUBLIC_WHATSAPP_MONITOR_ENABLED: 'true'
+      NEXT_PUBLIC_FIREBASE_API_KEY: demo-key
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-health.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-health
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-health.appspot.com
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123'
+      NEXT_PUBLIC_FIREBASE_APP_ID: demo-app
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated tooling
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/monitor-tools" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          "$RUNNER_TEMP/monitor-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Server gates and messaging regressions
+        run: |
+          npm run validate:firebase --prefix functions
+          npm run test:transactional-whatsapp --prefix functions
+          node --test functions/whatsappMonitor.test.js functions/whatsappWacliGateway.test.js functions/bookingVisitReferences.test.js functions/bookingVisitReferencesHttp.test.js functions/whatsappReferenceBundle.test.js
+      - name: Real Auth and Firestore concurrency and authorization
+        run: >-
+          "$RUNNER_TEMP/monitor-tools/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-health --config firebase.performance-emulator.json --only firestore,auth
+          'node --test functions/whatsappMonitor.emulator.test.js'
+      - name: ERP types and complete build
+        run: |
+          npm run typecheck --prefix apps/erp-next
+          npm run build --prefix apps/erp-next
+      - name: Actual ERP browser verification with synthetic data
+        run: MONITOR_PLAYWRIGHT="$RUNNER_TEMP/monitor-tools/node_modules/playwright" node apps/erp-next/scripts/messaging-monitor-browser.cjs
+      - name: Verify isolated deployment exports
+        run: |
+          node functions/whatsappMonitorPackage.cjs "$RUNNER_TEMP/monitor-source"
+          npm install --prefix "$RUNNER_TEMP/monitor-source" --no-audit --no-fund
+          node - "$RUNNER_TEMP/monitor-source" <<'NODE'
+          const assert=require('node:assert/strict');
+          assert.deepEqual(Object.keys(require(process.argv[2])).sort(),['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsappMessagingObserveOrder']);
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: whatsapp-monitor-verification
+          path: messaging-test-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-monitor-source
+          path: |
+            ${{ runner.temp }}/monitor-source/**
+            !${{ runner.temp }}/monitor-source/node_modules/**
+          if-no-files-found: error
+          retention-days: 7
+# Deliberately no deployment job. Runtime, channels, IAM and cutover are reviewed separately.
