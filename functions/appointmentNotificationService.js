@@ -1,6 +1,6 @@
 const { FieldValue } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
-const { bookingMessageAddress } = require("./bookingLocationDisplay");
+const { bookingMessageAddress, bookingMessageAddressLines } = require("./bookingLocationDisplay");
 const {
   DEFAULT_CLOSED_WEEKDAYS,
   DEFAULT_SEARCH_DAYS,
@@ -133,7 +133,7 @@ function createAppointmentNotificationService({ db } = {}) {
       String(recipient?.name || client.name || client.company || "Customer").trim(),
       formatAppointmentDate(order.date, languageCode),
       formatAppointmentTime(order.time, languageCode),
-      bookingMessageAddress(order, client.address),
+      bookingMessageAddress(order, client.address, { languageCode }),
       await getServiceDescription(order, languageCode),
     ];
   }
@@ -147,7 +147,9 @@ function createAppointmentNotificationService({ db } = {}) {
     const result = await whatsapp.queueTransactionalMessage({
       queueId,
       to,
-      text: renderAppointmentText(notificationType, bodyParameters, languageCode),
+      text: renderAppointmentText(notificationType, bodyParameters, languageCode, {
+        addressLines: bookingMessageAddressLines(order, client.address, { languageCode }),
+      }),
       templateName,
       languageCode,
       bodyParameters,

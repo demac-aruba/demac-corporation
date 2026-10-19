@@ -1,0 +1,162 @@
+'use strict';
+// Owner-approved message presentation release. No database clients or messaging calls.
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+const { manifest } = require('./appointment-finance-release-audit.cjs');
+const { releaseConfig, runtimeSourceHash, safePaths, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
+const { validateCandidate } = require('./booking-dwelling-candidate-validation.cjs');
+const { verifyPrivateBucket, verifyInheritedPolicies } = require('./appointment-finance-prepare.cjs');
+const { retainZip, sourceVerifier, createZip } = require('./appointment-finance-transport.cjs');
+const { updateSource } = require('./appointment-finance-source-update.cjs');
+const { verifyTraffic } = require('./appointment-finance-release.cjs');
+const PROJECT = 'demac-corporation', REGION = 'us-central1';
+const BUCKET = 'gcf-v2-sources-1053571783393-us-central1';
+const BRANCH = 'release/appointment-message-copy-20261019';
+const BASE = '2024b537f93aa6824f5b5e788ef24b46a2baaded';
+const REVIEWED = '86eb8679e7ef87e3be0d7d797c02549044645e7e';
+const FILES = ['appointmentCommunicationRenderer.js', 'appointmentNotificationService.js', 'bookingLocationDisplay.js', 'technicianDailyScheduleService.js', 'technicianScheduleChangeService.js', 'whatsappTransactionalService.js'];
+const TARGETS = ['officeBookingAuthority', 'queueAppointmentConfirmation', 'sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules', 'notifyBookingReferenceUpdate'];
+const TESTS = ['appointmentCommunicationRenderer.test.js', 'appointmentNotificationService.test.js', 'technicianDailyScheduleService.test.js', 'technicianScheduleChangeService.test.js', 'whatsappTransactionalService.test.js', 'appointmentCommunicationAuthority.test.js', 'vanScheduleCommunicationAuthority.test.js', 'officeBookingAuthorityCommunication.test.js'];
+const stable = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(stable) : Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
+const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(stable(v))).digest('hex');
+function verifyDelta(before, after) {
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(f => before[f] !== after[f]).sort();
+  assert.deepEqual(changed, [...FILES].sort(), 'Unexpected message source delta');
+  for (const f of FILES) assert.ok(before[f] && after[f], 'Existing source module required');
+  return changed;
+}
+function patchFor(name, transport) {
+  assert.ok(TARGETS.includes(name), 'Unapproved function');
+  for (const key of ['privateRetained', 'extractionVerified', 'anonymousAccessDenied']) assert.equal(transport[key], true);
+  assert.equal(transport.format, 'zip');
+  assert.match(transport.uri, new RegExp('^gs://' + BUCKET + '/codex-release-recovery/appointment-finance/[a-f0-9]{40}/' + name + '-candidate\\.zip$'));
+  assert.match(transport.generation, /^\d+$/); assert.match(transport.sha256, /^[a-f0-9]{64}$/);
+  return { name: `projects/${PROJECT}/locations/${REGION}/functions/${name}`, buildConfig: { source: { storageSource: {
+    bucket: BUCKET, object: transport.uri.slice(('gs://' + BUCKET + '/').length), generation: transport.generation,
+  } } } };
+}
+async function main() {
+  assert.equal(process.versions.node.split('.')[0], '22');
+  assert.equal(process.env.GITHUB_REPOSITORY, 'demac-aruba/demac-corporation');
+  assert.equal(process.env.GITHUB_REF, 'refs/heads/' + BRANCH);
+  assert.ok(path.isAbsolute(process.env.RUNNER_TEMP || ''));
+  const root = process.cwd(), out = path.join(process.env.RUNNER_TEMP, 'appointment-message-copy-release'); fs.mkdirSync(out);
+  const run = (cmd, args, cwd = root) => execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024 });
+  const cloud = args => run('gcloud', args);
+  const summary = { sourceSha: process.env.GITHUB_SHA, mode: 'source-only', stage: 'preflight', customerReads: false, productionDataWrites: false, functions: [] };
+  const save = () => fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 2));
+  const sourceGate = () => {
+    assert.equal(run('git', ['rev-parse', 'HEAD']).trim(), process.env.GITHUB_SHA);
+    for (const ref of ['refs/heads/main', 'refs/heads/' + BRANCH]) assert.equal(run('git', ['ls-remote', 'origin', ref]).split(/\s/)[0], process.env.GITHUB_SHA, 'Reviewed branch advanced');
+    run('git', ['merge-base', '--is-ancestor', BASE, 'HEAD']);
+    for (const file of FILES) assert.equal(run('git', ['show', 'HEAD:functions/' + file]), run('git', ['show', REVIEWED + ':functions/' + file]), 'Approved message source differs');
+  };
+  let token, tokenAt = 0;
+  const api = async (url, method = 'GET', body) => {
+    if (!token || Date.now() - tokenAt > 40 * 60 * 1000) { token = cloud(['auth', 'print-access-token']).trim(); tokenAt = Date.now(); }
+    const response = await fetch(url, { method, headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
+    assert.equal(response.status, 200, 'Cloud API ' + method + ' HTTP ' + response.status); return response.json();
+  };
+  const describe = name => JSON.parse(cloud(['functions', 'describe', name, '--gen2', '--project=' + PROJECT, '--region=' + REGION, '--format=json']));
+  const service = fn => JSON.parse(cloud(['run', 'services', 'describe', fn.serviceConfig.service.split('/').pop(), '--project=' + PROJECT, '--region=' + REGION, '--format=json']));
+  const iam = fn => hash(JSON.parse(cloud(['run', 'services', 'get-iam-policy', fn.serviceConfig.service.split('/').pop(), '--project=' + PROJECT, '--region=' + REGION, '--format=json'])));
+  const scheduler = name => {
+    if (!['sendDailyAppointmentReminders', 'sendDailyTechnicianSchedules'].includes(name)) return null;
+    const job = JSON.parse(cloud(['scheduler', 'jobs', 'describe', 'firebase-schedule-' + name + '-us-central1', '--project=' + PROJECT, '--location=' + REGION, '--format=json']));
+    return hash(Object.fromEntries(['schedule', 'timeZone', 'state', 'httpTarget', 'retryConfig', 'attemptDeadline'].map(k => [k, job[k]])));
+  };
+  let downloads = 0;
+  const download = (source, label) => {
+    assert.equal(source.bucket, BUCKET); assert.ok(source.object); assert.match(String(source.generation), /^\d+$/);
+    const directory = path.join(out, label + '-' + ++downloads), zip = directory + '.zip';
+    cloud(['storage', 'cp', `gs://${source.bucket}/${source.object}#${source.generation}`, zip, '--quiet']);
+    safePaths(run('unzip', ['-Z1', zip]).trim().split('\n')); fs.mkdirSync(directory); run('unzip', ['-q', zip, '-d', directory]);
+    return { directory, files: manifest(directory), archiveHash: hash(fs.readFileSync(zip)) };
+  };
+  try {
+    sourceGate(); save();
+    const bucket = JSON.parse(cloud(['storage', 'buckets', 'describe', 'gs://' + BUCKET, '--format=json']));
+    const policy = JSON.parse(cloud(['storage', 'buckets', 'get-iam-policy', 'gs://' + BUCKET, '--format=json']));
+    verifyPrivateBucket(bucket, policy);
+    const prepared = { sourceSha: process.env.GITHUB_SHA, recoveryBucketConfigHash: hash(bucket), recoveryBucketPolicyHash: hash(policy) };
+    if ((bucket.public_access_prevention ?? bucket.iamConfiguration?.publicAccessPrevention) === 'enforced') prepared.inheritedPrivacy = { mode: 'bucket-public-access-prevention' };
+    if (!prepared.inheritedPrivacy) {
+      try { const effective = JSON.parse(cloud(['org-policies', 'describe', 'constraints/storage.publicAccessPrevention', '--effective', '--project=' + PROJECT, '--format=json'])); const rules = effective.spec?.rules; if (Array.isArray(rules) && rules.length && rules.every(r => r.enforce === true && !r.condition)) prepared.inheritedPrivacy = { mode: 'effective-public-access-prevention', policyHash: hash(effective) }; } catch { /* Require complete ancestry below. */ }
+    }
+    if (!prepared.inheritedPrivacy) {
+      const ancestors = JSON.parse(cloud(['projects', 'get-ancestors', PROJECT, '--format=json']));
+      const policies = ancestors.map(a => { const kind = String(a.type).toLowerCase(); assert.ok(['project','folder','organization'].includes(kind)); return JSON.parse(cloud([...(kind === 'project' ? ['projects'] : kind === 'folder' ? ['resource-manager','folders'] : ['organizations']), 'get-iam-policy', String(a.id), '--format=json'])); });
+      verifyInheritedPolicies(ancestors, policies); prepared.inheritedPrivacy = { mode: 'complete-ancestry-iam', levels: ancestors.length, policyHashes: policies.map(hash) };
+    }
+    const patchPath = path.join(out, 'message-source.patch');
+    fs.writeFileSync(patchPath, run('git', ['diff', '--binary', BASE, 'HEAD', '--', ...FILES.map(f => 'functions/' + f)]));
+    assert.ok(fs.statSync(patchPath).size > 0);
+    const candidates = [];
+    // Validate and retain all five candidates before the first production patch.
+    for (const name of TARGETS) {
+      summary.stage = 'prepare-' + name; save(); sourceGate();
+      const fn = describe(name); assert.equal(fn.state, 'ACTIVE'); assert.equal(fn.buildConfig.runtime, 'nodejs22'); assert.equal(fn.buildConfig.entryPoint, name);
+      verifyTraffic(service(fn), fn.serviceConfig.revision);
+      const before = download(fn.buildConfig.source.storageSource, name + '-baseline');
+      const candidate = path.join(out, name + '-candidate'); fs.cpSync(before.directory, candidate, { recursive: true });
+      run('git', ['apply', '--check', '-p2', patchPath], candidate);
+      run('git', ['apply', '-p2', patchPath], candidate);
+      const files = manifest(candidate); verifyDelta(before.files, files);
+      const entry = { name, beforeRevision: fn.serviceConfig.revision, beforeSourceHash: runtimeSourceHash(before.files), candidateSourceHash: runtimeSourceHash(files), configHash: hash(releaseConfig(fn)), iamHash: iam(fn), schedulerHash: scheduler(name), operations: [] };
+      summary.functions.push(entry); save();
+      entry.validation = validateCandidate({ source: candidate, root, out, env: isolatedTestEnv(process.env), candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: TESTS });
+      assert.deepEqual(manifest(candidate), files);
+      entry.recovery = await retainZip({ name: name + 'Baseline', directory: before.directory, archive: { sha256: before.archiveHash }, out, prepared, cloud });
+      const zipped = createZip(candidate, path.join(out, name + '-proof.zip'));
+      entry.transport = await retainZip({ name, directory: candidate, archive: { sha256: zipped.sha256 }, out, prepared, cloud });
+      candidates.push({ entry, patch: patchFor(name, entry.transport) }); save();
+    }
+    for (const { entry, patch } of candidates) {
+      const name = entry.name;
+      const inspect = async ({ allowFailed = false } = {}) => {
+        const fn = describe(name); if (!allowFailed) assert.equal(fn.state, 'ACTIVE');
+        assert.equal(hash(releaseConfig(fn)), entry.configHash, 'Runtime configuration drift'); assert.equal(iam(fn), entry.iamHash, 'IAM drift'); assert.equal(scheduler(name), entry.schedulerHash, 'Scheduler drift');
+        const files = download(fn.buildConfig.source.storageSource, name + '-live').files;
+        const sourceHash = runtimeSourceHash(files);
+        assert.ok([entry.beforeSourceHash, entry.candidateSourceHash].includes(sourceHash), 'Concurrent source change');
+        if (sourceHash === entry.beforeSourceHash) assert.equal(fn.serviceConfig.revision, entry.beforeRevision, 'Concurrent revision change');
+        if (fn.state === 'ACTIVE') verifyTraffic(service(fn), fn.serviceConfig.revision);
+        return { fn, alreadyApplied: sourceHash === entry.candidateSourceHash };
+      };
+      sourceGate(); summary.stage = 'publish-' + name; save();
+      const sourceMatches = sourceVerifier({ name, transport: entry.transport, downloadHash: src => download(src, name + '-provenance').archiveHash });
+      const after = await updateSource({ patch, baselineRevision: entry.beforeRevision, inspect,
+        operations: async () => { const found = []; let pageToken; do { const page = await api(`https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/operations?pageSize=100` + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '')); found.push(...(page.operations || [])); pageToken = page.nextPageToken; } while (pageToken); return found; },
+        publish: async body => { sourceGate(); await inspect(); return api('https://cloudfunctions.googleapis.com/v2/' + patch.name + '?updateMask=buildConfig.source', 'PATCH', body); },
+        getOperation: name => api('https://cloudfunctions.googleapis.com/v2/' + name), wait: ms => new Promise(resolve => setTimeout(resolve, ms)), sourceMatches,
+        record: op => { entry.operations.push({ name: op.name, done: op.done, error: Boolean(op.error), intent: Boolean(op.intent) }); save(); } });
+      entry.afterRevision = after.fn.serviceConfig.revision; entry.sourceVerified = true; entry.configPreserved = true; entry.iamPreserved = true; entry.schedulerPreserved = true; entry.trafficVerified = true; save();
+      console.log(JSON.stringify({ name, stage: 'verified', revision: entry.afterRevision }));
+    }
+    sourceGate();
+    for (const { entry } of candidates) {
+      const fn = describe(entry.name); assert.equal(fn.state, 'ACTIVE');
+      assert.equal(fn.serviceConfig.revision, entry.afterRevision, 'Published revision changed');
+      assert.equal(runtimeSourceHash(download(fn.buildConfig.source.storageSource, entry.name + '-final').files), entry.candidateSourceHash);
+      assert.equal(hash(releaseConfig(fn)), entry.configHash); assert.equal(iam(fn), entry.iamHash);
+      assert.equal(scheduler(entry.name), entry.schedulerHash); verifyTraffic(service(fn), entry.afterRevision);
+    }
+    for (const origin of ['https://demac-aruba.com', 'https://www.demac-aruba.com']) {
+      const endpoint = `https://${REGION}-${PROJECT}.cloudfunctions.net/officeBookingAuthority`;
+      const preflight = await fetch(endpoint, { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' }, signal: AbortSignal.timeout(20000) });
+      assert.equal(preflight.status, 204); assert.ok([origin, '*'].includes(preflight.headers.get('access-control-allow-origin')));
+      const denied = await fetch(endpoint, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'list_presets', data: {} }), signal: AbortSignal.timeout(20000) });
+      assert.equal(denied.status, 401); assert.equal((await denied.json()).error?.code, 'unauthenticated');
+    }
+    summary.anonymousBoundaryVerified = true; summary.stage = 'complete'; save();
+    console.log('PASS: five source-only message updates, exact source, configuration, IAM, scheduler and traffic verified.');
+  } catch (error) {
+    summary.error = error.code === 'ERR_ASSERTION' ? String(error.message).split('\n')[0] : 'Release failed at ' + summary.stage;
+    save(); console.error(summary.error); process.exitCode = 1;
+  }
+}
+module.exports = { verifyDelta, patchFor, FILES, TARGETS };
+if (require.main === module) main();

@@ -165,6 +165,9 @@ function renderAppointmentText(notificationType, bodyParameters, languageCode, o
   const reminder = notificationType === "appointment-reminder";
   const brand = "*DEMAC Professional Cooling Solutions*";
   const greeting = greetingForLanguage(languageCode, name, options.now);
+  const addressLabel = languageCode === 'es' ? 'Dirección' : ['pap', 'nl'].includes(languageCode) ? 'Adres' : 'Address';
+  const addressLines = Array.isArray(options.addressLines) && options.addressLines.length ? options.addressLines : [address];
+  const addressBlock = addressLines.map((line) => `*${addressLabel}:* ${String(line || '').trim()}`).join('\n');
 
   if (languageCode === "pap") {
     return [
@@ -176,7 +179,7 @@ function renderAppointmentText(notificationType, bodyParameters, languageCode, o
       "",
       `*Fecha:* ${date}`,
       `*Ora:* ${time}`,
-      `*Adres:* ${address}`,
+      addressBlock,
       `*Servicio:* ${service}`,
       "",
       "Si bo mester haci algun cambio, contesta e mensahe aki.",
@@ -192,7 +195,7 @@ function renderAppointmentText(notificationType, bodyParameters, languageCode, o
       "",
       `*Fecha:* ${date}`,
       `*Hora:* ${time}`,
-      `*Dirección:* ${address}`,
+      addressBlock,
       `*Servicio:* ${service}`,
       "",
       "Si necesitas hacer algún cambio, responde a este mensaje.",
@@ -208,7 +211,7 @@ function renderAppointmentText(notificationType, bodyParameters, languageCode, o
       "",
       `*Datum:* ${date}`,
       `*Tijd:* ${time}`,
-      `*Adres:* ${address}`,
+      addressBlock,
       `*Service:* ${service}`,
       "",
       "Als u iets wilt wijzigen, kunt u op dit bericht reageren.",
@@ -223,10 +226,10 @@ function renderAppointmentText(notificationType, bodyParameters, languageCode, o
     "",
     `*Date:* ${date}`,
     `*Time:* ${time}`,
-    `*Address:* ${address}`,
+    addressBlock,
     `*Service:* ${service}`,
     "",
-    "If you need to make any changes, reply to this message.",
+    "If you have any questions or need to make a change to your appointment, please feel free to reply to this message. We’re happy to help!",
   ].join("\n");
 }
 

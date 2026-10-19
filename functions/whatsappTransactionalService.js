@@ -116,7 +116,7 @@ function renderAppointmentTransactionalText({ reminder = false, bodyParameters =
     `Address: ${address}`,
     `Service: ${service}`,
     "",
-    "If you need to make any changes, reply to this message.",
+    "If you have any questions or need to make a change to your appointment, please feel free to reply to this message. We’re happy to help!",
   ].join("\n");
 }
 

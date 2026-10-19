@@ -88,3 +88,14 @@ test("all appointment message languages bold the brand and field labels", () => 
 test("fixed Papiamento customer copy uses the existing Aruba orthography vocabulary", () => {
   assert.deepEqual(papiamentoUnknownFixedWords(), []);
 });
+
+test('confirmation and reminder show two address lines and a welcoming English closing', () => {
+  for (const type of ['appointment-confirmation', 'appointment-reminder']) {
+    const text = renderAppointmentText(type, ['Synthetic client', 'date', '8:30 AM', 'compact address', 'Standard Service × 3'], 'en', {
+      addressLines: ['Synthetic Residence 10', 'Apartment 4'],
+    });
+    assert.match(text, /\*Address:\* Synthetic Residence 10\n\*Address:\* Apartment 4\n\*Service:\* Standard Service × 3/);
+    assert.match(text, /If you have any questions or need to make a change to your appointment, please feel free to reply to this message\. We’re happy to help!$/);
+    assert.doesNotMatch(text, /compact address|If you need to make any changes/);
+  }
+});

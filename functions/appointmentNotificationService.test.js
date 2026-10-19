@@ -9,7 +9,7 @@ const {
   selectedRecipients,
 } = require("./appointmentNotificationService");
 const { ReferenceDb } = require('./test-support/referenceDb.cjs');
-const { bookingLocationLabel, bookingMessageAddress } = require('./bookingLocationDisplay');
+const { bookingLocationLabel, bookingMessageAddress, bookingMessageAddressLines } = require('./bookingLocationDisplay');
 
 const dwellingSnapshot = {
   propertyId: 'synthetic-property', dwellingId: 'synthetic-unit-4',
@@ -22,16 +22,33 @@ const dwellingSnapshot = {
 test('saved dwelling label uses only destination fields and never assigns a legacy booking to a unit', () => {
   const order = { propertyId: dwellingSnapshot.propertyId, dwellingId: dwellingSnapshot.dwellingId,
     address: 'Dirección de prueba 10', locationSnapshot: dwellingSnapshot };
-  assert.equal(bookingMessageAddress(order), 'Dirección de prueba 10 · Complejo de prueba · Apartamento 4 · A-04');
+  assert.equal(bookingMessageAddress(order), 'Dirección de prueba 10 · Complejo de prueba · Apartment 4');
   assert.equal(bookingLocationLabel({ ...order, locationSnapshot: { ...dwellingSnapshot, areaName: 'Sala' } }),
-    'Complejo de prueba · Apartamento 4 · A-04 · Sala');
+    'Complejo de prueba · Apartamento 4 · Sala');
   assert.equal(bookingMessageAddress({ address: 'Dirección de prueba 10' }), 'Dirección de prueba 10');
   assert.equal(bookingMessageAddress({}, 'Client fallback'), 'Client fallback');
   assert.equal(bookingLocationLabel({ ...order, locationSnapshot: { ...dwellingSnapshot, propertyId: 'neighbor' } }), '');
   assert.equal(bookingLocationLabel({ ...order, locationSnapshot: { ...dwellingSnapshot, dwellingId: 'neighbor-unit' } }), '');
   assert.equal(bookingLocationLabel({ dwellingId: 'unknown-unit' }), '', 'Never display an internal ID as an apartment');
   assert.equal(bookingMessageAddress({ ...order, locationSnapshot: { ...dwellingSnapshot,
-    locationLabel: 'Dirección de prueba 10 · Apartamento 4' } }), 'Dirección de prueba 10 · Apartamento 4 · A-04');
+    locationLabel: 'Dirección de prueba 10 · Apartamento 4' } }), 'Dirección de prueba 10 · Apartment 4');
+});
+
+test('message address separates the selected dwelling and omits generic property labels and redundant codes', () => {
+  const snapshot = { ...dwellingSnapshot, locationLabel: 'Propiedad principal · Apartamento 4' };
+  const order = { propertyId: snapshot.propertyId, dwellingId: snapshot.dwellingId,
+    address: 'Synthetic Residence 10', locationSnapshot: snapshot };
+  assert.deepEqual(bookingMessageAddressLines(order), ['Synthetic Residence 10', 'Apartment 4']);
+  assert.deepEqual(bookingMessageAddressLines({ ...order, locationSnapshot: { ...snapshot,
+    dwellingName: 'Casa', locationLabel: 'Propiedad principal · Casa' } }), ['Synthetic Residence 10', 'Casa']);
+  assert.deepEqual(bookingMessageAddressLines({ ...order, locationSnapshot: { ...snapshot,
+    dwellingName: 'Villa Azul', locationLabel: 'Propiedad principal · Villa Azul', areaName: 'Patio' } }),
+  ['Synthetic Residence 10', 'Villa Azul · Patio']);
+  assert.deepEqual(bookingMessageAddressLines({ ...order, locationSnapshot: { ...snapshot,
+    dwellingName: '', locationLabel: 'Propiedad principal' } }), ['Synthetic Residence 10', 'A-04']);
+  assert.deepEqual(bookingMessageAddressLines({ address: order.address }), ['Synthetic Residence 10']);
+  assert.deepEqual(bookingMessageAddressLines({ ...order, locationSnapshot: { ...snapshot, dwellingId: 'neighbor' } }),
+    ['Synthetic Residence 10']);
 });
 
 test('legacy addresses keep the existing coercion and fallback in prepared notifications', async () => {
@@ -77,8 +94,16 @@ for (const provider of ['wacli', 'meta']) {
       assert.equal(queue.length, 2);
       for (const message of queue) {
         const body = provider === 'meta' ? message.bodyParameters[3] : message.text;
-        assert.ok(body.includes('Dirección de prueba 10 · Complejo de prueba · Apartamento 4 · A-04'));
-        assert.doesNotMatch(body, /PRIVATE-|DO-NOT-CONTACT|Owner billing address/);
+        const unit = { en: 'Apartment 4', es: 'Apartamento 4', nl: 'Appartement 4', pap: 'Apartamento 4' }[language];
+        const label = language === 'en' ? 'Address' : language === 'es' ? 'Dirección' : 'Adres';
+        if (provider === 'meta') {
+          assert.equal(body, `Dirección de prueba 10 · Complejo de prueba · ${unit}`);
+          assert.doesNotMatch(body, /[\r\n]/, 'Approved Meta parameters remain single-line');
+        } else {
+          assert.ok(body.includes(`*${label}:* Dirección de prueba 10\n*${label}:* Complejo de prueba · ${unit}`));
+          if (language === 'en') assert.match(body, /We’re happy to help!/);
+        }
+        assert.doesNotMatch(body, /PRIVATE-|DO-NOT-CONTACT|Owner billing address|A-04/);
         assert.equal(message.recipientId, 'selected-recipient');
         assert.equal(message.languageCode, language);
         assert.equal(message.to, '2975600000');
