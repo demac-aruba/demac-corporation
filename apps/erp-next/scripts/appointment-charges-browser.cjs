@@ -90,21 +90,21 @@ assert.equal(catalogReads,1,'Adding lines does not reload the entire catalog');
 await page.getByLabel('Concepto 1',{exact:true}).scrollIntoViewIfNeeded();
 await page.screenshot({path:path.join(evidence,`catalog-selection-${viewport.width}.png`),fullPage:true});
 // A receipt saved alongside the work draft must preserve selected catalog articles.
-await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
+
 await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('10');
-await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
+await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
 await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
 assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'12K BTU Split Unit Standard Service - First Floor');
 assert.equal(await page.getByLabel('Concepto 2',{exact:true}).textContent(),'18K BTU Deep Cleaning');
-await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
+
 await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('20');
 await page.getByText('Ver detalle del pago',{exact:true}).last().click();
 page.once('dialog',dialog=>dialog.accept('Synthetic correction'));
 await page.getByRole('button',{name:'Anular registro',exact:true}).last().click();
 await page.getByText('Anulado · Synthetic correction',{exact:true}).waitFor();
 assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'20');
-await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
-await page.getByRole('button',{name:'Registrar pago',exact:true}).waitFor();
+await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
+await page.waitForFunction(()=>Array.from(document.querySelectorAll('label')).find(el=>el.textContent==='Monto recibido (Afl.)')?.querySelector('input')?.value==='');
 assert.equal(await page.getByLabel('Concepto 1',{exact:true}).textContent(),'12K BTU Split Unit Standard Service - First Floor');
 await add('diagnostico','Seleccionar Check up · CHECK-DEMO');assert.equal(await page.getByLabel('Concepto 3',{exact:true}).textContent(),'Check up');
 await page.getByLabel('Precio unitario 3',{exact:true}).filter({hasText:'Afl. 55.00'}).waitFor();
@@ -120,11 +120,11 @@ assert.equal(db.read('appointments/apt').jobCharges.final.lines[0].description,'
 assert.deepEqual([...db.store.entries()].filter(([key])=>key.startsWith('services/')),catalogBefore,'Invoice descriptions cannot modify catalog documents');
 assert.equal(db.read('appointments/apt').jobCharges.final.totalCents,49750);assert.equal(db.read('workOrders/wo').status,'Confirmada');
 for(const [method,amount,reference] of [['Efectivo','180',''],['POS','150','POS-TEST-150'],['SUAVE','47.50','SUAVE-TEST-47']]){
-await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('button',{name:method,exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill(amount);if(reference)await page.getByLabel('Referencia / comprobante',{exact:false}).fill(reference);
+await page.getByRole('button',{name:method,exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill(amount);if(reference)await page.getByLabel('Referencia / comprobante',{exact:false}).fill(reference);
 if(method==='SUAVE')dropNext=true;
-await page.getByRole('button',{name:'Guardar pago',exact:true}).click();
+await page.getByRole('button',{name:'Registrar pago',exact:true}).click();
 if(method==='SUAVE'){await page.getByRole('button',{name:'Reintentar la misma operación'}).waitFor();assert.equal(await page.getByRole('button',{name:'Cerrar cita'}).isDisabled(),true);await page.getByRole('button',{name:'Reintentar la misma operación'}).click();}
-await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();await page.getByRole('button',{name:'Registrar pago',exact:true}).waitFor();
+await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();await page.waitForFunction(()=>Array.from(document.querySelectorAll('label')).find(el=>el.textContent==='Monto recibido (Afl.)')?.querySelector('input')?.value==='');
 }
 assert.equal(db.read('appointments/apt').jobCharges.receivedCents,49750);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,6);
 await page.getByText('✓ Pagado',{exact:true}).waitFor();
@@ -146,7 +146,7 @@ const page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageer
 try{
 await page.goto(origin+'/existing');await page.getByLabel('Añadir servicio o producto',{exact:true}).fill('12KFSSF');await page.getByRole('button',{name:'Seleccionar 12K BTU Split Unit Standard Service - First Floor · 12KFSSF',exact:true}).click();await page.getByLabel('Cantidad 1',{exact:true}).fill('3');
 await page.getByLabel('Importe 1',{exact:true}).filter({hasText:'Afl. 375.00'}).waitFor();assert.equal(await page.getByRole('button',{name:'Descargar PDF',exact:true}).count(),0,'A draft has no PDF export');
-await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('OWNER-CASE-250');await page.getByRole('button',{name:'Guardar pago',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
+await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await page.getByLabel('Referencia / comprobante',{exact:false}).fill('OWNER-CASE-250');await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
 const balance=page.getByText('SALDO ESTIMADO',{exact:true}).locator('..');await balance.getByText('Afl. 125.00',{exact:true}).waitFor();assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3');assert.equal(db.read('appointments/apt').jobCharges.final,null);assert.equal(db.read('appointments/apt').jobCharges.originalEstimate,null);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,25000);
 await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor({state:'hidden',timeout:6000});assert.equal(await page.getByLabel('Cantidad 1',{exact:true}).inputValue(),'3','Success feedback disappears; the draft remains');
 // A fresh draft must survive a lease-only version change when visiting History.
@@ -213,7 +213,7 @@ await uncertainContext.route('**/*',route=>new URL(route.request().url()).origin
 const uncertain=await uncertainContext.newPage();uncertain.setDefaultTimeout(12000);
 try{
 await uncertain.goto(origin+'/existing');await uncertain.getByLabel('Añadir servicio o producto',{exact:true}).fill('12KFSSF');await uncertain.getByRole('button',{name:'Seleccionar 12K BTU Split Unit Standard Service - First Floor · 12KFSSF',exact:true}).click();await uncertain.getByLabel('Cantidad 1',{exact:true}).fill('3');
-await uncertain.getByRole('button',{name:'Efectivo',exact:true}).click();await uncertain.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');dropNext=true;await uncertain.getByRole('button',{name:'Guardar pago',exact:true}).click();
+await uncertain.getByRole('button',{name:'Efectivo',exact:true}).click();await uncertain.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');dropNext=true;await uncertain.getByRole('button',{name:'Registrar pago',exact:true}).click();
 await uncertain.getByRole('button',{name:'Reintentar la misma operación',exact:true}).waitFor();const request=structuredClone(writes.at(-1));
 denyNext=true;await uncertain.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await uncertain.getByRole('alert').filter({hasText:'Synthetic session expired'}).waitFor();assert.equal(await uncertain.getByRole('button',{name:'Reintentar la misma operación',exact:true}).isVisible(),true);
 await uncertain.evaluate(()=>window.__setChargeUser('another-office'));await uncertain.getByLabel('Añadir servicio o producto',{exact:true}).waitFor();assert.equal(await uncertain.getByRole('button',{name:'Reintentar la misma operación',exact:true}).count(),0);assert.equal(await uncertain.getByLabel('Cantidad 1',{exact:true}).count(),0);
@@ -231,11 +231,11 @@ reset();const missingContext=await browser.newContext({viewport:{width:1366,heig
 await missingContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
 const missing=await missingContext.newPage();missing.setDefaultTimeout(12000);
 try{
-await missing.goto(origin+'/existing');await missing.getByRole('button',{name:'Efectivo',exact:true}).click();await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');loseNext=true;await missing.getByRole('button',{name:'Guardar pago',exact:true}).click();await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).waitFor();
+await missing.goto(origin+'/existing');await missing.getByRole('button',{name:'Efectivo',exact:true}).click();await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');loseNext=true;await missing.getByRole('button',{name:'Registrar pago',exact:true}).click();await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).waitFor();
 const oldRequest=structuredClone(writes.at(-1)),leasePath='appointments/apt/chargeEditing/current';db.store.get(leasePath).expiresAtMs=0;
 await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await missing.getByRole('alert').filter({hasText:'sesión de edición venció'}).waitFor();assert.equal(await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).isVisible(),true,'Expiry alone never proves the first request absent');
 missing.once('dialog',dialog=>dialog.accept());await missing.reload();await missing.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();await missing.waitForFunction(()=>document.querySelector('[data-charge-stage]')?.getAttribute('aria-busy')==='false');
-await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await missing.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(button=>button.textContent.trim()==='Registrar pago'&&!button.disabled));assert.equal(await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).count(),0);assert.deepEqual(writes.at(-1),oldRequest);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,0);assert.equal(await missing.getByRole('button',{name:'Registrar pago',exact:true}).isEnabled(),true);
+await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).waitFor();await missing.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).some(button=>button.textContent.trim()==='Reintentar la misma operación'));assert.equal(await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).count(),0);assert.deepEqual(writes.at(-1),oldRequest);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,0);await missing.waitForFunction(()=>{const input=Array.from(document.querySelectorAll('label')).find(el=>el.textContent==='Monto recibido (Afl.)')?.querySelector('input');return input&&!input.matches(':disabled');});assert.equal(await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).isEnabled(),true);assert.equal(await missing.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true,'Empty form cannot submit after resolving an uncommitted request');
 results.push({name:'uncommitted-request-expiry-needs-fresh-fence-before-release',status:'PASS'});console.log('PASS uncommitted request requires fresh fence before resolution');
 }finally{await missingContext.close();}
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(evidence,'results.json'),JSON.stringify(results,null,2));fs.rmSync(folder,{recursive:true,force:true});}
