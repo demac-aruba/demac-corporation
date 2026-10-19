@@ -80,23 +80,31 @@ async function main() {
   await section('pending_queue', async () => summarize((await db.collection('whatsappOutboundQueue').where('status','in',['queued','processing']).select(...fields).limit(500).get()).docs,500));
   await section('pending_recovery_scope', async () => {
     const docs = (await db.collection('whatsappOutboundQueue').where('status','in',['queued','processing'])
-      .select('status','provider','notificationType','scheduleDate','reason','vanId','workOrderId','pendingStart','pendingEnd','lunchStart','lunchEnd','type','messageIndex','dependsOnQueueId','createdAt').limit(500).get()).docs;
-    const dates = {}, reasons = {}, signatures = new Map(); let startedBundles = 0, olderThanToday = 0, automaticToday = 0;
+      .select('status','provider','notificationType','scheduleDate','reason','vanId','workOrderId','pendingStart','pendingEnd','lunchStart','lunchEnd','type','messageIndex','dependsOnQueueId','createdAt','to','text','messages','media').limit(500).get()).docs;
+    // Content is compared only in memory. Never output bodies, identities or hashes.
+    const dates = {}, reasons = {}, signatures = new Map(), payloads = new Map(), kinds = {};
+    let startedBundles = 0, olderThanToday = 0, automaticToday = 0, pastSchedule = 0;
     for (const doc of docs) {
       const d = doc.data();
       const date = /^\d{4}-\d{2}-\d{2}$/.test(d.scheduleDate || '') ? d.scheduleDate : 'none';
       dates[date] = (dates[date] || 0) + 1;
       const reason = ['daily-van-schedule','manual-van-schedule','manual-van-schedule-send','same-day-work-created','same-day-schedule-updated','appointment-created','appointment-updated'].includes(d.reason) ? d.reason : 'other';
       reasons[reason] = (reasons[reason] || 0) + 1;
+      const kind = ['appointment-confirmation','appointment-reminder','van-daily-work-order','van-daily-pending-period','van-daily-lunch-break','booking-reference-update','van-schedule-change'].includes(d.notificationType) ? d.notificationType : 'other';
+      kinds[kind] = (kinds[kind] || 0) + 1;
       if (d.type === 'booking-reference-bundle' && Number(d.messageIndex || 0) > 0) startedBundles++;
       if ((iso(d.createdAt) || '') < day+'T04:00:00Z') olderThanToday++;
       if (d.scheduleDate === day && d.reason === 'daily-van-schedule') automaticToday++;
+      if (date !== 'none' && date < day) pastSchedule++;
       if (date !== 'none' && d.vanId && String(d.notificationType || '').startsWith('van-daily-')) {
         const key = JSON.stringify([date,d.vanId,d.notificationType,d.workOrderId || '',d.pendingStart || '',d.pendingEnd || '',d.lunchStart || '',d.lunchEnd || '']);
         signatures.set(key, (signatures.get(key) || 0) + 1);
+        const payload = JSON.stringify([key,d.to,d.type,d.text,d.messages,d.media,d.messageIndex || 0]);
+        payloads.set(payload, (payloads.get(payload) || 0) + 1);
       }
     }
-    return { count: docs.length, limitReached: docs.length===500, dates, reasons, startedBundles, olderThanToday, automaticToday,
+    return { count: docs.length, limitReached: docs.length===500, dates, reasons, kinds, startedBundles, olderThanToday, automaticToday, pastSchedule,
+      identicalExtraScheduleRecords: [...payloads.values()].reduce((sum,n) => sum + Math.max(0,n-1),0),
       repeatedScheduleGroups: [...signatures.values()].filter(n => n > 1).length,
       extraScheduleRecords: [...signatures.values()].reduce((sum,n) => sum + Math.max(0,n-1),0) };
   });
