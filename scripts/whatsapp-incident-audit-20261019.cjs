@@ -12,6 +12,11 @@ const emit = (section, data) => console.log(JSON.stringify({ section, ...data })
 function category(value) {
   const text = String(value || '').toLowerCase();
   for (const [label, pattern] of [
+    ['invalid_reference_bundle', /invalid booking reference/],
+    ['transaction_read_after_write', /reads.*before.*writes|read.*after.*writ/],
+    ['invalid_firestore_value', /undefined|invalid.*document|documentpath|invalid.*argument/],
+    ['transaction_contention', /contention|aborted|transaction.*lock/],
+    ['memory_limit', /memory limit|out of memory|heap/],
     ['permission_denied', /permission.denied|does not have|not authorized/],
     ['unauthorized', /unauthorized|http 401|invalid.*token/],
     ['session_disconnected', /logged.out|not logged|not authenticated|session.*expired|not connected|disconnected/],
@@ -82,6 +87,17 @@ async function main() {
     const counts={};
     for (const row of rows) { const key=String(row.resource?.labels?.service_name||'unknown')+'/'+category(JSON.stringify(row.jsonPayload||row.textPayload||row.httpRequest||{})); counts[key]=(counts[key]||0)+1; }
     return { count: rows.length, limitReached: rows.length===80, counts };
+  });
+  await section('poll_application_errors', async () => {
+    const filter = 'timestamp>="2026-10-19T04:00:00Z" AND resource.labels.service_name="waclioutboundpoll" AND severity>=ERROR AND (jsonPayload.message:* OR textPayload:*)';
+    const rows = cloud(['logging','read',filter,'--project='+project,'--limit=20','--format=json']);
+    return { count: rows.length, limitReached: rows.length===20, errors: rows.map(row => {
+      const payload = JSON.stringify(row.jsonPayload || row.textPayload || {});
+      const frames = [...payload.matchAll(/(?:whatsappWacliGateway|whatsappReferenceBundle)\.js:\d+:\d+/g)].map(match => match[0]);
+      return { at: row.timestamp, category: category(payload), frames: [...new Set(frames)],
+        name: ['Error','TypeError','RangeError'].find(name => payload.includes(name)) || null,
+        httpStatus: row.httpRequest?.status || null };
+    }) };
   });
 }
 module.exports = { category, summarize };
