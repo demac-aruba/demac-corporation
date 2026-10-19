@@ -14,6 +14,14 @@ const NAMES=['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsapp
 const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer'];
 const GROUPS={monitorExpectations:['targets'],monitorDays:['entries'],monitorIncidents:['items'],monitorAudit:[],monitorSnapshots:['queue','incidents','unverifiedIncidents']};
 const CONTROL='businessSettings/whatsapp/monitorControl/active';
+function verifyIdentityPolicy(account,policy) {
+  assert.equal(account?.email,ACCOUNT,'Administrator must provision the dedicated monitor identity');
+  assert.notEqual(account.disabled,true,'Monitor identity is disabled');
+  const bindings=(policy.bindings||[]).filter(b=>b.members?.includes('serviceAccount:'+ACCOUNT));
+  const granted=bindings.filter(b=>!b.condition).map(b=>b.role);
+  assert.ok(!bindings.some(b=>['roles/owner','roles/editor'].includes(b.role)),'Broad monitor identity role is forbidden');
+  for(const role of ROLES)assert.ok(granted.includes(role),'Administrator must provision monitor role: '+role);
+}
 function validateControl(value) {
   assert.equal(value.enabled,true,'Existing monitor is disabled; do not silently reactivate');
   assert.equal(value.activationRelease,'whatsapp-monitor-20261019','Unknown control ownership');
@@ -79,8 +87,11 @@ async function main() {
       fs.writeFileSync(path.join(out,'firebase.json'),JSON.stringify({functions:[{source:'source',codebase:'messaging-monitor',runtime:'nodejs22'}]}));
       step('identity');
       const accountUrl=`https://iam.googleapis.com/v1/projects/${PROJECT}/serviceAccounts/${ACCOUNT}`;
-      if(!await api(accountUrl,'GET',undefined,true))await api(`https://iam.googleapis.com/v1/projects/${PROJECT}/serviceAccounts`,'POST',{accountId:'demac-messaging-monitor',serviceAccount:{displayName:'DEMAC messaging health monitor'}});
-      for(const role of ROLES)cloud(['projects','add-iam-policy-binding',PROJECT,'--member=serviceAccount:'+ACCOUNT,'--role='+role,'--condition=None','--quiet']);
+      // The deployer has no identity-creation or project-policy-write permission.
+      // An administrator provisions this identity once; CI only verifies it.
+      const account=await api(accountUrl,'GET',undefined,true);
+      const policy=await api(`https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,'POST',{options:{requestedPolicyVersion:3}});
+      verifyIdentityPolicy(account,policy);
       step('additive-index');
       const indexUrl=adminBase+'whatsappOutboundQueue/indexes';
       const matches=index=>index.queryScope==='COLLECTION'&&index.fields?.length===3&&index.fields[0].fieldPath==='status'&&index.fields[0].order==='ASCENDING'&&index.fields[1].fieldPath==='createdAt'&&index.fields[1].order==='ASCENDING'&&index.fields[2].fieldPath==='__name__';
@@ -136,5 +147,5 @@ async function main() {
     save();console.error(summary.failure);process.exitCode=1;
   }
 }
-module.exports={validateControl,validateFunction,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
+module.exports={validateControl,validateFunction,verifyIdentityPolicy,NAMES,ROLES,GROUPS,CONTROL,ACCOUNT};
 if(require.main===module)main();

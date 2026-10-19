@@ -2,6 +2,12 @@
 
 Estado: publicación autorizada por el propietario el 2026-10-19 (merge y deploy).
 La evidencia del despliegue se registra por separado; los canales externos siguen pendientes de destinatario.
+PR607 fusionado en `35574f3bf59fbdfc401817f81589354199cea1b6`. El intento de publicación
+`39316901040` se detuvo antes de tocar funciones operacionales, índices o control de activación.
+La inspección de solo lectura `39317349409` confirmó que la identidad de CI no tiene
+`iam.serviceAccounts.create` ni `resourcemanager.projects.setIamPolicy`; IAM API sí está habilitada.
+Un administrador debe ejecutar una vez `scripts/whatsapp-monitor-provision-identity.sh`.
+CI verifica después la cuenta y sus cuatro roles incondicionales, sin modificar permisos de proyecto.
 La captura aprobada se conserva en `docs/ai/previews/whatsapp-monitoring/`.
 El monitor no envía WhatsApps, no reclama la cola y no tiene una acción de reintento.
 
