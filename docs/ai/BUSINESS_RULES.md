@@ -344,7 +344,10 @@ Production activation remains separately owner-approved through the server-side 
   Final scope review permits an outstanding balance and never marks Field/attendance complete.
 - Opening Importes y pagos reserves its appointment for one active financial writer/session,
   with a server-owned 90-second renewable lease. Other operators read with the holder name;
-  closing/leaving releases the lease and expiry recovers disconnects. Prefetch and audit history
+  closing/changing the appointment or principal, lost permission and blockers release the
+  lease; expiry recovers disconnects. After the first finance visit, internal Resumen /
+  Importes / Historial navigation retains the same session and mounted invoice inputs
+  (owner-requested performance correction, 2026-10-19). Prefetch and history-only visits
   never acquire. New writes require ownership plus expected version inside the transaction.
   A freshly authorized exact retry of an already committed operation remains resolvable after expiry.
 - Split payments, immutable receipt identity, exact replay, expected-version conflicts,

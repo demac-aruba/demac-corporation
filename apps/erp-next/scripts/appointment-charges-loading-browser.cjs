@@ -32,9 +32,13 @@ export async function callOfficeBookingAuthority(action,data){
  }
  if(action.endsWith('_appointment_charge_edit')){
   (window.__leaseCalls||=[]).push({action,data});
+  if(window.__leaseDelay)await new Promise(resolve=>setTimeout(resolve,window.__leaseDelay));
   if(window.__leaseHold&&action==='acquire_appointment_charge_edit')await new Promise(resolve=>window.__leaseRelease=resolve);
   if(window.__leaseError)throw Error('Synthetic lease unavailable');
   const mine=!window.__leaseOther&&action!=='release_appointment_charge_edit';
+  // Real grants fence financial versions; renewals and same-session recovery do not.
+  if(window.__fenceAcquires&&mine&&action==='acquire_appointment_charge_edit'&&window.__fencedSession!==data.editSessionId){window.__fencedSession=data.editSessionId;window.__record.state.version++;}
+  if(window.__fenceAcquires&&action==='release_appointment_charge_edit'&&window.__fencedSession===data.editSessionId)window.__fencedSession=null;
   return {success:true,edit:{held:true,mine,ownerName:mine?'Operador de prueba':'Scarlet de prueba',token:mine?'synthetic-lease':undefined,financialVersion:window.__leaseVersion||window.__record.state?.version||1,serverTime:new Date().toISOString(),expiresAt:window.__badExpiry?'invalid':new Date(Date.now()+(window.__leaseTtl||90000)).toISOString(),ttlMs:window.__leaseTtl||90000}};
  }
  if(action==='list_charge_services'){window.__catalogReads=(window.__catalogReads||0)+1;if(window.__catalogHold)await new Promise(resolve=>window.__catalogRelease=resolve);if(window.__catalogError)throw Error('Synthetic catalog read failed');return {success:true,services:structuredClone(window.__catalogItems||[])};}
@@ -45,7 +49,7 @@ export async function callOfficeBookingAuthority(action,data){
  window.__record.state.version++;return {success:true,state:window.__record.state};
 }`;
 const entry=`import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {LiveAppointmentDetailsDrawer} from './components/scheduling/live-appointment-details-drawer';import './app/globals.css';import shell from './components/scheduling/scheduling-page-shell.module.css';import readable from './components/scheduling/scheduling-readable-type.module.css';
-function Harness(){const [open,setOpen]=useState(true),[id,setId]=useState('APPOINTMENT-TEST'),[session,setSession]=useState(1),[uid,setUid]=useState('synthetic-office');window.__userId=setUid;window.__open=()=>setOpen(true);window.__select=setId;window.__session=()=>setSession(n=>n+1);return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}>{open?<LiveAppointmentDetailsDrawer currentUserId={uid} key={session+'-'+uid} appointment={{...${JSON.stringify(appointment)},...window.__appointment,id}} canManage={window.__canManage!==false} onClose={()=>setOpen(false)} onChanged={()=>{}}/>:<p>Cita cerrada</p>}</div>}createRoot(document.getElementById('app')).render(<React.StrictMode><Harness/></React.StrictMode>);`;
+function Harness(){const [canManage,setCanManage]=useState(window.__canManage!==false);window.__setCanManage=setCanManage;const [open,setOpen]=useState(true),[id,setId]=useState('APPOINTMENT-TEST'),[session,setSession]=useState(1),[uid,setUid]=useState('synthetic-office');window.__userId=setUid;window.__open=()=>setOpen(true);window.__select=setId;window.__session=()=>setSession(n=>n+1);return <div className={shell.shell+' '+shell.scheduleCompact+' '+readable.readable}>{open?<LiveAppointmentDetailsDrawer currentUserId={uid} key={session+'-'+uid} appointment={{...${JSON.stringify(appointment)},...window.__appointment,id}} canManage={canManage} onClose={()=>setOpen(false)} onChanged={()=>{}}/>:<p>Cita cerrada</p>}</div>}createRoot(document.getElementById('app')).render(<React.StrictMode><Harness/></React.StrictMode>);`;
 const quote={lines:[{id:'line-1',label:'CheckUp de ejemplo',quantityMillis:1000,unitCents:15000,totalCents:15000,baseUnitCents:15000,pendingReason:'',manualPrice:false}],totalCents:15000,knownTotalCents:15000,currency:'AWG',capturedAt:'2026-10-10T12:00:00Z',quoteToken:'synthetic-quote'};
 const record={success:true,state:{schemaVersion:1,version:1,originalEstimate:quote,estimate:quote,final:null,receivedCents:0,paymentCount:0},history:[],payments:[],blocker:'',appointmentStatus:'confirmed',candidateEvidence:{fingerprint:'field-v1',records:[{id:'field',revisionNumber:1,lines:[{description:'Revisión de ejemplo',quantity:1,lineTotal:150}],blockers:[]}]}};
 // Synthetic final snapshot exercises agreed prices, changed scope, add-ons and voids.
@@ -64,6 +68,7 @@ const largeRecord=structuredClone(premium);largeRecord.state.final.lines=Array.f
 const catalogPerformanceOnly=process.argv.includes('--catalog-performance-only');
 const descriptionRecoveryOnly=process.argv.includes('--description-recovery-only');
 const invoicePerformanceOnly=process.argv.includes('--invoice-performance-only'), baselinePerformance=process.argv.includes('--baseline-performance');
+const tabPerformanceOnly=process.argv.includes('--tab-performance-only'), tabPerformanceBaseline=process.argv.includes('--tab-performance-baseline');
 const desktop={width:1440,height:1000};
 const tab=(page,name)=>page.getByRole('navigation',{name:'Secciones de la cita'}).getByRole('button',{name,exact:true});
 const finance=page=>page.locator('[data-charge-stage]');
@@ -77,8 +82,30 @@ async function main(){
  const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://local').pathname;if(['/app.js','/app.css'].includes(name)){res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':'text/css');return res.end(fs.readFileSync(path.join(output,name.slice(1))));}res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div><script src="/app.js"></script></body></html>');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  const browser=await chromium.launch({headless:true,...(process.env.BOOKING_MODAL_CHROMIUM?{executablePath:process.env.BOOKING_MODAL_CHROMIUM}:{})});const results=[];
- async function run(name,test,flags={},viewport=desktop){if(baselinePerformance&&name!=='invoice-performance-known-quantity')return;if(invoicePerformanceOnly&&!name.startsWith('invoice-performance-'))return;if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
+ async function run(name,test,flags={},viewport=desktop){if((tabPerformanceOnly||tabPerformanceBaseline)&&!name.startsWith('tab-performance-'))return;if(baselinePerformance&&name!=='invoice-performance-known-quantity')return;if(invoicePerformanceOnly&&!name.startsWith('invoice-performance-'))return;if(catalogPerformanceOnly&&name!=='catalog-1000-items-bounded-local-search')return;if(descriptionRecoveryOnly&&!name.startsWith('description-recovery-'))return;const context=await browser.newContext({viewport,serviceWorkers:'block'}),errors=[],external=[];await context.route('**/*',route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});await context.addInitScript(({record,flags})=>{Object.assign(window,{__sequence:0,__referenceReads:[],__referenceWrites:[],__commReads:[],__commWrites:[],__lifecycle:[],__uploads:[],__mediaReads:[],__record:record,__reads:[],__writes:[],__release:[],__delay:0,__offset:0,...flags});const now=Date.now;Date.now=()=>now()+window.__offset;},{record,flags});const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{await page.goto(origin);await test(page);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);results.push({name,status:'PASS'});console.log('PASS '+name);}catch(error){await page.screenshot({path:path.join(artifacts,name+'-failure.png'),fullPage:true});console.error({name,errors,text:(await page.locator('body').innerText()).slice(0,5000)});throw error;}finally{await context.close();}}
  try{
+  for(const viewport of [desktop,{width:390,height:844}])await run('tab-performance-retained-session-'+viewport.width,async page=>{
+   await loaded(page);assert.equal(await page.evaluate(()=>window.__leaseCalls?.length||0),0,'Summary prefetch never acquires');
+   await tab(page,'Historial').click();await page.getByRole('heading',{name:'Historial de importes y pagos',exact:true}).waitFor();
+   assert.equal(await page.evaluate(()=>window.__leaseCalls?.length||0),0,'History-only never acquires');
+   await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();
+   await page.getByLabel('Descripción 1',{exact:true}).fill('Descripción conservada entre pestañas');
+   await page.getByLabel('Revisé los trabajos realizados',{exact:false}).check();
+   const counts=()=>page.evaluate(()=>({reads:window.__reads.length,acquires:window.__leaseCalls.filter(c=>c.action==='acquire_appointment_charge_edit').length,releases:window.__leaseCalls.filter(c=>c.action==='release_appointment_charge_edit').length,quotes:window.__quoteReads,catalog:window.__catalogReads,version:window.__record.state.version}));
+   const before=await counts(),latencies=[];let pendingFrames=0;
+   for(const name of ['Resumen','Historial','Resumen','Historial']){
+    await tab(page,name).click();
+    await page.evaluate(()=>{window.__tabPending=false;window.__tabObserver=new MutationObserver(()=>{const node=document.querySelector('[data-charge-stage]');if(node&&getComputedStyle(node).display!=='none'&&node.innerText.includes('Por confirmar'))window.__tabPending=true;});window.__tabObserver.observe(document.getElementById('app'),{subtree:true,childList:true,characterData:true});});
+    const start=performance.now();await tab(page,'Importes y pagos').click();
+    await page.waitForFunction(()=>{const input=document.querySelector('[aria-label="Descripción 1"]');const node=document.querySelector('[data-charge-stage]');return input&&!input.matches(':disabled')&&node?.getAttribute('aria-busy')==='false'&&!node.innerText.includes('Validando tarifas')&&!node.innerText.includes('Por confirmar');});
+    latencies.push(Math.round(performance.now()-start));pendingFrames+=await page.evaluate(()=>{window.__tabObserver.disconnect();return Number(window.__tabPending);});
+    assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Descripción conservada entre pestañas');
+   }
+   const after=await counts(),metrics={name:'tab-performance-metrics-'+viewport.width,baseline:tabPerformanceBaseline,latenciesMs:latencies,pendingTransitions:pendingFrames,before,after,syntheticDelaysMs:{read:1000,acquire:200,quote:600}};results.push(metrics);console.log(JSON.stringify(metrics));
+   if(!tabPerformanceBaseline){assert.deepEqual(after,before,'Internal tabs must not change the lease, record, catalog or tariff inputs');assert.equal(pendingFrames,0);assert.ok(Math.max(...latencies)<500,'Tabs must not wait for server latency');assert.equal(await page.getByLabel('Revisé los trabajos realizados',{exact:false}).isChecked(),true);assert.equal(await page.getByRole('button',{name:'Confirmar monto final',exact:true}).isEnabled(),true);}
+   await page.screenshot({path:path.join(artifacts,'tab-performance-'+viewport.width+'.png'),fullPage:true});
+   assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:premium,__fenceAcquires:true,__leaseDelay:200,__delay:1000,__quoteDelay:600},viewport);
   for(const viewport of [desktop,{width:1366,height:768},{width:390,height:844}])await run('single-step-payment-visible-'+viewport.width,async page=>{
    await openFinance(page);
    const amount=page.getByLabel('Monto recibido (Afl.)',{exact:true}), submit=page.getByRole('button',{name:'Registrar pago',exact:true});
@@ -273,16 +300,17 @@ async function main(){
   },{__record:(()=>{const r=structuredClone(premium);if(scenario==='final-only')r.state.originalEstimate=null;if(scenario==='empty')r.state=null;if(scenario==='unknown'){r.state.final=null;r.state.estimate.totalCents=null;r.state.estimate.lines[0].unitCents=null;r.state.estimate.lines[0].totalCents=null;r.state.estimate.lines[0].pendingReason='BTU pendiente';}if(scenario==='zero'){r.state.final.totalCents=0;r.state.final.lines=[];r.state.receivedCents=0;r.payments=[];}if(scenario==='credit')r.state.receivedCents=45000;if(scenario==='fractional'){r.state.final.lines=[{...work('extra','Hora adicional',4500),quantityMillis:1500,totalCents:6750}];r.state.final.totalCents=6750;}return r;})()});
 
   await run('lease-fence-discards-stale-prefetch-and-preserves-expired-draft',async page=>{
+   await page.clock.install();
    await page.waitForFunction(()=>window.__reads.length===1);await loaded(page);
    await page.evaluate(()=>{window.__holdReads=true;window.__leaseVersion=2;});
-   await focus(page);await tab(page,'Importes y pagos').click();await page.waitForFunction(()=>window.__reads.length===2&&window.__leaseCalls?.length>0);
+   await page.clock.fastForward(31000);await tab(page,'Importes y pagos').click();await page.waitForFunction(()=>window.__reads.length===2&&window.__leaseCalls?.length>0);
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await page.evaluate(()=>{window.__record.state.version=2;window.__release[1]();});
    await page.waitForFunction(()=>window.__reads.length===3);
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await page.evaluate(()=>{window.__holdReads=false;window.__release[2]();});
    await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('42');
-   await tab(page,'Resumen').click();await page.evaluate(()=>{window.__record.state.version=3;window.__leaseVersion=3;});await tab(page,'Importes y pagos').click();
+   await tab(page,'Resumen').click();await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});window.__record.state.version=3;window.__leaseVersion=3;});await page.clock.fastForward(91000);await page.evaluate(()=>Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'}));await tab(page,'Importes y pagos').click();await page.getByRole('button',{name:'Recuperar acceso de edición',exact:true}).click();
    await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();
    assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'42');
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
@@ -293,7 +321,7 @@ async function main(){
    assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);
    await page.evaluate(()=>window.__leaseOther=false);await page.getByRole('button',{name:'Recuperar acceso de edición'}).click();
    await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).fill('Borrador que se conserva');
-   await tab(page,'Resumen').click();await page.evaluate(()=>window.__leaseOther=true);await tab(page,'Importes y pagos').click();
+   await tab(page,'Resumen').click();await page.evaluate(()=>{window.__leaseOther=true;window.dispatchEvent(new Event('focus'));});await tab(page,'Importes y pagos').click();
    await page.getByText(/Scarlet de prueba está editando/).waitFor();assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Borrador que se conserva');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__leaseOther:true});
   await run('lease-unknown-acquire-retries-same-session-and-invalid-expiry-blocks',async page=>{
@@ -304,12 +332,40 @@ async function main(){
    await page.evaluate(()=>window.__badExpiry=false);await page.getByRole('button',{name:'Recuperar acceso de edición'}).click();await page.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
    assert.equal(await page.evaluate(id=>window.__leaseCalls.filter(c=>c.action==='acquire_appointment_charge_edit').every(c=>c.data.editSessionId===id),original),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__leaseError:true});
-  await run('lease-late-acquire-after-leaving-tab-releases-its-own-session',async page=>{
+  await run('lease-late-acquire-after-closing-dialog-releases-its-own-session',async page=>{
    await openFinance(page);await page.waitForFunction(()=>!!window.__leaseRelease);
-   await tab(page,'Resumen').click();await page.evaluate(()=>window.__leaseRelease());
+   await tab(page,'Resumen').click();await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();await page.evaluate(()=>window.__leaseRelease());
    await page.waitForFunction(()=>window.__leaseCalls.some(c=>c.action==='release_appointment_charge_edit'));
    const calls=await page.evaluate(()=>window.__leaseCalls);assert.equal(calls[0].data.editSessionId,calls.at(-1).data.editSessionId);assert.equal(calls.at(-1).data.editToken,'synthetic-lease');assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
   },{__record:premium,__leaseHold:true});
+  await run('tab-session-catalog-query-survives-hidden-resize',async page=>{
+   await openFinance(page);const search=page.getByLabel('Añadir servicio o producto',{exact:true});await search.fill('DEEP-DEMO');await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).waitFor();
+   const before=await page.evaluate(()=>window.__catalogReads);await tab(page,'Historial').click();await page.setViewportSize({width:390,height:844});await tab(page,'Importes y pagos').click();
+   assert.equal(await search.inputValue(),'DEEP-DEMO');assert.equal(await search.getAttribute('aria-expanded'),'false');await search.click();
+   const popup=await page.getByRole('region',{name:'Buscar en catálogo 0',exact:true}).boundingBox();assert.ok(popup.y>=0&&popup.y+popup.height<=844,'Reopened popup fits the current visible viewport');
+   await page.getByRole('button',{name:'Seleccionar Deep cleaning · DEEP-DEMO',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).waitFor();assert.equal(await page.getByLabel('Descripción 1',{exact:true}).inputValue(),'Limpieza profunda con desmontaje del equipo');assert.equal(await page.evaluate(()=>window.__catalogReads),before);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__catalogItems:catalogItems});
+  await run('tab-session-payment-draft-and-permission-revocation',async page=>{
+   await openFinance(page);await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('42');await page.getByRole('button',{name:'Transferencia',exact:true}).click();await page.getByLabel('Referencia / comprobante',{exact:false}).fill('KEPT-42');
+   const before=await page.evaluate(()=>({reads:window.__reads.length,acquires:window.__leaseCalls.filter(c=>c.action==='acquire_appointment_charge_edit').length}));
+   for(const name of ['Resumen','Historial','Resumen','Importes y pagos'])await tab(page,name).click();
+   assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'42');assert.equal(await page.getByLabel('Referencia / comprobante',{exact:false}).inputValue(),'KEPT-42');assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isEnabled(),true);
+   assert.deepEqual(await page.evaluate(()=>({reads:window.__reads.length,acquires:window.__leaseCalls.filter(c=>c.action==='acquire_appointment_charge_edit').length})),before);
+   await tab(page,'Historial').click();await page.evaluate(()=>window.__setCanManage(false));await page.waitForFunction(()=>window.__leaseCalls.some(c=>c.action==='release_appointment_charge_edit'));
+   await tab(page,'Importes y pagos').click();assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'42');assert.equal(await page.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:premium,__fenceAcquires:true});
+  await run('tab-session-late-acquire-retained-until-close',async page=>{
+   await openFinance(page);await page.waitForFunction(()=>!!window.__leaseRelease);await tab(page,'Historial').click();await page.evaluate(()=>window.__leaseRelease());
+   await tab(page,'Importes y pagos').click();await page.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();
+   assert.equal(await page.evaluate(()=>window.__leaseCalls.length),1);await tab(page,'Resumen').click();await page.getByRole('button',{name:'Cerrar cita',exact:true}).click();await page.waitForFunction(()=>window.__leaseCalls.length===2);
+   const calls=await page.evaluate(()=>window.__leaseCalls);assert.equal(calls[1].action,'release_appointment_charge_edit');assert.equal(calls[0].data.editSessionId,calls[1].data.editSessionId);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:premium,__leaseHold:true,__fenceAcquires:true});
+  for(const originTab of ['Resumen','Historial'])await run('tab-session-stale-pristine-data-still-refreshes-'+originTab,async page=>{
+   await openFinance(page);await page.getByText('Edición reservada para ti en esta cita.',{exact:true}).waitFor();await tab(page,originTab).click();
+   await page.evaluate(()=>{window.__offset+=31000;window.__record.state.receivedCents=21000;window.__holdReads=true;});await tab(page,'Importes y pagos').click();await page.waitForFunction(()=>window.__reads.length===2);
+   assert.match(await finance(page).innerText(),/Afl. 200.00/);assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).isDisabled(),true);assert.equal(await page.getByRole('button',{name:'Cerrar cita',exact:true}).isEnabled(),true);
+   await page.evaluate(()=>{window.__holdReads=false;window.__release[1]();});await loaded(page);assert.match(await finance(page).innerText(),/Afl. 210.00/);assert.equal(await page.evaluate(()=>window.__leaseCalls.filter(c=>c.action==='acquire_appointment_charge_edit').length),1);assert.deepEqual(await page.evaluate(()=>window.__writes),[]);
+  },{__record:premium});
   await run('lease-hidden-focus-resumes-renewal-and-expiry-keeps-draft',async page=>{
    await page.clock.install();await openFinance(page);await page.getByRole('button',{name:'Editar trabajos',exact:true}).click();await page.getByLabel('Descripción 1',{exact:true}).fill('Conservar al vencer');
    await page.evaluate(()=>Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>window.__visibility||'visible'}));
