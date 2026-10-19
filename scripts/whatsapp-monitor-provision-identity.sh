@@ -13,7 +13,7 @@ elif [[ "$monitor_existing" != "$monitor_account" ]]; then
   echo 'Unexpected service-account identity.' >&2
   exit 1
 fi
-for monitor_role in roles/datastore.user roles/logging.viewer roles/monitoring.metricWriter roles/firebaseauth.viewer; do
+for monitor_role in roles/datastore.user roles/logging.viewer roles/monitoring.metricWriter roles/firebaseauth.viewer roles/eventarc.eventReceiver; do
   gcloud projects add-iam-policy-binding "$monitor_project" \
     --member="serviceAccount:$monitor_account" --role="$monitor_role" --condition=None --quiet --format='none'
 done
