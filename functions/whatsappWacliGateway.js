@@ -16,6 +16,30 @@ const MAX_RECENT_MESSAGES = 120;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
+// Use the existing Admin Storage client's public ADC project discovery. Gen 2
+// deployments made through gcloud need not define either project environment
+// variable. Cache successful discovery; a failed/slow lookup can recover later.
+let referenceProjectPromise;
+function referenceMediaProjectId() {
+  if (!referenceProjectPromise) {
+    let timer;
+    referenceProjectPromise = Promise.race([
+      Promise.resolve().then(() => storage.bucket().storage.getProjectId()),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Project discovery timed out.')), 1500); }),
+    ]).then(projectId => {
+      if (typeof projectId !== 'string' || !/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(projectId)) {
+        throw new Error('Invalid reference project identity.');
+      }
+      return projectId;
+    }).catch(error => {
+      referenceProjectPromise = null;
+      throw error;
+    }).finally(() => clearTimeout(timer));
+  }
+  return referenceProjectPromise;
+}
+let lastReferenceProjectErrorAt = 0;
+
 function safeDocumentId(value) {
   return String(value || "unknown")
     .replaceAll("/", "_")
@@ -532,6 +556,14 @@ exports.wacliMediaIngest = onRequest(
 
 async function claimOutboundCommand(bridgeId) {
   const now = Date.now();
+  let projectForPoll;
+  const resolveReferenceProject = () => projectForPoll ||= referenceMediaProjectId().catch(() => {
+    if (Date.now() - lastReferenceProjectErrorAt >= 60000) {
+      logger.error('Private reference delivery deferred: project discovery unavailable.', { code: 'REFERENCE_PROJECT_UNAVAILABLE' });
+      lastReferenceProjectErrorAt = Date.now();
+    }
+    return null;
+  });
   const query = db.collection("whatsappOutboundQueue")
     .where("status", "in", ["queued", "processing"]).limit(50);
   let cursor = null;
@@ -590,8 +622,10 @@ async function claimOutboundCommand(bridgeId) {
         const claimToken = crypto.randomUUID();
         if (part && media?.storagePath) {
           if (!/^booking-references\/[^/]+\/[A-Za-z0-9_-]{8,100}$/.test(media.storagePath)) throw new Error('Invalid booking reference media path.');
-          const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
-          if (!projectId) throw new Error('Firebase project identity is required for private reference delivery.');
+          const projectId = await resolveReferenceProject();
+          // Leave the part and its recipient ordering untouched, but allow
+          // unrelated customers/Vans to progress during metadata outages.
+          if (!projectId) return null;
           media = { kind: media.kind, fileName: media.fileName, mimeType: media.mimeType,
             url: `https://us-central1-${projectId}.cloudfunctions.net/wacliBookingReferenceMedia?queueId=${encodeURIComponent(candidate.id)}&claimToken=${encodeURIComponent(claimToken)}` };
         }

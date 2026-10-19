@@ -6,30 +6,30 @@ const { createRequire } = require('node:module');
 const path = require('node:path');
 const { ReferenceDb, response } = require('./test-support/referenceDb.cjs');
 const { bundleFailure, currentBundlePart } = require('./whatsappReferenceBundle');
-function gateway(db) {
+function gateway(db, { env = { GCLOUD_PROJECT: 'demo-references' }, resolveProjectId = async () => 'demo-references' } = {}) {
   const filename = path.join(__dirname, 'whatsappWacliGateway.js');
   const localRequire = createRequire(filename);
   const exported = {};
   const mocks = {
     'firebase-admin/firestore': { getFirestore: () => db, FieldValue: { serverTimestamp: () => new Date().toISOString(), increment: n => n }, Timestamp: { fromMillis: ms => ({ toMillis: () => ms }) } },
-    'firebase-admin/storage': { getStorage: () => ({ bucket: () => ({ file: () => ({ download: async () => [Buffer.from('private-reference')] }) }) }) },
+    'firebase-admin/storage': { getStorage: () => ({ bucket: () => ({ storage: { getProjectId: resolveProjectId }, file: () => ({ download: async () => [Buffer.from('private-reference')] }) }) }) },
     'firebase-functions/logger': { info() {}, warn() {}, error() {} },
     'firebase-functions/params': { defineSecret: () => ({ value: () => 'synthetic-bridge-token' }) },
     'firebase-functions/v2/firestore': { onDocumentCreated: (_options, fn) => fn },
     'firebase-functions/v2/https': { onRequest: (_options, fn) => fn },
   };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { require: name => mocks[name] || localRequire(name), exports: exported, module: { exports: exported },
-    Buffer, URL, Date, Map, Set, process: { env: { GCLOUD_PROJECT: 'demo-references' } }, console }, { filename });
-  async function call(name, body = {}, query = {}) {
+    Buffer, URL, Date, Map, Set, setTimeout, clearTimeout, process: { env }, console }, { filename });
+  async function call(name, body = {}, query = {}, authorization = 'Bearer synthetic-bridge-token') {
     const res = response();
-    await exported[name]({ method: name === 'wacliBookingReferenceMedia' ? 'GET' : 'POST', body, query, get: key => key === 'authorization' ? 'Bearer synthetic-bridge-token' : '' }, res);
+    await exported[name]({ method: name === 'wacliBookingReferenceMedia' ? 'GET' : 'POST', body, query, get: key => key === 'authorization' ? authorization : '' }, res);
     assert.notEqual(res.statusCode, 500, JSON.stringify(res.body));
     return res;
   }
   return { call, poll: async () => (await call('wacliOutboundPoll')).body.command,
     ack: async (command, sent = true) => call('wacliOutboundAck', { queueId: command.queueId, claimToken: command.claimToken, sent, messageId: sent ? `msg-${command.claimToken}` : '', error: 'Synthetic temporary error' }) };
 }
-function fixture() {
+function fixture(options) {
   const db = new ReferenceDb({
     'whatsappOutboundQueue/WORK-1': { provider: 'wacli', type: 'booking-reference-bundle', appointmentId: 'APT-1', to: '120000000000001@g.us', status: 'queued', createdAt: '2026-10-05T12:00:00Z', messageIndex: 0,
       messages: [{ text: 'Work 1' }, { text: 'Photo: kitchen', media: { kind: 'image', storagePath: 'booking-references/office/photo-0001', fileName: 'kitchen.jpg', mimeType: 'image/jpeg' } },
@@ -37,8 +37,70 @@ function fixture() {
     'whatsappOutboundQueue/WORK-2': { provider: 'wacli', type: 'text', text: 'Work 2', to: '120000000000001@g.us', status: 'queued', createdAt: '2026-10-05T12:00:01Z', dependsOnQueueId: 'WORK-1' },
     'bookingReferenceUploads/photo-0001': { status: 'linked', appointmentId: 'APT-1', storagePath: 'booking-references/office/photo-0001', mimeType: 'image/jpeg' },
   });
-  return { db, ...gateway(db) };
+  return { db, ...gateway(db, options) };
 }
+
+test('private attachments resolve the runtime project without project environment variables', async () => {
+  let resolutions = 0;
+  const { poll, ack } = fixture({ env: {}, resolveProjectId: async () => { resolutions++; return 'demo-runtime'; } });
+  await ack(await poll());
+  const photo = await poll();
+  assert.match(photo.media.url, /^https:\/\/us-central1-demo-runtime\.cloudfunctions\.net\/wacliBookingReferenceMedia\?/);
+  await ack(photo); await ack(await poll());
+  const voice = await poll();
+  assert.match(voice.media.url, /^https:\/\/us-central1-demo-runtime\./);
+  assert.equal(resolutions, 1, 'Successful project discovery is cached across polls');
+});
+
+test('unavailable project discovery defers attachments and preserves order while other recipients progress', async () => {
+  let unavailable = true;
+  const { db, poll, ack } = fixture({ env: {}, resolveProjectId: async () => {
+    if (unavailable) throw new Error('Synthetic metadata outage');
+    return 'demo-runtime';
+  } });
+  await ack(await poll());
+  const before = { ...db.records.get('whatsappOutboundQueue/WORK-1') };
+  db.records.set('whatsappOutboundQueue/OTHER', { provider: 'wacli', type: 'text', to: '120000000000002@g.us', text: 'Customer confirmation', status: 'queued', createdAt: '2026-10-05T13:00:00Z' });
+  const other = await poll(); assert.equal(other.text, 'Customer confirmation'); await ack(other);
+  assert.deepEqual(db.records.get('whatsappOutboundQueue/WORK-1'), before, 'Do not claim, fail or consume attempts for an unsent attachment');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-2').status, 'queued');
+  unavailable = false;
+  const photo = await poll(); assert.equal(photo.media.kind, 'image');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').messageIndex, 1);
+});
+
+test('a stalled project lookup is bounded and does not cache failure permanently', async () => {
+  let stalled = true;
+  const { db, poll, ack } = fixture({ env: {}, resolveProjectId: () => stalled ? new Promise(() => {}) : Promise.resolve('demo-runtime') });
+  await ack(await poll());
+  db.records.set('whatsappOutboundQueue/OTHER', { provider: 'wacli', type: 'text', to: '120000000000002@g.us', text: 'Other van', status: 'queued', createdAt: '2026-10-05T13:00:00Z' });
+  assert.equal((await poll()).text, 'Other van');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'queued');
+  stalled = false;
+  assert.equal((await poll()).media.kind, 'image');
+});
+
+test('invalid discovered projects cannot influence the private media hostname', async () => {
+  for (const project of ['', 'demo-runtime.evil.example/x', '../another-project']) {
+    const { db, poll, ack } = fixture({ env: {}, resolveProjectId: async () => project });
+    await ack(await poll());
+    assert.equal(await poll(), null);
+    assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'queued');
+    assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').messageIndex, 1);
+  }
+});
+
+test('project discovery remains behind bridge authentication with no queue mutation on denial', async () => {
+  let resolutions = 0;
+  const { db, call } = fixture({ env: {}, resolveProjectId: async () => { resolutions++; return 'demo-runtime'; } });
+  const before = JSON.stringify([...db.records]);
+  for (const authorization of ['', 'Bearer invalid-token']) {
+    assert.equal((await call('wacliOutboundPoll', {}, {}, authorization)).statusCode, 401);
+    assert.equal((await call('wacliOutboundAck', {}, {}, authorization)).statusCode, 401);
+  }
+  assert.equal(resolutions, 0);
+  assert.equal(JSON.stringify([...db.records]), before);
+});
 test('bundle sends work → captioned photo → audio explanation → voice before next work; ack retries never advance twice', async () => {
   const { db, poll, ack, call } = fixture();
   const first = await poll(); assert.equal(first.text, 'Work 1'); assert.equal(await poll(), null);
@@ -103,6 +165,17 @@ test('a terminal failure does not lock tomorrow or unrelated messages for the sa
   const next = await poll(); await ack(next);
   db.records.set('whatsappOutboundQueue/TOMORROW', { provider: 'wacli', type: 'text', to: first.to, text: 'Tomorrow', status: 'queued' });
   assert.equal((await poll()).text, 'Tomorrow');
+});
+
+test('owner-discarded backlog releases new dependencies without replaying old content', async () => {
+  const { db, poll } = fixture();
+  const old = db.records.get('whatsappOutboundQueue/WORK-1');
+  db.records.set('whatsappOutboundQueue/WORK-1', { to: old.to, provider: 'wacli', status: 'cancelled', cancellationReason: 'owner-requested-20261019-cutover' });
+  assert.equal((await poll()).text, 'Work 2');
+  assert.equal(db.records.get('whatsappOutboundQueue/WORK-1').status, 'cancelled');
+  const { db: otherDb, poll: otherPoll } = fixture();
+  otherDb.records.set('whatsappOutboundQueue/WORK-1', { to: 'different-recipient', provider: 'wacli', status: 'cancelled', cancellationReason: 'owner-requested-20261019-cutover' });
+  assert.equal(await otherPoll(), null, 'Cutover cannot bypass recipient isolation');
 });
 
 test('stale recipient reservations are recovered without changing the original queue record', async () => {
