@@ -181,6 +181,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
         ...metadata,
         recipientType: "whatsapp-group",
         vanId: van.id,
+        vanName: van.name || van.id,
         groupName: config.groupName,
         groupJid: config.groupJid,
       },

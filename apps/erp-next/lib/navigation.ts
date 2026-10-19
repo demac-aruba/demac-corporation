@@ -93,6 +93,7 @@ export const navigationGroups: NavigationGroup[] = [
     items: [
       { label: 'Website Manager', href: '/website-manager', short: 'WM', roles: ['super_admin'] },
       { label: 'Settings', href: '/settings', short: 'ST', roles: ['super_admin'] },
+      { label: 'Message Templates', href: '/settings/messages', short: 'MT', roles: ['super_admin'] },
       { label: 'Performance & Health', href: '/settings/system/performance', short: 'PH', roles: ['super_admin'] },
       { label: 'Automations', href: '/automations', short: 'AU', roles: ['super_admin'] },
       { label: 'Integrations', href: '/integrations', short: 'IG', roles: ['super_admin'] },

@@ -1,4 +1,5 @@
 'use strict';
+const { renderMessageCopy } = require('./messageCopy');
 
 const {
   formatArubaDateTime,
@@ -18,23 +19,21 @@ function compactRequirements(value, maxLength = 2000) {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function assignmentNotificationMessage(task, assigneeName) {
+function assignmentNotificationMessage(task, assigneeName, copy) {
   const name = String(assigneeName || task?.assigneeNameSnapshot || 'team member').trim();
   const number = String(task?.taskNumber || 'Task').trim();
   const title = String(task?.title || 'Untitled task').trim();
   const deadline = formatArubaDateTime(task?.dueAt);
   const requirements = compactRequirements(task?.description);
   const lines = [
-    `Hi ${name}, you have a new DEMAC task.`,
-    '',
     number,
     `*${title}*`,
     '',
     `*Deadline:* ${deadline}`,
   ];
   if (requirements) lines.push('', '*Requirements:*', requirements);
-  lines.push('', '────────────', '', 'Please open DEMAC ERP to review and acknowledge this task.', '', '— DEMAC ERP');
-  return lines.join('\n');
+  lines.push('', '────────────');
+  return renderMessageCopy('task_assignment', 'en', { name, company: 'DEMAC Professional Cooling Solutions' }, lines.join('\n'), copy);
 }
 
 function assignmentQueueId(taskId) {

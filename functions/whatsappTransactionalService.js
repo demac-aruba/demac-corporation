@@ -1,4 +1,15 @@
 const { FieldValue } = require("firebase-admin/firestore");
+const { renderMessageCopy } = require('./messageCopy');
+const { loadMessageCopy } = require('./messageCopyStore');
+
+function technicianCopy(metadata, text) {
+  const type = metadata.notificationType;
+  const id = type === 'van-daily-work-order' ? (metadata.reason === 'visit-references-updated' ? 'van_references_updated' : 'van_work_order')
+    : type === 'van-same-day-schedule-change' ? 'van_same_day_change'
+    : type === 'van-adhoc-support-change' ? (metadata.supportNotificationRole === 'primary' ? 'van_support_assigned' : 'van_support_requested')
+    : type === 'van-daily-lunch-break' ? 'van_lunch' : type === 'van-daily-pending-period' ? 'van_pending' : null;
+  return id ? { id, language: 'es', variables: { van: metadata.vanName || metadata.vanId || '', company: 'DEMAC Professional Cooling Solutions' }, details: text } : null;
+}
 
 const ARUBA_COUNTRY_CODE = "297";
 const DEFAULT_TRANSACTIONAL_PROVIDER = "wacli";
@@ -301,6 +312,7 @@ function createWhatsAppTransactionalService({ db } = {}) {
   }
 
   async function queueTransactionalMessage({
+    messageCopy,
     messages,
     queueId,
     to,
@@ -314,6 +326,15 @@ function createWhatsAppTransactionalService({ db } = {}) {
     if (settings.transactionalProvider === "meta") {
       if (messages?.length > 1) throw new Error("Booking reference bundles require the configured wacli group transport.");
       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
+    }
+    const copy = messageCopy || technicianCopy(metadata, text);
+    if (copy) {
+      const saved = await loadMessageCopy(db, copy.id, copy.language);
+      text = renderMessageCopy(copy.id, copy.language, copy.variables, copy.details, saved.fields);
+      metadata = { ...metadata, messageTemplateId: copy.id, messageTemplateLanguage: copy.language, messageTemplateRevision: saved.revision };
+      // Reference attachment captions and order remain untouched; replace only
+      // the first text item belonging to this work message.
+      if (messages?.length) messages = [{ ...messages[0], text }, ...messages.slice(1)];
     }
     if (messages?.length > 1) return queueWacliReferenceBundle({ queueId, to, messages, metadata });
     const explicitText = String(text || "").trim();
