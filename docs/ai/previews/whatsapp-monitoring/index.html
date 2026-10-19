@@ -1,0 +1,158 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DEMAC · Vista previa del monitor de mensajería</title><style>:root {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef2f7;
+  --surface-3: #e7edf5;
+  --text: #122033;
+  --muted: #69778a;
+  --muted-2: #8c98a8;
+  --border: #dde4ee;
+  --border-strong: #ccd6e3;
+  --brand: #1769e0;
+  --brand-2: #3184f5;
+  --brand-soft: #eaf3ff;
+  --navy: #0e1c30;
+  --success: #19a86b;
+  --success-soft: #e9f8f1;
+  --warning: #e69b22;
+  --warning-soft: #fff6e5;
+  --danger: #e04f5f;
+  --danger-soft: #fff0f2;
+  --purple: #7559e9;
+  --shadow: 0 16px 42px rgba(27, 47, 74, .08);
+  --shadow-soft: 0 8px 24px rgba(27, 47, 74, .05);
+  --radius-xl: 22px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --sidebar: #102038;
+  --sidebar-2: #152a47;
+  --sidebar-text: #edf5ff;
+  --sidebar-muted: #8ea3bd;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #08111f;
+  --surface: #101c2d;
+  --surface-2: #142338;
+  --surface-3: #1a2b43;
+  --text: #f4f8fd;
+  --muted: #9fb0c5;
+  --muted-2: #778ba5;
+  --border: #24364f;
+  --border-strong: #304663;
+  --brand: #4d9bff;
+  --brand-2: #76b3ff;
+  --brand-soft: #132d50;
+  --navy: #07111e;
+  --success: #3ccc8b;
+  --success-soft: #123526;
+  --warning: #ffc05b;
+  --warning-soft: #3b2b13;
+  --danger: #ff7b88;
+  --danger-soft: #3d1e27;
+  --purple: #9f8bff;
+  --shadow: 0 22px 48px rgba(0, 0, 0, .22);
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, .16);
+  --sidebar: #060d18;
+  --sidebar-2: #0c192a;
+  --sidebar-text: #f1f6fd;
+  --sidebar-muted: #7e93ae;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+a { color: inherit; text-decoration: none; }
+
+.erp-frame { min-height: 100vh; display: flex; background: var(--bg); }
+.erp-sidebar {
+  position: fixed; inset: 0 auto 0 0; z-index: 40; width: 264px;
+  display: flex; flex-direction: column; overflow-y: auto;
+  background: linear-gradient(180deg, var(--sidebar) 0%, #0b1829 100%);
+  color: var(--sidebar-text); border-right: 1px solid rgba(255,255,255,.06);
+}
+.brand-block { display: flex; align-items: center; gap: 12px; padding: 24px 22px 20px; }
+.brand-mark {
+  width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center;
+  background: linear-gradient(135deg, #1d75f0, #55adff); color: white; font-weight: 900;
+  box-shadow: 0 10px 26px rgba(22, 105, 224, .35);
+}
+.brand-block strong { display: block; font-size: 15px; letter-spacing: .12em; }
+.brand-block span { display: block; margin-top: 3px; color: var(--sidebar-muted); font-size: 9px; letter-spacing: .18em; }
+.side-nav { padding: 2px 12px 24px; }
+.nav-group { margin-top: 16px; }
+.nav-group-label { padding: 0 10px 8px; color: #607994; font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.nav-item {
+  position: relative; display: flex; align-items: center; gap: 11px; min-height: 42px;
+  margin: 3px 0; padding: 8px 10px; border-radius: 12px; color: #aebfd3;
+  font-size: 12px; font-weight: 650; transition: .18s ease;
+}
+.nav-item:hover { background: rgba(255,255,255,.055); color: white; }
+.nav-item.active { background: linear-gradient(90deg, rgba(52,135,244,.24), rgba(52,135,244,.08)); color: white; }
+.nav-item.active::before { content: ''; position: absolute; left: -12px; width: 3px; height: 22px; border-radius: 0 4px 4px 0; background: #4b9dff; }
+.nav-glyph {
+  width: 28px; height: 28px; border: 1px solid rgba(255,255,255,.10); border-radius: 9px;
+  display: grid; place-items: center; color: #8fb6e4; background: rgba(255,255,255,.025);
+  font-size: 8px; font-weight: 900; letter-spacing: .04em;
+}
+.nav-item.active .nav-glyph { color: white; border-color: rgba(90,166,255,.45); background: rgba(44,125,226,.28); }
+.sidebar-footer { margin-top: auto; padding: 18px 20px 24px; color: var(--sidebar-muted); border-top: 1px solid rgba(255,255,255,.06); }
+.sidebar-footer small { display: block; margin-top: 7px; font-size: 9px; }
+.environment-pill { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 700; }
+.environment-pill span { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px rgba(25,168,107,.12); }
+
+.erp-main { flex: 1; min-width: 0; margin-left: 264px; }
+.erp-topbar {
+  position: sticky; top: 0; z-index: 30; height: 70px; display: flex; align-items: center; gap: 18px;
+  padding: 0 28px; background: color-mix(in srgb, var(--surface) 91%, transparent); backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--border);
+}
+.menu-trigger { display: none; border: 0; color: var(--text); background: transparent; font-size: 20px; }
+.global-search {
+  width: min(520px, 45vw); height: 40px; display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 0 12px;
+}
+.global-search > span { color: var(--muted); font-size: 18px; }
+.global-search input { flex: 1; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 12px; }
+.global-search input::placeholder { color: var(--muted-2); }
+.global-search kbd { border: 1px solid var(--border-strong); border-radius: 6px; color: var(--muted); background: var(--surface); padding: 3px 6px; font-size: 9px; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.theme-control { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.theme-control button { border: 0; border-radius: 7px; background: transparent; color: var(--muted); padding: 6px 9px; font-size: 9px; font-weight: 750; cursor: pointer; }
+.theme-control button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-soft); }
+.icon-action { position: relative; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 11px; color: var(--text); background: var(--surface); cursor: pointer; }
+.icon-action b { position: absolute; right: -4px; top: -5px; width: 16px; height: 16px; border-radius: 8px; display: grid; place-items: center; background: var(--danger); color: white; font-size: 8px; }
+.owner-chip { display: flex; align-items: center; gap: 9px; padding-left: 5px; }
+.avatar { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: linear-gradient(135deg, var(--brand), #77b8ff); color: white; font-size: 10px; font-weight: 900; }
+.owner-chip strong { display: block; font-size: 11px; }
+.owner-chip span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+.erp-content { padding: 28px; }
+
+
+
+body{font-family:Inter,"Segoe UI",sans-serif}button{cursor:default}svg{flex-shrink:0;vertical-align:middle}h1,h2,h3,p{margin:0}h1{font-size:31px;letter-spacing:-1px;line-height:1.2}h2{font-size:16px;letter-spacing:-.25px}.erp-content{padding:24px 28px 20px}.global-search{width:440px}.preview-tag{font-size:10px;font-weight:800;letter-spacing:.06em;background:#eef4fe;border:1px solid #d2e3fd;padding:7px 10px;border-radius:7px;color:#36699d}.topbar-state{display:flex;align-items:center;gap:7px;color:#b94831;font-size:11px;font-weight:700;padding:8px 10px;border:1px solid #f2d6c6;background:#fff8f1;border-radius:8px}.dot{width:7px;height:7px;display:inline-block;border-radius:50%;background:currentColor}.breadcrumb{display:flex;gap:9px;color:var(--muted);font-size:11px;align-items:center}.page-heading{display:flex;justify-content:space-between;align-items:center;margin:17px 0 21px}.title-line{display:flex;gap:13px;align-items:center}.title-icon{width:47px;height:47px;display:grid;place-items:center;background:#e8f2ff;color:#1769e0;border:1px solid #d9e9ff;border-radius:13px}.subtitle{font-size:12px;color:#69778a;margin-top:7px}.toolbar{display:flex;align-items:center;gap:9px}.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid #dbe3ed;border-radius:9px;background:#fff;color:#24405e;font-size:11px;font-weight:700;padding:10px 13px;white-space:nowrap}.btn.primary{background:#1769e0;color:#fff;border-color:#1769e0}.btn.quiet{background:#f7faff}.status-banner{display:flex;gap:14px;align-items:center;background:#fff1f2;border:1px solid #efc4ca;border-left:4px solid #d84c5c;border-radius:11px;padding:17px 18px;color:#b32f44}.status-banner .alert-icon{width:35px;height:35px;display:grid;place-items:center;border:1px solid #f0c9cd;background:#ffe6ea;border-radius:10px}.status-banner strong{font-size:14px}.status-banner p{font-size:12px;line-height:1.5;color:#805963;margin-top:5px}.status-banner .btn{margin-left:auto;color:#ad3043;background:white;border-color:#edbdc6}.tabbar{display:flex;gap:22px;margin-top:16px;border-bottom:1px solid #dce5ef;align-items:center}.tab{border:0;background:none;padding:14px 2px 12px;color:#738196;font-size:12px;font-weight:600}.tab.selected{color:#1769e0;border-bottom:2px solid #1769e0}.mini-count{margin-left:5px;padding:2px 6px;font-size:10px;background:#ffebee;color:#b9374d;border-radius:5px}.refresh-text{margin-left:auto;font-size:10px;color:#6d7f92;display:flex;align-items:center;gap:6px}.refresh-text .dot{color:#20a478}.metrics{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:13px;margin:18px 0}.metric{background:white;border:1px solid #dce5ef;border-radius:12px;padding:15px 17px;box-shadow:0 4px 12px #23456804}.metric-label{color:#6c7c8f;font-size:11px;font-weight:600;display:flex;align-items:center;gap:7px}.metric-top{display:flex;align-items:center;justify-content:space-between}.metric-value{font-size:27px;font-weight:750;letter-spacing:-.6px;margin:9px 0 5px}.metric-value.text{font-size:23px;color:#b43d4d}.metric small{font-size:10px;color:#7a8797}.metric-icon{color:#8fa4b8}.tag{border-radius:6px;font-size:10px;padding:4px 7px;font-weight:700;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.red{background:#fff0f2;color:#bb354d}.amber{background:#fff5df;color:#aa6f10}.green{background:#eaf8f1;color:#16825b}.blue{background:#edf4ff;color:#2b71ca}.neutral{background:#f0f3f7;color:#65778c}.columns{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(300px,1fr);gap:16px}.panel{background:white;border:1px solid #dce5ef;border-radius:12px;overflow:hidden;box-shadow:0 4px 12px #23456803}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:18px 19px 15px}.panel-sub{font-size:11px;color:#758499;margin-top:5px}.panel-head .link{font-size:10px;color:#286bd1;font-weight:700}.incidence{padding:16px 19px;border-top:1px solid #e6edf5}.incident-title{display:flex;justify-content:space-between;align-items:center;gap:12px}.incident-title h3{font-size:13px;font-weight:700}.incident-title .left{display:flex;align-items:center;gap:8px}.incidence p{font-size:11px;line-height:1.6;color:#6b7d92;margin:8px 0 11px}.incident-bottom{display:flex;align-items:center;gap:8px;color:#7b899b;font-size:10px}.incident-bottom button{margin-left:auto;padding:7px 10px;font-size:10px}.incident-bottom strong{font-weight:600;color:#566a80}.health{padding:0 18px 9px}.health-row{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #edf1f7;padding:13px 0;font-size:11px;gap:8px}.health-row .label{display:flex;gap:8px;align-items:center;color:#536b83}.health-row .label svg{color:#7d95ac}.health-foot{margin:0 18px 16px;padding:11px 12px;border:1px solid #deeadf;background:#f4faf7;border-radius:8px;color:#49735f;font-size:10px;line-height:1.5}.health-foot strong{color:#2d694e}.lower{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(300px,1fr);gap:16px;margin-top:16px}.flow-table{width:100%;border-collapse:collapse;font-size:11px}.flow-table th{text-align:left;font-size:9px;font-weight:700;color:#7b8ba0;letter-spacing:.04em;text-transform:uppercase;background:#f8fafd;padding:10px 18px;border-top:1px solid #e6edf5;border-bottom:1px solid #e6edf5}.flow-table td{padding:13px 18px;border-bottom:1px solid #edf1f6;color:#557089}.flow-table td strong{color:#2b435e;font-size:11px}.flow-table tr:last-child td{border-bottom:0}.flow-name{display:block;color:#8b98a9;font-size:10px;margin-top:4px}.number{font-weight:700;color:#24445f}.table-note{font-size:9px;color:#7e8fa3;padding:10px 18px;border-top:1px solid #edf1f6}.schedule-body{padding:0 19px 14px}.checktime{display:grid;grid-template-columns:47px 1fr auto;gap:10px;align-items:center;padding:11px 0;border-top:1px solid #edf1f6}.time{font-size:12px;font-weight:700;color:#274968}.checktime strong{display:block;font-size:11px;color:#536a82;font-weight:600}.checktime small{display:block;font-size:9px;color:#8a9aad;margin-top:4px}.footer{display:flex;align-items:center;justify-content:space-between;margin-top:17px;font-size:10px;color:#7c8ba0}.footer .safe{display:flex;align-items:center;gap:7px;color:#677e98}.foot-preview{color:#466e9c;font-weight:600}.tag .dot{width:5px;height:5px}.demo-note{font-size:10px;color:#7f8ea0;margin-top:10px}.monitor-healthy{font-size:11px;font-weight:700;color:#16825b;display:flex;gap:6px;align-items:center}.sidebar-footer{background:#0b1829}.metric-value .of{font-size:14px;color:#99a5b4;font-weight:400}.tabbar span{line-height:1.5}
+</style></head><body>
+<div class="erp-frame"><aside class="erp-sidebar"><div class="brand-block"><div class="brand-mark">D</div><div><strong>DEMAC</strong><span>ERP NEXT</span></div></div><nav class="side-nav"><div class="nav-group"><div class="nav-group-label">Operations</div><a class="nav-item"><span class="nav-glyph">CC</span><span>Command Center</span></a><a class="nav-item"><span class="nav-glyph">KP</span><span>KPIs</span></a><a class="nav-item"><span class="nav-glyph">SD</span><span>Scheduling & Dispatch</span></a><a class="nav-item"><span class="nav-glyph">PR</span><span>Projects</span></a><a class="nav-item"><span class="nav-glyph">TT</span><span>Task Tracker</span></a><a class="nav-item"><span class="nav-glyph">DC</span><span>Daily Dispatch Control</span></a><a class="nav-item"><span class="nav-glyph">RB</span><span>Dispatch Readiness Board</span></a><a class="nav-item"><span class="nav-glyph">WO</span><span>Work Orders</span></a><a class="nav-item"><span class="nav-glyph">SP</span><span>Services & Products</span></a><a class="nav-item"><span class="nav-glyph">FA</span><span>Field App</span></a><a class="nav-item"><span class="nav-glyph">TE</span><span>Technicians</span></a></div><div class="nav-group"><div class="nav-group-label">Customers</div><a class="nav-item"><span class="nav-glyph">CR</span><span>CRM</span></a><a class="nav-item"><span class="nav-glyph">LE</span><span>Leads</span></a><a class="nav-item"><span class="nav-glyph">OP</span><span>Opportunities</span></a><a class="nav-item"><span class="nav-glyph">ES</span><span>Estimates</span></a><a class="nav-item"><span class="nav-glyph">MA</span><span>Maintenance</span></a></div><div class="nav-group"><div class="nav-group-label">Communications</div><a class="nav-item"><span class="nav-glyph">CO</span><span>Communication Center</span></a><a class="nav-item"><span class="nav-glyph">AI</span><span>AI Customer Agent</span></a><a class="nav-item"><span class="nav-glyph">EC</span><span>Escalations</span></a></div></nav></aside>
+<div class="erp-main"><header class="erp-topbar"><label class="global-search"><span>⌕</span><input placeholder="Search modules, customers, work orders, invoices..."><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="topbar-state"><i class="dot"></i> WhatsApp · Atención</div><div class="theme-control"><button class="active">Light</button><button>Dark</button></div><button class="icon-action" aria-label="Notificaciones"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><b>2</b></button><div class="owner-chip"><div class="avatar">AD</div><div><strong>Administración</strong><span>DEMAC · Vista de ejemplo</span></div></div></div></header>
+<main class="erp-content"><div class="breadcrumb"><span>Settings</span><span>›</span><span>System</span><span>›</span><span>Performance &amp; Health Center</span><span>›</span><strong>Mensajería</strong><span style="margin-left:auto" class="preview-tag">VISTA PREVIA · DATOS DE EJEMPLO</span></div>
+<div class="page-heading"><div class="title-line"><div class="title-icon"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></div><div><h1>Monitor de mensajería</h1><p class="subtitle">Confirmaciones de clientes y agendas de técnicos, bajo supervisión.</p></div></div><div class="toolbar"><button class="btn quiet"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 3-1 3-3 1v4l-2 1 2 2v4l3 1 1 2h5l1-2 3-1v-4l2-2-2-1V7l-3-1-1-3Z"/><circle cx="11.5" cy="12" r="3"/></svg> Configurar avisos</button><button class="btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg> Actualizar</button></div></div>
+<div class="status-banner"><div class="alert-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v.1"/></svg></div><div><strong>Hay envíos que requieren atención</strong><p>3 confirmaciones de clientes y 2 envíos de técnicos pendientes. Revisa las incidencias antes de reenviar.</p></div><button class="btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg> Estoy atendiendo</button></div>
+<div class="tabbar"><button class="tab selected">Resumen</button><button class="tab">Incidencias <span class="mini-count">2</span></button><button class="tab">Clientes</button><button class="tab">Técnicos / Vans</button><button class="tab">Historial</button><span class="refresh-text"><i class="dot"></i>Última revisión 08:03:20 · cada 60 s</span></div>
+<div class="metrics"><div class="metric"><div class="metric-top"><span class="metric-label">Estado de los envíos</span><span class="tag red">Atención</span></div><div class="metric-value text">2 incidencias</div><small>Un fallo de generación y una demora</small></div><div class="metric"><div class="metric-top"><span class="metric-label">Envíos afectados</span><span class="metric-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v.1"/></svg></span></div><div class="metric-value">5</div><small>3 de clientes · 2 de técnicos</small></div><div class="metric"><div class="metric-top"><span class="metric-label">Envíos confirmados hoy</span><span class="metric-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4 10-10"/></svg></span></div><div class="metric-value">42</div><small>Confirmados por la integración</small></div><div class="metric"><div class="metric-top"><span class="metric-label">Mayor espera</span><span class="metric-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span></div><div class="metric-value">5 min 20 s</div><small>Confirmaciones aún sin generar</small></div></div>
+<div class="columns"><section class="panel"><div class="panel-head"><div><h2>Incidencias que necesitan atención</h2><p class="panel-sub">Agrupadas por causa para evitar avisos repetidos.</p></div><span class="tag neutral">2 abiertas</span></div>
+<div class="incidence"><div class="incident-title"><div class="left"><span class="tag red">Fallo</span><h3>Confirmaciones de clientes sin generar</h3></div><span class="tag neutral">3 citas</span></div><p>Las citas están confirmadas, pero sus mensajes no llegaron a la cola.<br>Revisar las confirmaciones faltantes y contactar a los clientes si es necesario.</p><div class="incident-bottom"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Desde las 07:58</span><span>·</span><strong>Sin responsable asignado</strong><button class="btn quiet">Ver citas afectadas <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button></div></div>
+<div class="incidence"><div class="incident-title"><div class="left"><span class="tag amber">Demora</span><h3>Van 2 · Agenda incompleta</h3></div><span class="tag neutral">2 envíos</span></div><p>Hay un trabajo y un archivo pendientes. El resto de la agenda sí salió.<br>Verificar el avance de ambos envíos antes de repetir la agenda.</p><div class="incident-bottom"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Desde las 08:00</span><span>·</span><strong>En seguimiento</strong><button class="btn quiet">Ver agenda <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button></div></div></section>
+<aside class="panel"><div class="panel-head"><h2>Conexión y avisos</h2><span class="monitor-healthy"><i class="dot"></i> Monitor activo</span></div><div class="health"><div class="health-row"><span class="label"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg> Conexión de WhatsApp</span><span class="tag green">Activa</span></div><div class="health-row"><span class="label"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Última conexión correcta</span><strong>Hace 12 s</strong></div><div class="health-row"><span class="label"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m3 7 9 6 9-6"/></svg> Aviso por correo</span><span class="tag blue">Enviado · 08:03</span></div><div class="health-row"><span class="label"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg> Destinatarios de avisos</span><strong>Dirección + Operaciones</strong></div></div><div class="health-foot"><strong>También vigilamos este monitor.</strong><br>Si deja de comprobar el sistema, se activa un aviso independiente de WhatsApp.</div></aside></div>
+<div class="lower"><section class="panel"><div class="panel-head"><div><h2>Estado por tipo de mensaje</h2><p class="panel-sub">Los envíos afectados incluyen mensajes que aún no se generaron.</p></div><span class="link">Ver todos los envíos →</span></div><table class="flow-table"><thead><tr><th>Flujo</th><th>Confirmados</th><th>Por atender</th><th>Estado</th></tr></thead><tbody><tr><td><strong>Confirmaciones de clientes</strong><span class="flow-name">Citas nuevas y actualizaciones</span></td><td class="number">18</td><td class="number">3</td><td><span class="tag red"><i class="dot"></i> Requiere atención</span></td></tr><tr><td><strong>Agendas de técnicos</strong><span class="flow-name">Trabajos y archivos por Van</span></td><td class="number">24</td><td class="number">2</td><td><span class="tag amber"><i class="dot"></i> Envío parcial</span></td></tr></tbody></table><div class="table-note">“Envío confirmado” no acredita recepción ni lectura en el teléfono.</div></section>
+<aside class="panel"><div class="panel-head"><h2>Revisión antes de la jornada</h2><span class="tag blue">Hora Aruba</span></div><div class="schedule-body"><div class="checktime"><span class="time">07:45</span><div><strong>Conexión y configuración</strong><small>Primera revisión preventiva</small></div><span class="tag green">Correcta</span></div><div class="checktime"><span class="time">07:55</span><div><strong>Preparación del envío</strong><small>Grupos y servicio disponibles</small></div><span class="tag green">Correcta</span></div><div class="checktime"><span class="time">08:00</span><div><strong>Salida de las agendas</strong><small>Comprobación de avance real</small></div><span class="tag amber">Parcial</span></div></div></aside></div>
+<div class="footer"><span class="safe"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg> La supervisión detecta y avisa. No reenvía mensajes automáticamente.</span><span class="foot-preview">Diseño propuesto · No describe el estado actual del ERP</span></div>
+</main></div></div></body></html>
