@@ -20,7 +20,8 @@ function monitor() {
     timestamp:Timestamp.fromMillis,enabled:process.env.WHATSAPP_MONITOR_ENABLED==='true',
     readTransport:async at=>(await cloud()).readTransport(at),publishSignals:async value=>(await cloud()).publishSignals(value)});
 }
-const options={region:'us-central1',memory:'256MiB',maxInstances:3};
+const options={region:'us-central1',memory:'256MiB',maxInstances:3,
+  ...(process.env.WHATSAPP_MONITOR_SERVICE_ACCOUNT?{serviceAccount:process.env.WHATSAPP_MONITOR_SERVICE_ACCOUNT}:{})};
 exports.whatsappMessagingMonitor=onRequest({...options,timeoutSeconds:30},async(req,res)=>{
   res.set('Access-Control-Allow-Origin','*');res.set('Access-Control-Allow-Headers','Authorization, Content-Type');res.set('Access-Control-Allow-Methods','POST, OPTIONS');res.set('Cache-Control','no-store');
   const result=await monitor().handle(req);

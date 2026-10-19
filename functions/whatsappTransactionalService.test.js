@@ -45,6 +45,14 @@ test("legacy renderer converts appointment reminder template parameters to wacli
   assert.match(text, /Dirección: Piedra Plat 1C/);
 });
 
+test('English transactional confirmation and reminder share the welcoming closing', () => {
+  for (const templateName of ['appointment_confirmation', 'appointment_reminder_24_hours']) {
+    const text = renderTransactionalText({ templateName, languageCode: 'en',
+      bodyParameters: ['Synthetic client', 'date', 'time', 'Synthetic address', 'Service'] });
+    assert.match(text, /please feel free to reply to this message\. We’re happy to help!$/);
+  }
+});
+
 test("legacy renderer converts technician schedule template parameters to wacli text", () => {
   const text = renderTransactionalText({
     templateName: "technician_daily_schedule",

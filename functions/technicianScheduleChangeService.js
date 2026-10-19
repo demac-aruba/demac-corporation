@@ -1,5 +1,5 @@
 const { referenceMessageParts } = require('./bookingVisitReferences');
-const { bookingLocationLabel } = require('./bookingLocationDisplay');
+const { bookingLocationLabel, bookingMessageAddressLines } = require('./bookingLocationDisplay');
 const { arubaDateParts, resolveAssignment } = require("./bookingSchedulingPrimitives");
 const { resolveCanonicalVanId } = require("./bookingVanIdentity");
 const {
@@ -140,8 +140,12 @@ function renderAdhocPrimaryVanText({
   const supportName = text(supportVan?.name || supportVan?.id) || "Van de apoyo";
   const supportTeam = crewLabel(supportCrew, staffById);
   const customer = text(client?.name || client?.company || supportOrder.clientName) || "Cliente";
-  const location = bookingLocationLabel(supportOrder, appointment)
-    || text(property?.name || supportOrder.address || property?.address || property?.addressRaw) || "Ubicación del trabajo";
+  const bookedLocation = bookingLocationLabel(supportOrder, appointment);
+  const location = bookedLocation ? ''
+    : text(property?.name || supportOrder.address || property?.address || property?.addressRaw) || "Ubicación del trabajo";
+  const addressLines = bookingMessageAddressLines(supportOrder, property?.address || property?.addressRaw || "Dirección pendiente", {
+    appointment, languageCode: 'es',
+  });
   const end = text(supportOrder.appointmentEndTime);
   const reason = text(supportOrder.supportReason || supportOrder.technicianInstructions);
   const primaryName = text(primaryVan?.name || primaryVan?.id) || "Van principal";
@@ -149,7 +153,8 @@ function renderAdhocPrimaryVanText({
     "🚨 *APOYO ASIGNADO · MISMO DÍA*",
     `*Van principal:* ${primaryName}`,
     `*Cliente:* ${customer}`,
-    `*Ubicación:* ${location}`,
+    location ? `*Ubicación:* ${location}` : '',
+    ...addressLines.map((line) => `*Dirección:* ${line}`),
     `*Apoyo:* ${supportName} · ${supportTeam}`,
     `*Hora de apoyo:* ${formatClock(supportOrder.time)}${end ? ` – ${formatClock(end)}` : ""}`,
     reason ? `*Motivo:* ${reason}` : "",

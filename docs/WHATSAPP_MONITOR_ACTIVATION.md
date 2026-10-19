@@ -1,6 +1,7 @@
 # Monitor de mensajería: publicación y activación
 
-Estado de este cambio: implementación revisable, sin despliegue ni canales externos activados.
+Estado: publicación autorizada por el propietario el 2026-10-19 (merge y deploy).
+La evidencia del despliegue se registra por separado; los canales externos siguen pendientes de destinatario.
 La captura aprobada se conserva en `docs/ai/previews/whatsapp-monitoring/`.
 El monitor no envía WhatsApps, no reclama la cola y no tiene una acción de reintento.
 
@@ -19,14 +20,14 @@ El monitor no envía WhatsApps, no reclama la cola y no tiene una acción de rei
 El paquete aislado se genera con `node functions/whatsappMonitorPackage.cjs <directorio-vacío-externo>`.
 Solo exporta las tres funciones nuevas. Los servicios de dominio incluidos se utilizan para
 leer las mismas reglas del productor; no se invoca ningún método de envío desde el monitor.
-El artefacto de CI conserva el código y la resolución de dependencias. No hay trabajo de
-despliegue automático en el workflow nuevo. Revisar otros workflows antes de fusionar;
+El artefacto de CI conserva el código y la resolución de dependencias. El workflow `whatsapp-monitor.yml` valida; `whatsapp-monitor-release.yml` publica únicamente
+desde `release/whatsapp-monitor-20261019`, con HEAD igual a main. Revisar otros workflows antes de fusionar;
 usar `[merge-only]` donde los workflows existentes lo requieran para separar publicación.
 
 ## Preparación revisable, antes de activar
 
-1. Confirmar destinatarios externos reales y autorización de publicación de esta función nueva.
-   La autorización anterior cubría la corrección del incidente, no esta ampliación.
+1. Autorización de publicación recibida. Confirmar destinatario antes de configurar canales
+   externos; esa parte permanece `externalAlertsVerified:false` y visible como pendiente.
 2. Crear una identidad de ejecución dedicada: lectura de las fuentes necesarias, escritura de
    proyecciones del monitor, lectura de logs y escritura de métricas. Firestore IAM no separa
    escrituras por colección; documentar este límite y mantener el código sin mutaciones de cola.
@@ -37,8 +38,9 @@ usar `[merge-only]` donde los workflows existentes lo requieran para separar pub
    `monitorIncidents`, `monitorAudit` (45 días) y `monitorSnapshots` (2 días). Excluir de índices
    los arrays `items`, `queue`, `incidents`, `unverifiedIncidents`, `entries`, `targets` donde
    corresponda. No se necesitan reglas nuevas: estas subcolecciones privadas ya se deniegan.
-5. Publicar primero las funciones nuevas con `WHATSAPP_MONITOR_ENABLED=false`, conservar las
-   identidades de las funciones operacionales y actualizar solo los dos productores listados.
+5. Preparar el paquete aislado y la identidad dedicada, y actualizar solo los dos productores
+   listados conservando sus identidades. Publicar las nuevas funciones con el flag de runtime
+   habilitado y el control privado aún ausente: ambos controles son necesarios para ejecutarse.
    Comprobar eventos, Scheduler, API autenticada, IAM y logs sin realizar envíos de prueba.
 6. Configurar canales verificados de Cloud Monitoring. Generar cuatro documentos revisables:
    `node functions/whatsappMonitorAlertPlan.cjs demac-corporation projects/demac-corporation/notificationChannels/ID`.

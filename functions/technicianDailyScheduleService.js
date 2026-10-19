@@ -1,5 +1,5 @@
 const { referenceMessageParts } = require('./bookingVisitReferences');
-const { bookingLocationLabel } = require('./bookingLocationDisplay');
+const { bookingLocationLabel, bookingMessageAddressLines } = require('./bookingLocationDisplay');
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
 const { endTimeFromOccupiedSlots } = require("./bookingCapacityAvailability");
 const { AFTERNOON_SLOTS, isHalfDay, occupiedSlots } = require("./bookingSchedulingPrimitives");
@@ -343,7 +343,8 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const access = propertyAccessInstructions(property);
   const district = geographicDistrict(property);
   const zone = geographicZone(property);
-  const locationName = bookingLocationLabel(order, appointment) || propertyLocationName(property);
+  const bookedLocation = bookingLocationLabel(order, appointment);
+  const locationName = bookedLocation ? '' : propertyLocationName(property);
   const vanLabel = normalizedText(van.name || van.id) || "Van";
   const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
   const header = [`*DEMAC · ${headerLabel}*`, `*Trabajo ${sequence} · ${formatScheduleDate(order.date)}*`];
@@ -358,7 +359,10 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   if (contact?.name) customerBlock.push(`*Contacto:* ${contact.name}`);
   const locationBlock = [];
   if (locationName) locationBlock.push(`*Location:* ${locationName}`);
-  locationBlock.push(`*Dirección:* ${normalizedText(order.address || property?.address || property?.addressRaw) || "Dirección pendiente"}`);
+  const addressLines = bookingMessageAddressLines(order, property?.address || property?.addressRaw || "Dirección pendiente", {
+    appointment, languageCode: 'es',
+  });
+  locationBlock.push(...addressLines.map((line) => `*Dirección:* ${normalizedText(line) || "Dirección pendiente"}`));
   if (district) locationBlock.push(`*Distrito:* ${district}`);
   if (zone) locationBlock.push(`*Zona:* ${zone}`);
   if (access) locationBlock.push(`*Acceso:* ${access}`);
