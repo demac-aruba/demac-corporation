@@ -27,7 +27,7 @@ async function main(){
   const policy=await api(`https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,{options:{requestedPolicyVersion:3}});
   result.monitorRoles={httpStatus:policy.response.status,bindings:(policy.data.bindings||[]).filter(b=>b.members?.includes('serviceAccount:demac-messaging-health-monitor@'+PROJECT+'.iam.gserviceaccount.com')).map(b=>({role:b.role,conditional:Boolean(b.condition)}))};
   result.indexInspection=[];
-  for(const suffix of ['whatsappOutboundQueue/indexes?pageSize=100','whatsappOutboundQueue/indexes','-/indexes?pageSize=100']) {
+  for(const suffix of ['whatsappOutboundQueue/indexes']) {
     const indexes=await api('https://firestore.googleapis.com/v1/projects/demac-corporation/databases/(default)/collectionGroups/'+suffix);
     result.indexInspection.push({suffix,httpStatus:indexes.response.status,errorCode:indexes.data.error?.status||null,errorMessage:String(indexes.data.error?.message||'').slice(0,500),returnedCount:(indexes.data.indexes||[]).length,nextPage:Boolean(indexes.data.nextPageToken),queueIndexes:(indexes.data.indexes||[]).filter(x=>x.name?.includes('/collectionGroups/whatsappOutboundQueue/')).map(x=>({state:x.state,queryScope:x.queryScope,fields:x.fields}))});
   }
