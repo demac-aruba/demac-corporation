@@ -33,6 +33,14 @@ Evidence: [initial audit](https://github.com/demac-aruba/demac-corporation/actio
 [confirmed error and configuration](https://github.com/demac-aruba/demac-corporation/actions/runs/39259223058).
 Outputs contain aggregate metadata and error categories, not customer data or secrets.
 
+The [09:28 Aruba recovery inventory](https://github.com/demac-aruba/demac-corporation/actions/runs/39260361997)
+still found 52 pending records: 38 for today's schedule, one carrying the 17 October
+schedule date and 13 without a schedule date. Six were created before today; creation
+age alone does not prove their content is obsolete. Seven extra schedule records had
+identical recipient, logical schedule identity, content, media and bundle cursor to
+another pending record. Content was compared only in memory; no body, recipient or
+content hash was printed. One bundle had already sent an earlier part.
+
 ## Scope and governance
 
 Communication Authority and the existing `whatsappOutboundQueue` remain authoritative.
@@ -76,7 +84,9 @@ Local Node 24.19.0 verification (production target Node 22):
 - `npm run test:transactional-whatsapp --prefix functions`: 133 PASS, zero failed/skipped.
 - Five reference/gateway/media test files: 36 PASS, zero failed/skipped.
 - `git diff --check`: PASS.
-- Node 22 validation: pending branch CI before release approval.
+- Node 22.23.3 CI repeated all 192 tests: PASS, zero failed/skipped.
+  [Verification run](https://github.com/demac-aruba/demac-corporation/actions/runs/39260162299).
+  Separate connector, transactional and TypeScript/web validation workflows also passed.
 
 ## Separate Solo Maintainer Adversarial Review
 
@@ -91,7 +101,7 @@ later message from overtaking its unfinished attachment. No automatic text retry
 recreation was added, so ambiguous provider sends do not receive a new retry policy here.
 The SDK call is bounded; its eventual late completion cannot overwrite a newer cache.
 
-Decision: prepared for review, production activation blocked pending owner authorization
+Decision: PASS with recorded follow-up, production activation blocked pending owner authorization
 and review of the accumulated queue. No production repair has been claimed.
 
 ## Release and recovery boundary
