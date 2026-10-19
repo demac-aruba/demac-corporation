@@ -50,3 +50,19 @@ and, if needed, reads again before enabling monetary controls. Existing drafts r
 their original expected version and display a conflict on reacquisition; they are never
 silently rebased. Exact committed retries remain valid without duplicate writes.
 The actual appointment notification trigger ignores the version-only change.
+
+## 2026-10-19: one activation per open appointment dialog
+
+The owner-requested tab performance correction changes only the client activation
+lifetime above. The first explicit Importes y pagos visit starts the existing lease;
+internal Resumen / Importes / Historial changes retain it until the dialog closes,
+the appointment/principal changes, permissions are revoked or an authority blocker
+appears. History-only access and prefetch never acquire. The same server expiry,
+renewal, token, expected-version and exact-replay rules remain authoritative.
+
+Keeping the lease avoids unnecessary version fences, record reads and requotes.
+Keeping hidden financial content mounted avoids catalog reloads. After 30 seconds,
+pristine visible tab changes still revalidate; drafts and uncertain writes retain
+their suspension and conflict guards. Other operators can read while the original
+operator keeps this appointment dialog open; closing it or server expiry allows
+handoff. No new cache, authority, schema, migration or backend release is introduced.

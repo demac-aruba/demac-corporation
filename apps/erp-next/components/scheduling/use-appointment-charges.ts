@@ -9,7 +9,7 @@ const REVALIDATE_AFTER_MS = 30_000;
 // dialogs or authenticated sessions, and simultaneous read requests share a flight.
 // LiveSchedulingOverview keys its subtree by principal ID/active/capabilities; the
 // drawer keys the workspace by appointment ID, also clearing drafts on owner change.
-export function useAppointmentCharges(appointmentId: string, active: boolean, suspended: boolean) {
+export function useAppointmentCharges(appointmentId: string, active: boolean, suspended: boolean, view: 'charges' | 'history' = 'charges') {
   const owner = useMemo(() => ({ alive: false, updatedAt: 0, version: -1, flight: null as Promise<boolean> | null }), [appointmentId]);
   const [snapshot, setSnapshot] = useState({ owner, record: null as ChargeRecord | null, error: '', loading: true, updatedAt: 0 });
   const reload = useCallback((): Promise<boolean> => {
@@ -57,7 +57,9 @@ export function useAppointmentCharges(appointmentId: string, active: boolean, su
       window.removeEventListener('focus', refreshIfStale);
       document.removeEventListener('visibilitychange', refreshIfStale);
     };
-  }, [active, suspended, owner, reload]);
+    // History and finance share a mounted resource and edit session. A view change
+    // still checks freshness, without reloading a recent snapshot or an open draft.
+  }, [active, suspended, owner, reload, view]);
 
   return { ...(snapshot.owner === owner ? snapshot : { record: null, error: '', loading: true, updatedAt: 0 }), reload, ensureVersion };
 }
