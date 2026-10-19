@@ -1,0 +1,27 @@
+name: Read-only WhatsApp monitor access diagnosis
+on:
+  push:
+    branches: [chore/whatsapp-monitor-access-20261019]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: node --check scripts/whatsapp-monitor-access-audit.cjs && node scripts/whatsapp-monitor-access-audit.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-monitor-access
+          path: ${{ runner.temp }}/whatsapp-monitor-access.json
+          if-no-files-found: error
+          retention-days: 30
