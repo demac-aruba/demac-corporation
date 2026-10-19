@@ -84,4 +84,5 @@ async function main() {
     return { count: rows.length, limitReached: rows.length===80, counts };
   });
 }
-main().catch(error => { emit('fatal', safeError(error)); process.exitCode = 1; });
+module.exports = { category, summarize };
+if (require.main === module) main().catch(error => { emit('fatal', safeError(error)); process.exitCode = 1; });
