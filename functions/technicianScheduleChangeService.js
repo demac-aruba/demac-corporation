@@ -188,7 +188,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
     return { ...result, vanId: van.id, groupName: config.groupName, groupJid: config.groupJid };
   }
 
-  async function queueSameDayChange({ order, eventId, reason = "same-day-schedule-change" } = {}) {
+  async function queueSameDayChange({ order, eventId, sourceVersionMs, reason = "same-day-schedule-change" } = {}) {
     if (!order?.id || !eventId) return { queued: false, created: false, reason: "missing-change-identity" };
     const day = await dailySchedules.loadDay(order.date);
     const vanId = resolveCanonicalVanId(order.vanId) || text(order.vanId);
@@ -220,6 +220,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
       messages: referenceMessageParts({ text: message, appointment, order: currentOrder, client, sequence }),
       metadata: {
         notificationType: "van-same-day-schedule-change",
+        ...(Number.isFinite(sourceVersionMs) ? { monitoringSourceVersionMs: sourceVersionMs } : {}),
         referencesVersion: appointment?.visitReferences?.version || 0,
         workOrderId: currentOrder.id,
         appointmentId: currentOrder.appointmentId || null,
@@ -237,7 +238,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
     };
   }
 
-  async function queueAdhocSupportChange({ order, eventId, reason = "same-day-adhoc-support" } = {}) {
+  async function queueAdhocSupportChange({ order, eventId, sourceVersionMs, reason = "same-day-adhoc-support" } = {}) {
     if (!order?.id || !eventId) return { queued: false, created: false, reason: "missing-change-identity" };
     if (!isAdhocSupportOrder(order)) return { queued: false, created: false, reason: "not-adhoc-support" };
 
@@ -290,6 +291,7 @@ function createTechnicianScheduleChangeService({ db } = {}) {
 
     const sharedMetadata = {
       notificationType: "van-adhoc-support-change",
+      ...(Number.isFinite(sourceVersionMs) ? { monitoringSourceVersionMs: sourceVersionMs } : {}),
       referencesVersion: appointment?.visitReferences?.version || 0,
       workOrderId: currentOrder.id,
       primaryWorkOrderId: primaryOrder.id,

@@ -464,6 +464,32 @@ function deterministicPendingQueueId({ dateKey, vanId, slot, deliveryKey = "auto
   return safeDocumentId(`van-daily-pending-${dateKey}-${vanId}-${normalizedText(slot).replace(/\D/g, "")}-${deliveryKey}`);
 }
 
+function planVanDailyMessages({ van, dateKey, day }) {
+  const rawOrders = day.workOrders
+    .filter((order) => order.vanId === van.id)
+    .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
+  const orders = collapseContiguousSupportOrders(rawOrders);
+  const pendingSlots = pendingSlotsForVan({
+    van,
+    dateKey,
+    capacityOrders: day.capacityOrders,
+    services: day.services,
+    staffProfiles: day.staffProfiles,
+    dailyVanAssignments: day.dailyVanAssignments,
+    staffAbsences: day.staffAbsences,
+    halfDaySchedules: day.halfDaySchedules,
+  });
+  const lunch = planLunchBreak(orders);
+  const workSequence = new Map(orders.map((order, index) => [order.id, index + 1]));
+  const timeline = [
+    ...orders.map((order) => ({ type: "work", time: order.time, order })),
+    ...pendingSlots.map((slot) => ({ type: "pending", time: slot, slot })),
+    ...(lunch ? [{ type: "lunch", time: minutesToTime(lunch.startMinutes), lunch }] : []),
+  ].sort((a, b) => normalizedText(a.time).localeCompare(normalizedText(b.time)) || a.type.localeCompare(b.type));
+
+  return { rawOrders, orders, pendingSlots, lunch, workSequence, timeline };
+}
+
 function createTechnicianDailyScheduleService({ db } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required for van daily schedules.");
   const whatsapp = createWhatsAppTransactionalService({ db });
@@ -628,31 +654,11 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     let lunchBreakCount = 0;
     let pendingPeriodCount = 0;
     for (const van of vans) {
-      const rawOrders = day.workOrders
-        .filter((order) => order.vanId === van.id)
-        .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
-      const orders = collapseContiguousSupportOrders(rawOrders);
-      const pendingSlots = pendingSlotsForVan({
-        van,
-        dateKey,
-        capacityOrders: day.capacityOrders,
-        services: day.services,
-        staffProfiles: day.staffProfiles,
-        dailyVanAssignments: day.dailyVanAssignments,
-        staffAbsences: day.staffAbsences,
-        halfDaySchedules: day.halfDaySchedules,
-      });
+      const { rawOrders, orders, pendingSlots, lunch, workSequence, timeline } = planVanDailyMessages({ van, dateKey, day });
       workOrderCount += rawOrders.length;
       scheduleVisitCount += orders.length;
       pendingPeriodCount += pendingSlots.length;
-      const lunch = planLunchBreak(orders);
       if (lunch) lunchBreakCount += 1;
-      const workSequence = new Map(orders.map((order, index) => [order.id, index + 1]));
-      const timeline = [
-        ...orders.map((order) => ({ type: "work", time: order.time, order })),
-        ...pendingSlots.map((slot) => ({ type: "pending", time: slot, slot })),
-        ...(lunch ? [{ type: "lunch", time: minutesToTime(lunch.startMinutes), lunch }] : []),
-      ].sort((a, b) => normalizedText(a.time).localeCompare(normalizedText(b.time)) || a.type.localeCompare(b.type));
 
       let previousQueueId = null;
       for (const item of timeline) {
@@ -734,3 +740,5 @@ module.exports.supportUnitCount = supportUnitCount;
 module.exports.technicianInstructions = technicianInstructions;
 module.exports.timeToMinutes = timeToMinutes;
 module.exports.workSummary = workSummary;
+
+module.exports.planVanDailyMessages = planVanDailyMessages;
