@@ -41,6 +41,8 @@ async function main(){
     const svc=await api('https://serviceusage.googleapis.com/v1/projects/1053571783393/services/'+service+'.googleapis.com');
     result.requiredApis.push({service,httpStatus:svc.response.status,state:svc.data.state||null});
   }
+  const registry=await api('https://artifactregistry.googleapis.com/v1/projects/demac-corporation/locations/us-central1/repositories/gcf-artifacts');
+  result.functionArtifactPolicy={httpStatus:registry.response.status,cleanupPolicyIds:Object.keys(registry.data.cleanupPolicies||{}),cleanupPolicyDryRun:registry.data.cleanupPolicyDryRun||false,labels:registry.data.labels||{}};
   fs.writeFileSync(path.join(process.env.RUNNER_TEMP,'whatsapp-monitor-access.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify(result,null,2));
 }
