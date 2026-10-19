@@ -6,8 +6,12 @@ PR607 fusionado en `35574f3bf59fbdfc401817f81589354199cea1b6`. El intento de pub
 `39316901040` se detuvo antes de tocar funciones operacionales, índices o control de activación.
 La inspección de solo lectura `39317349409` confirmó que la identidad de CI no tiene
 `iam.serviceAccounts.create` ni `resourcemanager.projects.setIamPolicy`; IAM API sí está habilitada.
-Un administrador debe ejecutar una vez `scripts/whatsapp-monitor-provision-identity.sh`.
-CI verifica después la cuenta y sus cuatro roles incondicionales, sin modificar permisos de proyecto.
+El propietario creó por consola `demac-messaging-health-monitor@demac-corporation.iam.gserviceaccount.com`
+y mostró los cuatro roles requeridos el 2026-10-19 a las 17:23 UTC-4. Se adapta el release a esa
+identidad existente. El script opcional `scripts/whatsapp-monitor-provision-identity.sh` queda
+alineado con el mismo nombre; no se necesita una segunda cuenta. CI verifica la cuenta, sus
+cuatro roles incondicionales y Cloud Monitoring API habilitada antes de realizar mutaciones.
+No modifica permisos de proyecto ni habilita APIs.
 La captura aprobada se conserva en `docs/ai/previews/whatsapp-monitoring/`.
 El monitor no envía WhatsApps, no reclama la cola y no tiene una acción de reintento.
 

@@ -9,7 +9,7 @@ const { packageMonitor } = require('../functions/whatsappMonitorPackage.cjs');
 const { validateLock } = require('./booking-dwelling-candidate-validation.cjs');
 const PROJECT='demac-corporation', REGION='us-central1';
 const BRANCH='release/whatsapp-monitor-20261019';
-const ACCOUNT=`demac-messaging-monitor@${PROJECT}.iam.gserviceaccount.com`;
+const ACCOUNT=`demac-messaging-health-monitor@${PROJECT}.iam.gserviceaccount.com`;
 const NAMES=['whatsappMessagingMonitor','whatsappMessagingMonitorTick','whatsappMessagingObserveOrder'];
 const ROLES=['roles/datastore.user','roles/logging.viewer','roles/monitoring.metricWriter','roles/firebaseauth.viewer'];
 const GROUPS={monitorExpectations:['targets'],monitorDays:['entries'],monitorIncidents:['items'],monitorAudit:[],monitorSnapshots:['queue','incidents','unverifiedIncidents']};
@@ -92,6 +92,8 @@ async function main() {
       const account=await api(accountUrl,'GET',undefined,true);
       const policy=await api(`https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,'POST',{options:{requestedPolicyVersion:3}});
       verifyIdentityPolicy(account,policy);
+      const monitoring=await api('https://serviceusage.googleapis.com/v1/projects/1053571783393/services/monitoring.googleapis.com');
+      assert.equal(monitoring.state,'ENABLED','Administrator must enable the Cloud Monitoring API');
       step('additive-index');
       const indexUrl=adminBase+'whatsappOutboundQueue/indexes';
       const matches=index=>index.queryScope==='COLLECTION'&&index.fields?.length===3&&index.fields[0].fieldPath==='status'&&index.fields[0].order==='ASCENDING'&&index.fields[1].fieldPath==='createdAt'&&index.fields[1].order==='ASCENDING'&&index.fields[2].fieldPath==='__name__';
