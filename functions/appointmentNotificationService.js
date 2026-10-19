@@ -1,3 +1,4 @@
+const { appointmentMessageCopy } = require('./appointmentCommunicationRenderer');
 const { FieldValue } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { bookingMessageAddress, bookingMessageAddressLines } = require("./bookingLocationDisplay");
@@ -153,6 +154,7 @@ function createAppointmentNotificationService({ db } = {}) {
       templateName,
       languageCode,
       bodyParameters,
+      messageCopy: appointmentMessageCopy(notificationType, bodyParameters, languageCode, { addressLines: bookingMessageAddressLines(order, client.address, { languageCode }) }),
       metadata: {
         clientId: client.id,
         appointmentId: order.appointmentId || null,

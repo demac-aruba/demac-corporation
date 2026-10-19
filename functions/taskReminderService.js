@@ -1,3 +1,4 @@
+const { renderMessageCopy } = require('./messageCopy');
 const TASK_TIME_ZONE = "America/Aruba";
 
 const DEFAULT_REMINDER_POLICY = Object.freeze({
@@ -213,31 +214,31 @@ function dailyCheckpointLines(task, now = new Date(), limit = 20) {
   return lines;
 }
 
-function reminderMessage(task, opportunity, assigneeName, now = new Date()) {
+function reminderMessage(task, opportunity, assigneeName, now = new Date(), copy) {
   const name = String(assigneeName || task?.assigneeNameSnapshot || "team member").trim();
   const taskLabel = `${task?.taskNumber || "Task"} – ${task?.title || "Untitled task"}`;
   const due = formatArubaDateTime(task?.dueAt);
   const checkpointBlock = checkpointReminderBlock(task, now);
   let intro;
-  if (opportunity?.kind === "pre_deadline_24h") intro = `Hi ${name}, reminder: ${taskLabel} is due in 24 hours. Deadline: ${due}.`;
-  else if (opportunity?.kind === "pre_deadline_3h") intro = `Hi ${name}, ${taskLabel} is due in about 3 hours. Deadline: ${due}.`;
-  else if (opportunity?.kind === "pre_deadline_1h") intro = `Hi ${name}, final reminder: ${taskLabel} is due in about 1 hour. Deadline: ${due}.`;
-  else if (opportunity?.kind === "overdue") intro = `Hi ${name}, ${taskLabel} is overdue. Original deadline: ${due}.`;
-  else intro = `Hi ${name}, ${taskLabel} has reached its deadline (${due}).`;
-  return `${intro}\n\n${checkpointBlock}\n\nPlease update the checkpoint progress in DEMAC ERP.`;
+  if (opportunity?.kind === "pre_deadline_24h") intro = `reminder: ${taskLabel} is due in 24 hours. Deadline: ${due}.`;
+  else if (opportunity?.kind === "pre_deadline_3h") intro = `${taskLabel} is due in about 3 hours. Deadline: ${due}.`;
+  else if (opportunity?.kind === "pre_deadline_1h") intro = `final reminder: ${taskLabel} is due in about 1 hour. Deadline: ${due}.`;
+  else if (opportunity?.kind === "overdue") intro = `${taskLabel} is overdue. Original deadline: ${due}.`;
+  else intro = `${taskLabel} has reached its deadline (${due}).`;
+  return renderMessageCopy('task_reminder', 'en', { name, company: 'DEMAC Professional Cooling Solutions' }, `${intro}\n\n${checkpointBlock}`, copy);
 }
 
-function dailyGreetingMessage(assigneeName) {
+function dailyGreetingMessage(assigneeName, copy) {
   const name = String(assigneeName || "team member").trim();
-  return `Good morning, ${name}.\nHere are your pending DEMAC tasks for today.\n\nPlease check the following messages.`;
+  return renderMessageCopy('task_daily_greeting', 'en', { name, company: 'DEMAC Professional Cooling Solutions' }, '', copy);
 }
 
-function dailyTaskReminderMessage(task, now = new Date()) {
+function dailyTaskReminderMessage(task, now = new Date(), copy, assigneeName) {
   const number = String(task?.taskNumber || "Task").trim();
   const title = String(task?.title || "Untitled task").trim();
   const due = formatArubaDateTime(task?.dueAt);
   const pendingLines = dailyCheckpointLines(task, now);
-  return [
+  const details = [
     number,
     `*${title}*`,
     '',
@@ -246,10 +247,11 @@ function dailyTaskReminderMessage(task, now = new Date()) {
     '*Pending:*',
     ...pendingLines,
   ].join('\n');
+  return renderMessageCopy('task_daily_item', 'en', { name: assigneeName || task?.assigneeNameSnapshot || 'team member', company: 'DEMAC Professional Cooling Solutions' }, details, copy);
 }
 
-function dailyClosingMessage() {
-  return `Please open DEMAC ERP to update your progress or add any new information.\n\n— DEMAC ERP`;
+function dailyClosingMessage(copy, assigneeName) {
+  return renderMessageCopy('task_daily_closing', 'en', { name: assigneeName || 'team member', company: 'DEMAC Professional Cooling Solutions' }, '', copy);
 }
 
 function dailySummaryMessage(tasks, assigneeName, now = new Date()) {

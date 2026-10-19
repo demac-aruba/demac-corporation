@@ -39,6 +39,7 @@ const router = require("./whatsappCopilotRouter");
 // enqueue only into the existing WhatsApp outbound authority. None of these
 // surfaces import, mutate, or derive work from Scheduling & Dispatch.
 module.exports = {
+  messageCopySettings: require('./messageCopySettingsFunction').messageCopySettings,
   quickbooksSandbox: require('./quickbooksSandbox').quickbooksSandbox,
   projectAuthority: require('./projectAuthority').projectAuthority,
   ...core,

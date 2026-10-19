@@ -53,3 +53,13 @@ test('standalone package exports monitoring only and refuses repository overwrit
 test('external alert plan requires explicit verified channels and monitors its own failure',()=>{
   assert.throws(()=>alertPlan('demo-demac-health',[]));assert.throws(()=>alertPlan('demo-demac-health',['projects/other-project/notificationChannels/123']));const plan=alertPlan('demo-demac-health',['projects/demo-demac-health/notificationChannels/123']);assert.equal(plan.length,4);assert.equal(plan[2].conditions[0].conditionAbsent.duration,'300s');assert.match(plan[3].conditions[0].conditionMatchedLog.filter,/messaging-observer/);
 });
+test('isolated monitor package includes the explicitly registered message catalog dependency',()=>{
+  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'demac-monitor-copy-'));
+  try {
+    const dest=packageMonitor(path.join(tmp,'source'));
+    const catalog=JSON.parse(fs.readFileSync(path.join(dest,'data/message-copy-catalog.json'),'utf8'));
+    assert.ok(catalog.some(item=>item.id==='appointment_confirmation'));
+    assert.ok(catalog.some(item=>item.id==='van_work_order'));
+    assert.ok(!fs.existsSync(path.join(dest,'messageCopySettingsFunction.js')));
+  } finally { fs.rmSync(tmp,{recursive:true,force:true}); }
+});

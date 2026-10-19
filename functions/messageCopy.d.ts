@@ -1,0 +1,10 @@
+export type CopyFields = { greeting: string; introduction: string; closing: string };
+export type CopyDefinition = { id: string; label: string; group: string; description: string; languages: string[]; variables: string[]; defaults: Record<string, CopyFields>; sampleDetails: Record<string, string> };
+export const CATALOG: CopyDefinition[];
+export const FIELDS: (keyof CopyFields)[];
+export const LIMITS: Record<keyof CopyFields, number>;
+export function definition(id: string): CopyDefinition | undefined;
+export function defaultsFor(id: string, language: string): CopyFields;
+export function validateFields(id: string, language: string, fields: CopyFields): CopyFields;
+export function renderMessageCopy(id: string, language: string, variables: Record<string, string>, details: string, override?: CopyFields | null): string;
+export function previewMessage(id: string, language: string, fields: CopyFields): string;

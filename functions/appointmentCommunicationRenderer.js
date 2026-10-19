@@ -160,78 +160,23 @@ function localizeServiceDescription(order = {}, fallback = "", languageCode = "e
   return explicitCustomerDescription || String(fallback || "").trim();
 }
 
-function renderAppointmentText(notificationType, bodyParameters, languageCode, options = {}) {
-  const [name, date, time, address, service] = bodyParameters.map((value) => String(value || "").trim());
-  const reminder = notificationType === "appointment-reminder";
-  const brand = "*DEMAC Professional Cooling Solutions*";
-  const greeting = greetingForLanguage(languageCode, name, options.now);
-  const addressLabel = languageCode === 'es' ? 'Dirección' : ['pap', 'nl'].includes(languageCode) ? 'Adres' : 'Address';
+function appointmentMessageCopy(notificationType, bodyParameters, languageCode, options = {}) {
+  const [name, date, time, address, service] = bodyParameters.map(value => String(value || '').trim());
+  const language = SUPPORTED_LANGUAGES.has(languageCode) ? languageCode : 'en';
+  const labels = { en: ['Date', 'Time', 'Address', 'Service'], es: ['Fecha', 'Hora', 'Dirección', 'Servicio'], nl: ['Datum', 'Tijd', 'Adres', 'Service'], pap: ['Fecha', 'Ora', 'Adres', 'Servicio'] }[language];
   const addressLines = Array.isArray(options.addressLines) && options.addressLines.length ? options.addressLines : [address];
-  const addressBlock = addressLines.map((line) => `*${addressLabel}:* ${String(line || '').trim()}`).join('\n');
-
-  if (languageCode === "pap") {
-    return [
-      greeting,
-      "",
-      reminder
-        ? `Esaki ta un recordatorio pa bo cita cu ${brand}.`
-        : `Nos ta confirma bo cita cu ${brand}.`,
-      "",
-      `*Fecha:* ${date}`,
-      `*Ora:* ${time}`,
-      addressBlock,
-      `*Servicio:* ${service}`,
-      "",
-      "Si bo mester haci algun cambio, contesta e mensahe aki.",
-    ].join("\n");
-  }
-  if (languageCode === "es") {
-    return [
-      greeting,
-      "",
-      reminder
-        ? `Este es un recordatorio de tu cita con ${brand}.`
-        : `Tu cita con ${brand} ha sido confirmada.`,
-      "",
-      `*Fecha:* ${date}`,
-      `*Hora:* ${time}`,
-      addressBlock,
-      `*Servicio:* ${service}`,
-      "",
-      "Si necesitas hacer algún cambio, responde a este mensaje.",
-    ].join("\n");
-  }
-  if (languageCode === "nl") {
-    return [
-      greeting,
-      "",
-      reminder
-        ? `Dit is een herinnering voor uw afspraak met ${brand}.`
-        : `Uw afspraak met ${brand} is bevestigd.`,
-      "",
-      `*Datum:* ${date}`,
-      `*Tijd:* ${time}`,
-      addressBlock,
-      `*Service:* ${service}`,
-      "",
-      "Als u iets wilt wijzigen, kunt u op dit bericht reageren.",
-    ].join("\n");
-  }
-  return [
-    greeting,
-    "",
-    reminder
-      ? `This is a reminder for your appointment with ${brand}.`
-      : `Your appointment with ${brand} has been confirmed.`,
-    "",
-    `*Date:* ${date}`,
-    `*Time:* ${time}`,
-    addressBlock,
-    `*Service:* ${service}`,
-    "",
-    "If you have any questions or need to make a change to your appointment, please feel free to reply to this message. We’re happy to help!",
-  ].join("\n");
+  return {
+    id: notificationType === 'appointment-reminder' ? 'appointment_reminder' : 'appointment_confirmation',
+    language,
+    variables: { name, company: 'DEMAC Professional Cooling Solutions', time_greeting: greetingForLanguage('pap', '', options.now).replace(/ ,$/, '') },
+    details: [`*${labels[0]}:* ${date}`, `*${labels[1]}:* ${time}`, ...addressLines.map(line => `*${labels[2]}:* ${String(line || '').trim()}`), `*${labels[3]}:* ${service}`].join('\n'),
+  };
 }
+function renderAppointmentText(notificationType, bodyParameters, languageCode, options = {}) {
+  const copy = appointmentMessageCopy(notificationType, bodyParameters, languageCode, options);
+  return require('./messageCopy').renderMessageCopy(copy.id, copy.language, copy.variables, copy.details);
+}
+module.exports.appointmentMessageCopy = appointmentMessageCopy;
 
 function papiamentoTokens(value) {
   return String(value || "").match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || [];
