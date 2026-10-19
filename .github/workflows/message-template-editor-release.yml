@@ -1,0 +1,51 @@
+name: Controlled message template editor release
+on:
+  pull_request:
+    paths:
+      - 'scripts/message-template-*'
+      - '.github/workflows/message-template-editor-release.yml'
+  push:
+    branches: [release/message-template-editor-20261019]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --test scripts/message-template-release.test.cjs scripts/appointment-finance-source-update.test.cjs scripts/appointment-finance-transport.test.cjs
+      - run: node --check scripts/message-template-editor-release.cjs && node --check scripts/message-template-settings-install.cjs && node --check scripts/message-template-runtime-smoke.cjs && node --check scripts/message-template-api-smoke.cjs
+  publish:
+    if: github.repository == 'demac-aruba/demac-corporation' && github.ref == 'refs/heads/release/message-template-editor-20261019'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f
+      - name: Publish authenticated settings API and preserve eight producer configurations
+        run: node scripts/message-template-editor-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: message-template-editor-release
+          path: ${{ runner.temp }}/message-template-editor-release/summary.json
+          if-no-files-found: error
+          retention-days: 90
