@@ -140,3 +140,5 @@
 /* Preserve catalog, scroll and inputs when the appointment shows its history. */
 .retainedView{display:contents}
 .hiddenView{display:none}
+
+.paymentActions{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px}.payment .editPayment{color:var(--charge-blue)}

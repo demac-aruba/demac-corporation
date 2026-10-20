@@ -10,7 +10,7 @@ const { EDIT_ACTIONS, editingRef, assertEditing, changeEditing } = require('./ap
 const { minimumProjectionPrice, bookingProjectionLines } = require('./appointmentProjectionPricing');
 const SOURCE = 'appointment-operational';
 const ACTIONS = new Set(['list_charge_services', 'quote_appointment_charges', 'get_appointment_charges', 'save_appointment_estimate',
-  'finalize_appointment_charges', 'record_appointment_payment', 'void_appointment_payment', ...EDIT_ACTIONS]);
+  'finalize_appointment_charges', 'record_appointment_payment', 'correct_appointment_payment', 'void_appointment_payment', ...EDIT_ACTIONS]);
 const WRITERS = new Set(['admin', 'owner', 'super_admin', 'superadmin', 'supervisor', 'operations', 'office', 'operator', 'office_operator', 'finance', 'accounting', 'accountant']);
 const METHODS = new Set(['cash', 'transfer', 'pos', 'suave']);
 const MAX_CENTS = 100000000;
@@ -61,9 +61,21 @@ function paymentInput(value, now) {
   if (!METHODS.has(value.method)) fail('payment_method', 'Selecciona efectivo, transferencia, POS o SUAVE.');
   const reference = clean(value.reference, 180);
   if (value.method !== 'cash' && !reference) fail('payment_reference', 'Ingresa la referencia de la transferencia o transacción.');
-  const receivedAt = clean(value.receivedAt, 40) || now.toISOString();
+  const receivedDate = value.receivedDate;
+  // A business date has day precision. The compatible receivedAt is Aruba's
+  // start of that day, never the timestamp of entry (createdAt/updatedAt).
+  if (receivedDate !== undefined && (typeof receivedDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)
+    || !Number.isFinite(Date.parse(`${receivedDate}T00:00:00Z`))
+    || new Date(`${receivedDate}T00:00:00Z`).toISOString().slice(0, 10) !== receivedDate
+    || receivedDate > new Date(now.getTime() - 4 * 3600000).toISOString().slice(0, 10))) fail('payment_date', 'Selecciona una fecha válida que no esté en el futuro.');
+  const receivedAt = receivedDate !== undefined ? `${receivedDate}T00:00:00-04:00` : clean(value.receivedAt, 40) || now.toISOString();
   if (!/^\d{4}-\d{2}-\d{2}T/.test(receivedAt) || !Number.isFinite(Date.parse(receivedAt)) || Date.parse(receivedAt) > now.getTime() + 60000) fail('payment_date', 'La fecha de recepción no puede estar en el futuro.');
-  return { amountCents, method: value.method, reference, receivedAt: new Date(receivedAt).toISOString(), note: clean(value.note, 700) };
+  return { amountCents, method: value.method, reference, receivedAt: new Date(receivedAt).toISOString(),
+    ...(receivedDate !== undefined ? { receivedDate } : {}), note: clean(value.note, 700) };
+}
+function paymentSnapshot(payment) {
+  return { amountCents: payment.amountCents, method: payment.method, reference: payment.reference || '',
+    receivedAt: payment.receivedAt, ...(payment.receivedDate ? { receivedDate: payment.receivedDate } : {}), note: payment.note || '' };
 }
 function initialInput(input) {
   if (input === undefined || input === null) return null;
@@ -320,7 +332,7 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       const candidates = await candidateEvidence({ db, get, appointment, appointmentId });
       const blocker = receiptBlocker(payments, state) || candidates.blocker || await legacyBlocker({ db, get, appointment, appointmentId });
       const events = await get(ref.collection('chargeEvents').orderBy('at','desc').limit(100));
-      return { success: true, state: appointment.jobCharges || null, payments: blocker ? [] : payments, blocker, candidateEvidence: candidates,
+      return { success: true, state: appointment.jobCharges || null, payments: blocker ? [] : payments, blocker, candidateEvidence: candidates, paymentCorrections: true,
         workItems: bookingProjectionLines(appointment),
         history: events.docs.map(doc => ({ ...doc.data(), id: doc.id })), appointmentStatus: appointment.status };
       });
@@ -350,7 +362,7 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       if (blocker) fail('charge_reconciliation', blocker, 409);
       const next = { ...current, version: current.version + 1, updatedAt: now.toISOString(), updatedBy: actor.id };
       const audit = { action, fingerprint, at: now.toISOString(), actor, version: next.version, requestId };
-      let receipt = null, receiptRef = null, voidRef = null, voidPatch = null;
+      let receipt = null, receiptRef = null, voidRef = null, voidPatch = null, correctionRef = null, correctionPatch = null;
       if (action === 'save_appointment_estimate' || action === 'finalize_appointment_charges') {
         if (['cancelled','canceled'].includes(appointment.status)) fail('charge_cancelled', 'La cita está cancelada; conserva sus importes e historial.', 409);
         if (action === 'save_appointment_estimate' && current.final) fail('charge_final_exists', 'El monto final ya está confirmado; usa una corrección de cierre con motivo.', 409);
@@ -385,6 +397,39 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
         next.paymentCount++;
         audit.paymentId = paymentId;
         audit.amountCents = payment.amountCents;
+        audit.paymentAfter = paymentSnapshot(payment);
+      } else if (action === 'correct_appointment_payment') {
+        const reason = clean(data.reason, 700);
+        if (!reason) fail('payment_correction_reason', 'Explica por qué corriges este pago.');
+        const paymentId = id(data.paymentId, 'Pago');
+        const previous = payments.find(item => item.id === paymentId && item.appointmentId === appointmentId);
+        if (!previous || previous.source !== SOURCE || previous.status !== 'recorded') fail('payment_unavailable', 'El pago no está disponible para corrección.', 409);
+        const linked = ['invoiceId', 'qboInvoiceId', 'qboPaymentId', 'externalId', 'externalAccountingId', 'bankTransactionId', 'reconciledAt', 'reconciliationId', 'allocationId'].some(key => Boolean(previous[key]));
+        const allocations = await get(db.collection('payment_allocations').where('paymentId', '==', paymentId).limit(1));
+        if (previous.verificationStatus !== 'office_recorded' || previous.customerId !== appointment.customerId || previous.propertyId !== appointment.propertyId
+          || previous.currency !== 'AWG' || previous.amount?.currency !== 'AWG' || Math.round(Number(previous.amount?.amount) * 100) !== previous.amountCents
+          || ['invoiceIds', 'allocationIds'].some(key => previous[key] != null && previous[key] !== '' && (!Array.isArray(previous[key]) || previous[key].length > 0))
+          || linked || !allocations.empty) fail('payment_reconciled', 'Este pago requiere revisión de contabilidad antes de corregirse.', 409);
+        const payment = paymentInput(data.payment, now);
+        const previousDate = previous.receivedDate || new Date(Date.parse(previous.receivedAt) - 4 * 3600000).toISOString().slice(0, 10);
+        if (payment.receivedDate === previousDate) {
+          payment.receivedAt = previous.receivedAt;
+          if (!previous.receivedDate) delete payment.receivedDate;
+        }
+        if (previous.receivedDate && !payment.receivedDate) fail('payment_date', 'Selecciona la fecha del pago.');
+        if (payment.reference && payments.some(p => p.id !== paymentId && p.status === 'recorded' && p.method === payment.method && clean(p.reference).toLowerCase() === payment.reference.toLowerCase())) fail('payment_duplicate', 'Ya existe un pago con este método y referencia. Revisa el historial.', 409);
+        const before = paymentSnapshot(previous), after = paymentSnapshot(payment);
+        if (stable(before) === stable(after)) fail('payment_unchanged', 'No hay cambios en el pago.');
+        next.receivedCents += payment.amountCents - previous.amountCents;
+        if (next.receivedCents > MAX_CENTS) fail('payment_limit', 'El monto recibido supera el límite por cita.');
+        correctionRef = db.collection('payments').doc(paymentId);
+        correctionPatch = { ...payment, amount: { amount: payment.amountCents / 100, currency: 'AWG' },
+          updatedAt: now.toISOString(), updatedBy: actor.id, updatedByName: actor.name };
+        audit.paymentId = paymentId;
+        audit.paymentBefore = before;
+        audit.paymentAfter = after;
+        audit.amountCents = payment.amountCents - previous.amountCents;
+        audit.reason = reason;
       } else if (action === 'void_appointment_payment') {
         const reason = clean(data.reason, 700);
         if (!reason) fail('payment_void_reason', 'Explica por qué se anula este registro.');
@@ -404,6 +449,7 @@ function createAppointmentCharges({ db, clock = () => new Date() }) {
       transaction.set(auditRef, audit);
       if (receipt) transaction.set(receiptRef, receipt);
       if (voidRef) transaction.update(voidRef, voidPatch);
+      if (correctionRef) transaction.update(correctionRef, correctionPatch);
       return { success: true, state: next, paymentId: receipt?.id || null };
     });
   }

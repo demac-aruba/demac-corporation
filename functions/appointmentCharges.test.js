@@ -474,3 +474,70 @@ test('line descriptions persist independently of tariff tokens, with old-client 
   for(const description of [null,42,{},'x'.repeat(1001)]) await rejectsCode(call('quote_appointment_charges',{lines:[{...lines[0],description}]}),'charge_description');
   assert.equal((await call('quote_appointment_charges',{lines:[{...lines[0],description:'<script>example</script>'}]})).quote.totalCents,37500);
 });
+
+
+test('date-only receipts validate real Aruba days, preserve legacy timestamps and use separate server entry time', async () => {
+  const { db, call } = fixture();
+  const result = await call('record_appointment_payment', { payment: cash('145', { receivedDate: '2026-10-08' }) });
+  const receipt = db.read('payments/' + result.paymentId);
+  assert.equal(receipt.receivedDate, '2026-10-08'); assert.equal(receipt.receivedAt, '2026-10-08T04:00:00.000Z');
+  assert.equal(receipt.createdAt, NOW.toISOString()); assert.equal(receipt.createdBy, 'office');
+  for (const receivedDate of ['', '2026-02-30', '2026-13-01', '2026-10-11', '2026-1-01']) await rejectsCode(call('record_appointment_payment', { payment: cash('1', { receivedDate }) }), 'payment_date');
+  assert.equal(paymentInput(cash('1', { receivedDate: '2026-10-09' }), new Date('2026-10-10T02:00:00Z')).receivedAt, '2026-10-09T04:00:00.000Z');
+  assert.throws(() => paymentInput(cash('1', { receivedDate: '2026-10-10' }), new Date('2026-10-10T02:00:00Z')), e => e.code === 'payment_date');
+  assert.equal(paymentInput(cash('1', { receivedAt: '2026-10-08T12:51:00Z' }), NOW).receivedAt, '2026-10-08T12:51:00.000Z');
+});
+test('correction preserves identity/creator, adjusts only delta, audits both snapshots and does not duplicate on exact replay', async () => {
+  const { db, call } = fixture();
+  const { paymentId } = await call('record_appointment_payment', { payment: cash('145', { receivedAt: '2026-10-08T12:51:00Z' }) });
+  const before = structuredClone(db.read('payments/' + paymentId)), appointment = structuredClone(db.read('appointments/apt')), wo = structuredClone(db.read('workOrders/wo'));
+  db.store.set('users/reviewer', { active: true, role: 'office', name: 'Segundo operador' });
+  db.store.set('appointments/apt/chargeEditing/current', { ...db.read('appointments/apt/chargeEditing/current'), ownerId: 'reviewer' });
+  const request = { requestId: 'correction-exact-retry', expectedVersion: 1, paymentId, reason: 'Monto, método y fecha incorrectos', payment: cash('250', { method: 'transfer', reference: 'TRANSFER-250', receivedDate: '2026-10-07' }) };
+  const result = await call('correct_appointment_payment', request, 'reviewer');
+  assert.equal(result.state.receivedCents, 25000); assert.equal(result.state.paymentCount, 1);
+  const saved = db.read('payments/' + paymentId);
+  assert.equal(saved.createdAt, before.createdAt); assert.equal(saved.createdBy, before.createdBy); assert.equal(saved.updatedBy, 'reviewer'); assert.equal(saved.updatedAt, NOW.toISOString());
+  assert.deepEqual(saved.amount, { amount: 250, currency: 'AWG' }); assert.equal(saved.receivedDate, '2026-10-07'); assert.equal(saved.status, 'recorded');
+  const event = (await call('get_appointment_charges')).history.find(e => e.action === 'correct_appointment_payment');
+  assert.equal(event.paymentBefore.amountCents, 14500); assert.equal(event.paymentBefore.receivedAt, before.receivedAt); assert.equal(event.paymentAfter.amountCents, 25000); assert.equal(event.reason, request.reason); assert.equal(event.actor.id, 'reviewer'); assert.equal(event.after, undefined);
+  assert.equal((await call('correct_appointment_payment', request, 'reviewer')).replayed, true);
+  assert.equal([...db.store.keys()].filter(k => k.startsWith('payments/')).length, 1); assert.deepEqual(db.read('workOrders/wo'), wo);
+  const { jobCharges, ...rest } = db.read('appointments/apt'); const { jobCharges: _, ...original } = appointment; assert.deepEqual(rest, original);
+  await rejectsCode(call('correct_appointment_payment', { ...request, reason: 'Changed retry' }, 'reviewer'), 'idempotency_conflict');
+});
+test('same-date amount correction keeps historical time and subsequent void subtracts corrected amount', async () => {
+  const { db, call } = fixture(); const { paymentId } = await call('record_appointment_payment', { payment: cash('145', { receivedAt: '2026-10-08T12:51:00Z' }) });
+  await call('correct_appointment_payment', { paymentId, reason: 'Monto incorrecto', payment: cash('125', { receivedDate: '2026-10-08' }) });
+  assert.equal(db.read('payments/' + paymentId).receivedAt, '2026-10-08T12:51:00.000Z'); assert.equal(db.read('appointments/apt').jobCharges.receivedCents, 12500);
+  await call('void_appointment_payment', { paymentId, reason: 'Prueba de anulación' }); assert.equal(db.read('appointments/apt').jobCharges.receivedCents, 0);
+  await rejectsCode(call('correct_appointment_payment', { paymentId, reason: 'No permitido', payment: cash() }), 'payment_unavailable');
+});
+test('correction rejects missing reason, no-op, duplicate reference, foreign receipt, stale version and unauthorized actor without writes', async () => {
+  const { db, call } = fixture(); const { paymentId } = await call('record_appointment_payment', { payment: cash('145', { receivedAt: NOW.toISOString() }) });
+  await call('record_appointment_payment', { payment: cash('10', { method: 'transfer', reference: 'BANK' }) });
+  const request = { paymentId, reason: 'Correction', payment: cash('150') };
+  const before = JSON.stringify([...db.store]);
+  for (const [patch, code] of [[{ reason: '' }, 'payment_correction_reason'], [{ payment: cash('145', { receivedAt: NOW.toISOString() }) }, 'payment_unchanged'], [{ payment: cash('145', { receivedDate: '2026-10-10' }) }, 'payment_unchanged'], [{ payment: cash('20', { method: 'transfer', reference: 'bank' }) }, 'payment_duplicate'], [{ paymentId: 'foreign' }, 'payment_unavailable'], [{ expectedVersion: 0 }, 'charge_conflict'], [{ editToken: 'lost' }, 'charge_edit_lost']]) await rejectsCode(call('correct_appointment_payment', { ...request, ...patch }), code);
+  await rejectsCode(call('correct_appointment_payment', request, 'missing'), 'permission_denied');
+  assert.equal(JSON.stringify([...db.store]), before);
+});
+test('correction rejects externally linked/reconciled or inconsistent receipts without touching balances', async () => {
+  for (const patch of [{ verificationStatus: 'bank_verified' }, { customerId: 'other' }, { propertyId: 'other' }, { currency: 'USD' }, { bankTransactionId: 'bank' }, { qboPaymentId: 'qbo' }, { externalAccountingId: 'external' }, { invoiceId: 'invoice' }, { invoiceIds: ['invoice'] }, { invoiceIds: 'invoice' }, { allocationIds: false }, { amount: { amount: 999, currency: 'AWG' } }]) {
+    const { db, call } = fixture(); const { paymentId } = await call('record_appointment_payment', { payment: cash('145') });
+    db.store.set('payments/' + paymentId, { ...db.read('payments/' + paymentId), ...patch }); const before = JSON.stringify([...db.store]);
+    await rejectsCode(call('correct_appointment_payment', { paymentId, reason: 'Correction', payment: cash('150') }), 'payment_reconciled'); assert.equal(JSON.stringify([...db.store]), before);
+  }
+  const { db, call } = fixture(); const { paymentId } = await call('record_appointment_payment', { payment: cash('145') });
+  db.store.set('payment_allocations/allocation', { paymentId, invoiceId: 'invoice' });
+  await rejectsCode(call('correct_appointment_payment', { paymentId, reason: 'Correction', payment: cash('150') }), 'payment_reconciled');
+});
+test('concurrent corrections cannot double apply delta; same exact concurrent request replays once', async () => {
+  const { db, call } = fixture(); const { paymentId } = await call('record_appointment_payment', { payment: cash('145') });
+  const request = { paymentId, expectedVersion: 1, reason: 'Monto incorrecto', payment: cash('250') };
+  const competing = await Promise.allSettled([call('correct_appointment_payment', request), call('correct_appointment_payment', { ...request, payment: cash('200') })]);
+  assert.equal(competing.filter(r => r.status === 'fulfilled').length, 1); assert.equal(competing.find(r => r.status === 'rejected').reason.code, 'charge_conflict');
+  const same = { ...request, expectedVersion: 2, requestId: 'correction-double-click', payment: cash('100') };
+  const results = await Promise.all([call('correct_appointment_payment', same), call('correct_appointment_payment', same)]);
+  assert.equal(results.filter(r => r.replayed).length, 1); assert.equal(db.read('appointments/apt').jobCharges.receivedCents, 10000); assert.equal(db.read('appointments/apt').jobCharges.paymentCount, 1);
+});

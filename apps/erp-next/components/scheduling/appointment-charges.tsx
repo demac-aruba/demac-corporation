@@ -5,7 +5,7 @@ import { chargeRetryWasNotCommitted, chargeRecoveryBaseline, readChargeRecovery,
 import { appointmentChargeBalance } from '../../lib/appointment-charge-balance';
 import { OfficeBookingRequestError, officeBookingOutcomeUnknown } from '../../lib/office-booking-authority';
 import { bookingChargeDraft, chargeInputFromQuote, chargeMoney, fillMissingChargeDescriptions, getAppointmentCharges, mutateAppointmentCharges, newChargeRequestId,
-  paymentMethods, type ChargeCatalogItem, type ChargeDraft, type ChargeLineInput, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
+  paymentMethods, paymentDate, paymentDateInput, type AppointmentPayment, type ChargeHistory, type ChargeCatalogItem, type ChargeDraft, type ChargeLineInput, type PaymentInput, type PaymentMethod } from '../../lib/appointment-charges';
 import { ChargeIcon, type ChargeIconName } from './appointment-charge-icons';
 import styles from './appointment-charges.module.css';
 import { useAppointmentCharges } from './use-appointment-charges';
@@ -17,18 +17,22 @@ import { ChargeAddSearch } from './charge-add-search';
 import { AppointmentQuickBooksPreviewButton } from './appointment-quickbooks-preview';
 
 const methodIcon: Record<PaymentMethod, ChargeIconName> = { cash: 'money', transfer: 'bank', pos: 'card', suave: 'phone' };
-const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', receivedAt: new Date().toISOString(), note: '' });
+const dateLabel = (value: string) => new Date(value).toLocaleString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const paymentDateLabel = (value: { receivedAt?: string; receivedDate?: string }) => {
+  const date = paymentDate(value);
+  return date ? new Date(`${date}T12:00:00Z`).toLocaleDateString('es', { timeZone: 'America/Aruba', day: '2-digit', month: 'short', year: 'numeric' }) : 'Sin fecha';
+};
+const newPayment = (): PaymentInput => ({ method: 'cash', amount: '', reference: '', ...paymentDateInput(paymentDate({ receivedAt: new Date().toISOString() })), note: '' });
 export function ChargeNotice({ children }: { children: React.ReactNode }) { return <div className={styles.notice}><ChargeIcon name="info"/><div>{children}</div></div>; }
-function PaymentFields({ value, onChange, disabled = false, compact = false }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean; compact?: boolean }) {
+function PaymentFields({ value, onChange, disabled = false, compact = false, dateHint }: { value: PaymentInput; onChange: (value: PaymentInput) => void; disabled?: boolean; compact?: boolean; dateHint?: string }) {
   const amounts = <div className={styles.two}><label>Monto recibido (Afl.)<input inputMode="decimal" value={value.amount} onChange={event => onChange({ ...value, amount: event.target.value })} placeholder="0.00"/></label><label>Referencia / comprobante{value.method !== 'cash' ? ' *' : ''}<input maxLength={180} value={value.reference} onChange={event => onChange({ ...value, reference: event.target.value })} placeholder={value.method === 'cash' ? 'N.º de recibo (opcional)' : 'Referencia de la transacción'}/></label></div>;
   const paymentNote = <label style={{ marginTop: compact ? 6 : 12 }}>Nota del pago<input maxLength={700} value={value.note || ''} onChange={event => onChange({ ...value, note: event.target.value })} placeholder="Información para contabilidad"/></label>;
   return <fieldset disabled={disabled} style={{ padding: 0, margin: 0, border: 0, minWidth: 0 }}>
     {compact ? amounts : null}
     <span className={styles.muted}>Método de pago</span><div className={styles.methods}>{paymentMethods.map(method => <button key={method.id} type="button" aria-pressed={value.method === method.id} className={value.method === method.id ? styles.selected : ''} onClick={() => onChange({ ...value, method: method.id })}><ChargeIcon name={methodIcon[method.id]}/>{method.label}</button>)}</div>
     {!compact ? amounts : null}
-    <label style={{ marginTop: compact ? 0 : 12 }}>Fecha y hora de recepción · Aruba<input type="datetime-local" value={value.receivedAt ? new Date(Date.parse(value.receivedAt) - 4 * 3600000).toISOString().slice(0,16) : ''} onChange={event => onChange({ ...value, receivedAt: event.target.value ? new Date(`${event.target.value}:00-04:00`).toISOString() : '' })}/></label>
-    {compact ? <><small className={styles.paymentHint}>Fecha actual por defecto · editable</small><details className={styles.paymentNote}><summary>Añadir nota (opcional)</summary>{paymentNote}</details></> : paymentNote}
+    <label style={{ marginTop: compact ? 0 : 12 }}>Fecha del pago<input type="date" max={paymentDate({ receivedAt: new Date().toISOString() })} value={paymentDate(value)} onChange={event => onChange({ ...value, ...paymentDateInput(event.target.value) })}/></label>
+    {compact ? <><small className={styles.paymentHint}>{dateHint || 'Fecha actual por defecto · editable'}</small><details className={styles.paymentNote}><summary>Añadir nota (opcional)</summary>{paymentNote}</details></> : paymentNote}
   </fieldset>;
 }
 export function BookingChargesEditor({ seeds, value, onChange, disabled }: { seeds: ChargeLineInput[]; value: ChargeDraft | null; onChange: (draft: ChargeDraft) => void; disabled: boolean }) {
@@ -64,7 +68,18 @@ function ChargesSkeleton() {
     </div>
   </div>;
 }
-const historyLabels: Record<string,string> = { initial_estimate: 'Proyección inicial', save_appointment_estimate: 'Proyección actualizada', finalize_appointment_charges: 'Monto final confirmado', record_appointment_payment: 'Pago registrado', void_appointment_payment: 'Registro de pago anulado' };
+const historyLabels: Record<string,string> = { initial_estimate: 'Proyección inicial', save_appointment_estimate: 'Proyección actualizada', finalize_appointment_charges: 'Monto final confirmado', record_appointment_payment: 'Pago registrado', correct_appointment_payment: 'Pago corregido', void_appointment_payment: 'Registro de pago anulado' };
+function PaymentChanges({ event }: { event: ChargeHistory }) {
+  const before = event.paymentBefore, after = event.paymentAfter;
+  if (!before || !after) return null;
+  const method = (id: PaymentMethod) => paymentMethods.find(item => item.id === id)?.label || id;
+  const rows = [['Monto', chargeMoney(before.amountCents), chargeMoney(after.amountCents)],
+    ['Fecha del pago', paymentDateLabel(before), paymentDateLabel(after)],
+    ['Método', method(before.method), method(after.method)],
+    ['Referencia', before.reference || 'Sin referencia', after.reference || 'Sin referencia'],
+    ['Nota', before.note || 'Sin nota', after.note || 'Sin nota']].filter(([, a, b]) => a !== b);
+  return <div>{rows.map(([label, a, b]) => <p key={label}><strong>{label}:</strong> {a} → {b}</p>)}</div>;
+}
 export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDraftStateChange, canManage, showHistory = false, active = true, onBusyChange, onChanged, onShowHistory, onClose, documentContext }: { appointmentId: string; currentUserId: string; onDraftStateChange?: (state: { dirty: boolean; recoverable: boolean }) => void; canManage: boolean; showHistory?: boolean; active?: boolean; onBusyChange: (busy: boolean) => void; onChanged: () => Promise<void> | void; onShowHistory?: () => void; onClose?: () => void; documentContext?: { customer: string; dateKey: string } }) {
   const [error, setError] = useState(''), [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false), [editing, setEditing] = useState<'final' | null>(null);
@@ -74,6 +89,9 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   useEffect(() => { if (!success) return; const timer = window.setTimeout(() => setSuccess(''), 4500); return () => window.clearTimeout(timer); }, [success]);
   const [lines, setLines] = useState<ChargeLineInput[]>([]), [note, setNote] = useState(''), [reviewed, setReviewed] = useState(false), [payment, setPayment] = useState<PaymentInput | null>(null);
   const [emptyPayment, setEmptyPayment] = useState(newPayment);
+  const paymentForm = useRef<HTMLDivElement>(null);
+  const [correctingPaymentId, setCorrectingPaymentId] = useState<string | null>(null), [paymentReason, setPaymentReason] = useState('');
+  useEffect(() => { if (correctingPaymentId) paymentForm.current?.querySelector('input')?.focus(); }, [correctingPaymentId]);
   useEffect(() => {
     // A visible empty form is not a draft. Keep its default date fresh without
     // suspending revalidation/close or changing a date the operator has entered.
@@ -212,9 +230,9 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
         setEditing(null); setRecoveringDraft(false); setRecovered(false);
         if (payment && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
       } else {
-        if (request.action === 'record_appointment_payment') setPayment(null);
+        if (['record_appointment_payment', 'correct_appointment_payment'].includes(request.action)) { setPayment(null); setCorrectingPaymentId(null); setPaymentReason(''); }
         if (editing && ownVersion && editingVersion === request.data.expectedVersion) { setEditingVersion(result.state.version); acknowledgedVersion.current = result.state.version; }
-        if (payment && request.action !== 'record_appointment_payment' && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
+        if (payment && !['record_appointment_payment', 'correct_appointment_payment'].includes(request.action) && ownVersion && paymentVersion === request.data.expectedVersion) setPaymentVersion(result.state.version);
       } setSuccess(request.action === 'record_appointment_payment' && editing ? 'Pago registrado; los trabajos siguen pendientes de confirmar' : historyLabels[request.action] || 'Cambios guardados');
       await reload();
       try { await onChanged(); } catch { /* Monetary commit already succeeded; refresh does not undo it. */ }
@@ -226,12 +244,19 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
   const save = (action: string, values: Record<string,unknown>) => {
     const lease = editSession.credentials();
     if (!lease) { setError('Recupera el acceso de edición antes de guardar. Tu borrador se conserva.'); return; }
-    void perform({ action, data: { ...values, ...lease, appointmentId, expectedVersion: action === 'record_appointment_payment' ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } });
+    void perform({ action, data: { ...values, ...lease, appointmentId, expectedVersion: ['record_appointment_payment', 'correct_appointment_payment'].includes(action) ? paymentVersion : action === 'void_appointment_payment' ? version : editingVersion, requestId: newChargeRequestId() } });
   };
   const updatePayment = (value: PaymentInput) => {
     // Capture the version at the first edit, not when the empty form appears.
     if (!payment) { setPaymentVersion(version); setSuccess(''); }
     setPayment(value);
+  };
+  const clearPayment = () => { setPayment(null); setCorrectingPaymentId(null); setPaymentReason(''); };
+  const correctPayment = (item: AppointmentPayment) => {
+    if (blocked || payment || !record?.paymentCorrections) return;
+    setPaymentVersion(version); setCorrectingPaymentId(item.id); setPaymentReason(''); setError(''); setSuccess('');
+    setPayment({ amount: (item.amountCents / 100).toFixed(2), method: item.method, reference: item.reference || '', receivedAt: item.receivedAt,
+      ...(item.receivedDate ? { receivedDate: item.receivedDate } : {}), note: item.note || '' });
   };
   const downloadPdf = async () => {
     if (pdfFlight.current || editing || pending || busy || loading || readError || !record?.state?.final || record.blocker || !documentContext) return;
@@ -255,7 +280,7 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
     {editing ? <div className={styles.draftStatus} role="status">{recovered ? 'Borrador recuperado. ' : ''}Trabajos pendientes de confirmar · {draftSaved ? 'Borrador conservado en esta pestaña' : 'Conservando borrador…'}</div> : null}
     {recoveryConflict ? <div className={styles.notice}><div><strong>Los datos guardados cambiaron desde este borrador.</strong><p>Compara los trabajos y pagos actuales antes de continuar. Tu selección se conserva.</p><details><summary>Ver trabajos guardados actualmente</summary><ChargeLineSummary record={record}/></details><label className={styles.check}><input type="checkbox" checked={recoveryReviewed} onChange={event => setReviewRecovery(event.target.checked ? currentBaseline : '')}/>Revisé los trabajos y pagos guardados y quiero continuar con este borrador.</label><button type="button" className={styles.secondary} disabled={accessBlocked || !recoveryReviewed} onClick={() => { if (accessBlocked || !recoveryReviewed) return; setDraftBaseline(currentBaseline); setEditingVersion(version); setRecoveringDraft(false); setReviewed(false); setCandidateFingerprint(''); setReviewRecovery(''); }}>Continuar con este borrador</button></div></div> : null}
     {record.blocker ? <div className={styles.error} role="alert">{record.blocker}</div> : null}
-    {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio conserva su responsable y fecha. Las anulaciones incluyen el motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : null}
+    {showHistory ? <section className={styles.panel}><h3 className={styles.heading}><ChargeIcon name="history"/>Historial de importes y pagos</h3>{record.history.length ? <ol className={styles.history}>{record.history.map(event => <li key={event.id}><strong>{historyLabels[event.action] || event.action}</strong><small>{dateLabel(event.at)} · {event.actor.name || 'Usuario registrado'} · Versión {event.version}</small>{event.after ? <p>{chargeMoney(event.after.totalCents)} · {event.after.note}</p> : null}{event.paymentBefore ? <PaymentChanges event={event}/> : event.amountCents !== undefined ? <p>{chargeMoney(event.amountCents)}</p> : null}{event.reason ? <p>{event.reason}</p> : null}</li>)}</ol> : <div className={styles.empty}>Todavía no hay movimientos registrados.</div>}<ChargeNotice>El estimado original se conserva. Cada cambio conserva su responsable y fecha. Las correcciones y anulaciones incluyen el motivo. Se muestran los últimos 100 movimientos.</ChargeNotice></section> : null}
     <div className={showHistory ? styles.hiddenView : styles.retainedView}>
     {editing ? <div className={styles.metrics}>
       <Metric icon="receipt" label="PROYECCIÓN ORIGINAL" value={state?.originalEstimate?.totalCents} note="Solo referencia del booking"/>
@@ -277,13 +302,14 @@ export function AppointmentChargesWorkspace({ appointmentId, currentUserId, onDr
       <ChargeAddSearch active={active && !showHistory} disabled={blocked || editingConflict || (editing ? lines.length >= 60 : (state?.final?.lines.length || 0) >= 60) || ['cancelled','canceled','temporary_hold'].includes(record.appointmentStatus)} onAdd={addActual} onCatalogLoaded={setCatalogItems}/>
       </section>
       <section className={`${styles.panel} ${styles.paymentsPanel}`} aria-label="Pagos de la visita"><div className={styles.panelHeader}><div className={styles.panelTitle}><span className={`${styles.tile} ${styles.green}`}><ChargeIcon name="money"/></span><div><h3 className={styles.heading}>Pagos de la visita</h3><p>Pagos registrados para esta cita</p></div></div><span className={`${styles.paymentStatus} ${!editing && totals?.paymentStatus === '✓ Pagado' ? styles.paidStatus : ''}`}>{record.blocker ? 'Por conciliar' : editing ? 'Borrador en edición' : totals?.paymentStatus}</span></div>
-        {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{dateLabel(item.receivedAt)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'}</small>{item.note ? <small>{item.note}</small> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
+        {record.payments.length ? [...record.payments].sort((a,b) => a.createdAt.localeCompare(b.createdAt)).map(item => <div className={`${styles.payment} ${item.status === 'voided' ? styles.voided : ''}`} key={item.id}><span className={`${styles.tile} ${item.method === 'cash' ? styles.green : ''}`}><ChargeIcon name={methodIcon[item.method] || 'money'}/></span><div><strong>{paymentMethods.find(method => method.id === item.method)?.label || item.method}</strong><small>{paymentDateLabel(item)}</small>{item.status === 'voided' ? <small>Anulado · {item.voidReason}</small> : null}<details className={styles.paymentDetails}><summary>Ver detalle del pago</summary><small>{item.reference || 'Sin referencia'}</small><small>Registrado por {item.createdByName || 'Oficina'} · {dateLabel(item.createdAt)}</small>{item.updatedAt ? <small>Última corrección por {item.updatedByName || 'Oficina'} · {dateLabel(item.updatedAt)}</small> : null}{record.history.filter(event => event.paymentId === item.id && event.paymentBefore).map(event => <details key={event.id}><summary>Corrección · {dateLabel(event.at)}</summary><small>{event.actor.name} · {event.reason}</small><PaymentChanges event={event}/></details>)}{item.note ? <small>{item.note}</small> : null}<div className={styles.paymentActions}>{item.status !== 'voided' && record.paymentCorrections ? <button type="button" className={styles.editPayment} disabled={blocked || editingConflict || Boolean(payment)} onClick={() => correctPayment(item)}>Editar pago</button> : null}{item.status === 'voided' ? null : <button type="button" disabled={blocked || editingConflict || paymentConflict || Boolean(correctingPaymentId)} onClick={() => { const reason = window.prompt('Motivo de la anulación del registro (no realiza un reembolso):'); if (reason?.trim()) save('void_appointment_payment', { paymentId: item.id, reason }); }}>Anular registro</button>}</div></details></div><strong className={styles.paymentAmount}>{chargeMoney(item.amountCents)}</strong></div>) : <div className={styles.empty}>{record.blocker ? 'Consulta el aviso de conciliación antes de registrar pagos.' : 'Sin pagos registrados en este historial.'}</div>}
         <div className={styles.receivedStrip}><strong>Total recibido</strong><strong>{chargeMoney(totals?.receivedCents)}</strong></div>
         {balance !== null ? <div className={`${styles.balanceStrip} ${!editing && balance === 0 ? styles.settledStrip : ''}`}><strong>{editing ? balance < 0 ? 'A favor estimado' : 'Saldo estimado' : balance < 0 ? 'Saldo a favor' : 'Saldo por cobrar'}</strong><strong>{chargeMoney(Math.abs(balance))}</strong></div> : null}
-        <div className={styles.paymentEntry}><div className={styles.paymentEntryHeading}><h4>Registrar depósito, abono o pago</h4>{payment ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={() => setPayment(null)}>Limpiar</button> : null}</div>
-          <PaymentFields compact value={payment || emptyPayment} onChange={updatePayment} disabled={blocked || editingConflict || paymentConflict || record.appointmentStatus === 'temporary_hold'}/>
-          <button type="button" className={styles.primary} aria-label="Registrar pago" disabled={blocked || paymentConflict || editingConflict || record.appointmentStatus === 'temporary_hold' || !payment?.amount.trim() || !payment.receivedAt || (payment.method !== 'cash' && !payment.reference.trim())} onClick={() => { if (payment) save('record_appointment_payment', { payment }); }}>{busy && pending?.action === 'record_appointment_payment' ? 'Registrando pago…' : 'Registrar pago'}</button>
-          <small className={styles.paymentHint}>Registra un pago ya recibido. No realiza cargos en POS o SUAVE.</small>
+        <div ref={paymentForm} className={styles.paymentEntry}><div className={styles.paymentEntryHeading}><h4>{correctingPaymentId ? 'Editar pago' : 'Registrar depósito, abono o pago'}</h4>{payment ? <button type="button" className={styles.link} disabled={busy || Boolean(pending)} onClick={clearPayment}>{correctingPaymentId ? 'Cancelar edición' : 'Limpiar'}</button> : null}</div>
+          <PaymentFields compact dateHint={correctingPaymentId ? 'Fecha de recepción del pago · editable' : undefined} value={payment || emptyPayment} onChange={updatePayment} disabled={blocked || editingConflict || paymentConflict || record.appointmentStatus === 'temporary_hold'}/>
+          {correctingPaymentId ? <label>Motivo de la corrección *<input maxLength={700} value={paymentReason} disabled={blocked || editingConflict || paymentConflict} onChange={event => setPaymentReason(event.target.value)} placeholder="Explica qué dato estaba incorrecto"/></label> : null}
+          <button type="button" className={styles.primary} aria-label={correctingPaymentId ? 'Guardar corrección' : 'Registrar pago'} disabled={blocked || paymentConflict || editingConflict || record.appointmentStatus === 'temporary_hold' || !payment?.amount.trim() || !paymentDate(payment) || (payment.method !== 'cash' && !payment.reference.trim()) || Boolean(correctingPaymentId && (!paymentReason.trim() || !record.paymentCorrections))} onClick={() => { if (payment) save(correctingPaymentId ? 'correct_appointment_payment' : 'record_appointment_payment', { payment, ...(correctingPaymentId ? { paymentId: correctingPaymentId, reason: paymentReason } : {}) }); }}>{busy && ['record_appointment_payment', 'correct_appointment_payment'].includes(pending?.action || '') ? 'Guardando pago…' : correctingPaymentId ? 'Guardar corrección' : 'Registrar pago'}</button>
+          <small className={styles.paymentHint}>{correctingPaymentId ? 'Conserva el pago original y registra los cambios en su historial.' : 'Registra un pago ya recibido. No realiza cargos en POS o SUAVE.'}</small>
         </div>
         {onShowHistory ? <button type="button" className={styles.historyShortcut} disabled={busy || Boolean(pending)} onClick={onShowHistory}><ChargeIcon name="history"/>Ver movimientos</button> : null}
       </section>
