@@ -42,7 +42,7 @@ export function decodeChargeRecovery(raw: string | null, userId: string, appoint
   if (draft && (!Array.isArray(draft.lines) || draft.lines.length > 60 || !draft.lines.every(validLine)
     || !text(draft.note, 1000) || !Number.isSafeInteger(draft.version) || draft.version < 0 || !text(draft.baseline, MAX_CHARS))) throw Error('No se pudo validar el borrador guardado.');
   const request = value.pending;
-  if (request && (!['record_appointment_payment','void_appointment_payment','finalize_appointment_charges'].includes(request.action)
+  if (request && (!['record_appointment_payment','correct_appointment_payment','void_appointment_payment','finalize_appointment_charges'].includes(request.action)
     || !request.data || Number(request.data.expectedVersion) < 0 || request.data.appointmentId !== appointmentId || !Number.isSafeInteger(request.data.expectedVersion)
     || !['requestId','editSessionId','editToken'].every(k => text(request.data[k], 200) && Boolean(request.data[k])))) throw Error('No se pudo validar la operación pendiente.');
   if (!draft && !request) return null;

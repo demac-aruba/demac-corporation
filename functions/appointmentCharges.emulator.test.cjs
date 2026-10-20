@@ -93,3 +93,17 @@ assert.equal(result.status,400,JSON.stringify(result.body));assert.equal(result.
 assert.equal((await db.doc('appointments/apt').get()).data().jobCharges.final,null);
 assert.equal((await db.collection('payments').get()).size,0);
 });
+
+
+test('real Firestore correction atomically updates one receipt and audits before/after; concurrent retry applies once',async()=>{
+const initial=await call('record_appointment_payment',{...pay('date-only-initial'),payment:{method:'cash',amount:'145',receivedDate:'2026-10-08'}});assert.equal(initial.status,200,JSON.stringify(initial.body));
+const paymentId=initial.body.paymentId,original=(await db.doc('payments/'+paymentId).get()).data();
+const request={requestId:'correction-emulator-request',expectedVersion:1,paymentId,reason:'Fecha y monto incorrectos',payment:{method:'transfer',reference:'SYNTHETIC-TRANSFER',amount:'250',receivedDate:'2026-10-07'}};
+const results=await Promise.all([call('correct_appointment_payment',request),call('correct_appointment_payment',request)]);assert.deepEqual(results.map(r=>r.status),[200,200]);assert.equal(results.filter(r=>r.body.replayed).length,1);
+const record=await call('get_appointment_charges');assert.equal(record.body.state.receivedCents,25000);assert.equal(record.body.state.paymentCount,1);assert.equal(record.body.payments.length,1);
+const saved=record.body.payments[0];assert.equal(saved.id,paymentId);assert.equal(saved.createdAt,original.createdAt);assert.equal(saved.createdBy,original.createdBy);assert.equal(saved.amount.amount,250);assert.equal(saved.receivedAt,'2026-10-07T04:00:00.000Z');
+const audit=record.body.history.find(e=>e.action==='correct_appointment_payment');assert.equal(audit.paymentBefore.amountCents,14500);assert.equal(audit.paymentAfter.amountCents,25000);assert.equal(audit.reason,request.reason);assert.equal(audit.actor.id,'office');
+assert.equal((await call('correct_appointment_payment',{...request,requestId:'correction-stale',payment:{...request.payment,amount:'200'}})).status,409);
+await db.doc('payment_allocations/test').set({paymentId,invoiceId:'external'});const denied=await call('correct_appointment_payment',{...request,requestId:'correction-allocated',expectedVersion:2,payment:{...request.payment,amount:'200'}});assert.equal(denied.body.error.code,'payment_reconciled');
+assert.equal((await db.doc('appointments/apt').get()).data().jobCharges.receivedCents,25000);assert.equal((await db.collection('payments').get()).size,1);
+});
