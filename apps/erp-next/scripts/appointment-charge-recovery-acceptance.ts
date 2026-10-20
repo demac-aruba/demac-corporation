@@ -47,6 +47,8 @@ check('malformed, excessive and corrupt recovery is rejected', () => {
 check('unknown operation retains exact replay identity and values, without creating a new request', () => {
   const pending = { action: 'record_appointment_payment', data: { appointmentId: 'apt', expectedVersion: 7, editSessionId: 'synthetic-session', editToken: 'synthetic-token', requestId: 'same-request', payment: { method: 'cash', amount: '250', reference: '', receivedAt: '2026-10-13T12:00:00Z' } } };
   assert.deepEqual(decodeChargeRecovery(JSON.stringify({ ...saved, pending }), 'operator', 'apt')?.pending, pending);
+  const correction = { ...pending, action: 'correct_appointment_payment', data: { ...pending.data, paymentId: 'receipt', reason: 'Fecha incorrecta' } };
+  assert.deepEqual(decodeChargeRecovery(JSON.stringify({ ...saved, pending: correction }), 'operator', 'apt')?.pending, correction);
   assert.throws(() => decodeChargeRecovery(JSON.stringify({ ...saved, pending: { ...pending, action: 'another_action' } }), 'operator', 'apt'));
 });
 check('receipt identity and equal-total changes do not compare as equivalent', () => {

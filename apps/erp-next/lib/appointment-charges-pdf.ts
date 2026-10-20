@@ -1,4 +1,4 @@
-import type { ChargeRecord } from './appointment-charges';
+import { paymentDate, type ChargeRecord } from './appointment-charges';
 import { appointmentChargeBalance } from './appointment-charge-balance';
 
 type Options = { appointmentId: string; customer: string; dateKey: string; record: ChargeRecord };
@@ -104,7 +104,7 @@ export function buildAppointmentChargesPdf({ appointmentId, customer, dateKey, r
   for (const payment of record.payments) {
     ensure(65);
     paragraph(`${methods[payment.method] || payment.method} | ${money(payment.amountCents)} | ${payment.status === 'voided' ? 'ANULADO - no incluido en total' : 'Recibido'}`);
-    paragraph(`${date(payment.receivedAt)} | Ref.: ${payment.reference || 'Sin referencia'}`, 9);
+    paragraph(`Fecha del pago: ${paymentDate(payment)} | Ref.: ${payment.reference || 'Sin referencia'}`, 9);
     y += 8;
   }
   ensure(50); y += 12;

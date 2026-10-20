@@ -2,15 +2,24 @@ import { callOfficeBookingAuthority } from './office-booking-authority';
 
 export type ChargeLineInput = { id: string; workLineId?: string; presetId?: string; serviceId?: string; label: string; description?: string; btu?: number | string | null; quantity: number | string; unitPrice?: number | string | null; reason?: string };
 export type PaymentMethod = 'cash' | 'transfer' | 'pos' | 'suave';
-export type PaymentInput = { method: PaymentMethod; amount: string; reference: string; receivedAt?: string; note?: string };
+export type PaymentInput = { method: PaymentMethod; amount: string; reference: string; receivedAt?: string; receivedDate?: string; note?: string };
 export type ChargeDraft = { lines: ChargeLineInput[]; quoteToken?: string; note?: string; payment?: PaymentInput | null; purpose?: 'projection' };
 export type ChargeLine = ChargeLineInput & { quantityMillis: number; baseUnitCents: number | null; unitCents: number | null; totalCents: number | null; pendingReason: string; manualPrice: boolean; pricingVersion: string; overrideCents: number | null; projectionOnly?: boolean; retainedPrice?: boolean };
 export type ChargeCandidateEvidence = { fingerprint: string; records: { id: string; revisionNumber: number; status: string; lines: { description: string; quantity: number; lineTotal: number }[]; blockers: { message: string }[] }[] };
 export type ChargeQuote = { lines: ChargeLine[]; totalCents: number | null; knownTotalCents: number; currency: 'AWG'; capturedAt: string; quoteToken: string; note?: string; actor?: { id: string; name: string }; candidateEvidence?: ChargeCandidateEvidence };
 export type ChargeState = { schemaVersion: 1; version: number; originalEstimate: ChargeQuote | null; estimate: ChargeQuote | null; final: ChargeQuote | null; receivedCents: number; paymentCount: number };
-export type AppointmentPayment = { id: string; source: string; amountCents: number; method: PaymentMethod; reference: string; receivedAt: string; createdAt: string; createdByName: string; status: 'recorded' | 'voided'; note?: string; voidReason?: string; voidedAt?: string; voidedByName?: string };
-export type ChargeHistory = { id: string; action: string; at: string; actor: { id: string; name: string }; reason?: string; amountCents?: number; after?: ChargeQuote; version: number };
-export type ChargeRecord = { success: true; state: ChargeState | null; payments: AppointmentPayment[]; history: ChargeHistory[]; blocker: string; candidateEvidence?: ChargeCandidateEvidence; appointmentStatus: string; workItems?: ChargeLineInput[] };
+export type PaymentSnapshot = { amountCents: number; method: PaymentMethod; reference: string; receivedAt: string; receivedDate?: string; note?: string };
+export type AppointmentPayment = PaymentSnapshot & { id: string; source: string; createdAt: string; createdByName: string; updatedAt?: string; updatedByName?: string; status: 'recorded' | 'voided'; voidReason?: string; voidedAt?: string; voidedByName?: string };
+export type ChargeHistory = { id: string; action: string; at: string; actor: { id: string; name: string }; reason?: string; amountCents?: number; after?: ChargeQuote; version: number; paymentId?: string; paymentBefore?: PaymentSnapshot; paymentAfter?: PaymentSnapshot };
+export type ChargeRecord = { success: true; state: ChargeState | null; payments: AppointmentPayment[]; history: ChargeHistory[]; blocker: string; candidateEvidence?: ChargeCandidateEvidence; appointmentStatus: string; workItems?: ChargeLineInput[]; paymentCorrections?: boolean };
+export function paymentDate(value: { receivedAt?: string; receivedDate?: string }) {
+  if (value.receivedDate) return value.receivedDate;
+  const timestamp = Date.parse(value.receivedAt || '');
+  return Number.isFinite(timestamp) ? new Date(timestamp - 4 * 3600000).toISOString().slice(0, 10) : '';
+}
+export function paymentDateInput(date: string) {
+  return { receivedDate: date, receivedAt: /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T04:00:00.000Z` : '' };
+}
 export const paymentMethods: { id: PaymentMethod; label: string }[] = [{ id: 'cash', label: 'Efectivo' }, { id: 'transfer', label: 'Transferencia' }, { id: 'pos', label: 'POS' }, { id: 'suave', label: 'SUAVE' }];
 export const chargeMoney = (cents: number | null | undefined) => cents === null || cents === undefined ? 'Por confirmar' : `Afl. ${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export function chargeInputFromQuote(quote: ChargeQuote | null | undefined): ChargeLineInput[] {

@@ -41,9 +41,9 @@ reset();
 const server=http.createServer(async(req,res)=>{try{const pathname=new URL(req.url,'http://localhost').pathname;
 if(pathname==='/authority'||pathname==='/initial'){let text='';for await(const chunk of req)text+=chunk;const input=JSON.parse(text);
 if(pathname==='/initial'){await db.runTransaction(async transaction=>{const commit=await prepareInitialCharges({db,transaction,input,actor:{id:'synthetic-office',source:'office-scheduling'},appointmentId:'apt',appointment:db.read('appointments/apt')});transaction.update(db.collection('appointments').doc('apt'),{jobCharges:commit.value});commit.write();});writes.push('initial');res.setHeader('Content-Type','application/json');return res.end('{}');}
-if(input.action==='record_appointment_payment'&&(denyNext||loseNext)){const denied=denyNext;denyNext=false;loseNext=false;writes.push(input);res.statusCode=denied?401:503;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({error:{code:denied?'unauthenticated':'charge_internal',message:denied?'Synthetic session expired':'Synthetic request lost before authority'}}));}
-if(input.action==='list_charge_services')catalogReads++;const result=await facade.handle({method:'POST',headers:req.headers,body:input});if(['save_appointment_estimate','finalize_appointment_charges','record_appointment_payment','void_appointment_payment'].includes(input.action))writes.push(input);
-res.setHeader('Content-Type','application/json');if(dropNext&&input.action==='record_appointment_payment'&&result.status===200){dropNext=false;res.statusCode=503;return res.end(JSON.stringify({error:{message:'Synthetic response lost after commit'}}));}res.statusCode=result.status;return res.end(JSON.stringify(result.body));}
+if(['record_appointment_payment','correct_appointment_payment'].includes(input.action)&&(denyNext||loseNext)){const denied=denyNext;denyNext=false;loseNext=false;writes.push(input);res.statusCode=denied?401:503;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({error:{code:denied?'unauthenticated':'charge_internal',message:denied?'Synthetic session expired':'Synthetic request lost before authority'}}));}
+if(input.action==='list_charge_services')catalogReads++;const result=await facade.handle({method:'POST',headers:req.headers,body:input});if(['save_appointment_estimate','finalize_appointment_charges','record_appointment_payment','correct_appointment_payment','void_appointment_payment'].includes(input.action))writes.push(input);
+res.setHeader('Content-Type','application/json');if(dropNext&&['record_appointment_payment','correct_appointment_payment'].includes(input.action)&&result.status===200){dropNext=false;res.statusCode=503;return res.end(JSON.stringify({error:{message:'Synthetic response lost after commit'}}));}res.statusCode=result.status;return res.end(JSON.stringify(result.body));}
 if(pathname==='/app.js'||pathname==='/app.css'){res.setHeader('Content-Type',pathname.endsWith('.js')?'application/javascript':'text/css');return res.end(fs.readFileSync(path.join(folder,pathname.slice(1))));}
 res.end('<!doctype html><html lang="es"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div><script src="/app.js"></script></body></html>');
 }catch(error){res.statusCode=400;res.end(JSON.stringify({error:error.message}));}});
@@ -240,6 +240,43 @@ missing.once('dialog',dialog=>dialog.accept());await missing.reload();await miss
 await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).waitFor();await missing.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).some(button=>button.textContent.trim()==='Reintentar la misma operación'));assert.equal(await missing.getByRole('button',{name:'Reintentar la misma operación',exact:true}).count(),0);assert.deepEqual(writes.at(-1),oldRequest);assert.equal([...db.store.keys()].filter(key=>key.startsWith('payments/')).length,0);await missing.waitForFunction(()=>{const input=Array.from(document.querySelectorAll('label')).find(el=>el.textContent==='Monto recibido (Afl.)')?.querySelector('input');return input&&!input.matches(':disabled');});assert.equal(await missing.getByLabel('Monto recibido (Afl.)',{exact:true}).isEnabled(),true);assert.equal(await missing.getByRole('button',{name:'Registrar pago',exact:true}).isDisabled(),true,'Empty form cannot submit after resolving an uncommitted request');
 results.push({name:'uncommitted-request-expiry-needs-fresh-fence-before-release',status:'PASS'});console.log('PASS uncommitted request requires fresh fence before resolution');
 }finally{await missingContext.close();}
+
+// The real correction flow keeps one receipt, with date-only entry and exact uncertain replay.
+for (const viewport of [{width:1366,height:768},{width:390,height:844}]) {
+reset();const correctionContext=await browser.newContext({viewport,timezoneId:'Asia/Tokyo',serviceWorkers:'block'});
+await correctionContext.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+const page=await correctionContext.newPage();page.setDefaultTimeout(12000);
+try {
+await page.goto(origin+'/existing');await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('145');
+const date=page.getByLabel('Fecha del pago',{exact:true});assert.equal(await date.getAttribute('type'),'date');assert.equal(await date.inputValue(),new Date(Date.now()-4*3600000).toISOString().slice(0,10));
+await date.fill('2026-10-06');await page.getByRole('button',{name:'Registrar pago',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago registrado'}).waitFor();
+const receiptKey=[...db.store.keys()].find(k=>k.startsWith('payments/')),original=structuredClone(db.read(receiptKey));
+await page.getByText('Ver detalle del pago',{exact:true}).click();await page.getByRole('button',{name:'Editar pago',exact:true}).click();
+assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'145.00');assert.equal(await date.inputValue(),'2026-10-06');assert.equal(await page.getByRole('button',{name:'Guardar corrección',exact:true}).isDisabled(),true);
+await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('250');await date.fill('2026-10-08');await page.getByRole('button',{name:'Transferencia',exact:true}).click();
+await page.getByLabel('Motivo de la corrección *',{exact:true}).fill('Monto, fecha y método capturados incorrectamente');assert.equal(await page.getByRole('button',{name:'Guardar corrección',exact:true}).isDisabled(),true);
+await page.getByLabel('Referencia / comprobante',{exact:false}).fill('CORRECTED-TRANSFER');
+await page.screenshot({path:path.join(evidence,'edit-payment-'+viewport.width+'.png'),fullPage:true});
+await page.getByRole('button',{name:'Guardar corrección',exact:true}).evaluate(button=>{button.click();button.click();});await page.getByRole('status').filter({hasText:'Pago corregido'}).waitFor();
+assert.equal(writes.filter(w=>w.action==='correct_appointment_payment').length,1);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,25000);assert.equal(db.read('appointments/apt').jobCharges.paymentCount,1);
+assert.equal(db.read(receiptKey).createdAt,original.createdAt);assert.equal(db.read(receiptKey).createdBy,original.createdBy);assert.equal(db.read(receiptKey).receivedDate,'2026-10-08');
+await page.getByRole('button',{name:'Historial',exact:true}).click();const history=page.getByRole('heading',{name:'Historial de importes y pagos'}).locator('..');
+for(const text of ['145.00','250.00','Efectivo','Transferencia','Monto, fecha y método capturados incorrectamente','Oficina de prueba'])assert.ok((await history.innerText()).includes(text));
+await page.getByRole('button',{name:'Importes y pagos',exact:true}).click();
+// An authoritative conflict keeps the edit values and prevents another save.
+await page.getByRole('button',{name:'Editar pago',exact:true}).click();await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('225');await page.getByLabel('Motivo de la corrección *',{exact:true}).fill('Conflicto sintético');
+const state=db.read('appointments/apt').jobCharges;db.store.set('appointments/apt',{...db.read('appointments/apt'),jobCharges:{...state,version:state.version+1}});
+await page.getByRole('button',{name:'Actualizar importes',exact:true}).click();await page.getByRole('alert').filter({hasText:'Los importes cambiaron'}).waitFor();assert.equal(await page.getByLabel('Monto recibido (Afl.)',{exact:true}).inputValue(),'225');assert.equal(await page.getByRole('button',{name:'Guardar corrección',exact:true}).isDisabled(),true);
+await page.getByRole('button',{name:'Cancelar edición',exact:true}).click();await page.getByRole('button',{name:'Editar pago',exact:true}).click();
+await page.getByLabel('Monto recibido (Afl.)',{exact:true}).fill('200');await page.getByLabel('Motivo de la corrección *',{exact:true}).fill('Corrección con respuesta perdida');dropNext=true;
+await page.getByRole('button',{name:'Guardar corrección',exact:true}).click();await page.getByRole('button',{name:'Reintentar la misma operación',exact:true}).waitFor();const request=structuredClone(writes.at(-1));
+assert.equal(db.read('appointments/apt').jobCharges.receivedCents,20000);page.once('dialog',d=>d.accept());await page.reload();await page.getByRole('button',{name:'Reintentar la misma operación',exact:true}).click();await page.getByRole('status').filter({hasText:'Pago corregido'}).waitFor();
+assert.deepEqual(writes.at(-1),request);assert.equal([...db.store.keys()].filter(k=>k.startsWith('payments/')).length,1);assert.equal(db.read('appointments/apt').jobCharges.receivedCents,20000);
+assert.equal([...db.store.entries()].filter(([key,value])=>key.includes('/chargeEvents/')&&value.action==='correct_appointment_payment').length,2);
+assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+results.push({name:'date-only-correction-audit-conflict-exact-recovery-'+viewport.width,status:'PASS'});console.log('PASS date-only correction/audit/conflict/recovery '+viewport.width);
+}finally{await correctionContext.close();}
+}
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(evidence,'results.json'),JSON.stringify(results,null,2));fs.rmSync(folder,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
