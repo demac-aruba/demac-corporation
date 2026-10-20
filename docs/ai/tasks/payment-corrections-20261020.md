@@ -19,3 +19,12 @@ Frontend capability is advertised by compatible backend; deploy isolated source 
 
 ## Verification
 Focused backend date/correction/denial/race/retry tests; real Firestore emulator; real component→HTTP facade→synthetic database correction/reload scenarios; existing drawer/booking/finance tests, types, Firebase validation and ERP build. Independent review recorded separately. Production checks read-only.
+
+
+## Verified before release
+- Local authority/lease/booking/after-hours: 90 tests passed; final focused appointment suite passed after adversarial corrections.
+- Drawer: 80 scenarios passed, including retained tab/session/catalog behavior. Real UI→HTTP Office facade→isolated database: 9 flows passed, including 1366px/390px correction, required reason/reference, version conflicts and exact retry after lost response+reload. Browser timezone Tokyo verifies Aruba date default.
+- TypeScript, Firebase syntax validation, charge display/PDF (13), draft recovery (8), release helper tests (19) and final production build passed.
+- Read-only live-source audit run 39466690105 (source 6129e3347373dcf37d00bb2dd6ff1b12c74086ce): live Office revision officebookingauthority-00090-ruq; unchanged published lock installed cleanly, baseline 127 and candidate 133 tests plus real bootstrap smoke passed. Candidate changes only appointmentCharges.js. Report under releases/payment-corrections-audit-20261020.json.
+- Independent review exercises additional same-day legacy precision/no-op and malformed linkage cases. No production customer mutations performed.
+- Merge/publication require final head CI, preview verification, exact source-only Office publication, then isolated frontend activation. Public checks cannot replace authenticated real-customer end-to-end verification; none will be simulated with real writes.
