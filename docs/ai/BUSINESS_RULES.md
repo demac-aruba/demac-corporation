@@ -386,9 +386,18 @@ Production activation remains separately owner-approved through the server-side 
 
 - Owner-approved receipt UX clarification (2026-10-19): appointment payments open directly
   with amount, reference, one cash/transfer/POS/SUAVE selector and editable current Aruba
-  date/time. The note is optional and collapsed. Displaying the empty form is not an edit;
+  date (without manual time selection, owner clarification 2026-10-20). The note is optional and collapsed. Displaying the empty form is not an edit;
   the first input captures its financial version. Registration remains one explicit,
   authority-confirmed operation; uncertain retries retain the exact original payload.
+
+- Owner-approved payment corrections (2026-10-20): office-recorded, unallocated operational
+  receipts may be corrected through the same Office authority, retaining receipt identity,
+  original creator/time and count. Require a reason and append paymentBefore/paymentAfter
+  snapshots with server actor/time. Adjust received balance by the amount delta atomically
+  with the receipt and appointment version. Linked/reconciled/inconsistent receipts remain
+  blocked. Date-only entry carries explicit Aruba business day plus compatible receivedAt;
+  registration/correction timestamps remain independent and server-owned. Existing timestamps
+  are preserved if their day is unchanged. No automatic repair/backfill of historical receipts.
 
 ## Booking Spots and workload support
 
