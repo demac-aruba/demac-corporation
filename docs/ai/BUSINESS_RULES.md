@@ -265,6 +265,15 @@ Production activation remains separately owner-approved through the server-side 
 - New or edited explicit attendance records preserve an additive snapshot of the resolved
   scheduled start, end, break allowance, and scheduled paid-free minutes. Existing records
   without snapshot fields remain valid; no historical backfill is required.
+- `OPS-STAFF-ATTENDANCE-SPLIT`: explicit intervals exclude off-duty gaps, deduct their own
+  breaks, reject overlaps, and attribute next-day work to the starting attendance date.
+  08:00–17:00 / 60m break plus 19:30–05:00 is 480 regular and 570 overtime minutes;
+  the 150-minute gap is excluded. Missing regular time remains independently classified.
+- `OPS-STAFF-ATTENDANCE-OT-RATE`: operators explicitly allocate net overtime minutes to
+  150% or 200%. The sum must equal overtime; existing unassigned hours retain their totals
+  until explicitly classified. Rate changes preserve recorded clock times and calculations.
+  Preserve prior values and actor/reason history. See
+  `decisions/ADR-20261025-split-attendance-overtime.md` for compatibility and recovery.
 - `CRM-LOCATION-001` (isolated preview): independent dwellings require explicit selection; stable Property-contained IDs and server membership checks preserve owner, contacts, equipment and visit scope. No apartment-count rule implies equipment count or automatic historical classification. See `decisions/ADR-20260921-property-dwellings.md`.
 
 ## Planned emergency and weekly-rest work

@@ -37,6 +37,18 @@ export type AttendanceWorkSegment = {
   completedAt?: string;
 };
 
+export type AttendanceWorkInterval = {
+  startTime: string;
+  endTime: string;
+  startDayOffset: 0 | 1;
+  endDayOffset: 0 | 1;
+  breakMinutes: number;
+};
+export type OvertimePayAllocation = { rate: 150 | 200; minutes: number };
+export function normalizeAttendanceIntervals(intervals: AttendanceWorkInterval[]): Array<AttendanceWorkInterval & { start: number; end: number }>;
+export function validateOvertimePayAllocations(allocations: OvertimePayAllocation[], overtimeMinutes: number): OvertimePayAllocation[];
+export function overtimeRateTotals(entry?: { overtimeMinutes?: number; overtimeHours?: number; overtimePayAllocations?: OvertimePayAllocation[] }): { at150: number; at200: number; unassigned: number; requiresReview: boolean };
+
 export type AttendanceVariance = {
   expectedBreakMinutes: number;
   workedMinutes: number;
@@ -54,6 +66,7 @@ export type AttendanceVariance = {
 };
 
 export type AttendanceVarianceWithWorkSegments = AttendanceVariance & {
+  excludedGapMinutes?: number;
   workSegmentMinutes: number;
   workSegmentOvertimeMinutes: number;
 };
@@ -75,6 +88,7 @@ export function calculateAttendanceVarianceWithWorkSegments(input: {
   clockOutTime: string;
   breakMinutes: number;
   workSegments?: AttendanceWorkSegment[];
+  workIntervals?: AttendanceWorkInterval[];
 }): AttendanceVarianceWithWorkSegments;
 export function classifyAttendanceExceptions(
   variance: AttendanceVariance,
@@ -82,3 +96,5 @@ export function classifyAttendanceExceptions(
 ): AttendanceExceptionSegment[];
 export function attendanceExceptionTotals(segments: AttendanceExceptionSegment[]): { paidMinutes: number; noWorkNoPayMinutes: number };
 export function attendanceExceptionKindLabel(kind: AttendanceExceptionKind): string;
+
+export function attendanceWorkWindows(entry: {date: string; clockInTime?: string; clockOutTime?: string; workIntervals?: AttendanceWorkInterval[]; workOrderAttendanceSegments?: AttendanceWorkSegment[]}, referenceDate: string): Array<[number, number]>;

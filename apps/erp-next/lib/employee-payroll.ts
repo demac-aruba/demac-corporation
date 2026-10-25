@@ -8,6 +8,8 @@ import {
 } from './employee-attendance';
 import { resolveEmployeeSchedule } from './employee-work-schedule';
 
+import { overtimeRateTotals } from './employee-attendance-calculation';
+
 export const MONTHLY_HOURS_FACTOR = 4.333;
 
 export type PayrollPeriod = {
@@ -24,6 +26,10 @@ export type PayrollDay = {
   paidFreeHours: number;
   regularHours: number;
   overtimeHours: number;
+  overtime150Hours?: number;
+  overtime200Hours?: number;
+  overtimeUnassignedHours?: number;
+  overtimeRateReviewRequired?: boolean;
   aoHours: number;
   vacationHours: number;
   noWorkNoPayHours: number;
@@ -38,6 +44,10 @@ export type PayrollEmployeeSummary = {
   monthlyBaseHours: number;
   actualRegularHours: number;
   overtimeHours: number;
+  overtime150Hours?: number;
+  overtime200Hours?: number;
+  overtimeUnassignedHours?: number;
+  overtimeRateReviewRequired?: boolean;
   aoHours: number;
   vacationHours: number;
   noWorkNoPayHours: number;
@@ -104,7 +114,12 @@ function absenceStatus(absence: CanonicalStaffAbsence | undefined) {
 }
 
 function dayFromTimesheet(entry: EmployeeTimesheetEntry, scheduledHours: number, scheduledPaidFree: number): PayrollDay {
+  const rates = overtimeRateTotals(entry);
   return {
+    overtime150Hours: rates.at150 / 60,
+    overtime200Hours: rates.at200 / 60,
+    overtimeUnassignedHours: rates.unassigned / 60,
+    overtimeRateReviewRequired: rates.requiresReview,
     employeeId: entry.employeeId,
     date: entry.date,
     scheduledWorkHours: roundHours(entry.scheduledWorkHours ?? scheduledHours),
@@ -229,6 +244,10 @@ export function summarizeEmployee(input: {
     monthlyBaseHours: monthlyBase,
     actualRegularHours: total('regularHours'),
     overtimeHours: overtime,
+    overtime150Hours: days.reduce((sum, day) => sum + (day.overtime150Hours ?? 0), 0),
+    overtime200Hours: days.reduce((sum, day) => sum + (day.overtime200Hours ?? 0), 0),
+    overtimeUnassignedHours: days.reduce((sum, day) => sum + (day.overtimeUnassignedHours ?? 0), 0),
+    overtimeRateReviewRequired: days.some((day) => day.overtimeRateReviewRequired),
     aoHours: total('aoHours'),
     vacationHours: total('vacationHours'),
     noWorkNoPayHours: noWork,

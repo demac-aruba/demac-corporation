@@ -26,7 +26,9 @@ import {
 } from '@/lib/employee-attendance';
 import {
   attendanceExceptionKindLabel,
-  calculateAttendanceVariance,
+  calculateAttendanceVarianceWithWorkSegments,
+  overtimeRateTotals,
+  validateOvertimePayAllocations,
   scheduledBreakMinutes,
 } from '@/lib/employee-attendance-calculation';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
@@ -35,6 +37,7 @@ import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
 import { EmployeeProfileDialog } from './employee-profile-dialog';
+import { EmployeeAttendanceIntervalEditor } from './employee-attendance-interval-editor';
 import { EmployeeBonusesPanel } from './employee-bonuses-panel';
 import { payrollBonusReport } from '@/lib/employee-bonuses';
 import styles from './employee-attendance-command-center.module.css';
@@ -49,6 +52,9 @@ type EmployeePeriodSummary = {
   scheduled: number;
   regular: number;
   overtime: number;
+  overtime150: number;
+  overtime200: number;
+  overtimeUnassigned: number;
   ao: number;
   vacation: number;
   nwnp: number;
@@ -161,6 +167,9 @@ export function EmployeeWorkspace() {
         reason: segment.reason,
       })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
+      workIntervals: record.entry?.workIntervals?.map((row) => ({ ...row })),
+      overtimePayAllocations: record.entry?.overtimePayAllocations?.map((row) => ({ ...row })),
+      changeReason: '',
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
 
@@ -203,7 +212,36 @@ export function EmployeeWorkspace() {
   const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
-  const selectedVariance = selectedRecord && draft ? calculateAttendanceVariance({ schedule: selectedRecord.schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes }) : null;
+  const attendanceInputsChanged = Boolean(selectedRecord && draft && (draft.clockInTime !== (selectedRecord.entry?.clockInTime ?? selectedRecord.schedule.startTime)
+    || draft.clockOutTime !== (selectedRecord.entry?.clockOutTime ?? selectedRecord.schedule.endTime)
+    || draft.breakMinutes !== (selectedRecord.entry?.breakMinutes ?? scheduledBreakMinutes(selectedRecord.schedule))
+    || JSON.stringify(draft.workIntervals) !== JSON.stringify(selectedRecord.entry?.workIntervals)));
+  const selectedCalculation = (() => {
+    if (!selectedRecord || !draft) return { variance: null, error: '' };
+    try {
+      const variance = calculateAttendanceVarianceWithWorkSegments({ workDate: selectedDate, schedule: selectedRecord.schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes, workIntervals: draft.workIntervals, workSegments: selectedRecord.entry?.workOrderAttendanceSegments });
+      // Loading a historical record or selecting its pay rate never recalculates its recorded hours.
+      if (selectedRecord.entry && !attendanceInputsChanged) {
+        variance.overtimeMinutes = selectedRecord.entry.overtimeMinutes ?? Math.round(selectedRecord.entry.overtimeHours * 60);
+        variance.workedMinutes = selectedRecord.entry.workedMinutes ?? variance.workedMinutes;
+        variance.missingSegments = selectedRecord.entry.attendanceExceptions ?? [];
+        variance.missingScheduledMinutes = variance.missingSegments.reduce((sum, row) => sum + row.minutes, 0);
+      }
+      return { variance, error: '' };
+    } catch (cause) { return { variance: null, error: cause instanceof Error ? cause.message : 'Review the work intervals.' }; }
+  })();
+  const selectedVariance = selectedCalculation.variance;
+  const selectedRates = overtimeRateTotals({ overtimeMinutes: selectedVariance?.overtimeMinutes ?? 0, overtimePayAllocations: draft?.overtimePayAllocations });
+  const intervalSaveError = (() => {
+    if (selectedCalculation.error) return selectedCalculation.error;
+    if (!draft) return '';
+    try {
+      if (draft.overtimePayAllocations !== undefined) validateOvertimePayAllocations(draft.overtimePayAllocations, selectedVariance?.overtimeMinutes ?? 0);
+      else if (draft.workIntervals?.length && (selectedVariance?.overtimeMinutes ?? 0) > 0) return 'Choose how to pay the calculated overtime.';
+      if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
+      return '';
+    } catch (cause) { return cause instanceof Error ? cause.message : 'Review the overtime allocation.'; }
+  })();
   const workedStatus = draft?.status === 'Present' || draft?.status === 'Late';
   const detectedAttendanceExceptions = workedStatus ? selectedVariance?.missingSegments ?? [] : [];
   const partialWorkday = detectedAttendanceExceptions.some((segment) => segment.kind === 'partial_day');
@@ -213,7 +251,7 @@ export function EmployeeWorkspace() {
   const selectedExceptionHours = Math.max(0, Number(draft?.exceptionHours) || 0);
   const selectedRegularHours = selectedRecord && draft
     ? workedStatus
-      ? Math.max(0, (selectedRecord.schedule.scheduledMinutes - (selectedVariance?.missingScheduledMinutes ?? 0)) / 60)
+      ? selectedRecord.entry && !attendanceInputsChanged ? selectedRecord.entry.regularHours : Math.max(0, (selectedRecord.schedule.scheduledMinutes - (selectedVariance?.missingScheduledMinutes ?? 0)) / 60)
       : Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0))
     : 0;
   const partialTreatmentTotals = detectedAttendanceExceptions.reduce((total, segment) => {
@@ -228,6 +266,7 @@ export function EmployeeWorkspace() {
   });
   const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular
     && draft?.status === 'Present'
+    && !draft.workIntervals?.length
     && !hasAttendanceTimeChange(selectedRecord.schedule, draft)
     && (selectedVariance?.overtimeMinutes ?? 0) === 0
     && detectedAttendanceExceptions.length === 0
@@ -318,7 +357,7 @@ export function EmployeeWorkspace() {
     }
     setBusy(true); setError(''); setMessage('');
     try {
-      const saved = await saveAttendanceDay({ employee: selectedEmployee, date: selectedDate, schedule: selectedRecord.schedule, draft, existingEntry: selectedRecord.entry, existingAbsence: selectedRecord.absence, updatedByUserId: principal.userId, updatedByName: principal.displayName });
+      const saved = await saveAttendanceDay({ employee: selectedEmployee, date: selectedDate, schedule: selectedRecord.schedule, draft, existingEntry: selectedRecord.entry, existingAbsence: selectedRecord.absence, updatedByUserId: principal.userId, updatedByName: principal.displayName, adjacentEntries: attendance.timesheets, nextScheduledStartTime: recordsFor(selectedEmployee, new Date(Date.parse(`${selectedDate}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)).schedule.startTime });
       setAttendance((current) => ({ ...current, timesheets: [...current.timesheets.filter((entry) => entry.id !== saved.id), saved] }));
       setMessage('Attendance exception saved. Overtime and partial exceptions were calculated from the scheduled shift.');
     } catch (cause) { setError(errorText(cause)); }
@@ -424,7 +463,7 @@ export function EmployeeWorkspace() {
         </section>
 
         <div className={styles.mainGrid}>
-          <section className={styles.calendarCard}>
+          <div><section className={styles.calendarCard}>
             <div className={styles.calendarToolbar}>
               <div>
                 <h2>{monthLabel(monthKey(period.end))}</h2>
@@ -449,7 +488,7 @@ export function EmployeeWorkspace() {
                 : exceptionCount
                   ? `${record?.status === 'Present' ? 'Present' : statusShort(record?.status ?? null)} · ${exceptionCount} ex.`
                   : hasOvertime && record?.status === 'Present'
-                    ? 'Present · OT'
+                    ? record?.entry?.workIntervals?.length ? 'Present · Split · OT' : 'Present · OT'
                     : record?.status ? statusShort(record.status) : 'Off';
               return <button
                 key={date}
@@ -462,6 +501,7 @@ export function EmployeeWorkspace() {
             })}</div>
             <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / outside payroll</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
           </section>
+          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>OT 150%</th><th>OT 200%</th><th>Rate not assigned</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td><td>{hours(selectedSummary?.overtimeUnassigned ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Existing overtime stays visible without assigning a new pay rate automatically.</p></section></div>
 
           <aside className={styles.rightRail}>
             <section className={styles.dailyCard}>
@@ -470,9 +510,13 @@ export function EmployeeWorkspace() {
                 {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Enter only what actually changed; overtime and partial missing time are calculated from the employee schedule.</div> : null}
                 <Field label="Status" full><select className={styles.control} value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as AttendanceStatus, exceptionHours: ['Sick', 'Vacation', 'Absent'].includes(event.target.value) ? (draft.exceptionHours ?? selectedRecord.schedule.scheduledMinutes / 60) : undefined })}>{STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ATTENDANCE_STATUS_LABELS[status]}</option>)}</select></Field>
                 {['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <Field label="Exception Hours" full><input className={styles.control} type="number" min="0" max={selectedRecord.schedule.scheduledMinutes / 60} step="0.25" value={draft.exceptionHours ?? ''} onChange={(event) => setDraft({ ...draft, exceptionHours: Number(event.target.value) })} /></Field> : null}
+                {!draft.workIntervals?.length ? <>
                 <Field label="Clock In"><input className={styles.control} type="time" value={draft.clockInTime} onChange={(event) => setDraft({ ...draft, clockInTime: event.target.value })} /></Field>
                 <Field label="Clock Out"><input className={styles.control} type="time" value={draft.clockOutTime} onChange={(event) => setDraft({ ...draft, clockOutTime: event.target.value })} /></Field>
                 <Field label="Break Minutes" full><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft({ ...draft, breakMinutes: Number(event.target.value) })} /></Field>
+                </> : null}
+                {workedStatus ? <EmployeeAttendanceIntervalEditor draft={draft} onChange={setDraft} existing={selectedRecord.entry} disabled={busy || !canManageSensitiveAttendance} overtimeMinutes={selectedVariance?.overtimeMinutes ?? 0} excludedGapMinutes={selectedVariance?.excludedGapMinutes} /> : null}
+                {intervalSaveError ? <div className={styles.notice} role="status">{intervalSaveError}</div> : null}
 
                 {workedStatus && selectedVariance ? <div className={styles.dailySummary}>
                   <SummaryRow icon="timer" label="Calculated Overtime" value={hoursAndMinutes(selectedVariance.overtimeMinutes)} tone="orange" />
@@ -501,12 +545,13 @@ export function EmployeeWorkspace() {
                   <SummaryRow icon="vacation" label="Scheduled Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
                   <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
                   <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
-                  {workedStatus ? <SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /> : null}
+                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.unassigned > 0 ? <SummaryRow icon="timer" label="Overtime · rate not assigned" value={hoursAndMinutes(selectedRates.unassigned)} tone="orange" /> : null}</> : null}
                   {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
                   {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}
                 </div>
-                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
+                {selectedRecord.entry?.attendanceHistory?.length ? <details className={styles.attendanceAudit}><summary>Attendance history · {selectedRecord.entry.attendanceHistory.length} changes</summary>{[...selectedRecord.entry.attendanceHistory].reverse().map((event) => <article key={event.id}><strong>{event.actorName}</strong> · {new Date(event.at).toLocaleString('en-AW', { timeZone: 'America/Aruba' })}<p>{event.reason}</p><details><summary>Previous and saved values</summary><pre>{JSON.stringify({ before: event.before, after: event.after }, null, 2)}</pre></details></article>)}</details> : null}
+                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException || !!intervalSaveError} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
               </div> : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}
             </section>
             <section className={styles.rangesCard}><div className={styles.rangesIcon}><Icon name="calendar" /></div><div><h3>Recent / Scheduled Ranges</h3>{selectedAbsenceRanges.length ? selectedAbsenceRanges.map((range) => <p key={range.id}><strong>{range.reason ?? 'Absence'}</strong> · {range.fromDate ?? '—'}{range.toDate && range.toDate !== range.fromDate ? ` → ${range.toDate}` : ''}</p>) : <p>No absence ranges recorded.</p>}</div></section>

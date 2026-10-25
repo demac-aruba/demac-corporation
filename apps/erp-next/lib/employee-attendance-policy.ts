@@ -1,6 +1,7 @@
 import type { CanonicalOperationsState, CanonicalStaffProfile } from './canonical-operations';
 import {
   absenceForDate,
+  scheduleForRecordedAttendance,
   payrollSettingsForEmployee,
   statusFromRecords,
   timesheetForDate,
@@ -28,6 +29,9 @@ export type AttendancePeriodSummary = {
   scheduled: number;
   regular: number;
   overtime: number;
+  overtime150: number;
+  overtime200: number;
+  overtimeUnassigned: number;
   ao: number;
   vacation: number;
   nwnp: number;
@@ -71,7 +75,7 @@ export function deriveAttendanceDay(input: {
   attendance: EmployeeAttendanceState;
 }): AttendanceDayView {
   const { employee, date, operations, attendance } = input;
-  const schedule = resolveEmployeeSchedule({
+  let schedule = resolveEmployeeSchedule({
     profile: employee,
     date,
     payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, employee),
@@ -80,6 +84,7 @@ export function deriveAttendanceDay(input: {
   });
   const absence = absenceForDate(operations.staffAbsences, employee.id, date);
   const entry = timesheetForDate(attendance.timesheets, employee.id, date);
+  schedule = scheduleForRecordedAttendance(schedule, entry);
   const explicitStatus = statusFromRecords(entry, absence, schedule.scheduledMinutes);
   const assumedRegular = !entry && !absence && schedule.scheduledMinutes > 0;
 
@@ -117,6 +122,9 @@ export function summarizeAttendancePeriod(input: {
     scheduled: total((day) => day.scheduledWorkHours),
     regular: total((day) => day.regularHours),
     overtime: total((day) => day.overtimeHours),
+    overtime150: total((day) => day.overtime150Hours ?? 0),
+    overtime200: total((day) => day.overtime200Hours ?? 0),
+    overtimeUnassigned: total((day) => day.overtimeUnassignedHours ?? 0),
     ao: total((day) => day.aoHours),
     vacation: total((day) => day.vacationHours),
     nwnp: total((day) => day.noWorkNoPayHours),

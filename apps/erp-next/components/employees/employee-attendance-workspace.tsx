@@ -207,6 +207,7 @@ export function EmployeeAttendanceWorkspace() {
         schedule: record.schedule,
         draft,
         existingEntry: record.entry,
+        adjacentEntries: attendance.timesheets,
         existingAbsence: record.absence,
         updatedByUserId: principal.userId,
         updatedByName: principal.displayName,

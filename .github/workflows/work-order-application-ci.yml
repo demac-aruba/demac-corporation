@@ -72,7 +72,7 @@ jobs:
           node --check functions/workOrderApplicationService.js
 
       - name: Run shared attendance authority tests
-        run: node --test functions/employeeAttendanceCalculation.test.js
+        run: node --test functions/employeeAttendanceCalculation.test.js functions/employeeAttendanceSplit.test.js
 
       - name: Run Booking Authority aggregate regression
         run: npm run --prefix functions test:booking-authority

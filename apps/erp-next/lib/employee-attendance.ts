@@ -1,4 +1,4 @@
-import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument, mutateFirestoreDocumentWithReads } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import type { PayrollAdjustment } from './employee-bonuses';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
@@ -12,6 +12,11 @@ import {
   type AttendanceExceptionClassification,
   type AttendanceExceptionSegment,
   type AttendanceWorkSegment,
+  normalizeAttendanceIntervals,
+  attendanceWorkWindows,
+  validateOvertimePayAllocations,
+  type AttendanceWorkInterval,
+  type OvertimePayAllocation,
 } from './employee-attendance-calculation';
 
 export { minutesBetween, workedMinutes } from './employee-attendance-calculation';
@@ -21,6 +26,8 @@ export type {
   AttendanceExceptionSegment,
   AttendancePaymentTreatment,
   AttendanceWorkSegment,
+  AttendanceWorkInterval,
+  OvertimePayAllocation,
 } from './employee-attendance-calculation';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
@@ -70,6 +77,10 @@ export type EmployeeTimesheetEntry = {
   workedMinutes?: number;
   attendanceExceptions?: AttendanceExceptionSegment[];
   workOrderAttendanceSegments?: AttendanceWorkSegment[];
+  workIntervals?: AttendanceWorkInterval[];
+  overtimePayAllocations?: OvertimePayAllocation[];
+  attendanceChangeReason?: string;
+  attendanceHistory?: Array<{ id: string; at: string; actorId: string; actorName: string; reason: string; before: Record<string, unknown> | null; after: Record<string, unknown> }>;
   overtimeCalculationSource?: 'attendance_authority' | 'attendance_authority_with_work_segments';
   overtimeReconciliationRequired?: boolean;
   lastWorkOrderCompletedAt?: string;
@@ -111,6 +122,9 @@ export type AttendanceDayDraft = {
   exceptionHours?: number;
   attendanceExceptionClassifications?: AttendanceExceptionClassification[];
   notes: string;
+  workIntervals?: AttendanceWorkInterval[];
+  overtimePayAllocations?: OvertimePayAllocation[];
+  changeReason?: string;
 };
 
 export type AttendanceSchedule = {
@@ -378,6 +392,14 @@ export function hasAttendanceTimeChange(schedule: AttendanceSchedule, draft: Pic
     || draft.breakMinutes !== scheduledBreakMinutes(schedule);
 }
 
+export function scheduleForRecordedAttendance<T extends AttendanceSchedule>(schedule: T, entry?: EmployeeTimesheetEntry): T {
+  if (!(entry?.workIntervals?.length || entry?.overtimePayAllocations !== undefined) || !entry.scheduledStartTime || !entry.scheduledEndTime) return schedule;
+  return { ...schedule, startTime: entry.scheduledStartTime, endTime: entry.scheduledEndTime,
+    scheduledMinutes: Math.round(entry.scheduledWorkHours * 60), paidFreeMinutes: entry.scheduledPaidFreeMinutes ?? schedule.paidFreeMinutes,
+    expectedBreakMinutes: entry.scheduledBreakMinutes ?? scheduledBreakMinutes(schedule),
+    label: `Recorded schedule · ${entry.scheduledStartTime}–${entry.scheduledEndTime}` };
+}
+
 export async function saveAttendanceDay(input: {
   employee: CanonicalStaffProfile;
   date: string;
@@ -387,8 +409,11 @@ export async function saveAttendanceDay(input: {
   existingAbsence?: CanonicalStaffAbsence;
   updatedByUserId?: string;
   updatedByName?: string;
+  adjacentEntries?: EmployeeTimesheetEntry[];
+  nextScheduledStartTime?: string;
 }) {
-  const { employee, date, schedule, draft, existingEntry, existingAbsence, updatedByUserId, updatedByName } = input;
+  const { employee, date, draft, existingEntry, existingAbsence, updatedByUserId, updatedByName } = input;
+  const schedule = scheduleForRecordedAttendance(input.schedule, existingEntry);
   const now = new Date().toISOString();
   const scheduledHours = roundHours(schedule.scheduledMinutes);
   const scheduledPaidFreeMinutes = Math.max(0, Math.round(schedule.paidFreeMinutes));
@@ -396,13 +421,26 @@ export async function saveAttendanceDay(input: {
   const exceptionStatus = draft.status === 'Sick' || draft.status === 'Vacation' || draft.status === 'Absent';
   const workedStatus = draft.status === 'Present' || draft.status === 'Late';
   const workOrderAttendanceSegments = existingEntry?.workOrderAttendanceSegments ?? [];
+  const enhanced = Boolean(draft.workIntervals?.length || draft.overtimePayAllocations !== undefined || existingEntry?.workIntervals?.length || existingEntry?.overtimePayAllocations !== undefined);
+  const workIntervals = draft.workIntervals?.length ? normalizeAttendanceIntervals(draft.workIntervals).map(({ start: _start, end: _end, ...row }) => row) : undefined;
+  const ratesOnly = Boolean(existingEntry && JSON.stringify(workIntervals) === JSON.stringify(existingEntry.workIntervals)
+    && draft.overtimePayAllocations !== undefined
+    && draft.clockInTime === (existingEntry.clockInTime ?? schedule.startTime)
+    && draft.clockOutTime === (existingEntry.clockOutTime ?? schedule.endTime)
+    && draft.breakMinutes === (existingEntry.breakMinutes ?? scheduledBreakMinutesValue)
+    && draft.status === (existingEntry.attendanceStatus ?? statusFromRecords(existingEntry, undefined, schedule.scheduledMinutes))
+    && JSON.stringify(draft.attendanceExceptionClassifications ?? []) === JSON.stringify((existingEntry.attendanceExceptions ?? []).map(({ kind, treatment, reason }) => ({ kind, treatment, reason }))));
+  if (existingEntry?.workIntervals?.length && !workIntervals) throw new Error('Keep the recorded work intervals. Edit them explicitly instead of removing split mode.');
+  if (enhanced && existingAbsence?.active !== false && existingAbsence) throw new Error('Resolve the active absence before recording worked intervals or overtime rates.');
+  if (enhanced && !workedStatus) throw new Error('Work intervals and overtime rates require Present or Late status.');
+  if (enhanced && (!updatedByUserId || !draft.changeReason?.trim())) throw new Error('Enter a reason for this attendance or overtime-rate change.');
 
-  if (workedStatus && schedule.scheduledMinutes > 0) {
+  if (workedStatus && schedule.scheduledMinutes > 0 && !workIntervals && !ratesOnly) {
     if (!draft.clockInTime || !draft.clockOutTime) throw new Error('Clock In and Clock Out are required for a worked attendance day.');
     if (!hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime)) throw new Error('Clock Out must be later than Clock In.');
   }
 
-  const hasBaseAttendance = hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime);
+  const hasBaseAttendance = Boolean(workIntervals) || hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime);
   const variance = calculateAttendanceVarianceWithWorkSegments({
     workDate: date,
     schedule,
@@ -410,8 +448,9 @@ export async function saveAttendanceDay(input: {
     clockOutTime: draft.clockOutTime,
     breakMinutes: draft.breakMinutes,
     workSegments: workOrderAttendanceSegments,
+    workIntervals,
   });
-  const attendanceExceptions = workedStatus
+  const attendanceExceptions = ratesOnly ? existingEntry?.attendanceExceptions ?? [] : workedStatus
     ? classifyAttendanceExceptions(variance, draft.attendanceExceptionClassifications)
     : [];
   const partialTotals = attendanceExceptionTotals(attendanceExceptions);
@@ -438,11 +477,16 @@ export async function saveAttendanceDay(input: {
   const noWorkNoPayMinutesValue = workedStatus
     ? partialTotals.noWorkNoPayMinutes
     : Math.round(fullDayNoWorkNoPayHours * 60);
-  const overtimeMinutesValue = preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes;
+  const overtimeMinutesValue = ratesOnly || preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes;
+  const overtimePayAllocations = draft.overtimePayAllocations === undefined
+    ? workIntervals && overtimeMinutesValue === 0 ? [] : existingEntry?.overtimePayAllocations
+    : validateOvertimePayAllocations(draft.overtimePayAllocations, overtimeMinutesValue);
+  if (enhanced && overtimePayAllocations !== undefined) validateOvertimePayAllocations(overtimePayAllocations, overtimeMinutesValue);
+  if (workIntervals && overtimeMinutesValue > 0 && !overtimePayAllocations) throw new Error('Choose how to pay the calculated overtime.');
 
-  const entry: EmployeeTimesheetEntry = {
+  let entry: EmployeeTimesheetEntry = {
     ...existingEntry,
-    id: `${employee.id}_${date}`,
+    id: existingEntry?.id ?? `${employee.id}_${date}`,
     payrollPeriodId: payrollPeriodForDate(date),
     employeeId: employee.id,
     employeeName: input.employee.name ?? input.employee.id,
@@ -465,6 +509,8 @@ export async function saveAttendanceDay(input: {
     workedMinutes: variance.workedMinutes,
     attendanceExceptions,
     workOrderAttendanceSegments,
+    ...(workIntervals ? { workIntervals } : {}),
+    ...(overtimePayAllocations !== undefined ? { overtimePayAllocations } : {}),
     overtimeCalculationSource: workOrderAttendanceSegments.length ? 'attendance_authority_with_work_segments' : 'attendance_authority',
     overtimeReconciliationRequired: preserveUnknownLegacyOvertime,
     scheduledStartTime: schedule.startTime || undefined,
@@ -476,8 +522,47 @@ export async function saveAttendanceDay(input: {
     updatedByUserId,
     updatedByName,
   };
+  if (ratesOnly) entry = { ...existingEntry!, notes: draft.notes.trim(), overtimePayAllocations, updatedAt: now, updatedByUserId, updatedByName };
 
-  await saveFirestoreDocument('employeeTimesheets', entry);
+  if (enhanced || (workedStatus && input.adjacentEntries !== undefined)) {
+    const reason = draft.changeReason?.trim() || 'Attendance update';
+    const adjacent = (input.adjacentEntries ?? []).filter((row) => row.employeeId === employee.id && Math.abs(Date.parse(row.date) - Date.parse(date)) <= 86400000 && row.id !== entry.id);
+    if (adjacent.some((row) => row.date === date)) throw new Error('Multiple records exist for this employee and date. Review them before saving.');
+    const previousDate = new Date(Date.parse(`${date}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const nextDate = new Date(Date.parse(`${date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    const readIds = [...adjacent.map((row) => row.id), `${employee.id}_${previousDate}`, `${employee.id}_${nextDate}`];
+    const comparison = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item);
+    const snapshot = (value: EmployeeTimesheetEntry) => {
+      const { attendanceHistory: _history, ...rest } = value;
+      return rest as Record<string, unknown>;
+    };
+    const comparable = (value: EmployeeTimesheetEntry) => {
+      const { createdAt: _created, updatedAt: _updated, attendanceChangeReason: _reason, ...rest } = snapshot(value);
+      return comparison(rest);
+    };
+    const saved = await mutateFirestoreDocumentWithReads<EmployeeTimesheetEntry>('employeeTimesheets', entry.id, readIds, (current, records) => {
+      if (current && comparable(current) === comparable(entry) && current.attendanceChangeReason === reason) return null;
+      if (comparison(current) !== comparison(existingEntry ?? null)) throw new Error('This attendance record changed. Refresh and review the latest values before saving.');
+      const intervalRows = workIntervals ?? [{ startTime: draft.clockInTime, endTime: draft.clockOutTime, startDayOffset: 0, endDayOffset: 0, breakMinutes: draft.breakMinutes }];
+      const normalized = ratesOnly ? [] : normalizeAttendanceIntervals(intervalRows);
+      const nextStart = input.nextScheduledStartTime;
+      if (normalized.some((row) => row.endDayOffset && nextStart && row.end > 1440 + Number(nextStart.slice(0, 2)) * 60 + Number(nextStart.slice(3, 5)))) throw new Error('This interval overlaps the next scheduled workday. Record that day separately.');
+      for (const other of Object.values(records)) {
+        if (!other || other.id === entry.id) continue;
+        if (other.employeeId !== employee.id) throw new Error('Unexpected employee identity in adjacent attendance.');
+        const otherWindows = attendanceWorkWindows(other, date);
+        if (otherWindows.some(([start, end]) => normalized.some((n) => start < n.end && end > n.start))) throw new Error('These hours overlap an existing attendance record on an adjacent date.');
+      }
+      const history = [...(current?.attendanceHistory ?? []), { id: `${updatedByUserId}-${now}`, at: now, actorId: updatedByUserId!, actorName: updatedByName ?? updatedByUserId!, reason, before: current ? snapshot(current) : null, after: snapshot(entry) }];
+      if (comparison(history).length > 700000) throw new Error('Attendance history is too large to extend safely. No history has been removed.');
+      // Masked fields: unknown fields are never replaced or removed. The old
+      // record is retained verbatim in history before an operator's explicit edit.
+      const changedFields = Object.fromEntries(Object.entries(entry).filter(([key, value]) => key !== 'id' && value !== undefined && comparison((current as unknown as Record<string, unknown> | null)?.[key]) !== comparison(value)));
+      return { ...changedFields, attendanceHistory: history, attendanceChangeReason: reason };
+    });
+    if (enhanced) return saved;
+    entry = saved;
+  } else await saveFirestoreDocument('employeeTimesheets', entry);
 
   const fullDayException = scheduledHours > 0 && exceptionHours >= scheduledHours;
   const desiredAbsenceReason = fullDayException && draft.status === 'Sick'

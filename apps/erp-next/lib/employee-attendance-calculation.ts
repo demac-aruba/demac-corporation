@@ -8,6 +8,10 @@ export {
   minutesBetween,
   scheduledBreakMinutes,
   workedMinutes,
+  normalizeAttendanceIntervals,
+  validateOvertimePayAllocations,
+  overtimeRateTotals,
+  attendanceWorkWindows,
 } from '../../../functions/employeeAttendanceCalculation';
 
 export type {
@@ -20,4 +24,6 @@ export type {
   AttendanceVarianceWithWorkSegments,
   AttendanceWorkSegment,
   DetectedAttendanceException,
+  AttendanceWorkInterval,
+  OvertimePayAllocation,
 } from '../../../functions/employeeAttendanceCalculation';
