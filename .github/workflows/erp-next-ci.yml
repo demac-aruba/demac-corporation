@@ -139,6 +139,11 @@ jobs:
           ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence
         run: node apps/erp-next/scripts/employee-partial-day-browser.cjs
+      - name: Split shifts and overtime rates in desktop and mobile
+        env:
+          ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence/split
+        run: node apps/erp-next/scripts/employee-split-browser.cjs
       - name: Retain synthetic attendance browser evidence
         if: always()
         uses: actions/upload-artifact@v4

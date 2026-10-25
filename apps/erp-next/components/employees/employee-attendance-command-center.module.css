@@ -10,6 +10,32 @@
   color: var(--ink, var(--att-ink));
 }
 
+.intervalEditor { grid-column: 1 / -1; border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 10px; }
+.splitToggle { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid #cfdef6; border-radius: 9px; background: color-mix(in srgb, var(--panel, #fff) 92%, #eaf3ff); font-size: 10px; }
+.splitToggle input, .intervalDates input { accent-color: #1769e8; }
+.splitToggle small { display: block; margin-top: 3px; color: var(--muted, #738197); font-size: 9px; }
+.intervalSection { border-top: 1px solid var(--line, #dfe7f1); padding-top: 10px; }
+.intervalTitle { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 10px; }
+.intervalTitle button { border: 0; background: transparent; color: var(--att-blue); font: inherit; cursor: pointer; }
+.intervalCard { border: 1px solid var(--line, #dfe7f1); border-radius: 10px; padding: 10px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel, #fff) 96%, #eef4fa); }
+.intervalFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 78px; gap: 8px; }
+.intervalDates { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 7px; color: var(--muted, #738197); font-size: 9px; }
+.intervalDates label { display: inline-flex; align-items: center; gap: 4px; }
+.intervalHint { margin: 7px 0 0; color: var(--muted, #738197); font-size: 9px; line-height: 1.5; }
+.rateModes { display: flex; padding: 3px; gap: 3px; border: 1px solid var(--line, #dfe7f1); background: var(--bg, #f5f7fb); border-radius: 8px; margin-bottom: 9px; }
+.rateModes button { flex: 1; font: inherit; font-size: 10px; min-height: 30px; padding: 5px; border: 0; background: transparent; color: var(--muted, #738197); border-radius: 5px; cursor: pointer; }
+.rateModes button[aria-pressed='true'] { background: var(--panel, #fff); color: var(--att-blue); box-shadow: 0 2px 7px #20354f15; font-weight: 750; }
+.rateFields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.attendanceAudit { grid-column: 1 / -1; border: 1px solid var(--line, #dfe7f1); border-radius: 9px; padding: 10px; font-size: 10px; }
+.attendanceAudit summary { cursor: pointer; color: var(--att-blue); font-weight: 750; }
+.attendanceAudit article { margin-top: 9px; border-top: 1px solid var(--line, #dfe7f1); padding-top: 8px; }
+.attendanceAudit pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 9px; }
+.payrollBreakdown { margin-top: 16px; padding: 16px; border: 1px solid var(--line, #dfe7f1); border-radius: 16px; background: var(--panel, #fff); }
+.payrollBreakdown h3 { margin: 0 0 10px; font-size: 13px; }
+.payrollBreakdown table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.payrollBreakdown th, .payrollBreakdown td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--line, #e5ebf2); }
+@media(max-width:470px) { .intervalFields { grid-template-columns: 1fr 1fr; } .intervalFields .field:last-child { grid-column: 1 / -1; } }
+
 .pageHeader {
   display: flex;
   align-items: flex-end;

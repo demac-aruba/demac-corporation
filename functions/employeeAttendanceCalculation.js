@@ -281,6 +281,7 @@ function outsideScheduleIntervals(intervals, schedule) {
  * attendance record because after-hours evidence cannot classify in-shift absences.
  */
 function calculateAttendanceVarianceWithWorkSegments(input) {
+  if (Array.isArray(input?.workIntervals) && input.workIntervals.length) return calculateSplitAttendance(input);
   const base = calculateAttendanceVariance(input || {});
   const workDate = String(input?.workDate || '').trim();
   const segments = (Array.isArray(input?.workSegments) ? input.workSegments : [])
@@ -308,14 +309,117 @@ function calculateAttendanceVarianceWithWorkSegments(input) {
   };
 }
 
+// Opt-in attendance intervals. The legacy calculation above is unchanged for every
+// existing record without these fields. Off-duty gaps are never worked minutes.
+function normalizeAttendanceIntervals(intervals) {
+  if (!Array.isArray(intervals) || !intervals.length || intervals.length > 12) throw new Error('Enter between 1 and 12 work intervals.');
+  const normalized = intervals.map((row) => {
+    const startDayOffset = row.startDayOffset ?? 0;
+    const endDayOffset = row.endDayOffset ?? 0;
+    const startClock = /^\d{2}:\d{2}$/.test(row.startTime) ? minutesOfDay(row.startTime) : undefined;
+    const endClock = /^\d{2}:\d{2}$/.test(row.endTime) ? minutesOfDay(row.endTime) : undefined;
+    if (startClock === undefined || endClock === undefined || ![0, 1].includes(startDayOffset) || ![0, 1].includes(endDayOffset)) throw new Error('Choose valid times and dates for every interval.');
+    const start = startClock + startDayOffset * 1440, end = endClock + endDayOffset * 1440;
+    const pause = row.breakMinutes;
+    if (end <= start || end - start > 1440) throw new Error('Clock Out must be later than Clock In, within 24 hours. Select next day when applicable.');
+    if (!Number.isInteger(pause) || pause < 0 || pause >= end - start) throw new Error('Break minutes must be a whole number smaller than the work interval.');
+    return { startTime: row.startTime, endTime: row.endTime, startDayOffset, endDayOffset, breakMinutes: pause, start, end };
+  }).sort((a, b) => a.start - b.start);
+  if (normalized[0].startDayOffset !== 0) throw new Error('The first work interval must start on the selected date.');
+  for (let i = 1; i < normalized.length; i++) if (normalized[i].start < normalized[i - 1].end) throw new Error('Work intervals cannot overlap.');
+  return normalized;
+}
+
+function calculateSplitAttendance(input) {
+  const rows = normalizeAttendanceIntervals(input.workIntervals);
+  const schedule = input.schedule || {};
+  const scheduled = Math.max(0, Number(schedule.scheduledMinutes) || 0);
+  const scheduleStart = minutesOfDay(schedule.startTime), scheduleEnd = minutesOfDay(schedule.endTime);
+  const expectedBreak = scheduledBreakMinutes(schedule);
+  let insideWorked = 0, outsideWorked = 0, earlyStart = 0, lateFinish = 0;
+  for (const row of rows) {
+    const inside = scheduled > 0 && scheduleStart !== undefined && scheduleEnd !== undefined
+      ? Math.max(0, Math.min(row.end, scheduleEnd) - Math.max(row.start, scheduleStart)) : 0;
+    // A duration-only break consumes regular-window time first, matching the
+    // existing daily attendance policy. Outside-only intervals deduct their own break.
+    const regularBreak = Math.min(inside, row.breakMinutes);
+    insideWorked += inside - regularBreak;
+    outsideWorked += row.end - row.start - inside - (row.breakMinutes - regularBreak);
+    if (scheduled > 0) {
+      earlyStart += Math.max(0, Math.min(row.end, scheduleStart) - row.start);
+      lateFinish += Math.max(0, row.end - Math.max(row.start, scheduleEnd));
+    }
+  }
+  const manualIntervals = rows.map((r) => [r.start, r.end]);
+  const evidence = (input.workSegments || []).map((segment) => segmentInterval(input.workDate, segment)).filter(Boolean);
+  const unique = subtractIntervals(evidence, manualIntervals);
+  const evidenceMinutes = intervalMinutes(unique);
+  const evidenceOvertime = intervalMinutes(outsideScheduleIntervals(unique, schedule));
+  const regularMinutes = Math.min(scheduled, insideWorked);
+  const missing = Math.max(0, scheduled - regularMinutes);
+  const extraInside = Math.max(0, insideWorked - scheduled);
+  const first = rows[0], last = rows[rows.length - 1];
+  return {
+    ...emptyVariance(expectedBreak, insideWorked + outsideWorked + evidenceMinutes),
+    earlyStartMinutes: earlyStart,
+    lateFinishMinutes: lateFinish,
+    unusedBreakMinutes: extraInside,
+    overtimeMinutes: outsideWorked + extraInside + evidenceOvertime,
+    lateArrivalMinutes: scheduled > 0 ? Math.max(0, Math.min(scheduled, first.start - scheduleStart)) : 0,
+    earlyDepartureMinutes: scheduled > 0 ? Math.max(0, Math.min(scheduled, scheduleEnd - last.end)) : 0,
+    missingScheduledMinutes: missing,
+    missingSegments: missing ? [{ kind: 'partial_day', minutes: missing }] : [],
+    workSegmentMinutes: evidenceMinutes,
+    workSegmentOvertimeMinutes: evidenceOvertime,
+    excludedGapMinutes: rows.slice(1).reduce((sum, row, i) => sum + row.start - rows[i].end, 0),
+  };
+}
+
+// Absolute-minute windows for cross-date conflict checks; includes Work Order evidence.
+function attendanceWorkWindows(entry, referenceDate) {
+  const offset = (Date.parse(entry.date + 'T00:00:00Z') - Date.parse(referenceDate + 'T00:00:00Z')) / 60000;
+  if (!Number.isFinite(offset)) throw new Error('Invalid attendance date.');
+  const base = entry.workIntervals?.length ? normalizeAttendanceIntervals(entry.workIntervals).map(r => [r.start, r.end])
+    : hasValidWorkedTimeRange(entry.clockInTime, entry.clockOutTime) ? [[minutesOfDay(entry.clockInTime), minutesOfDay(entry.clockOutTime)]] : [];
+  const evidence = (entry.workOrderAttendanceSegments || []).map(s => segmentInterval(entry.date, s)).filter(Boolean);
+  return mergeIntervals([...base, ...evidence]).map(([start, end]) => [start + offset, end + offset]);
+}
+
+function validateOvertimePayAllocations(allocations, overtimeMinutes) {
+  if (!Array.isArray(allocations) || allocations.length > 24) throw new Error('Choose valid overtime pay allocations.');
+  let total = 0;
+  const result = allocations.map((row) => {
+    if (![150, 200].includes(row.rate) || !Number.isInteger(row.minutes) || row.minutes <= 0) throw new Error('Each overtime allocation needs a positive number of minutes and a 150% or 200% rate.');
+    total += row.minutes;
+    return { rate: row.rate, minutes: row.minutes };
+  });
+  if (total !== overtimeMinutes) throw new Error('Assigned overtime must exactly match calculated overtime.');
+  return result;
+}
+
+function overtimeRateTotals(entry) {
+  const total = Math.max(0, Math.round(Number(entry?.overtimeMinutes ?? (Number(entry?.overtimeHours || 0) * 60)) || 0));
+  let at150 = 0, at200 = 0, invalid = false;
+  for (const row of entry?.overtimePayAllocations || []) {
+    if (![150, 200].includes(row.rate) || !Number.isInteger(row.minutes) || row.minutes <= 0) { invalid = true; continue; }
+    if (row.rate === 150) at150 += row.minutes; else at200 += row.minutes;
+  }
+  return { at150, at200, unassigned: Math.max(0, total - at150 - at200), requiresReview: invalid || at150 + at200 > total };
+}
+
 module.exports = {
   attendanceExceptionKindLabel,
   attendanceExceptionTotals,
   calculateAttendanceVariance,
   calculateAttendanceVarianceWithWorkSegments,
+  normalizeAttendanceIntervals,
+  validateOvertimePayAllocations,
+  overtimeRateTotals,
   classifyAttendanceExceptions,
   hasValidWorkedTimeRange,
   minutesBetween,
   scheduledBreakMinutes,
   workedMinutes,
 };
+
+module.exports.attendanceWorkWindows = attendanceWorkWindows;

@@ -284,3 +284,50 @@ export async function mutateFirestoreDocument<T extends { id: string }>(
   }
   throw new Error('Payroll changed concurrently. Refresh and retry.');
 }
+
+/** One masked write, with current/adjacent attendance records read atomically.
+ * Reads do not materialize missing days. Firestore Rules apply to every request.
+ */
+export async function mutateFirestoreDocumentWithReads<T extends { id: string }>(
+  collectionPath: string, id: string, readIds: string[],
+  changesFor: (current: T | null, records: Record<string, T | null>) => Record<string, unknown> | null,
+): Promise<T> {
+  const ids = [...new Set([id, ...readIds])];
+  if (ids.length > 20 || [collectionPath, ...ids].some((value) => !value || value.includes('/') || value === '.' || value === '..')) throw new Error('Invalid attendance transaction.');
+  const url = baseUrl();
+  const prefix = url.slice('https://firestore.googleapis.com/v1/'.length);
+  const begin = await authenticatedFetch(`${url}:beginTransaction`, { method: 'POST', body: JSON.stringify({ options: { readWrite: {} } }) });
+  if (!begin.ok) throw await firebaseResponseError(begin, 'Unable to begin attendance save.');
+  const { transaction } = await readFirebaseJson<{ transaction: string }>(begin);
+  if (!transaction) throw new Error('Missing attendance transaction.');
+  try {
+    const names = new Map(ids.map((key) => [`${prefix}/${collectionPath}/${key}`, key]));
+    const read = await authenticatedFetch(`${url}:batchGet`, { method: 'POST', body: JSON.stringify({ documents: [...names.keys()], transaction }) });
+    if (!read.ok) throw await firebaseResponseError(read, 'Unable to read attendance records.');
+    const rows = await readFirebaseJson<Array<{ found?: FirestoreDocument; missing?: string }>>(read);
+    const records: Record<string, T | null> = Object.create(null);
+    for (const row of rows) {
+      const key = names.get(row.found?.name ?? row.missing ?? '');
+      if (!key || Object.hasOwn(records, key) || (!!row.found === !!row.missing)) throw new Error('Invalid attendance read response.');
+      records[key] = row.found ? decodeDocument<T>(row.found) : null;
+    }
+    if (Object.keys(records).length !== ids.length) throw new Error('Incomplete attendance read. Refresh and retry.');
+    const current = records[id], changes = changesFor(current, records);
+    if (!changes && current) {
+      await authenticatedFetch(`${url}:rollback`, { method: 'POST', body: JSON.stringify({ transaction }) });
+      return current;
+    }
+    if (!changes) throw new Error('No attendance changes to save.');
+    const fields = encodeFirestoreFields(changes);
+    const commit = await authenticatedFetch(`${url}:commit`, { method: 'POST', body: JSON.stringify({ transaction, writes: [{
+      update: { name: `${prefix}/${collectionPath}/${id}`, fields },
+      updateMask: { fieldPaths: Object.keys(fields) },
+      currentDocument: { exists: !!current },
+    }] }) });
+    if (!commit.ok) throw await firebaseResponseError(commit, 'Attendance changed while saving. Refresh and review before retrying.');
+    return { ...current, ...decodeFirestoreFields(fields), id } as T;
+  } catch (error) {
+    await authenticatedFetch(`${url}:rollback`, { method: 'POST', body: JSON.stringify({ transaction }) }).catch(() => undefined);
+    throw error;
+  }
+}
