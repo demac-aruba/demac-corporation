@@ -1,6 +1,7 @@
 import type { CanonicalOperationsState, CanonicalStaffProfile } from './canonical-operations';
 import {
   absenceForDate,
+  scheduleForRecordedAttendance,
   payrollSettingsForEmployee,
   statusFromRecords,
   timesheetForDate,
@@ -74,7 +75,7 @@ export function deriveAttendanceDay(input: {
   attendance: EmployeeAttendanceState;
 }): AttendanceDayView {
   const { employee, date, operations, attendance } = input;
-  const schedule = resolveEmployeeSchedule({
+  let schedule = resolveEmployeeSchedule({
     profile: employee,
     date,
     payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, employee),
@@ -83,6 +84,7 @@ export function deriveAttendanceDay(input: {
   });
   const absence = absenceForDate(operations.staffAbsences, employee.id, date);
   const entry = timesheetForDate(attendance.timesheets, employee.id, date);
+  schedule = scheduleForRecordedAttendance(schedule, entry);
   const explicitStatus = statusFromRecords(entry, absence, schedule.scheduledMinutes);
   const assumedRegular = !entry && !absence && schedule.scheduledMinutes > 0;
 

@@ -83,9 +83,9 @@ async function main() {
         fs.symlinkSync(path.join(root, 'scripts'), path.join(baselineTests, 'scripts'), 'dir');
         entry.baselineTestsSha = BASE;
         report.stage = name + '-baseline-tests'; save();
-        entry.baselineResult = validateAttendanceCandidate({ source: dir, root: baselineTests, out, env, candidate: true, reconstruct: false, name: name + '-baseline', selectedTests: tests, smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: fixtures });
+        entry.baselineResult = validateAttendanceCandidate({ source: dir, root: baselineTests, out, env, candidate: true, reconstruct: false, name: name + '-baseline', selectedTests: tests, updatedTests: tests.filter(f => f !== 'bookingAfterHours.test.js'), smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: fixtures });
         report.stage = name + '-candidate-tests'; save();
-        entry.candidateResult = validateAttendanceCandidate({ source: candidate, root, out, env, candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: [...tests, 'employeeAttendanceSplit.test.js'], smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: [] });
+        entry.candidateResult = validateAttendanceCandidate({ source: candidate, root, out, env, candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: [...tests, 'employeeAttendanceSplit.test.js'], updatedTests: [...tests.filter(f => f !== 'bookingAfterHours.test.js'), 'employeeAttendanceSplit.test.js'], smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: [] });
         assert.deepEqual(manifest(dir), files); assert.deepEqual(manifest(candidate), after);
       }
       const fresh = describe(); assert.equal(fresh.state, 'ACTIVE'); assert.equal(fresh.serviceConfig.revision, fn.serviceConfig.revision);

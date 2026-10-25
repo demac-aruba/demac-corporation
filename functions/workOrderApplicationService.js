@@ -206,7 +206,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule,
 
   const result = {
     ...existing,
-    id: `${staff.id}_${workDate}`,
+    id: existing.id || `${staff.id}_${workDate}`,
     payrollPeriodId: payrollPeriodForDate(workDate),
     employeeId: staff.id,
     employeeName: cleanText(staff.name, 180) || staff.id,
@@ -316,6 +316,10 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
       const halfDaySnapshot = await transaction.get(db.collection("vanHalfDaySchedules"));
       const halfDaySchedules = (halfDaySnapshot.docs || []).map((doc) => ({ id: doc.id, ...doc.data() }));
       const schedule = resolvedTechnicalSchedule(workDate, workOrder.vanId, halfDaySchedules);
+      const adjacentDates = [-1, 0, 1].map(offset => new Date(Date.parse(workDate + 'T12:00:00Z') + offset * 86400000).toISOString().slice(0, 10));
+      // One single-field date query discovers legacy IDs without a new index or collection.
+      const datedSnapshot = await transaction.get(db.collection('employeeTimesheets').where('date', 'in', adjacentDates));
+      const datedRows = (datedSnapshot.docs || []).map(doc => ({ ...doc.data(), id: doc.id }));
       const staffRefs = technicianIds.map((staffId) => db.collection("staffProfiles").doc(staffId));
       const staffSnapshots = [];
       const timesheetSnapshots = [];
@@ -325,17 +329,14 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
           throw new WorkOrderApplicationError("staff_profile_missing", "Assigned crew history references a missing staff profile.", { staffId: technicianIds[index], workOrderId: id }, 409);
         }
         staffSnapshots.push(staffSnapshot);
-        timesheetSnapshots.push(await transaction.get(db.collection("employeeTimesheets").doc(`${technicianIds[index]}_${workDate}`)));
+        const canonical = await transaction.get(db.collection('employeeTimesheets').doc(`${technicianIds[index]}_${workDate}`));
+        const matches = datedRows.filter(row => row.employeeId === technicianIds[index] && row.date === workDate);
+        if (canonical.exists && !matches.some(row => row.id === canonical.id)) throw new WorkOrderApplicationError('attendance_identity_conflict', 'The canonical attendance identity conflicts with its recorded employee or date.', {}, 409);
+        if (matches.length > 1) throw new WorkOrderApplicationError('attendance_identity_conflict', 'Multiple attendance records exist for this employee and date. Review before completing.', {}, 409);
+        timesheetSnapshots.push(matches[0] || null);
       }
 
-      const adjacentTimesheets = [];
-      for (const staffId of technicianIds) {
-        for (const offset of [-1, 1]) {
-          const date = new Date(Date.parse(workDate + 'T12:00:00Z') + offset * 86400000).toISOString().slice(0, 10);
-          const snapshot = await transaction.get(db.collection('employeeTimesheets').doc(`${staffId}_${date}`));
-          if (snapshot.exists) adjacentTimesheets.push({ ...snapshot.data(), employeeId: staffId, date });
-        }
-      }
+      const adjacentTimesheets = datedRows.filter(row => technicianIds.includes(row.employeeId) && row.date !== workDate);
       const newWindows = attendanceWorkWindows({ date: workDate, workOrderAttendanceSegments: [attendanceSegment(workOrder, completion)] }, workDate);
       for (const other of adjacentTimesheets) {
         if (attendanceWorkWindows(other, workDate).some(([start, end]) => newWindows.some(([a, b]) => start < b && end > a))) {
@@ -345,7 +346,7 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
       const attendanceEntries = [];
       for (let index = 0; index < technicianIds.length; index += 1) {
         const staff = { id: staffSnapshots[index].id, ...staffSnapshots[index].data() };
-        const existing = timesheetSnapshots[index].exists ? timesheetSnapshots[index].data() || {} : {};
+        const existing = timesheetSnapshots[index] || {};
         const entry = buildTimesheet({ existing, staff, workOrder, completion, schedule, actor });
         transaction.set(db.collection("employeeTimesheets").doc(entry.id), entry, { merge: false });
         attendanceEntries.push(entry);

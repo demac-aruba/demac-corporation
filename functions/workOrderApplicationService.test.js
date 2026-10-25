@@ -31,6 +31,10 @@ class FakeDocRef {
 class FakeCollectionRef {
   constructor(db, name) { this.db = db; this.name = name; }
   doc(id) { return new FakeDocRef(this.db, this.name, id); }
+  where(field, op, values) {
+    assert.equal(op, 'in');
+    return { get: async () => ({ docs: (await this.get()).docs.filter(doc => values.includes(doc.data()[field])) }) };
+  }
   async get() {
     const prefix = `${this.name}/`;
     const docs = [];
@@ -390,5 +394,26 @@ test('Work Order completion rejects cross-date overlap before any document chang
   }, '2026-08-28T04:30:00.000Z');
   const before = JSON.stringify([...db.store]);
   await assert.rejects(service.completeAfterHours(input()), (error) => error.code === 'attendance_overlap');
+  assert.equal(JSON.stringify([...db.store]), before);
+});
+
+
+test('Work Order uses a sole legacy attendance ID and rejects duplicate identity', async () => {
+  const original = existingAttendance({ id: 'legacy-day', workIntervals: [{startTime:'08:00',endTime:'17:00',startDayOffset:0,endDayOffset:0,breakMinutes:60}], overtimePayAllocations: [] });
+  const { db, service } = fixture({ 'employeeTimesheets/legacy-day': original });
+  await service.completeAfterHours(input());
+  assert.equal(db.read('employeeTimesheets/legacy-day').id, 'legacy-day');
+  assert.equal(db.read('employeeTimesheets/legacy-day').overtimeMinutes, 105);
+  assert.equal(db.read(`employeeTimesheets/driver-1_${WORK_DATE}`), undefined);
+  const duplicate = fixture({ 'employeeTimesheets/legacy-day': original, [`employeeTimesheets/driver-1_${WORK_DATE}`]: original });
+  const before = JSON.stringify([...duplicate.db.store]);
+  await assert.rejects(duplicate.service.completeAfterHours(input()), error => error.code === 'attendance_identity_conflict');
+  assert.equal(JSON.stringify([...duplicate.db.store]), before);
+});
+
+test('Work Order discovers adjacent overnight attendance under a legacy ID', async () => {
+  const { db, service } = fixture({ 'employeeTimesheets/legacy-adjacent': { id: 'legacy-adjacent', employeeId: 'driver-1', date: '2026-08-28', clockInTime: '00:00', clockOutTime: '01:00' } }, '2026-08-28T04:30:00.000Z');
+  const before = JSON.stringify([...db.store]);
+  await assert.rejects(service.completeAfterHours(input()), error => error.code === 'attendance_overlap');
   assert.equal(JSON.stringify([...db.store]), before);
 });

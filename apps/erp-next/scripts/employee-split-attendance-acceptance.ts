@@ -55,6 +55,15 @@ async function main() {
     const updated = await saveAttendanceDay({ ...input, existingEntry: legacy, draft: { ...draft, workIntervals: undefined, overtimePayAllocations: [{ rate: 150, minutes: 123 }] } });
     assert.equal(updated.id, 'legacy-id'); assert.equal(updated.overtimeMinutes, 123); assert.deepEqual((updated as typeof legacy).unknownMetadata, { preserve: true });
     await assert.rejects(saveAttendanceDay({ ...input, existingAbsence: { id: 'absence', active: true } as never }), /active absence/);
+    const partialEmployee = { id: 'synthetic-partial', name: 'Synthetic Partial' };
+    const partialDraft: AttendanceDayDraft = { ...draft, overtimePayAllocations: [{ rate: 150, minutes: 60 }],
+      workIntervals: [{startTime:'08:00',endTime:'12:00',startDayOffset:0,endDayOffset:0,breakMinutes:0}, {startTime:'14:00',endTime:'17:00',startDayOffset:0,endDayOffset:0,breakMinutes:0}, {startTime:'19:00',endTime:'20:00',startDayOffset:0,endDayOffset:0,breakMinutes:0}],
+      clockOutTime: '12:00', breakMinutes: 0, attendanceExceptionClassifications: [{ kind: 'partial_day', treatment: 'paid', reason: 'Synthetic permission' }] };
+    const partial = await saveAttendanceDay({ ...input, employee: partialEmployee, draft: partialDraft });
+    assert.equal(partial.paidFreeHours, 1);
+    const reclassified = await saveAttendanceDay({ ...input, employee: partialEmployee, existingEntry: partial, schedule: { ...schedule, endTime: '13:00', scheduledMinutes: 240 }, draft: { ...partialDraft, attendanceExceptionClassifications: [{ kind: 'partial_day', treatment: 'no_work_no_pay', reason: 'Synthetic correction' }] } });
+    assert.equal(reclassified.paidFreeHours, 0); assert.equal(reclassified.noWorkNoPayHours, 1);
+    assert.equal(reclassified.overtimeMinutes, 60);
     console.log('PASS split persistence: exact totals, payroll boundary, retry, stale edit, historical schedule/rates, audit, zero-OT edit, adjacent evidence, legacy identity, absence conflict.');
   } finally { storage.mutateFirestoreDocumentWithReads = original; }
 }
