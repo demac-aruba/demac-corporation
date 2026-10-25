@@ -41,6 +41,13 @@ async function main() {
     docs['synthetic-employee_2026-10-25'] = { id: 'synthetic-employee_2026-10-25', employeeId: employee.id, date: '2026-10-25', workOrderAttendanceSegments: [{ workOrderId: 'synthetic-work', startDate: '2026-10-25', startTime: '19:30', endDate: '2026-10-26', endTime: '09:00' }] } as EmployeeTimesheetEntry;
     await assert.rejects(saveAttendanceDay({ ...input, existingEntry: regular, draft: { ...draft, clockInTime: '07:00', workIntervals: [{ ...draft.workIntervals![0], startTime: '07:00' }], overtimePayAllocations: [{ rate: 150, minutes: 60 }] } }), /overlap/);
     assert.equal(commits, 3);
+    const normalEmployee = { id: 'synthetic-normal', name: 'Synthetic Normal' };
+    docs['synthetic-normal_2026-10-25'] = { ...docs['synthetic-employee_2026-10-25']!, id: 'synthetic-normal_2026-10-25', employeeId: normalEmployee.id };
+    await assert.rejects(saveAttendanceDay({ ...input, employee: normalEmployee, existingEntry: undefined,
+      existingAbsence: { id: 'synthetic-absence', active: true } as never,
+      draft: { ...draft, workIntervals: undefined, overtimePayAllocations: undefined, changeReason: undefined },
+    }), /overlap/);
+    assert.equal(commits, 3, 'Ordinary absence-to-Present conversion must reject before writing either authority');
     delete docs['synthetic-employee_2026-10-25'];
     // Existing legacy identifiers and opaque metadata survive a rate-only update.
     const legacy = { ...first, id: 'legacy-id', workIntervals: undefined, overtimePayAllocations: undefined, attendanceHistory: undefined, overtimeMinutes: 123, overtimeHours: 2.05, unknownMetadata: { preserve: true } };

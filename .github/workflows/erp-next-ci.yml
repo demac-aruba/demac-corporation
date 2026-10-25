@@ -71,6 +71,11 @@ jobs:
           npm install --prefix apps/erp-next --no-audit --no-fund
           npm install --prefix "$SCHEDULING_TEST_TOOLS" --no-audit --no-fund playwright@1.57.0 esbuild@0.25.9
           "$SCHEDULING_TEST_TOOLS/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Split shifts and overtime rates in desktop and mobile
+        env:
+          ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence/split
+        run: node apps/erp-next/scripts/employee-split-browser.cjs
       - name: Property address autocomplete on desktop and mobile
         env:
           ADDRESS_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
@@ -139,11 +144,6 @@ jobs:
           ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence
         run: node apps/erp-next/scripts/employee-partial-day-browser.cjs
-      - name: Split shifts and overtime rates in desktop and mobile
-        env:
-          ATTENDANCE_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
-          ATTENDANCE_TEST_OUTPUT: ${{ runner.temp }}/attendance-evidence/split
-        run: node apps/erp-next/scripts/employee-split-browser.cjs
       - name: Retain synthetic attendance browser evidence
         if: always()
         uses: actions/upload-artifact@v4

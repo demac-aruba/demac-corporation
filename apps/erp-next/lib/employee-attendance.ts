@@ -515,7 +515,7 @@ export async function saveAttendanceDay(input: {
   };
   if (ratesOnly) entry = { ...existingEntry!, overtimePayAllocations, updatedAt: now, updatedByUserId, updatedByName };
 
-  if (enhanced || (workedStatus && input.adjacentEntries !== undefined && !existingAbsence)) {
+  if (enhanced || (workedStatus && input.adjacentEntries !== undefined)) {
     const reason = draft.changeReason?.trim() || 'Attendance update';
     const adjacent = (input.adjacentEntries ?? []).filter((row) => row.employeeId === employee.id && Math.abs(Date.parse(row.date) - Date.parse(date)) <= 86400000 && row.id !== entry.id);
     if (adjacent.some((row) => row.date === date)) throw new Error('Multiple records exist for this employee and date. Review them before saving.');
@@ -551,9 +551,9 @@ export async function saveAttendanceDay(input: {
       const changedFields = Object.fromEntries(Object.entries(entry).filter(([key, value]) => key !== 'id' && value !== undefined && comparison((current as unknown as Record<string, unknown> | null)?.[key]) !== comparison(value)));
       return { ...changedFields, attendanceHistory: history, attendanceChangeReason: reason };
     });
-    return saved;
-  }
-  await saveFirestoreDocument('employeeTimesheets', entry);
+    if (enhanced) return saved;
+    entry = saved;
+  } else await saveFirestoreDocument('employeeTimesheets', entry);
 
   const fullDayException = scheduledHours > 0 && exceptionHours >= scheduledHours;
   const desiredAbsenceReason = fullDayException && draft.status === 'Sick'

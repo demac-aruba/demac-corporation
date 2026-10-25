@@ -356,3 +356,39 @@ test("after-hours evidence and payroll overtime remain correct when work finishe
   assert.equal(entry.workOrderAttendanceSegments[0].endTime, "00:30");
   assert.equal(entry.workOrderAttendanceSegments[0].completedAt, "2026-08-28T04:30:00.000Z");
 });
+
+test('split intervals keep rate decisions and saved schedule when another Work Order completes', async () => {
+  const id = `driver-1_${WORK_DATE}`;
+  const original = existingAttendance({
+    regularHours: 8, workedMinutes: 1050, overtimeMinutes: 570, overtimeHours: 9.5,
+    scheduledStartTime: '08:00', scheduledEndTime: '17:00', scheduledWorkHours: 8,
+    scheduledBreakMinutes: 60, scheduledPaidFreeMinutes: 0,
+    workIntervals: [
+      { startTime: '08:00', endTime: '17:00', startDayOffset: 0, endDayOffset: 0, breakMinutes: 60 },
+      { startTime: '19:30', endTime: '05:00', startDayOffset: 0, endDayOffset: 1, breakMinutes: 0 },
+    ],
+    overtimePayAllocations: [{ rate: 200, minutes: 570 }],
+    attendanceHistory: [], unknownField: { retained: true },
+  });
+  const { db, service } = fixture({ [`employeeTimesheets/${id}`]: original });
+  await service.completeAfterHours(input()); // 17:30–19:15 is new, outside recorded intervals.
+  const saved = db.read(`employeeTimesheets/${id}`);
+  assert.equal(saved.overtimeMinutes, 675); assert.equal(saved.workedMinutes, 1155);
+  assert.equal(saved.regularHours, 8); assert.equal(saved.scheduledEndTime, '17:00');
+  assert.deepEqual(saved.workIntervals, original.workIntervals);
+  assert.deepEqual(saved.overtimePayAllocations, original.overtimePayAllocations);
+  assert.deepEqual(saved.unknownField, original.unknownField);
+  assert.equal(saved.attendanceHistory.length, 1);
+  assert.equal(saved.attendanceHistory[0].before.overtimeMinutes, 570);
+  await service.completeAfterHours(input());
+  assert.equal(db.read(`employeeTimesheets/${id}`).attendanceHistory.length, 1);
+});
+
+test('Work Order completion rejects cross-date overlap before any document changes', async () => {
+  const { db, service } = fixture({
+    'employeeTimesheets/driver-1_2026-08-28': { employeeId: 'driver-1', date: '2026-08-28', clockInTime: '00:00', clockOutTime: '01:00' },
+  }, '2026-08-28T04:30:00.000Z');
+  const before = JSON.stringify([...db.store]);
+  await assert.rejects(service.completeAfterHours(input()), (error) => error.code === 'attendance_overlap');
+  assert.equal(JSON.stringify([...db.store]), before);
+});

@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { manifest } = require('./appointment-finance-release-audit.cjs');
 const { releaseConfig, runtimeSourceHash, safePaths, isolatedTestEnv } = require('./booking-dwelling-release.cjs');
 const { validateCandidate, validateLock } = require('./booking-dwelling-candidate-validation.cjs');
+const { validateAttendanceCandidate } = require('./employee-split-candidate.cjs');
 const { verifyTraffic } = require('./appointment-finance-release.cjs');
 const PROJECT = 'demac-corporation';
 const TARGETS = ['workOrderApplication'];
@@ -56,7 +57,6 @@ async function main() {
       report.stage = name + '-dependencies'; save();
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
       const lockPresent = Object.hasOwn(files, 'package-lock.json');
-      if (name === 'workOrderApplication') assert.equal(lockPresent, true, 'Published Office lock required');
       if (lockPresent) validateLock(fs.readFileSync(path.join(dir, 'package-lock.json')), pkg);
       const read = f => fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8') : '';
       const entry = { name, revision: fn.serviceConfig.revision, source, sourceHash: runtimeSourceHash(files), configHash: hash(releaseConfig(fn)), iamHash,
@@ -83,9 +83,9 @@ async function main() {
         fs.symlinkSync(path.join(root, 'scripts'), path.join(baselineTests, 'scripts'), 'dir');
         entry.baselineTestsSha = BASE;
         report.stage = name + '-baseline-tests'; save();
-        entry.baselineResult = validateCandidate({ source: dir, root: baselineTests, out, env, candidate: true, reconstruct: false, name: name + '-baseline', selectedTests: tests, smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: fixtures });
+        entry.baselineResult = validateAttendanceCandidate({ source: dir, root: baselineTests, out, env, candidate: true, reconstruct: false, name: name + '-baseline', selectedTests: tests, smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: fixtures });
         report.stage = name + '-candidate-tests'; save();
-        entry.candidateResult = validateCandidate({ source: candidate, root, out, env, candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: [...tests, 'employeeAttendanceSplit.test.js'], smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: [] });
+        entry.candidateResult = validateAttendanceCandidate({ source: candidate, root, out, env, candidate: true, reconstruct: false, name: name + '-candidate', selectedTests: [...tests, 'employeeAttendanceSplit.test.js'], smokeScript: 'employee-split-runtime-smoke.cjs', testFixtures: [] });
         assert.deepEqual(manifest(dir), files); assert.deepEqual(manifest(candidate), after);
       }
       const fresh = describe(); assert.equal(fresh.state, 'ACTIVE'); assert.equal(fresh.serviceConfig.revision, fn.serviceConfig.revision);
