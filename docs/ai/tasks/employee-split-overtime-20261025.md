@@ -13,12 +13,12 @@
 - Existing authorization and Firestore payroll roles remain unchanged. No statutory pay-rate policy or monetary wage calculation is introduced.
 
 ## Acceptance criteria
-- [ ] 08:00–17:00 minus 60m + 19:30–05:00 next day = 480 regular, 570 overtime, 150m excluded gap.
-- [ ] Manual rate allocations reconcile exactly to net overtime; rates never create worked hours.
-- [ ] Adjacent/overlapping intervals, invalid breaks, incomplete allocations and concurrent edits fail before overwrite.
-- [ ] Legacy records and aggregate fields remain unchanged by loading/deployment; explicit prior values remain in audit.
-- [ ] Work Order completion preserves split intervals/rates and does not double-count overlaps.
-- [ ] Permission-denial, retry, partial-day, midnight and payroll-boundary cases verified with synthetic fixtures.
+- [x] 08:00–17:00 minus 60m + 19:30–05:00 next day = 480 regular, 570 overtime, 150m excluded gap.
+- [x] Manual rate allocations reconcile exactly to net overtime; rates never create worked hours.
+- [x] Adjacent/overlapping intervals, invalid breaks, incomplete allocations and concurrent edits fail before overwrite.
+- [x] Legacy records and aggregate fields remain unchanged by loading/deployment; explicit prior values remain in audit.
+- [x] Work Order completion preserves split intervals/rates and does not double-count overlaps.
+- [x] Permission-denial, retry, partial-day, midnight and payroll-boundary cases verified with synthetic fixtures.
 - [ ] Typecheck, focused/transitive tests, production build, separate adversarial review and deployment verification complete.
 
 ## Governance and recovery
@@ -29,4 +29,12 @@
 - No real employee record is used as a test fixture or modified during verification.
 
 ## Verification
-Pending implementation and focused checks. This task file is not a claim of release completion.
+- Typecheck and production build including every prebuild gate: PASS.
+- Shared calculation/split/Work Order tests: 54/54 PASS.
+- Attendance save/payroll/REST transport tests: PASS; no network or production writes.
+- Synthetic desktop/mobile split save and rate-only change: PASS in ERP CI.
+- Exact live-source baseline: 64 tests; candidate: 76 tests; real bootstrap and anonymous
+  HTTP checks: PASS. Audit run 40246297922 and retained JSON in releases/.
+- Release mask/privacy/retry/transport tests: 19/19 PASS.
+- Independent implementation review closed all blocking findings; see review record.
+- Production publication and final CI still pending at this documentation checkpoint.
