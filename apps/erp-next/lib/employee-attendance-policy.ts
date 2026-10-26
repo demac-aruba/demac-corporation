@@ -32,6 +32,7 @@ export type AttendancePeriodSummary = {
   overtime150: number;
   overtime200: number;
   overtimeUnassigned: number;
+  overtimeRateReviewRequired: boolean;
   ao: number;
   vacation: number;
   nwnp: number;
@@ -125,6 +126,7 @@ export function summarizeAttendancePeriod(input: {
     overtime150: total((day) => day.overtime150Hours ?? 0),
     overtime200: total((day) => day.overtime200Hours ?? 0),
     overtimeUnassigned: total((day) => day.overtimeUnassignedHours ?? 0),
+    overtimeRateReviewRequired: days.some((day) => day.overtimeRateReviewRequired),
     ao: total((day) => day.aoHours),
     vacation: total((day) => day.vacationHours),
     nwnp: total((day) => day.noWorkNoPayHours),

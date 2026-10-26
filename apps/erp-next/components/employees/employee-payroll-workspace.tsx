@@ -166,19 +166,19 @@ export function EmployeePayrollWorkspace() {
   function exportSummary() {
     if (!payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
     downloadCsv(`DEMAC-payroll-summary-${period.id}.csv`, [
-      ['Employee', 'Role', 'Type', 'Weekly paid base', `Monthly base x ${MONTHLY_HOURS_FACTOR}`, 'Actual regular', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Paid free', 'Payable hours estimate', 'Salary Advances Afl.', 'Exception days', 'Bonuses Afl.', 'Bonus Details', 'OT 150%', 'OT 200%', 'OT Unassigned', 'OT Rate Review'],
+      ['Employee', 'Role', 'Type', 'Weekly paid base', `Monthly base x ${MONTHLY_HOURS_FACTOR}`, 'Actual regular', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Paid free', 'Payable hours estimate', 'Salary Advances Afl.', 'Exception days', 'Bonuses Afl.', 'Bonus Details', 'Regular OT 150%', 'Special OT 200%', 'OT Rate Review'],
       ...summaries.map((item) => [
-        staffDisplayName(item.employee), item.employee.role ?? '', employeeType(item.employee), decimalHours(item.weeklyPaidBaseHours), decimalHours(item.monthlyBaseHours), decimalHours(item.actualRegularHours), decimalHours(item.overtimeHours), decimalHours(item.aoHours), decimalHours(item.vacationHours), decimalHours(item.noWorkNoPayHours), decimalHours(item.paidFreeHours), decimalHours(item.payableHoursEstimate), (advanceByEmployee.get(item.employee.id) ?? 0).toFixed(2), item.exceptionDays, (bonusReport.byEmployee[item.employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[item.employee.id] ?? '', decimalHours(item.overtime150Hours ?? 0), decimalHours(item.overtime200Hours ?? 0), decimalHours(item.overtimeUnassignedHours ?? 0), item.overtimeRateReviewRequired ? 'Review required' : '',
+        staffDisplayName(item.employee), item.employee.role ?? '', employeeType(item.employee), decimalHours(item.weeklyPaidBaseHours), decimalHours(item.monthlyBaseHours), decimalHours(item.actualRegularHours), decimalHours(item.overtimeHours), decimalHours(item.aoHours), decimalHours(item.vacationHours), decimalHours(item.noWorkNoPayHours), decimalHours(item.paidFreeHours), decimalHours(item.payableHoursEstimate), (advanceByEmployee.get(item.employee.id) ?? 0).toFixed(2), item.exceptionDays, (bonusReport.byEmployee[item.employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[item.employee.id] ?? '', decimalHours(item.overtime150Hours ?? 0), decimalHours(item.overtime200Hours ?? 0), item.overtimeRateReviewRequired ? 'Review required' : '',
       ]),
     ]);
   }
 
   function exportDetailed() {
     if (!operations) return;
-    const rows: Array<Array<string | number>> = [['Employee', 'Date', 'Status', 'Scheduled', 'Regular', 'Paid free', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Source', 'Notes', 'OT 150%', 'OT 200%', 'OT Unassigned', 'OT Rate Review']];
+    const rows: Array<Array<string | number>> = [['Employee', 'Date', 'Status', 'Scheduled', 'Regular', 'Paid free', 'Overtime', 'AO / Sick', 'Vacation', 'No Work No Pay', 'Source', 'Notes', 'Regular OT 150%', 'Special OT 200%', 'OT Rate Review']];
     employees.forEach((employee) => payrollPeriodDates(period).forEach((date) => {
       const day = calculatePayrollDay({ employee, date, operations, attendance });
-      rows.push([staffDisplayName(employee), date, day.status, decimalHours(day.scheduledWorkHours), decimalHours(day.regularHours), decimalHours(day.paidFreeHours), decimalHours(day.overtimeHours), decimalHours(day.aoHours), decimalHours(day.vacationHours), decimalHours(day.noWorkNoPayHours), day.source, day.notes, decimalHours(day.overtime150Hours ?? 0), decimalHours(day.overtime200Hours ?? 0), decimalHours(day.overtimeUnassignedHours ?? 0), day.overtimeRateReviewRequired ? 'Review required' : '']);
+      rows.push([staffDisplayName(employee), date, day.status, decimalHours(day.scheduledWorkHours), decimalHours(day.regularHours), decimalHours(day.paidFreeHours), decimalHours(day.overtimeHours), decimalHours(day.aoHours), decimalHours(day.vacationHours), decimalHours(day.noWorkNoPayHours), day.source, day.notes, decimalHours(day.overtime150Hours ?? 0), decimalHours(day.overtime200Hours ?? 0), day.overtimeRateReviewRequired ? 'Review required' : '']);
     }));
     downloadCsv(`DEMAC-payroll-detail-${period.id}.csv`, rows);
   }
@@ -248,7 +248,7 @@ export function EmployeePayrollWorkspace() {
         <div>
           <span className={styles.sectionEyebrow}>Accountant-ready payroll control</span>
           <h2>Employee Period Summary</h2>
-          <p>Every employee remains visible. OT 150% and OT 200% are worked hours at the selected pay rate. Unassigned hours retain their existing total until a rate is explicitly selected.</p>
+          <p>Every employee remains visible. Regular overtime defaults to 150%. Special overtime uses 200% only when selected; these columns show worked hours at each pay rate.</p>
         </div>
         <span className={styles.summaryMeta}>{summaries.length} employees · {totals.exceptionDays} exception days</span>
       </header>
@@ -260,14 +260,14 @@ export function EmployeePayrollWorkspace() {
 
       <div className={styles.tableWrap}>
         <table className={styles.table}>
-          <thead><tr><th>Employee</th><th className={styles.metric}>Weekly Base</th><th className={styles.metric}>Regular</th><th className={styles.metric}>OT</th><th className={styles.metric}>OT 150%</th><th className={styles.metric}>OT 200%</th><th className={styles.metric}>Unassigned</th><th className={styles.metric}>AO / Sick</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>Advance</th><th className={styles.metric}>Bonuses</th><th className={styles.metric}>Payable Est.</th><th className={styles.metric}>Exceptions</th></tr></thead>
+          <thead><tr><th>Employee</th><th className={styles.metric}>Weekly Base</th><th className={styles.metric}>Regular</th><th className={styles.metric}>OT</th><th className={styles.metric}>Regular OT 150%</th><th className={styles.metric}>Special OT 200%</th><th className={styles.metric}>AO / Sick</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>Advance</th><th className={styles.metric}>Bonuses</th><th className={styles.metric}>Payable Est.</th><th className={styles.metric}>Exceptions</th></tr></thead>
           <tbody>{filtered.map((item) => {
             const selected = item.employee.id === selectedEmployee?.id;
             return <tr key={item.employee.id} className={`${styles.row} ${selected ? styles.rowSelected : ''}`} onClick={() => setSelectedEmployeeId(item.employee.id)}>
               <td><div className={styles.employeeCell}><span className={styles.employeeAvatar}>{initials(staffDisplayName(item.employee))}</span><span><strong>{staffDisplayName(item.employee)}</strong><small>{item.employee.role ?? employeeType(item.employee)}{item.employee.active === false ? ' · Former employee' : ''}</small></span></div></td>
               <MetricCell value={`${decimalHours(item.weeklyPaidBaseHours)} h`} />
               <MetricCell value={hoursMinutes(item.actualRegularHours)} />
-              <MetricCell value={hoursMinutes(item.overtimeHours)} active={item.overtimeHours > 0} /><MetricCell value={hoursMinutes(item.overtime150Hours ?? 0)} active={(item.overtime150Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(item.overtime200Hours ?? 0)} active={(item.overtime200Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(item.overtimeUnassignedHours ?? 0)} active={(item.overtimeUnassignedHours ?? 0) > 0} risk={true} />
+              <MetricCell value={hoursMinutes(item.overtimeHours)} active={item.overtimeHours > 0} /><MetricCell value={hoursMinutes(item.overtime150Hours ?? 0)} active={(item.overtime150Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(item.overtime200Hours ?? 0)} active={(item.overtime200Hours ?? 0) > 0} />
               <MetricCell value={hoursMinutes(item.aoHours)} active={item.aoHours > 0} risk={item.aoHours > 0} />
               <MetricCell value={hoursMinutes(item.vacationHours)} active={item.vacationHours > 0} />
               <MetricCell value={hoursMinutes(item.noWorkNoPayHours)} active={item.noWorkNoPayHours > 0} risk={item.noWorkNoPayHours > 0} />
@@ -300,10 +300,10 @@ export function EmployeePayrollWorkspace() {
 
       <div className={`${styles.tableWrap} ${styles.detailScroll}`}>
         <table className={styles.table}>
-          <thead><tr><th>Date</th><th>Status</th><th className={styles.metric}>Scheduled</th><th className={styles.metric}>Regular</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>OT</th><th className={styles.metric}>OT 150%</th><th className={styles.metric}>OT 200%</th><th className={styles.metric}>Unassigned</th><th className={styles.metric}>AO</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th>Source</th></tr></thead>
+          <thead><tr><th>Date</th><th>Status</th><th className={styles.metric}>Scheduled</th><th className={styles.metric}>Regular</th><th className={styles.metric}>Paid Free</th><th className={styles.metric}>OT</th><th className={styles.metric}>Regular OT 150%</th><th className={styles.metric}>Special OT 200%</th><th className={styles.metric}>AO</th><th className={styles.metric}>Vacation</th><th className={styles.metric}>NWNP</th><th>Source</th></tr></thead>
           <tbody>{visibleDays.map((day) => {
             const risk = day.aoHours > 0 || day.vacationHours > 0 || day.noWorkNoPayHours > 0 || day.overtimeHours > 0;
-            return <tr key={day.date}><td><strong>{formatDate(day.date)}</strong></td><td><span className={styles.dayStatus} data-risk={risk ? 'true' : 'false'}>{day.status}</span></td><MetricCell value={hoursMinutes(day.scheduledWorkHours)} /><MetricCell value={hoursMinutes(day.regularHours)} /><MetricCell value={hoursMinutes(day.paidFreeHours)} active={day.paidFreeHours > 0} /><MetricCell value={hoursMinutes(day.overtimeHours)} active={day.overtimeHours > 0} /><MetricCell value={hoursMinutes(day.overtime150Hours ?? 0)} active={(day.overtime150Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(day.overtime200Hours ?? 0)} active={(day.overtime200Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(day.overtimeUnassignedHours ?? 0)} active={(day.overtimeUnassignedHours ?? 0) > 0} risk={true} /><MetricCell value={hoursMinutes(day.aoHours)} active={day.aoHours > 0} risk={day.aoHours > 0} /><MetricCell value={hoursMinutes(day.vacationHours)} active={day.vacationHours > 0} /><MetricCell value={hoursMinutes(day.noWorkNoPayHours)} active={day.noWorkNoPayHours > 0} risk={day.noWorkNoPayHours > 0} /><td>{sourceLabel(day.source)}</td></tr>;
+            return <tr key={day.date}><td><strong>{formatDate(day.date)}</strong></td><td><span className={styles.dayStatus} data-risk={risk ? 'true' : 'false'}>{day.status}</span></td><MetricCell value={hoursMinutes(day.scheduledWorkHours)} /><MetricCell value={hoursMinutes(day.regularHours)} /><MetricCell value={hoursMinutes(day.paidFreeHours)} active={day.paidFreeHours > 0} /><MetricCell value={hoursMinutes(day.overtimeHours)} active={day.overtimeHours > 0} /><MetricCell value={hoursMinutes(day.overtime150Hours ?? 0)} active={(day.overtime150Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(day.overtime200Hours ?? 0)} active={(day.overtime200Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(day.aoHours)} active={day.aoHours > 0} risk={day.aoHours > 0} /><MetricCell value={hoursMinutes(day.vacationHours)} active={day.vacationHours > 0} /><MetricCell value={hoursMinutes(day.noWorkNoPayHours)} active={day.noWorkNoPayHours > 0} risk={day.noWorkNoPayHours > 0} /><td>{sourceLabel(day.source)}</td></tr>;
           })}</tbody>
         </table>
       </div>

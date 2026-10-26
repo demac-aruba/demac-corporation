@@ -55,6 +55,7 @@ type EmployeePeriodSummary = {
   overtime150: number;
   overtime200: number;
   overtimeUnassigned: number;
+  overtimeRateReviewRequired: boolean;
   ao: number;
   vacation: number;
   nwnp: number;
@@ -153,6 +154,8 @@ export function EmployeeWorkspace() {
     const record = recordsFor(profile, date);
     const defaultBreak = scheduledBreakMinutes(record.schedule);
     const status = record.status ?? 'Day Off';
+    const recordedAllocations = record.entry?.overtimePayAllocations;
+    const editableAllocations = Array.isArray(recordedAllocations) && recordedAllocations.every((row) => row && [150, 200].includes(row.rate) && Number.isInteger(row.minutes) && row.minutes > 0) ? recordedAllocations : undefined;
     const exceptionHours = status === 'Sick' ? record.entry?.aoHours : status === 'Vacation' ? record.entry?.vacationHours : status === 'Absent' ? record.entry?.noWorkNoPayHours : undefined;
     return {
       status,
@@ -168,7 +171,7 @@ export function EmployeeWorkspace() {
       })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
       workIntervals: record.entry?.workIntervals?.map((row) => ({ ...row })),
-      overtimePayAllocations: record.entry?.overtimePayAllocations?.map((row) => ({ ...row })),
+      overtimePayAllocations: editableAllocations?.length ? editableAllocations.map((row) => ({ ...row })) : undefined,
       changeReason: '',
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
@@ -231,14 +234,14 @@ export function EmployeeWorkspace() {
     } catch (cause) { return { variance: null, error: cause instanceof Error ? cause.message : 'Review the work intervals.' }; }
   })();
   const selectedVariance = selectedCalculation.variance;
-  const selectedRates = overtimeRateTotals({ overtimeMinutes: selectedVariance?.overtimeMinutes ?? 0, overtimePayAllocations: draft?.overtimePayAllocations });
+  const selectedRates = overtimeRateTotals({ overtimeMinutes: selectedVariance?.overtimeMinutes ?? 0, overtimePayAllocations: draft?.overtimePayAllocations ?? selectedRecord?.entry?.overtimePayAllocations });
   const intervalSaveError = (() => {
     if (selectedCalculation.error) return selectedCalculation.error;
     if (!draft) return '';
     try {
+      if (draft.overtimePayAllocations === undefined && overtimeRateTotals(selectedRecord?.entry).requiresReview) return 'Recorded overtime rates need review. Select a complete, valid allocation before saving.';
       if (draft.overtimePayAllocations !== undefined) validateOvertimePayAllocations(draft.overtimePayAllocations, selectedVariance?.overtimeMinutes ?? 0);
-      else if (draft.workIntervals?.length && (selectedVariance?.overtimeMinutes ?? 0) > 0) return 'Choose how to pay the calculated overtime.';
-      if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
+      if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined || selectedRecord?.entry?.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
       return '';
     } catch (cause) { return cause instanceof Error ? cause.message : 'Review the overtime allocation.'; }
   })();
@@ -302,11 +305,11 @@ export function EmployeeWorkspace() {
 
   function exportAccountingCsv() {
     if (!operations || !payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
-    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records', 'Bonuses Afl', 'Bonus Details'];
+    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records', 'Bonuses Afl', 'Bonus Details', 'Regular OT 150%', 'Special OT 200%', 'OT Rate Review'];
     const rows = accountingEmployees.map((employee) => {
       const summary = summarizeAttendancePeriod({ employee, period, operations, attendance });
       const advances = periodAdvances.filter((advance) => advance.employeeId === employee.id).reduce((sum, advance) => sum + advance.amount, 0);
-      return [staffDisplayName(employee), employee.role ?? '', employeeVan(employee)?.name ?? 'UNASSIGNED', summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays), (bonusReport.byEmployee[employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[employee.id] ?? ''];
+      return [staffDisplayName(employee), employee.role ?? '', employeeVan(employee)?.name ?? 'UNASSIGNED', summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays), (bonusReport.byEmployee[employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[employee.id] ?? '', summary.overtime150.toFixed(2), summary.overtime200.toFixed(2), summary.overtimeRateReviewRequired ? 'Review required' : ''];
     });
     const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -501,7 +504,7 @@ export function EmployeeWorkspace() {
             })}</div>
             <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / outside payroll</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
           </section>
-          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>OT 150%</th><th>OT 200%</th><th>Rate not assigned</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td><td>{hours(selectedSummary?.overtimeUnassigned ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Existing overtime stays visible without assigning a new pay rate automatically.</p></section></div>
+          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>Regular OT 150%</th><th>Special OT 200%</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Regular overtime defaults to 150%. Special overtime uses 200% only when selected.</p>{selectedSummary?.overtimeRateReviewRequired ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals before processing payroll.</p> : null}</section></div>
 
           <aside className={styles.rightRail}>
             <section className={styles.dailyCard}>
@@ -545,7 +548,7 @@ export function EmployeeWorkspace() {
                   <SummaryRow icon="vacation" label="Scheduled Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
                   <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
                   <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
-                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.unassigned > 0 ? <SummaryRow icon="timer" label="Overtime · rate not assigned" value={hoursAndMinutes(selectedRates.unassigned)} tone="orange" /> : null}</> : null}
+                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Regular overtime · 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Special overtime · 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.requiresReview ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals.</p> : null}</> : null}
                   {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
                   {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}

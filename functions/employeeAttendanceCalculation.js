@@ -399,12 +399,17 @@ function validateOvertimePayAllocations(allocations, overtimeMinutes) {
 
 function overtimeRateTotals(entry) {
   const total = Math.max(0, Math.round(Number(entry?.overtimeMinutes ?? (Number(entry?.overtimeHours || 0) * 60)) || 0));
-  let at150 = 0, at200 = 0, invalid = false;
-  for (const row of entry?.overtimePayAllocations || []) {
-    if (![150, 200].includes(row.rate) || !Number.isInteger(row.minutes) || row.minutes <= 0) { invalid = true; continue; }
+  const allocations = entry?.overtimePayAllocations;
+  let at150 = 0, at200 = 0, invalid = allocations != null && !Array.isArray(allocations);
+  for (const row of Array.isArray(allocations) ? allocations : []) {
+    if (!row || ![150, 200].includes(row.rate) || !Number.isInteger(row.minutes) || row.minutes <= 0) { invalid = true; continue; }
     if (row.rate === 150) at150 += row.minutes; else at200 += row.minutes;
   }
-  return { at150, at200, unassigned: Math.max(0, total - at150 - at200), requiresReview: invalid || at150 + at200 > total };
+  const remainder = Math.max(0, total - at150 - at200);
+  const requiresReview = invalid || at150 + at200 > total;
+  // Owner policy: regular OT defaults to 150%; only an explicit selection earns 200%.
+  // Project historical/new evidence without rewriting records or masking invalid allocations.
+  return { at150: at150 + (requiresReview ? 0 : remainder), at200, unassigned: requiresReview ? remainder : 0, requiresReview };
 }
 
 module.exports = {

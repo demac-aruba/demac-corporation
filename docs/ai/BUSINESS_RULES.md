@@ -270,8 +270,10 @@ Production activation remains separately owner-approved through the server-side 
   08:00–17:00 / 60m break plus 19:30–05:00 is 480 regular and 570 overtime minutes;
   the 150-minute gap is excluded. Missing regular time remains independently classified.
 - `OPS-STAFF-ATTENDANCE-OT-RATE`: operators explicitly allocate net overtime minutes to
-  150% or 200%. The sum must equal overtime; existing unassigned hours retain their totals
-  until explicitly classified. Rate changes preserve recorded clock times and calculations.
+  150% or 200%. The sum must equal overtime on explicit selection. Owner clarification
+  2026-10-26: regular overtime defaults to 150%, including historical/new evidence without
+  a rate; only explicit selections earn 200%. Project the remaining valid minutes at 150%
+  without rewriting existing records. Invalid/excess allocations remain review-required. Rate changes preserve recorded clock times and calculations.
   Preserve prior values and actor/reason history. See
   `decisions/ADR-20261025-split-attendance-overtime.md` for compatibility and recovery.
 - `CRM-LOCATION-001` (isolated preview): independent dwellings require explicit selection; stable Property-contained IDs and server membership checks preserve owner, contacts, equipment and visit scope. No apartment-count rule implies equipment count or automatic historical classification. See `decisions/ADR-20260921-property-dwellings.md`.

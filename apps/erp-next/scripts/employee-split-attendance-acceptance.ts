@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { saveAttendanceDay, type EmployeeTimesheetEntry, type AttendanceDayDraft, type AttendanceSchedule } from '../lib/employee-attendance';
 import { overtimeRateTotals } from '../lib/employee-attendance-calculation';
+import { summarizeEmployee, payrollPeriodFromDates } from '../lib/employee-payroll';
+import { summarizeAttendancePeriod } from '../lib/employee-attendance-policy';
+import { buildPayrollAccountingPdf } from '../lib/payroll-accounting-pdf';
+import type { CanonicalOperationsState } from '../lib/canonical-operations';
 
 async function main() {
   const storage = require('../lib/firebase/firestore-rest') as typeof import('../lib/firebase/firestore-rest');
@@ -64,6 +68,46 @@ async function main() {
     const reclassified = await saveAttendanceDay({ ...input, employee: partialEmployee, existingEntry: partial, schedule: { ...schedule, endTime: '13:00', scheduledMinutes: 240 }, draft: { ...partialDraft, attendanceExceptionClassifications: [{ kind: 'partial_day', treatment: 'no_work_no_pay', reason: 'Synthetic correction' }] } });
     assert.equal(reclassified.paidFreeHours, 0); assert.equal(reclassified.noWorkNoPayHours, 1);
     assert.equal(reclassified.overtimeMinutes, 60);
+    const defaultEmployee = { id: 'synthetic-default', name: 'Synthetic Default' };
+    const defaultInput = { ...input, employee: defaultEmployee, draft: { ...draft, overtimePayAllocations: undefined } };
+    const defaultSplit = await saveAttendanceDay(defaultInput);
+    assert.equal(defaultSplit.overtimeMinutes, 570);
+    assert.equal(defaultSplit.overtimePayAllocations, undefined, 'Default is projected; no invented manual selection');
+    assert.equal(overtimeRateTotals(defaultSplit).at150, 570);
+    const beforeRetry = commits;
+    await saveAttendanceDay(defaultInput);
+    assert.equal(commits, beforeRetry, 'Default-rate retry remains idempotent');
+    const specialSplit = await saveAttendanceDay({ ...defaultInput, existingEntry: defaultSplit, draft: { ...defaultInput.draft, overtimePayAllocations: [{ rate: 200, minutes: 570 }] } });
+    const preserved = await saveAttendanceDay({ ...defaultInput, existingEntry: specialSplit, draft: { ...defaultInput.draft, notes: 'Synthetic update' } });
+    assert.deepEqual(preserved.overtimePayAllocations, [{ rate: 200, minutes: 570 }]);
+    await assert.rejects(saveAttendanceDay({ ...defaultInput, existingEntry: preserved, draft: { ...defaultInput.draft, workIntervals: [draft.workIntervals![0], { ...draft.workIntervals![1], endTime: '06:00' }] } }), /exactly match/);
+    const corrupt = { ...preserved, overtimePayAllocations: { rate: 200, minutes: 570 } } as unknown as EmployeeTimesheetEntry;
+    docs[corrupt.id] = corrupt;
+    const beforeCorruptSave = commits;
+    await assert.rejects(saveAttendanceDay({ ...defaultInput, existingEntry: corrupt, draft: { ...defaultInput.draft, notes: 'Must reject malformed saved rates' } }), /allocations/);
+    assert.equal(commits, beforeCorruptSave);
+    // Empty historical rates mean the regular default, and must not block a new split.
+    const emptyRates = { ...preserved, overtimePayAllocations: [] };
+    docs[emptyRates.id] = emptyRates;
+    const fromEmpty = await saveAttendanceDay({ ...defaultInput, existingEntry: emptyRates });
+    assert.deepEqual(overtimeRateTotals(fromEmpty), { at150: 570, at200: 0, unassigned: 0, requiresReview: false });
+    const operations = { staffProfiles: [employee], vans: [], vanHalfDaySchedules: [], staffAbsences: [] } as unknown as CanonicalOperationsState;
+    // Existing records across days: exact user example, with no backfill or history mutation.
+    const historical = { ...first, id: 'historical', date: '2026-10-23', overtimeMinutes: 2275, overtimeHours: 2275 / 60, overtimePayAllocations: undefined };
+    const special = { ...first, date: '2026-10-26', overtimePayAllocations: [{ rate: 200 as const, minutes: 570 }] };
+    const attendance = { timesheets: [historical, special], payrollSettings: [], advances: [] };
+    const snapshot = structuredClone(attendance);
+    const period = payrollPeriodFromDates('2026-10-23', '2026-10-26');
+    const payroll = summarizeEmployee({ employee, operations, attendance, period });
+    const calendar = summarizeAttendancePeriod({ employee, operations, attendance, period: { id: period.id, start: period.startDate, end: period.endDate } });
+    for (const [total, regular, specialHours] of [[payroll.overtimeHours, payroll.overtime150Hours!, payroll.overtime200Hours!], [calendar.overtime, calendar.overtime150, calendar.overtime200]]) {
+      assert.equal(Math.round(total * 60), 2845); assert.equal(Math.round(regular * 60), 2275); assert.equal(Math.round(specialHours * 60), 570);
+    }
+    assert.equal(payroll.overtimeRateReviewRequired, false);
+    const pdf = Buffer.from(buildPayrollAccountingPdf({ periodLabel: 'Synthetic overtime policy', summaries: [payroll] })).toString('latin1');
+    for (const label of ['Regular OT 150%', 'Special OT 200%', '(37 h 55 min)', '(9 h 30 min)']) assert.ok(pdf.includes(label), label);
+    assert.ok(!pdf.includes('Unassigned'));
+    assert.deepEqual(attendance, snapshot, 'Payroll and PDF do not rewrite historical evidence');
     console.log('PASS split persistence: exact totals, payroll boundary, retry, stale edit, historical schedule/rates, audit, zero-OT edit, adjacent evidence, legacy identity, absence conflict.');
   } finally { storage.mutateFirestoreDocumentWithReads = original; }
 }

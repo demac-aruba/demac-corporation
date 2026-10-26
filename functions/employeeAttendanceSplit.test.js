@@ -47,13 +47,30 @@ test('work order evidence union excludes double-counting and off-duty gaps', () 
   const extra = calculate({ ...input, workSegments: [{ ...segment, startTime: '18:30', endDate: input.workDate, endTime: '20:30' }] });
   assert.equal(extra.overtimeMinutes, 630); assert.equal(extra.workSegmentMinutes, 60);
 });
-test('legacy totals stay unassigned; new evidence remains visible without reassigning approved rates', () => {
+test('regular and newly evidenced overtime default to 150% without changing explicit rates or records', () => {
   const old = Object.freeze({ overtimeHours: 7.75 });
-  assert.deepEqual(overtimeRateTotals(old), { at150: 0, at200: 0, unassigned: 465, requiresReview: false });
-  assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 600, overtimePayAllocations: [{ rate: 200, minutes: 570 }] }), { at150: 0, at200: 570, unassigned: 30, requiresReview: false });
+  assert.deepEqual(overtimeRateTotals(old), { at150: 465, at200: 0, unassigned: 0, requiresReview: false });
+  assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 600, overtimePayAllocations: [{ rate: 200, minutes: 570 }] }), { at150: 30, at200: 570, unassigned: 0, requiresReview: false });
   assert.equal(overtimeRateTotals({ overtimeMinutes: 300, overtimePayAllocations: [{ rate: 200, minutes: 570 }] }).requiresReview, true);
 });
 test('allocation totals, percentages and integer-minute precision are enforced', () => {
   for (const allocation of [[{ rate: 150, minutes: 569 }], [{ rate: 200, minutes: 571 }], [{ rate: 175, minutes: 570 }], [{ rate: 200, minutes: -1 }], [{ rate: 150, minutes: 569.5 }], []]) assert.throws(() => validateOvertimePayAllocations(allocation, 570));
   assert.deepEqual(validateOvertimePayAllocations([], 0), []);
+});
+
+test('owner payroll example defaults 37h55 to regular and preserves 9h30 special', () => {
+  const record = Object.freeze({ overtimeMinutes: 2845, overtimePayAllocations: Object.freeze([Object.freeze({ rate: 200, minutes: 570 })]) });
+  assert.deepEqual(overtimeRateTotals(record), { at150: 2275, at200: 570, unassigned: 0, requiresReview: false });
+  assert.deepEqual(record.overtimePayAllocations, [{ rate: 200, minutes: 570 }]);
+  for (const overtimePayAllocations of [undefined, null, []]) {
+    assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 570, overtimePayAllocations }), { at150: 570, at200: 0, unassigned: 0, requiresReview: false });
+  }
+  assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 600, overtimePayAllocations: [{ rate: 150, minutes: 30 }, { rate: 200, minutes: 570 }] }), { at150: 30, at200: 570, unassigned: 0, requiresReview: false });
+  assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 0 }), { at150: 0, at200: 0, unassigned: 0, requiresReview: false });
+});
+test('invalid explicit allocations remain reviewable instead of receiving an assumed rate', () => {
+  for (const overtimePayAllocations of [{ rate: 200, minutes: 570 }, [null], [{ rate: 175, minutes: 10 }], [{ rate: 200, minutes: -1 }]]) {
+    assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 570, overtimePayAllocations }), { at150: 0, at200: 0, unassigned: 570, requiresReview: true });
+  }
+  assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 300, overtimePayAllocations: [{ rate: 200, minutes: 570 }] }), { at150: 0, at200: 570, unassigned: 0, requiresReview: true });
 });

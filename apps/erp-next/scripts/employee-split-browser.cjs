@@ -19,10 +19,11 @@ if (emulator) {
   storage = require('../.employee-attendance-test/apps/erp-next/lib/firebase/firestore-rest');
 }
 
+const historical = { id: 'synthetic-employee_2026-09-11', employeeId: 'synthetic-employee', employeeName: 'Synthetic Employee', date: '2026-09-11', payrollPeriodId: '2026-08-27_2026-09-26', regularHours: 8, scheduledWorkHours: 8, overtimeHours: 2275 / 60, overtimeMinutes: 2275, aoHours: 0, vacationHours: 0, noWorkNoPayHours: 0, paidFreeHours: 0, status: 'Regular', notes: 'Synthetic historical OT without rate' };
 const stubs = {
   'auth-provider': `const principal={role:'super_admin',userId:'synthetic-operator',displayName:'Test Operator',capabilities:new Set(['payroll_sensitive.view'])};export function useAuth(){return {principal};}`,
   'canonical-operations': `export * from './lib/canonical-operations';export async function loadCanonicalOperationsState(){return {staffProfiles:[{id:'synthetic-employee',name:'Synthetic Employee',active:true}],vans:[],vanHalfDaySchedules:[],staffAbsences:[]};}`,
-  'firestore-rest': `export * from './lib/firebase/firestore-rest';export async function listFirestoreCollection(){return [];}export async function mutateFirestoreDocumentWithReads(collection,id,readIds,fn){const current=window.saved.filter(x=>x.id===id).at(-1)||null;const changes=fn(current,Object.fromEntries([id,...readIds].map(key=>[key,window.saved.filter(x=>x.id===key).at(-1)||null])));if(!changes)return current;const document={...current,...changes,id};window.saved.push(structuredClone(document));return document;}export async function saveFirestoreDocument(collection,document){if(collection!=='employeeTimesheets')throw Error('Unexpected collection');window.saved.push(structuredClone(document));return document;}`,
+  'firestore-rest': `export * from './lib/firebase/firestore-rest';export async function listFirestoreCollection(collection){return collection==='employeeTimesheets'?[window.historical]:[];}export async function mutateFirestoreDocumentWithReads(collection,id,readIds,fn){const current=window.saved.filter(x=>x.id===id).at(-1)||null;const changes=fn(current,Object.fromEntries([id,...readIds].map(key=>[key,window.saved.filter(x=>x.id===key).at(-1)||null])));if(!changes)return current;const document={...current,...changes,id};window.saved.push(structuredClone(document));return document;}export async function saveFirestoreDocument(collection,document){if(collection!=='employeeTimesheets')throw Error('Unexpected collection');window.saved.push(structuredClone(document));return document;}`,
   'employee-directory-overview': `export function EmployeeDirectoryOverview(){return null;}`,
   'employee-profile-dialog': `export function EmployeeProfileDialog(){return null;}`,
 };
@@ -30,10 +31,10 @@ if (emulator) {
   stubs['firestore-rest'] = `export * from './lib/firebase/firestore-rest';`;
   stubs['auth-provider'] = `export function useAuth(){return {principal:{role:'super_admin',userId:window.syntheticUid,displayName:'Synthetic Admin',capabilities:new Set(['payroll_sensitive.view'])}};}`;
 }
-const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {EmployeeWorkspace} from './components/employees/employee-workspace';${emulator ? `import {signInWithFirebaseEmail} from './lib/firebase/session';async function start(){const session=await signInWithFirebaseEmail('browser@attendance.invalid','Synthetic-attendance-test-123!');window.syntheticUid=session.uid;createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);}start();` : `window.saved=[];createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);`}`;
+const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {EmployeeWorkspace} from './components/employees/employee-workspace';${emulator ? `import {signInWithFirebaseEmail} from './lib/firebase/session';async function start(){const session=await signInWithFirebaseEmail('browser@attendance.invalid','Synthetic-attendance-test-123!');window.syntheticUid=session.uid;createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);}start();` : `window.saved=[];window.historical=${JSON.stringify(historical)};createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);`}`;
 
 async function runCase(browser, origin, name, viewport) {
-  if (emulator) { await emulator.reset(); principal = await emulator.account(storage, 'browser', 'admin'); }
+  if (emulator) { await emulator.reset(); principal = await emulator.account(storage, 'browser', 'admin'); await emulator.seed(storage, 'employeeTimesheets/' + historical.id, historical); }
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   const errors = [], external = [], rpc = [];
@@ -63,12 +64,6 @@ async function runCase(browser, origin, name, viewport) {
   await page.getByLabel('Interval 2 Clock Out', { exact: true }).fill('05:00');
   await page.getByLabel('Interval 2 Clock out next day', { exact: true }).check();
   await page.getByText('Time between intervals excluded:', { exact: false }).filter({ hasText: '2h 30m' }).waitFor();
-  await page.getByRole('button', { name: 'Split rates', exact: true }).click();
-  await page.getByLabel('Allocation 1 hours', { exact: true }).fill('2');
-  await page.getByLabel('Allocation 1 minutes', { exact: true }).fill('30');
-  await page.getByLabel('Allocation 2 hours', { exact: true }).fill('7');
-  await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic emergency overtime allocation');
-  await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
   const readSaved = async (count) => {
     if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); return page.evaluate(() => window.saved.at(-1)); }
     const deadline = Date.now() + 15000;
@@ -79,35 +74,90 @@ async function runCase(browser, origin, name, viewport) {
     }
     throw Error('Authenticated browser save did not reach Firestore');
   };
+  assert.equal(await page.getByRole('button', { name: 'All at 150%', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic default regular overtime');
+  await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
   let saved = await readSaved(1);
+  assert.equal(saved.overtimeMinutes, 570);
+  assert.equal(saved.overtimePayAllocations, undefined);
+  assert.equal(saved.attendanceHistory.length, 1);
+  await page.screenshot({ path: path.join(output, name + '-default-150.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Split rates', exact: true }).click();
+  await page.getByLabel('Allocation 1 hours', { exact: true }).fill('2');
+  await page.getByLabel('Allocation 1 minutes', { exact: true }).fill('30');
+  await page.getByLabel('Allocation 2 hours', { exact: true }).fill('7');
+  await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic emergency overtime allocation');
+  await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
+  saved = await readSaved(2);
   assert.equal(saved.regularHours, 8); assert.equal(saved.workedMinutes, 1050);
   assert.equal(saved.overtimeMinutes, 570);
   assert.deepEqual(saved.overtimePayAllocations, [{rate:150,minutes:150},{rate:200,minutes:420}]);
-  assert.equal(saved.attendanceHistory.length, 1);
+  assert.equal(saved.attendanceHistory.length, 2);
   await page.screenshot({ path: path.join(output, name + '-split.png'), fullPage: true });
   // A rate-only edit preserves the saved times and appends history.
   await page.getByRole('button', { name: 'All at 200%', exact: true }).click();
   await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic 200% approval');
   await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
-  saved = await readSaved(2);
+  saved = await readSaved(3);
   assert.equal(saved.overtimeMinutes, 570); assert.equal(saved.workedMinutes, 1050);
   assert.deepEqual(saved.overtimePayAllocations, [{rate:200,minutes:570}]);
-  assert.equal(saved.attendanceHistory.length, 2);
+  assert.equal(saved.attendanceHistory.length, 3);
+  const breakdown = page.getByRole('heading', { name: 'Payroll breakdown · selected period', exact: true }).locator('..');
+  assert.deepEqual(await breakdown.locator('tbody td').allTextContents().then(rows => rows.slice(1)), ['47h 25m', '37h 55m', '9h 30m']);
+  assert.equal(await page.getByText('Rate not assigned', { exact: true }).count(), 0);
+  await page.locator('summary').filter({ hasText: 'Quick actions' }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export accounting CSV', exact: true }).click();
+  const download = await downloadPromise;
+  const csvPath = path.join(output, name + '-accounting.csv');
+  await download.saveAs(csvPath);
+  const csv = fs.readFileSync(csvPath, 'utf8');
+  assert.ok(csv.includes('Regular OT 150%,Special OT 200%,OT Rate Review'));
+  assert.ok(csv.split('\n')[1].endsWith(',37.92,9.50,'));
   if (emulator) {
     assert.equal(saved.updatedByUserId, principal.uid);
     assert.equal(await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-13'), null);
     assert.equal(await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-15'), null);
-    assert.equal(rpc.filter(x => x === 'commit').length, 2);
-    assert.equal(rpc.filter(x => x === 'batchGet').length, 2);
+    assert.equal(rpc.filter(x => x === 'commit').length, 3);
+    assert.equal(rpc.filter(x => x === 'batchGet').length, 3);
+    assert.deepEqual(await emulator.get(storage, 'employeeTimesheets/' + historical.id), historical);
     await page.reload();
     await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
     await page.getByLabel('Interval 2 Clock In', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Interval 2 Clock In', { exact: true }).inputValue(), '19:30');
     await page.screenshot({ path: path.join(output, name + '-persisted-200.png'), fullPage: true });
   }
+  await page.getByLabel('Interval 2 Clock Out', { exact: true }).fill('06:00');
+  assert.equal(await page.getByLabel('Allocation 1 rate', { exact: true }).inputValue(), '200');
+  assert.equal(await page.getByLabel('Allocation 1 hours', { exact: true }).inputValue(), '9');
+  await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic changed duration');
+  assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+  await page.getByText('Assigned overtime must exactly match calculated overtime.', { exact: true }).waitFor();
+  if (emulator) {
+    // Malformed stored data stays visible as a warning and cannot be silently resaved.
+    await emulator.seed(storage, 'employeeTimesheets/synthetic-employee_2026-09-14', { ...saved, overtimePayAllocations: { rate: 200, minutes: 570 } });
+    assert.deepEqual((await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-14')).overtimePayAllocations, { rate: 200, minutes: 570 });
+    await page.reload();
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByText('Recorded overtime rates need review. Select a complete, valid allocation before saving.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'All at 150%', exact: true }).click();
+    await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic explicit rate correction');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isEnabled(), true);
+    // Empty legacy selections retain the writer's reason requirement even without split mode.
+    const { workIntervals: _intervals, ...ordinary } = saved;
+    await emulator.seed(storage, 'employeeTimesheets/synthetic-employee_2026-09-14', { ...ordinary, overtimeMinutes: 0, overtimeHours: 0, workedMinutes: 480, overtimePayAllocations: [] });
+    await page.reload();
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByLabel('Reason for this change (required)', { exact: true }).waitFor();
+    await page.getByLabel('Notes', { exact: true }).fill('Synthetic legacy note');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+    await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic legacy update');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isEnabled(), true);
+  }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
-  return { name, result: 'PASS', externalRequests: 0, saves: 2, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };
+  return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };
 }
 
 async function main() {

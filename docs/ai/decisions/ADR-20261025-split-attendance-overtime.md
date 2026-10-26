@@ -13,8 +13,12 @@ remain independent; missing regular time still requires Paid/NWNP classification
 
 Optional overtimePayAllocations contain integer minutes and a selected rate of 150 or 200.
 Their sum must equal net overtime on explicit save. These are hours at a rate, not multiplied
-hours or monetary wage amounts. No automatic policy threshold or historical default is
-introduced. Payroll keeps total overtime and adds 150%, 200%, and unassigned columns.
+hours or monetary wage amounts. Owner clarification on 2026-10-26 establishes 150% as the default for regular overtime,
+including historical records and newly evidenced minutes without a rate. Only explicit
+selections earn 200%; no time, holiday or hours threshold selects it automatically. Payroll
+keeps total overtime and shows regular 150% and special 200% columns. The projection fills
+remaining valid minutes at 150% without backfilling data. Invalid or excessive allocations
+remain review-required, with explicit values retained for correction.
 
 Explicit saves use the existing payroll-role Firestore permissions, authenticated masked
 transactions, adjacent-date conflict reads, stale-state rejection and before/after history.
@@ -24,12 +28,13 @@ Active absence conflicts require explicit resolution before introducing enhanced
 
 Work Order completion discovers canonical and legacy attendance IDs by the existing date
 index, rejects duplicate identities and adjacent overlaps, preserves selected rates and adds
-only newly evidenced minutes. Newly added overtime remains unassigned for operator review.
+only newly evidenced minutes. Newly added overtime defaults to 150% in the read projection, preserving explicit rates.
 
 ## Alternatives and consequences
 
 - A single 08:00–05:00 range would invent work during the off-duty gap: rejected.
-- Backfilling old overtime as 150% would invent a payment decision: rejected.
+- Persisted backfill remains rejected. The owner-authorized 150% read default changes
+  classification without rewriting recorded hours, manual selections or history.
 - A separate attendance collection would split payroll truth: rejected.
 - At most 12 intervals / 24 rate allocations; history is append-only with a conservative
   size guard. Operators must review stale saves rather than silently merge financial edits.
