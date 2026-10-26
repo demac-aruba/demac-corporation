@@ -1,0 +1,30 @@
+name: Attendance web save read-only diagnosis
+on:
+  push:
+    branches: [fix/attendance-web-transaction-20261025]
+    paths: ['scripts/attendance-web-save-audit.cjs', '.github/workflows/attendance-web-save-audit.yml']
+permissions:
+  contents: read
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: node scripts/attendance-web-save-audit.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attendance-web-save-read-only-diagnosis
+          path: ${{ runner.temp }}/attendance-web-save-audit.json
+          if-no-files-found: error
+          retention-days: 30
