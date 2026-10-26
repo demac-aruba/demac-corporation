@@ -2,9 +2,9 @@
 
 ## Context and scope
 
-Owner incident2026-10-26: ordinary attendance15:00 onOct20 through05:00 onOct21,
-zero actual break, manually200% overtime, cannot be saved. Planned shift15:00–00:00
-includes60m break. Screenshot shows old recurring08:00–17:00 and no next-day option.
+Owner incident 2026-10-26: ordinary attendance15:00 on Oct 20 through05:00 on Oct 21,
+zero actual break, manually 200% overtime, cannot be saved. Planned shift15:00–00:00
+includes 60m break. Screenshot shows old recurring08:00–17:00 and no next-day option.
 Repair the ordinary single-interval form and dated schedule window; preserve existing data.
 Owner merge/deploy authorization continues. No production employee is a test fixture.
 
@@ -19,7 +19,7 @@ The adjusted shift preserves canonical/saved net regular minutes and paid-free e
 
 - Explicit next-day ClockOut for one continuous interval; split remains two or more intervals.
 - Dated planned start/end/next-day/break; actual break remains separate.
--840 worked,480 regular,360 OT; manual200% preserved after save/reload/WorkOrder evidence.
+- 840 worked,480 regular,360 OT; manual 200% preserved after save/reload/WorkOrder evidence.
 - Same-day/next-day offsets, missing time, overlaps, rates, reasons and optimistic writes validated.
 - Existing history/unknown metadata preserved; lost-response creates/updates are idempotent.
 - Existing clients cannot rewrite adjusted records without increasing the revision and retaining

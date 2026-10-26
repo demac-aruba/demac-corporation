@@ -113,6 +113,17 @@ async function main(){
   const legacy={...once,employeeId:'synthetic-conversion'};await seed(legacyId,legacy);
   const converted=await attendance.saveAttendanceDay({...overnightInput,employee:{...employee,id:'synthetic-conversion'},existingEntry:{...legacy,id:legacyId}});
   assert.equal(converted.attendanceShiftRevision,1);assert.equal(converted.workedMinutes,840);
+  for (const revision of [undefined,2]) {
+    const rejectedId='synthetic-invalid-revision-'+String(revision);
+    const {attendanceShiftRevision:_revision,...withoutRevision}=overnight;
+    const invalid={...withoutRevision,...(revision===undefined?{}:{attendanceShiftRevision:revision})};
+    await assert.rejects(storage.mutateFirestoreDocumentWithReads('employeeTimesheets',rejectedId,[],()=>invalid),/PERMISSION_DENIED/);
+    assert.equal(await doc(rejectedId),null);
+  }
+  // Missing guarded targets must never be recreated by a stale conditional edit.
+  beforeCommit=()=>em.remove('employeeTimesheets/'+overnightId);
+  await assert.rejects(attendance.saveAttendanceDay({...financeEdit,existingEntry:rerated,draft:{...financeEdit.draft,notes:'Synthetic concurrent deletion'}}),/PERMISSION_DENIED|Refresh and review/);
+  assert.equal(await doc(overnightId),null);
   scenarios.push('continuous overnight 840m worked, 360m at 200%; retry, accounting update and legacy conversion');
   scenarios.push('old-client revision reuse/removal/reset and inconsistent schedule snapshots denied');
   console.log(JSON.stringify({result:'PASS',productionRequests:0,authentication:'Firebase Auth emulator',rules:'repository firestore.rules including adjusted-shift revision guard',scenarios},null,2));

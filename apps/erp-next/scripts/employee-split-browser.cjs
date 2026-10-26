@@ -60,15 +60,24 @@ async function runCase(browser, origin, name, viewport, scenario = 'split') {
   await page.clock.install({ time: new Date(workDate + 'T14:00:00.000Z') });
   await page.goto(origin);
   await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+  const waitForAcceptedSave = async (count) => {
+    // A committed document may be visible before the response reaches React.
+    // Start the next user action only after the UI accepts that save and resets its reason.
+    await page.getByText('Attendance history · '+count+' changes',{exact:true}).waitFor();
+    const reason=await page.getByLabel('Reason for this change (required)',{exact:true}).elementHandle();
+    await page.waitForFunction(input=>input.value==='',reason);
+  };
   const readSaved = async (count) => {
-    if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); return page.evaluate(() => window.saved.at(-1)); }
+    if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); await waitForAcceptedSave(count); return page.evaluate(() => window.saved.at(-1)); }
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       const row = await emulator.get(storage, 'employeeTimesheets/synthetic-employee_' + workDate);
-      if (row?.attendanceHistory?.length === count) { await page.getByRole('button', { name: 'Save Exception', exact: true }).waitFor(); return row; }
+      if (row?.attendanceHistory?.length === count) { await waitForAcceptedSave(count); return row; }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    throw Error('Authenticated browser save did not reach Firestore');
+    await page.screenshot({path:path.join(output,name+'-'+scenario+'-failure.png'),fullPage:true});
+    fs.writeFileSync(path.join(output,name+'-'+scenario+'-failure.json'),JSON.stringify({errors,rpc,expectedHistory:count,saved:await emulator.get(storage,'employeeTimesheets/synthetic-employee_'+workDate),visibleText:await page.locator('body').innerText()},null,2));
+    throw Error('Authenticated browser save did not reach Firestore: '+name+'/'+scenario+' history '+count);
   };
   if (scenario === 'overnight') {
     await page.getByLabel('Clock In', { exact: true }).fill('15:00');
@@ -202,7 +211,7 @@ async function runCase(browser, origin, name, viewport, scenario = 'split') {
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
-  return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };
+  return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, repository Rules, reload verified' : 'synthetic adapter' };
 }
 
 async function main() {

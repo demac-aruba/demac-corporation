@@ -529,7 +529,7 @@ export function EmployeeWorkspace() {
                 {(draft.workIntervals?.length ?? 0) <= 1 ? <>
                 <Field label="Clock In"><input className={styles.control} type="time" value={draft.clockInTime} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, { clockInTime: event.target.value }))} /></Field>
                 <Field label="Clock Out"><input className={styles.control} type="time" value={draft.clockOutTime} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, { clockOutTime: event.target.value }))} /></Field>
-                <label className={styles.intervalDates}><input type="checkbox" checked={draft.workIntervals?.[0]?.endDayOffset === 1} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, {}, event.target.checked))} />Clock out next day</label>
+                <label className={styles.dayOffsetToggle}><input type="checkbox" checked={draft.workIntervals?.[0]?.endDayOffset === 1} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, {}, event.target.checked))} />Clock out next day</label>
                 <Field label="Break Minutes" full><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, { breakMinutes: Number(event.target.value) }))} /></Field>
                 </> : null}
                 {workedStatus ? <EmployeeAttendanceIntervalEditor draft={draft} onChange={setDraft} existing={selectedRecord.entry} disabled={busy || !canManageSensitiveAttendance} overtimeMinutes={selectedVariance?.overtimeMinutes ?? 0} excludedGapMinutes={selectedVariance?.excludedGapMinutes} /> : null}

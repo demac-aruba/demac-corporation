@@ -20,7 +20,7 @@ export function EmployeeAttendanceShiftEditor({ draft, schedule, existing, disab
         <label className={styles.field}><span>Scheduled end</span><input className={styles.control} type="time" value={shift.endTime} onChange={(event) => onChange({ ...draft, attendanceShiftOverride: { ...shift, endTime: event.target.value } })} /></label>
         <label className={styles.field}><span>Scheduled break (min)</span><input className={styles.control} type="number" min="0" step="1" value={shift.breakMinutes} onChange={(event) => onChange({ ...draft, attendanceShiftOverride: { ...shift, breakMinutes: Number(event.target.value) } })} /></label>
       </div>
-      <label className={styles.intervalDates}><input type="checkbox" checked={shift.endDayOffset === 1} onChange={(event) => onChange({ ...draft, attendanceShiftOverride: { ...shift, endDayOffset: event.target.checked ? 1 : 0 } })} />Scheduled end is next day</label>
+      <label className={styles.dayOffsetToggle}><input type="checkbox" checked={shift.endDayOffset === 1} onChange={(event) => onChange({ ...draft, attendanceShiftOverride: { ...shift, endDayOffset: event.target.checked ? 1 : 0 } })} />Scheduled end is next day</label>
       <p className={styles.intervalHint}>Keep the same {schedule.scheduledMinutes / 60} regular hours. This adjustment applies only to this attendance date; the recurring schedule stays unchanged. Record the break actually taken below.</p>
     </section> : null}
   </fieldset>;
