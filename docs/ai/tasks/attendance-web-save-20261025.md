@@ -54,3 +54,19 @@ Sources:
 - https://firebase.google.com/docs/firestore/transaction-data-contention
 - https://github.com/firebase/firebase-js-sdk/blob/main/packages/firestore/src/core/transaction.ts
 - https://cloud.google.com/firestore/native/docs/security/iam
+
+## Completed verification checkpoint
+
+- Source under review: 4d419099e974ff0aaeb59febacd93aefb2592a36.
+- Typecheck, complete production build/prebuild gates: PASS locally.
+- Authenticated transport, domain and emulator regression: PASS locally and repeated
+  independently by /root/attendance_review.
+- Real desktop/mobile login, REST save and reload: PASS in workflow 40258094150,
+  artifact 12623715085. Zero production requests; synthetic data only.
+- Corrected read-only audit 40258090824: active Rules still identical, log query returned
+  no entries. There is no captured trace of the user's specific failed request.
+- Emulator probe accepts BeginTransaction (HTTP200), so it does not reproduce the
+  production IAM limitation. Diagnosis remains a protocol incompatibility inferred from
+  the deployed code and official SDK design, not a claimed production reproduction.
+- Independent reviewer approved the complete diff with no blockers. Remaining broad CI
+  and production publication are tracked in PR626, not represented as already complete here.
