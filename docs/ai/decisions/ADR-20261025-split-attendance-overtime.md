@@ -51,3 +51,15 @@ revision. Validate the exact candidate entrypoint and anonymous boundary after p
 
 Forward recovery must retain support for saved interval fields. Do not roll back to an
 interval-unaware writer. Keep immutable baseline and candidate archives for controlled repair.
+
+## Web transaction correction (2026-10-25)
+
+The initial browser transport incorrectly used a built-in readWrite BeginTransaction
+with Firebase web credentials. Replace it with the SDK web optimistic protocol: BatchGet
+without a transaction ID, then one Commit containing the masked target write and Verify
+preconditions for every read-only adjacent document. Existing records use their raw
+updateTime (including sub-millisecond precision); missing records use exists:false.
+A conflict rejects the save for explicit refresh/review. A failed response can be retried
+through the existing content/history idempotency check. No Rules, IAM, model, backend or
+production-data changes are needed. Auth+Firestore emulator tests and browser persistence
+with real transport are mandatory regression evidence; mocked transport alone is insufficient.

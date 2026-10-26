@@ -1,5 +1,6 @@
 // Real EmployeeWorkspace + save/calculation/payroll; synthetic read/write adapters only.
-// This is isolated component verification, not a Firebase production test.
+// --emulator retains real session, HTTP persistence and unmodified Firestore Rules.
+// Both modes are isolated verification, never a Firebase production test.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,6 +12,12 @@ if (!output || !path.isAbsolute(output)) throw Error('Absolute ATTENDANCE_TEST_O
 const { build } = require(require.resolve('esbuild', { paths: toolPaths }));
 const { chromium } = require(require.resolve('playwright', { paths: toolPaths }));
 fs.mkdirSync(output, { recursive: true });
+const emulator = process.argv.includes('--emulator') ? require('./test-support/attendance-emulator.cjs') : null;
+let storage, principal;
+if (emulator) {
+  emulator.configure();
+  storage = require('../.employee-attendance-test/apps/erp-next/lib/firebase/firestore-rest');
+}
 
 const stubs = {
   'auth-provider': `const principal={role:'super_admin',userId:'synthetic-operator',displayName:'Test Operator',capabilities:new Set(['payroll_sensitive.view'])};export function useAuth(){return {principal};}`,
@@ -19,15 +26,33 @@ const stubs = {
   'employee-directory-overview': `export function EmployeeDirectoryOverview(){return null;}`,
   'employee-profile-dialog': `export function EmployeeProfileDialog(){return null;}`,
 };
-const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {EmployeeWorkspace} from './components/employees/employee-workspace';window.saved=[];createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);`;
+if (emulator) {
+  stubs['firestore-rest'] = `export * from './lib/firebase/firestore-rest';`;
+  stubs['auth-provider'] = `export function useAuth(){return {principal:{role:'super_admin',userId:window.syntheticUid,displayName:'Synthetic Admin',capabilities:new Set(['payroll_sensitive.view'])}};}`;
+}
+const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {EmployeeWorkspace} from './components/employees/employee-workspace';${emulator ? `import {signInWithFirebaseEmail} from './lib/firebase/session';async function start(){const session=await signInWithFirebaseEmail('browser@attendance.invalid','Synthetic-attendance-test-123!');window.syntheticUid=session.uid;createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);}start();` : `window.saved=[];createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);`}`;
 
 async function runCase(browser, origin, name, viewport) {
+  if (emulator) { await emulator.reset(); principal = await emulator.account(storage, 'browser', 'admin'); }
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
-  const errors = [], external = [];
+  const errors = [], external = [], rpc = [];
   page.on('pageerror', error => errors.push(error.message));
-  await context.route('**/*', route => {
+  await context.route('**/*', async route => {
     if (route.request().url().startsWith(origin + '/')) return route.continue();
+    if (emulator) {
+      const url = route.request().url();
+      let destination;
+      try { destination = emulator.destination(url); } catch { external.push(url); return route.abort(); }
+      if (url.includes('firestore.googleapis.com')) {
+        rpc.push(new URL(url).pathname.split(':').at(-1));
+        assert.ok(!url.endsWith(':beginTransaction') && !url.endsWith(':rollback'));
+      }
+      // Forward the actual browser method/body/Authorization unchanged to the
+      // emulator. No mocked response, persistence, session or Rules decision.
+      const response = await route.fetch({ url: destination });
+      return route.fulfill({ response });
+    }
     external.push(route.request().url()); return route.abort();
   });
   await page.clock.install({ time: new Date('2026-09-14T14:00:00.000Z') });
@@ -44,8 +69,17 @@ async function runCase(browser, origin, name, viewport) {
   await page.getByLabel('Allocation 2 hours', { exact: true }).fill('7');
   await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic emergency overtime allocation');
   await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
-  await page.waitForFunction(() => window.saved.length === 1);
-  let saved = await page.evaluate(() => window.saved.at(-1));
+  const readSaved = async (count) => {
+    if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); return page.evaluate(() => window.saved.at(-1)); }
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const row = await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-14');
+      if (row?.attendanceHistory?.length === count) { await page.getByRole('button', { name: 'Save Exception', exact: true }).waitFor(); return row; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw Error('Authenticated browser save did not reach Firestore');
+  };
+  let saved = await readSaved(1);
   assert.equal(saved.regularHours, 8); assert.equal(saved.workedMinutes, 1050);
   assert.equal(saved.overtimeMinutes, 570);
   assert.deepEqual(saved.overtimePayAllocations, [{rate:150,minutes:150},{rate:200,minutes:420}]);
@@ -55,19 +89,30 @@ async function runCase(browser, origin, name, viewport) {
   await page.getByRole('button', { name: 'All at 200%', exact: true }).click();
   await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic 200% approval');
   await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
-  await page.waitForFunction(() => window.saved.length === 2);
-  saved = await page.evaluate(() => window.saved.at(-1));
+  saved = await readSaved(2);
   assert.equal(saved.overtimeMinutes, 570); assert.equal(saved.workedMinutes, 1050);
   assert.deepEqual(saved.overtimePayAllocations, [{rate:200,minutes:570}]);
   assert.equal(saved.attendanceHistory.length, 2);
+  if (emulator) {
+    assert.equal(saved.updatedByUserId, principal.uid);
+    assert.equal(await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-13'), null);
+    assert.equal(await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-15'), null);
+    assert.equal(rpc.filter(x => x === 'commit').length, 2);
+    assert.equal(rpc.filter(x => x === 'batchGet').length, 2);
+    await page.reload();
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByLabel('Interval 2 Clock In', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Interval 2 Clock In', { exact: true }).inputValue(), '19:30');
+    await page.screenshot({ path: path.join(output, name + '-persisted-200.png'), fullPage: true });
+  }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
-  return { name, result: 'PASS', externalRequests: 0, saves: 2 };
+  return { name, result: 'PASS', externalRequests: 0, saves: 2, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };
 }
 
 async function main() {
   await build({ absWorkingDir: APP, tsconfig: path.join(APP, 'tsconfig.json'), stdin: { contents: entry, loader: 'tsx', resolveDir: APP }, outfile: path.join(output, 'app.js'), bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic',
-    define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-demac-attendance', NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false' }) },
+    define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', ...Object.fromEntries(['API_KEY','AUTH_DOMAIN','PROJECT_ID','STORAGE_BUCKET','MESSAGING_SENDER_ID','APP_ID'].map(k => ['NEXT_PUBLIC_FIREBASE_'+k, 'demo-demac-attendance'])), NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false' }) },
     plugins: [{ name: 'synthetic-attendance-adapters', setup(b) {
       b.onResolve({ filter: /.*/ }, args => {
         if (args.namespace === 'synthetic') return;
