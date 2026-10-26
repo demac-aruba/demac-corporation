@@ -29,7 +29,7 @@ async function main(){
       report.rules={matchesRepository:hash(rules.source.files[0].content)===hash(fs.readFileSync('firestore.rules')),sourceHash:hash(rules.source.files[0].content),releaseTime:release.updateTime};
     }
   }
-  const logs=await api('https://logging.googleapis.com/v2/entries:list?fields=entries(timestamp,protoPayload(methodName,status(code))),nextPageToken',{
+  const logs=await api('https://logging.googleapis.com/v2/entries:list?fields=entries(timestamp,protoPayload),nextPageToken',{
     resourceNames:['projects/'+PROJECT],pageSize:50,orderBy:'timestamp desc',
     filter:'resource.labels.project_id="'+PROJECT+'" AND protoPayload.serviceName="firestore.googleapis.com" AND protoPayload.methodName="google.firestore.v1.Firestore.BeginTransaction" AND protoPayload.status.code=7 AND timestamp>="2026-10-25T23:55:00Z"'
   });
