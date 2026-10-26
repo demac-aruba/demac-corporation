@@ -353,7 +353,30 @@ service cloud.firestore {
     }
 
     match /employeeTimesheets/{entryId} {
-      allow read, create, update: if payrollRole();
+      function adjustedShift(data) {
+        return data.get('attendanceShiftOverride', null) != null
+          || data.get('scheduledEndDayOffset', 0) != 0
+          || data.get('attendanceShiftRevision', 0) != 0;
+      }
+      function validShiftRevision(previous) {
+        let data = request.resource.data;
+        return data.get('attendanceShiftOverride', null) is map
+          && data.get('attendanceShiftRevision', 0) is int
+          && data.attendanceShiftRevision == previous + 1
+          && data.get('scheduledEndDayOffset', 0) in [0, 1]
+          && data.scheduledStartTime == data.attendanceShiftOverride.startTime
+          && data.scheduledEndTime == data.attendanceShiftOverride.endTime
+          && data.scheduledEndDayOffset == data.attendanceShiftOverride.endDayOffset
+          && data.scheduledBreakMinutes is int
+          && data.scheduledBreakMinutes == data.attendanceShiftOverride.breakMinutes;
+      }
+      allow read: if payrollRole();
+      allow create: if payrollRole() && (!adjustedShift(request.resource.data) || validShiftRevision(0));
+      allow update: if payrollRole() && (
+        (resource == null && (!adjustedShift(request.resource.data) || validShiftRevision(0)))
+        || (resource != null && ((!adjustedShift(resource.data) && !adjustedShift(request.resource.data))
+          || validShiftRevision(resource.data.get('attendanceShiftRevision', 0))))
+      );
       allow delete: if adminRole();
     }
 

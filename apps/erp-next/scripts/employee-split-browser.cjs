@@ -33,7 +33,8 @@ if (emulator) {
 }
 const entry = `import React from 'react';import {createRoot} from 'react-dom/client';import {EmployeeWorkspace} from './components/employees/employee-workspace';${emulator ? `import {signInWithFirebaseEmail} from './lib/firebase/session';async function start(){const session=await signInWithFirebaseEmail('browser@attendance.invalid','Synthetic-attendance-test-123!');window.syntheticUid=session.uid;createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);}start();` : `window.saved=[];window.historical=${JSON.stringify(historical)};createRoot(document.getElementById('app')).render(<EmployeeWorkspace/>);`}`;
 
-async function runCase(browser, origin, name, viewport) {
+async function runCase(browser, origin, name, viewport, scenario = 'split') {
+  const workDate = scenario === 'overnight' ? '2026-10-20' : '2026-09-14';
   if (emulator) { await emulator.reset(); principal = await emulator.account(storage, 'browser', 'admin'); await emulator.seed(storage, 'employeeTimesheets/' + historical.id, historical); }
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
@@ -56,24 +57,77 @@ async function runCase(browser, origin, name, viewport) {
     }
     external.push(route.request().url()); return route.abort();
   });
-  await page.clock.install({ time: new Date('2026-09-14T14:00:00.000Z') });
+  await page.clock.install({ time: new Date(workDate + 'T14:00:00.000Z') });
   await page.goto(origin);
   await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+  const waitForAcceptedSave = async (count) => {
+    // A committed document may be visible before the response reaches React.
+    // Start the next user action only after the UI accepts that save and resets its reason.
+    await page.getByText('Attendance history · '+count+' changes',{exact:true}).waitFor();
+    const reason=await page.getByLabel('Reason for this change (required)',{exact:true}).elementHandle();
+    await page.waitForFunction(input=>input.value==='',reason);
+  };
+  const readSaved = async (count) => {
+    if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); await waitForAcceptedSave(count); return page.evaluate(() => window.saved.at(-1)); }
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const row = await emulator.get(storage, 'employeeTimesheets/synthetic-employee_' + workDate);
+      if (row?.attendanceHistory?.length === count) { await waitForAcceptedSave(count); return row; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    await page.screenshot({path:path.join(output,name+'-'+scenario+'-failure.png'),fullPage:true});
+    fs.writeFileSync(path.join(output,name+'-'+scenario+'-failure.json'),JSON.stringify({errors,rpc,expectedHistory:count,saved:await emulator.get(storage,'employeeTimesheets/synthetic-employee_'+workDate),visibleText:await page.locator('body').innerText()},null,2));
+    throw Error('Authenticated browser save did not reach Firestore: '+name+'/'+scenario+' history '+count);
+  };
+  if (scenario === 'overnight') {
+    await page.getByLabel('Clock In', { exact: true }).fill('15:00');
+    await page.getByLabel('Clock Out', { exact: true }).fill('05:00');
+    await page.getByLabel('Break Minutes', { exact: true }).fill('0');
+    await page.getByText('Clock Out must follow Clock In. Select Clock out next day for overnight work.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+    await page.getByRole('checkbox', { name: 'Clock out next day', exact: true }).check();
+    await page.getByRole('checkbox', { name: /Adjust scheduled shift for this day/ }).check();
+    await page.getByLabel('Scheduled start', { exact: true }).fill('15:00');
+    await page.getByLabel('Scheduled end', { exact: true }).fill('00:00');
+    await page.getByRole('checkbox', { name: 'Scheduled end is next day', exact: true }).check();
+    await page.getByLabel('Scheduled break (min)', { exact: true }).fill('60');
+    await page.getByRole('button', { name: 'All at 200%', exact: true }).click();
+    await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic continuous overnight 200% approval');
+    await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
+    let saved = await readSaved(1);
+    assert.equal(saved.workedMinutes,840); assert.equal(saved.regularHours,8); assert.equal(saved.overtimeMinutes,360);
+    assert.equal(saved.breakMinutes,0); assert.equal(saved.scheduledBreakMinutes,60); assert.equal(saved.scheduledEndDayOffset,1);
+    assert.equal(saved.workIntervals.length,1); assert.equal(saved.attendanceShiftRevision,1);
+    assert.deepEqual(saved.attendanceShiftOverride,{startTime:'15:00',endTime:'00:00',endDayOffset:1,breakMinutes:60});
+    assert.deepEqual(saved.overtimePayAllocations,[{rate:200,minutes:360}]);
+    await page.screenshot({path:path.join(output,name+'-overnight-200.png'),fullPage:true});
+    if (emulator) {
+      await page.reload();
+      await page.getByRole('button', {name:'Employee Calendar',exact:true}).click();
+      await page.getByLabel('Clock In',{exact:true}).waitFor();
+      assert.equal(await page.getByLabel('Clock In',{exact:true}).inputValue(),'15:00');
+      assert.equal(await page.getByLabel('Clock Out',{exact:true}).inputValue(),'05:00');
+      assert.equal(await page.getByLabel('Break Minutes',{exact:true}).inputValue(),'0');
+      assert.equal(await page.getByRole('checkbox',{name:'Clock out next day',exact:true}).isChecked(),true);
+      assert.equal(await page.getByRole('checkbox',{name:/Split shift/}).isChecked(),false);
+      assert.equal(await page.getByLabel('Scheduled start',{exact:true}).inputValue(),'15:00');
+      await page.getByLabel('Notes',{exact:true}).fill('Synthetic persisted shift note');
+      await page.getByLabel('Reason for this change (required)',{exact:true}).fill('Synthetic persisted shift edit');
+      await page.getByRole('button',{name:'Save Exception',exact:true}).click();
+      saved=await readSaved(2);
+      assert.equal(saved.attendanceShiftRevision,2);assert.equal(saved.workedMinutes,840);assert.equal(saved.overtimeMinutes,360);
+      assert.deepEqual(saved.overtimePayAllocations,[{rate:200,minutes:360}]);
+      await page.screenshot({path:path.join(output,name+'-overnight-persisted.png'),fullPage:true});
+    }
+    assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+    await context.close();
+    return {name,scenario,result:'PASS',externalRequests:0,workedMinutes:840,regularMinutes:480,ot200Minutes:360,persistence:emulator?'real Auth + Firestore Rules, reload verified':'synthetic adapter'};
+  }
   await page.getByRole('checkbox', { name: /Split shift/ }).check();
   await page.getByLabel('Interval 2 Clock In', { exact: true }).fill('19:30');
   await page.getByLabel('Interval 2 Clock Out', { exact: true }).fill('05:00');
   await page.getByLabel('Interval 2 Clock out next day', { exact: true }).check();
   await page.getByText('Time between intervals excluded:', { exact: false }).filter({ hasText: '2h 30m' }).waitFor();
-  const readSaved = async (count) => {
-    if (!emulator) { await page.waitForFunction(n => window.saved.length === n, count); return page.evaluate(() => window.saved.at(-1)); }
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      const row = await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-14');
-      if (row?.attendanceHistory?.length === count) { await page.getByRole('button', { name: 'Save Exception', exact: true }).waitFor(); return row; }
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    throw Error('Authenticated browser save did not reach Firestore');
-  };
   assert.equal(await page.getByRole('button', { name: 'All at 150%', exact: true }).getAttribute('aria-pressed'), 'true');
   await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic default regular overtime');
   await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
@@ -157,7 +211,7 @@ async function runCase(browser, origin, name, viewport) {
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
-  return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };
+  return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, repository Rules, reload verified' : 'synthetic adapter' };
 }
 
 async function main() {
@@ -182,7 +236,7 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true });
     const results = [];
-    for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) results.push(await runCase(browser, origin, name, viewport));
+    for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) for (const scenario of ['split','overnight']) results.push(await runCase(browser, origin, name, viewport, scenario));
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2));console.log(JSON.stringify(results));
   } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
 }

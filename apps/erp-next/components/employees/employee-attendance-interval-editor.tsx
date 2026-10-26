@@ -16,6 +16,7 @@ const duration = (minutes: number) => `${Math.floor(minutes / 60)}h ${String(min
 
 export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinutes, excludedGapMinutes, existing, disabled }: Props) {
   const intervals = draft.workIntervals;
+  const split = (intervals?.length ?? 0) > 1;
   const allocations = draft.overtimePayAllocations;
   const displayedAllocations: OvertimePayAllocation[] = allocations ?? (overtimeMinutes ? [{ rate: 150, minutes: overtimeMinutes }] : []);
   const assignedMinutes = displayedAllocations.reduce((sum, row) => sum + row.minutes, 0);
@@ -29,11 +30,11 @@ export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinu
   }
   function setRates(next: OvertimePayAllocation[]) { onChange({ ...draft, overtimePayAllocations: next }); }
   return <fieldset className={styles.intervalEditor} disabled={disabled}>
-    <label className={styles.splitToggle}><input type="checkbox" checked={!!intervals?.length} disabled={!!existing?.workIntervals?.length} onChange={(event) => {
-      if (!event.target.checked) { onChange({ ...draft, workIntervals: undefined, overtimePayAllocations: allocations?.length ? allocations : undefined }); return; }
-      updateIntervals([{ startTime: draft.clockInTime, endTime: draft.clockOutTime, startDayOffset: 0, endDayOffset: 0, breakMinutes: draft.breakMinutes }, { startTime: '', endTime: '', startDayOffset: 0, endDayOffset: 0, breakMinutes: 0 }]);
+    <label className={styles.splitToggle}><input type="checkbox" checked={split} disabled={(existing?.workIntervals?.length ?? 0) > 1} onChange={(event) => {
+      if (!event.target.checked) { updateIntervals([intervals![0]]); return; }
+      updateIntervals([intervals?.[0] ?? { startTime: draft.clockInTime, endTime: draft.clockOutTime, startDayOffset: 0, endDayOffset: 0, breakMinutes: draft.breakMinutes }, { startTime: '', endTime: '', startDayOffset: 0, endDayOffset: 0, breakMinutes: 0 }]);
     }} /><span><strong>Split shift / additional work interval</strong><small>Record a return to work without counting the time between shifts.</small></span></label>
-    {intervals?.length ? <section className={styles.intervalSection}>
+    {split && intervals ? <section className={styles.intervalSection}>
       <div className={styles.intervalTitle}><strong>Work intervals</strong><button type="button" disabled={intervals.length >= 12} onClick={() => updateIntervals([...intervals, { startTime: '', endTime: '', startDayOffset: 0, endDayOffset: 0, breakMinutes: 0 }])}>+ Add interval</button></div>
       {intervals.map((row, index) => <div className={styles.intervalCard} key={index}>
         <div className={styles.intervalTitle}><strong>{index + 1}. {index === 0 ? 'First work interval' : 'Additional work / overtime'}</strong>{index > 0 ? <button type="button" aria-label={`Remove interval ${index + 1}`} onClick={() => updateIntervals(intervals.filter((_, i) => i !== index))}>Remove</button> : null}</div>
@@ -57,6 +58,6 @@ export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinu
       </div>)}
       <p className={styles.intervalHint}>Assigned: <strong>{duration(assignedMinutes)} / {duration(overtimeMinutes)}</strong>. Allocate net overtime hours after breaks; clock times stay unchanged.</p>
     </section> : null}
-    {intervals?.length || allocations !== undefined || existing?.overtimePayAllocations !== undefined ? <label className={styles.field}><span>Reason for this change (required)</span><textarea className={`${styles.control} ${styles.notes}`} value={draft.changeReason ?? ''} onChange={(event) => onChange({ ...draft, changeReason: event.target.value })} placeholder="Reason for split shift or approved overtime rate…" /></label> : null}
+    {draft.attendanceShiftOverride || intervals?.length || allocations !== undefined || existing?.overtimePayAllocations !== undefined ? <label className={styles.field}><span>Reason for this change (required)</span><textarea className={`${styles.control} ${styles.notes}`} value={draft.changeReason ?? ''} onChange={(event) => onChange({ ...draft, changeReason: event.target.value })} placeholder="Reason for split shift or approved overtime rate…" /></label> : null}
   </fieldset>;
 }

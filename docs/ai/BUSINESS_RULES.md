@@ -269,6 +269,14 @@ Production activation remains separately owner-approved through the server-side 
   breaks, reject overlaps, and attribute next-day work to the starting attendance date.
   08:00–17:00 / 60m break plus 19:30–05:00 is 480 regular and 570 overtime minutes;
   the 150-minute gap is excluded. Missing regular time remains independently classified.
+- `OPS-STAFF-ATTENDANCE-DAILY-SHIFT`: an explicit dated adjustment may move the regular
+  shift window, including its end to the next day, while retaining canonical/saved net regular
+  minutes and paid-free entitlement. It does not alter recurring scheduling or create regular
+  hours on a day off. Actual attendance retains its own explicit next-day flag and actual break.
+  A continuous interval is not a split. Planned 15:00–00:00 with 60m planned break, actual
+  15:00–05:00 next day and zero break yields 840 worked, 480 regular, 360 overtime minutes.
+  Manual 200% selection applies to all 360m; absent selection defaults to150%.
+  Preserve the daily snapshot and actor/reason history; old clients must not overwrite it.
 - `OPS-STAFF-ATTENDANCE-OT-RATE`: operators explicitly allocate net overtime minutes to
   150% or 200%. The sum must equal overtime on explicit selection. Owner clarification
   2026-10-26: regular overtime defaults to 150%, including historical/new evidence without

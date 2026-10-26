@@ -108,6 +108,11 @@ record the discrepancy, and require reconciliation before a high-impact write.
 
 - `employeeTimesheets` is not a second recurring schedule authority. Explicit daily records
   are interpreted against the employee schedule resolved from the existing schedule authorities.
+- A payroll-sensitive operator may explicitly adjust the regular shift window for one
+  attendance date using `attendanceShiftOverride`, retaining canonical/saved regular minutes
+  and paid-free entitlement. This dated attendance decision does not change recurring schedule
+  authority. The snapshot includes `scheduledEndDayOffset`; an increasing
+  `attendanceShiftRevision` protects it from older web writers.
 - Normal scheduled attendance remains synthesized and is not materialized as a daily record.
 - `staffAbsences` remains the dated full-day/operational unavailability authority. A partial
   late arrival, early departure, or extended break is stored on the explicit daily timesheet

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { saveAttendanceDay, type EmployeeTimesheetEntry, type AttendanceDayDraft, type AttendanceSchedule } from '../lib/employee-attendance';
+import { scheduleForAttendanceDraft, updateAttendanceClockDraft, saveAttendanceDay, type EmployeeTimesheetEntry, type AttendanceDayDraft, type AttendanceSchedule } from '../lib/employee-attendance';
 import { overtimeRateTotals } from '../lib/employee-attendance-calculation';
 import { summarizeEmployee, payrollPeriodFromDates } from '../lib/employee-payroll';
 import { summarizeAttendancePeriod } from '../lib/employee-attendance-policy';
@@ -108,6 +108,26 @@ async function main() {
     for (const label of ['Regular OT 150%', 'Special OT 200%', '(37 h 55 min)', '(9 h 30 min)']) assert.ok(pdf.includes(label), label);
     assert.ok(!pdf.includes('Unassigned'));
     assert.deepEqual(attendance, snapshot, 'Payroll and PDF do not rewrite historical evidence');
+    const overnightEmployee = { id: 'synthetic-overnight', name: 'Synthetic Overnight' };
+    const overnightDraft: AttendanceDayDraft = updateAttendanceClockDraft({ ...draft, workIntervals: undefined, overtimePayAllocations: [{rate:200,minutes:360}], attendanceShiftOverride: {startTime:'15:00',endTime:'00:00',endDayOffset:1,breakMinutes:60} }, {clockInTime:'15:00',clockOutTime:'05:00',breakMinutes:0}, true);
+    const overnightInput = {...input, employee:overnightEmployee, date:'2026-10-20', draft:overnightDraft};
+    const overnight = await saveAttendanceDay(overnightInput);
+    assert.equal(overnight.workedMinutes,840);assert.equal(overnight.regularHours,8);assert.equal(overnight.overtimeMinutes,360);
+    assert.equal(overnight.breakMinutes,0);assert.equal(overnight.scheduledBreakMinutes,60);assert.equal(overnight.scheduledEndDayOffset,1);
+    assert.equal(overnight.workIntervals?.length,1);assert.equal(overnight.attendanceShiftRevision,1);assert.equal(overnight.payrollPeriodId,'2026-09-27_2026-10-26');
+    const afterOvernight = commits; await saveAttendanceDay(overnightInput); assert.equal(commits,afterOvernight);
+    const overnightEdit = await saveAttendanceDay({...overnightInput,existingEntry:overnight,draft:{...overnightDraft,notes:'Synthetic note edit'}});
+    assert.equal(overnightEdit.attendanceShiftRevision,2);assert.equal(overnightEdit.workedMinutes,840);assert.equal(overnightEdit.overtimeMinutes,360);assert.equal(overnightEdit.attendanceHistory?.length,2);
+    await assert.rejects(saveAttendanceDay({...overnightInput,existingEntry:overnightEdit,draft:{...overnightDraft,attendanceShiftOverride:undefined}}), /recorded daily shift/);
+    await assert.rejects(saveAttendanceDay({...overnightInput,existingEntry:overnightEdit,draft:{...overnightDraft,attendanceShiftOverride:{...overnightDraft.attendanceShiftOverride!,breakMinutes:0}}}), /same regular hours/);
+    await assert.rejects(saveAttendanceDay({...overnightInput,existingEntry:overnightEdit,draft:{...overnightDraft,workIntervals:undefined}}), /next day/);
+    // A shift-only edit must recalculate instead of taking the rates-only shortcut.
+    const shiftedAgain = {...overnightDraft, attendanceShiftOverride:{startTime:'16:00',endTime:'01:00',endDayOffset:1 as const,breakMinutes:60}};
+    const rescheduled = await saveAttendanceDay({...overnightInput,existingEntry:overnightEdit,draft:shiftedAgain});
+    assert.equal(rescheduled.scheduledStartTime,'16:00');assert.equal(rescheduled.scheduledEndTime,'01:00');assert.equal(rescheduled.attendanceShiftRevision,3);assert.equal(rescheduled.overtimeMinutes,360);
+    assert.equal(scheduleForAttendanceDraft(schedule,overnightDraft).scheduledMinutes,480);
+    const daytime=await saveAttendanceDay({...input,employee:{id:'synthetic-day-shift',name:'Synthetic Day Shift'},draft:{...draft,workIntervals:undefined,clockInTime:'09:00',clockOutTime:'18:00',breakMinutes:60,attendanceShiftOverride:{startTime:'09:00',endTime:'18:00',endDayOffset:0,breakMinutes:60},overtimePayAllocations:undefined}});
+    assert.equal(daytime.workIntervals?.length,1);assert.equal(daytime.workedMinutes,480);assert.equal(daytime.overtimeMinutes,0);assert.equal(daytime.attendanceShiftRevision,1);
     console.log('PASS split persistence: exact totals, payroll boundary, retry, stale edit, historical schedule/rates, audit, zero-OT edit, adjacent evidence, legacy identity, absence conflict.');
   } finally { storage.mutateFirestoreDocumentWithReads = original; }
 }
