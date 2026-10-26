@@ -55,6 +55,7 @@ type EmployeePeriodSummary = {
   overtime150: number;
   overtime200: number;
   overtimeUnassigned: number;
+  overtimeRateReviewRequired: boolean;
   ao: number;
   vacation: number;
   nwnp: number;
@@ -168,7 +169,7 @@ export function EmployeeWorkspace() {
       })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
       workIntervals: record.entry?.workIntervals?.map((row) => ({ ...row })),
-      overtimePayAllocations: record.entry?.overtimePayAllocations?.map((row) => ({ ...row })),
+      overtimePayAllocations: record.entry?.overtimePayAllocations?.length ? record.entry.overtimePayAllocations.map((row) => ({ ...row })) : undefined,
       changeReason: '',
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
@@ -237,7 +238,6 @@ export function EmployeeWorkspace() {
     if (!draft) return '';
     try {
       if (draft.overtimePayAllocations !== undefined) validateOvertimePayAllocations(draft.overtimePayAllocations, selectedVariance?.overtimeMinutes ?? 0);
-      else if (draft.workIntervals?.length && (selectedVariance?.overtimeMinutes ?? 0) > 0) return 'Choose how to pay the calculated overtime.';
       if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
       return '';
     } catch (cause) { return cause instanceof Error ? cause.message : 'Review the overtime allocation.'; }
@@ -501,7 +501,7 @@ export function EmployeeWorkspace() {
             })}</div>
             <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / outside payroll</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
           </section>
-          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>OT 150%</th><th>OT 200%</th><th>Rate not assigned</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td><td>{hours(selectedSummary?.overtimeUnassigned ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Existing overtime stays visible without assigning a new pay rate automatically.</p></section></div>
+          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>Regular OT 150%</th><th>Special OT 200%</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Regular overtime defaults to 150%. Special overtime uses 200% only when selected.</p>{selectedSummary?.overtimeRateReviewRequired ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals before processing payroll.</p> : null}</section></div>
 
           <aside className={styles.rightRail}>
             <section className={styles.dailyCard}>
@@ -545,7 +545,7 @@ export function EmployeeWorkspace() {
                   <SummaryRow icon="vacation" label="Scheduled Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
                   <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
                   <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
-                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Overtime at 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.unassigned > 0 ? <SummaryRow icon="timer" label="Overtime · rate not assigned" value={hoursAndMinutes(selectedRates.unassigned)} tone="orange" /> : null}</> : null}
+                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Regular overtime · 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Special overtime · 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.requiresReview ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals.</p> : null}</> : null}
                   {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
                   {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}

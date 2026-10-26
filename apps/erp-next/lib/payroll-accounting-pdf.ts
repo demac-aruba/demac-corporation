@@ -26,7 +26,7 @@ type PayrollAccountingPdfOptions = {
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200' | 'unassigned';
+  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
   label: string;
   width: number;
   align?: 'left' | 'center' | 'right';
@@ -44,11 +44,10 @@ const COLUMNS: Column[] = [
 ];
 
 const RATE_COLUMNS: Column[] = [
-  { key: 'employee', label: 'Employee', width: 281.89 },
-  { key: 'overtime', label: 'Total OT', width: 125, align: 'center' },
-  { key: 'rate150', label: 'OT 150%', width: 125, align: 'center' },
-  { key: 'rate200', label: 'OT 200%', width: 125, align: 'center' },
-  { key: 'unassigned', label: 'OT Unassigned', width: 125, align: 'center' },
+  { key: 'employee', label: 'Employee', width: CONTENT_WIDTH - 450 },
+  { key: 'overtime', label: 'Total OT', width: 150, align: 'center' },
+  { key: 'rate150', label: 'Regular OT 150%', width: 150, align: 'center' },
+  { key: 'rate200', label: 'Special OT 200%', width: 150, align: 'center' },
 ];
 
 function formatWeeklyBase(value: number) {
@@ -143,7 +142,6 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     overtime: summaries.reduce((sum, item) => sum + item.overtimeHours, 0),
     rate150: summaries.reduce((sum, item) => sum + (item.overtime150Hours ?? 0), 0),
     rate200: summaries.reduce((sum, item) => sum + (item.overtime200Hours ?? 0), 0),
-    unassigned: summaries.reduce((sum, item) => sum + (item.overtimeUnassignedHours ?? item.overtimeHours), 0),
     ao: summaries.reduce((sum, item) => sum + item.aoHours, 0),
     vacation: summaries.reduce((sum, item) => sum + item.vacationHours, 0),
     noWork: summaries.reduce((sum, item) => sum + item.noWorkNoPayHours, 0),
@@ -187,7 +185,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     drawText('DEMAC', MARGIN + 54, 25, 22, { bold: true, fill: NAVY });
     drawText('PROFESSIONAL COOLING SOLUTIONS', MARGIN + 55, 49, 7.4, { bold: true, fill: BLUE_DARK });
     drawText(ratePage ? 'OVERTIME PAY RATE BREAKDOWN - ACCOUNTING' : 'PAYROLL INPUT SUMMARY - ACCOUNTING', MARGIN, 80, 12, { bold: true, fill: NAVY });
-    drawText(ratePage ? 'Worked hours by pay rate. Unassigned hours are preserved; no rate is assumed for historical records.' : 'Compact monthly control report. Statutory payroll is completed by Accounting.', MARGIN, 98, 7.4, { fill: MUTED });
+    drawText(ratePage ? 'Worked hours by pay rate. Regular overtime defaults to 150%; special overtime uses 200% only when selected.' : 'Compact monthly control report. Statutory payroll is completed by Accounting.', MARGIN, 98, 7.4, { fill: MUTED });
     drawText('Payroll period', PAGE_WIDTH - MARGIN - 285, 28, 7.4, { bold: true, fill: MUTED, align: 'right', width: 285 });
     drawText(periodLabel, PAGE_WIDTH - MARGIN - 285, 43, 10, { bold: true, fill: NAVY, align: 'right', width: 285 });
     drawText(`Generated ${new Date().toLocaleDateString('en-AW')}`, PAGE_WIDTH - MARGIN - 285, 59, 7.2, { fill: MUTED, align: 'right', width: 285 });
@@ -216,7 +214,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
           const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
           drawText(formatMoney(value), x + 5, top + 11, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
         } else {
-          const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, unassigned: summary.overtimeUnassignedHours ?? summary.overtimeHours, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
+          const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
           const value = values[column.key];
           const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
           drawText(display, x + 5, top + 11, 7.9, { bold: column.key === 'weeklyBase' || value > 0, fill: value > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT, align: column.align, width: column.width - 10 });
