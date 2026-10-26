@@ -57,6 +57,6 @@ export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinu
       </div>)}
       <p className={styles.intervalHint}>Assigned: <strong>{duration(assignedMinutes)} / {duration(overtimeMinutes)}</strong>. Allocate net overtime hours after breaks; clock times stay unchanged.</p>
     </section> : null}
-    {intervals?.length || allocations !== undefined ? <label className={styles.field}><span>Reason for this change (required)</span><textarea className={`${styles.control} ${styles.notes}`} value={draft.changeReason ?? ''} onChange={(event) => onChange({ ...draft, changeReason: event.target.value })} placeholder="Reason for split shift or approved overtime rate…" /></label> : null}
+    {intervals?.length || allocations !== undefined || existing?.overtimePayAllocations !== undefined ? <label className={styles.field}><span>Reason for this change (required)</span><textarea className={`${styles.control} ${styles.notes}`} value={draft.changeReason ?? ''} onChange={(event) => onChange({ ...draft, changeReason: event.target.value })} placeholder="Reason for split shift or approved overtime rate…" /></label> : null}
   </fieldset>;
 }

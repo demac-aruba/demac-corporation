@@ -241,7 +241,7 @@ export function EmployeeWorkspace() {
     try {
       if (draft.overtimePayAllocations === undefined && overtimeRateTotals(selectedRecord?.entry).requiresReview) return 'Recorded overtime rates need review. Select a complete, valid allocation before saving.';
       if (draft.overtimePayAllocations !== undefined) validateOvertimePayAllocations(draft.overtimePayAllocations, selectedVariance?.overtimeMinutes ?? 0);
-      if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
+      if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined || selectedRecord?.entry?.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
       return '';
     } catch (cause) { return cause instanceof Error ? cause.message : 'Review the overtime allocation.'; }
   })();

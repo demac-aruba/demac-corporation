@@ -13,9 +13,10 @@
 | Severity | Finding | Resolution |
 | --- | --- | --- |
 | Medium | Employees accounting CSV lacked the rate breakdown shown on screen. | Appended regular 150%, special 200% and review flag; original columns retained. |
+| Medium | Empty/null stored rates normalized to a default draft hid the writer-required reason on non-split days. | Keep the reason visible and block save until filled whenever the existing rate field is present, including zero OT; authenticated browser regression added. |
 | Medium | Allowing empty historical allocations also skipped malformed non-array values. | Only nullish/empty arrays bypass validation; non-arrays reject before writing. Editor keeps a warning and requires explicit valid selection. Regression reproduced and fixed. |
 
-The reviewer inspected the complete diff and subsequent corrections. No code blockers remain.
+The reviewer inspected the complete diff and subsequent corrections. No code blockers remain. The reviewer also confirmed the final empty-rate reason guard and its zero-overtime browser case.
 Explicit 200% minutes are retained, valid remainder defaults to 150%, and malformed/excess
 allocations remain visible for review. Historical records are never backfilled by reads.
 

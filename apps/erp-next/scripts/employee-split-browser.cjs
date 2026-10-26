@@ -144,6 +144,16 @@ async function runCase(browser, origin, name, viewport) {
     await page.getByRole('button', { name: 'All at 150%', exact: true }).click();
     await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic explicit rate correction');
     assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isEnabled(), true);
+    // Empty legacy selections retain the writer's reason requirement even without split mode.
+    const { workIntervals: _intervals, ...ordinary } = saved;
+    await emulator.seed(storage, 'employeeTimesheets/synthetic-employee_2026-09-14', { ...ordinary, overtimeMinutes: 0, overtimeHours: 0, workedMinutes: 480, overtimePayAllocations: [] });
+    await page.reload();
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByLabel('Reason for this change (required)', { exact: true }).waitFor();
+    await page.getByLabel('Notes', { exact: true }).fill('Synthetic legacy note');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+    await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic legacy update');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isEnabled(), true);
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
