@@ -105,6 +105,15 @@ async function runCase(browser, origin, name, viewport) {
   const breakdown = page.getByRole('heading', { name: 'Payroll breakdown · selected period', exact: true }).locator('..');
   assert.deepEqual(await breakdown.locator('tbody td').allTextContents().then(rows => rows.slice(1)), ['47h 25m', '37h 55m', '9h 30m']);
   assert.equal(await page.getByText('Rate not assigned', { exact: true }).count(), 0);
+  await page.locator('summary').filter({ hasText: 'Quick actions' }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export accounting CSV', exact: true }).click();
+  const download = await downloadPromise;
+  const csvPath = path.join(output, name + '-accounting.csv');
+  await download.saveAs(csvPath);
+  const csv = fs.readFileSync(csvPath, 'utf8');
+  assert.ok(csv.includes('Regular OT 150%,Special OT 200%,OT Rate Review'));
+  assert.ok(csv.split('\n')[1].endsWith(',37.92,9.50,'));
   if (emulator) {
     assert.equal(saved.updatedByUserId, principal.uid);
     assert.equal(await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-13'), null);
@@ -124,6 +133,17 @@ async function runCase(browser, origin, name, viewport) {
   await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic changed duration');
   assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
   await page.getByText('Assigned overtime must exactly match calculated overtime.', { exact: true }).waitFor();
+  if (emulator) {
+    // Malformed stored data stays visible as a warning and cannot be silently resaved.
+    await emulator.seed(storage, 'employeeTimesheets/' + saved.id, { ...saved, overtimePayAllocations: { rate: 200, minutes: 570 } });
+    await page.reload();
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByText('Recorded overtime rates need review. Select a complete, valid allocation before saving.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'All at 150%', exact: true }).click();
+    await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic explicit rate correction');
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isEnabled(), true);
+  }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await context.close();
   return { name, result: 'PASS', externalRequests: 0, saves: 3, persistence: emulator ? 'real Auth + Firestore emulators, unchanged Rules, reload verified' : 'synthetic adapter' };

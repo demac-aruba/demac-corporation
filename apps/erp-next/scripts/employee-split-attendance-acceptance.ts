@@ -81,6 +81,16 @@ async function main() {
     const preserved = await saveAttendanceDay({ ...defaultInput, existingEntry: specialSplit, draft: { ...defaultInput.draft, notes: 'Synthetic update' } });
     assert.deepEqual(preserved.overtimePayAllocations, [{ rate: 200, minutes: 570 }]);
     await assert.rejects(saveAttendanceDay({ ...defaultInput, existingEntry: preserved, draft: { ...defaultInput.draft, workIntervals: [draft.workIntervals![0], { ...draft.workIntervals![1], endTime: '06:00' }] } }), /exactly match/);
+    const corrupt = { ...preserved, overtimePayAllocations: { rate: 200, minutes: 570 } } as unknown as EmployeeTimesheetEntry;
+    docs[corrupt.id] = corrupt;
+    const beforeCorruptSave = commits;
+    await assert.rejects(saveAttendanceDay({ ...defaultInput, existingEntry: corrupt, draft: { ...defaultInput.draft, notes: 'Must reject malformed saved rates' } }), /allocations/);
+    assert.equal(commits, beforeCorruptSave);
+    // Empty historical rates mean the regular default, and must not block a new split.
+    const emptyRates = { ...preserved, overtimePayAllocations: [] };
+    docs[emptyRates.id] = emptyRates;
+    const fromEmpty = await saveAttendanceDay({ ...defaultInput, existingEntry: emptyRates });
+    assert.deepEqual(overtimeRateTotals(fromEmpty), { at150: 570, at200: 0, unassigned: 0, requiresReview: false });
     const operations = { staffProfiles: [employee], vans: [], vanHalfDaySchedules: [], staffAbsences: [] } as unknown as CanonicalOperationsState;
     // Existing records across days: exact user example, with no backfill or history mutation.
     const historical = { ...first, id: 'historical', date: '2026-10-23', overtimeMinutes: 2275, overtimeHours: 2275 / 60, overtimePayAllocations: undefined };
@@ -95,7 +105,7 @@ async function main() {
     }
     assert.equal(payroll.overtimeRateReviewRequired, false);
     const pdf = Buffer.from(buildPayrollAccountingPdf({ periodLabel: 'Synthetic overtime policy', summaries: [payroll] })).toString('latin1');
-    for (const label of ['Regular OT 150%', 'Special OT 200%', '37 h 55 m', '9 h 30 m']) assert.ok(pdf.includes(label), label);
+    for (const label of ['Regular OT 150%', 'Special OT 200%', '(37 h 55 min)', '(9 h 30 min)']) assert.ok(pdf.includes(label), label);
     assert.ok(!pdf.includes('Unassigned'));
     assert.deepEqual(attendance, snapshot, 'Payroll and PDF do not rewrite historical evidence');
     console.log('PASS split persistence: exact totals, payroll boundary, retry, stale edit, historical schedule/rates, audit, zero-OT edit, adjacent evidence, legacy identity, absence conflict.');

@@ -154,6 +154,8 @@ export function EmployeeWorkspace() {
     const record = recordsFor(profile, date);
     const defaultBreak = scheduledBreakMinutes(record.schedule);
     const status = record.status ?? 'Day Off';
+    const recordedAllocations = record.entry?.overtimePayAllocations;
+    const editableAllocations = Array.isArray(recordedAllocations) && recordedAllocations.every((row) => row && [150, 200].includes(row.rate) && Number.isInteger(row.minutes) && row.minutes > 0) ? recordedAllocations : undefined;
     const exceptionHours = status === 'Sick' ? record.entry?.aoHours : status === 'Vacation' ? record.entry?.vacationHours : status === 'Absent' ? record.entry?.noWorkNoPayHours : undefined;
     return {
       status,
@@ -169,7 +171,7 @@ export function EmployeeWorkspace() {
       })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
       workIntervals: record.entry?.workIntervals?.map((row) => ({ ...row })),
-      overtimePayAllocations: record.entry?.overtimePayAllocations?.length ? record.entry.overtimePayAllocations.map((row) => ({ ...row })) : undefined,
+      overtimePayAllocations: editableAllocations?.length ? editableAllocations.map((row) => ({ ...row })) : undefined,
       changeReason: '',
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
@@ -232,11 +234,12 @@ export function EmployeeWorkspace() {
     } catch (cause) { return { variance: null, error: cause instanceof Error ? cause.message : 'Review the work intervals.' }; }
   })();
   const selectedVariance = selectedCalculation.variance;
-  const selectedRates = overtimeRateTotals({ overtimeMinutes: selectedVariance?.overtimeMinutes ?? 0, overtimePayAllocations: draft?.overtimePayAllocations });
+  const selectedRates = overtimeRateTotals({ overtimeMinutes: selectedVariance?.overtimeMinutes ?? 0, overtimePayAllocations: draft?.overtimePayAllocations ?? selectedRecord?.entry?.overtimePayAllocations });
   const intervalSaveError = (() => {
     if (selectedCalculation.error) return selectedCalculation.error;
     if (!draft) return '';
     try {
+      if (draft.overtimePayAllocations === undefined && overtimeRateTotals(selectedRecord?.entry).requiresReview) return 'Recorded overtime rates need review. Select a complete, valid allocation before saving.';
       if (draft.overtimePayAllocations !== undefined) validateOvertimePayAllocations(draft.overtimePayAllocations, selectedVariance?.overtimeMinutes ?? 0);
       if ((draft.workIntervals?.length || draft.overtimePayAllocations !== undefined) && !draft.changeReason?.trim()) return 'Enter a reason for this attendance or overtime-rate change.';
       return '';
@@ -302,11 +305,11 @@ export function EmployeeWorkspace() {
 
   function exportAccountingCsv() {
     if (!operations || !payrollLoaded || bonusReport.issues.length) { setError('Load all payroll records and resolve bonus warnings before exporting.'); return; }
-    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records', 'Bonuses Afl', 'Bonus Details'];
+    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records', 'Bonuses Afl', 'Bonus Details', 'Regular OT 150%', 'Special OT 200%', 'OT Rate Review'];
     const rows = accountingEmployees.map((employee) => {
       const summary = summarizeAttendancePeriod({ employee, period, operations, attendance });
       const advances = periodAdvances.filter((advance) => advance.employeeId === employee.id).reduce((sum, advance) => sum + advance.amount, 0);
-      return [staffDisplayName(employee), employee.role ?? '', employeeVan(employee)?.name ?? 'UNASSIGNED', summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays), (bonusReport.byEmployee[employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[employee.id] ?? ''];
+      return [staffDisplayName(employee), employee.role ?? '', employeeVan(employee)?.name ?? 'UNASSIGNED', summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays), (bonusReport.byEmployee[employee.id] ?? 0).toFixed(2), bonusReport.detailsByEmployee[employee.id] ?? '', summary.overtime150.toFixed(2), summary.overtime200.toFixed(2), summary.overtimeRateReviewRequired ? 'Review required' : ''];
     });
     const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });

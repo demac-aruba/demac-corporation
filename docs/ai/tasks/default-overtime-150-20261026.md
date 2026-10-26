@@ -18,7 +18,7 @@ employee data writes or automatic late-night/holiday threshold is part of this r
 - Keep every explicit 200% minute; malformed/excess allocations remain review-required.
 - New split saves use 150% without a manual selection; explicit selections must match OT.
 - Interval edits preserve selected rates and require correction if the total changes.
-- Employees, Payroll, both CSV exports and PDF use regular 150% / special 200% columns.
+- Employees, Payroll, all three CSV exports and PDF use regular 150% / special 200% columns.
 - Remove the ordinary unassigned category; retain conflict warnings and compatibility metadata.
 - Preserve times, IDs, unknown fields, history, permission boundaries and idempotent retries.
 

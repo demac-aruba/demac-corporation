@@ -481,7 +481,7 @@ export async function saveAttendanceDay(input: {
   const overtimePayAllocations = draft.overtimePayAllocations === undefined
     ? workIntervals && overtimeMinutesValue === 0 ? [] : existingEntry?.overtimePayAllocations
     : validateOvertimePayAllocations(draft.overtimePayAllocations, overtimeMinutesValue);
-  if (enhanced && overtimePayAllocations?.length) validateOvertimePayAllocations(overtimePayAllocations, overtimeMinutesValue);
+  if (enhanced && overtimePayAllocations != null && (!Array.isArray(overtimePayAllocations) || overtimePayAllocations.length > 0)) validateOvertimePayAllocations(overtimePayAllocations, overtimeMinutesValue);
 
   let entry: EmployeeTimesheetEntry = {
     ...existingEntry,
