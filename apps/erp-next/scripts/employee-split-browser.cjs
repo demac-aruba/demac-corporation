@@ -135,7 +135,8 @@ async function runCase(browser, origin, name, viewport) {
   await page.getByText('Assigned overtime must exactly match calculated overtime.', { exact: true }).waitFor();
   if (emulator) {
     // Malformed stored data stays visible as a warning and cannot be silently resaved.
-    await emulator.seed(storage, 'employeeTimesheets/' + saved.id, { ...saved, overtimePayAllocations: { rate: 200, minutes: 570 } });
+    await emulator.seed(storage, 'employeeTimesheets/synthetic-employee_2026-09-14', { ...saved, overtimePayAllocations: { rate: 200, minutes: 570 } });
+    assert.deepEqual((await emulator.get(storage, 'employeeTimesheets/synthetic-employee_2026-09-14')).overtimePayAllocations, { rate: 200, minutes: 570 });
     await page.reload();
     await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
     await page.getByText('Recorded overtime rates need review. Select a complete, valid allocation before saving.', { exact: true }).waitFor();
