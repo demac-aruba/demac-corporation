@@ -11,6 +11,7 @@ export {
   normalizeAttendanceIntervals,
   validateOvertimePayAllocations,
   overtimeRateTotals,
+  resolveAttendanceShift,
   attendanceWorkWindows,
 } from '../../../functions/employeeAttendanceCalculation';
 
@@ -25,5 +26,6 @@ export type {
   AttendanceWorkSegment,
   DetectedAttendanceException,
   AttendanceWorkInterval,
+  AttendanceShiftOverride,
   OvertimePayAllocation,
 } from '../../../functions/employeeAttendanceCalculation';

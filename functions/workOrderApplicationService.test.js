@@ -417,3 +417,24 @@ test('Work Order discovers adjacent overnight attendance under a legacy ID', asy
   await assert.rejects(service.completeAfterHours(input()), error => error.code === 'attendance_overlap');
   assert.equal(JSON.stringify([...db.store]), before);
 });
+
+test('overnight daily shift snapshot survives Work Order evidence and retry with manual 200% intact', async () => {
+  const id = `driver-1_${WORK_DATE}`;
+  const original = existingAttendance({
+    regularHours: 8, workedMinutes: 840, overtimeMinutes: 360, overtimeHours: 6,
+    clockInTime: '15:00', clockOutTime: '05:00', breakMinutes: 0,
+    scheduledStartTime: '15:00', scheduledEndTime: '00:00', scheduledEndDayOffset: 1,
+    scheduledWorkHours: 8, scheduledBreakMinutes: 60, scheduledPaidFreeMinutes: 0,
+    attendanceShiftOverride: {startTime:'15:00',endTime:'00:00',endDayOffset:1,breakMinutes:60}, attendanceShiftRevision: 1,
+    workIntervals: [{startTime:'15:00',endTime:'05:00',startDayOffset:0,endDayOffset:1,breakMinutes:0}],
+    overtimePayAllocations: [{rate:200,minutes:360}], attendanceHistory: [], unknownField: {retained:true},
+  });
+  const { db, service } = fixture({[`employeeTimesheets/${id}`]:original}, '2026-08-28T10:00:00.000Z'); // 06:00 Aruba, 60 new minutes
+  await service.completeAfterHours(input());
+  const saved = db.read(`employeeTimesheets/${id}`);
+  assert.equal(saved.workedMinutes,900); assert.equal(saved.overtimeMinutes,420); assert.equal(saved.regularHours,8);
+  assert.equal(saved.scheduledStartTime,'15:00');assert.equal(saved.scheduledEndTime,'00:00');assert.equal(saved.scheduledEndDayOffset,1);
+  assert.deepEqual(saved.attendanceShiftOverride,original.attendanceShiftOverride);assert.deepEqual(saved.overtimePayAllocations,original.overtimePayAllocations);
+  assert.equal(saved.attendanceShiftRevision,2);assert.equal(saved.attendanceHistory.length,1);assert.deepEqual(saved.unknownField,{retained:true});
+  await service.completeAfterHours(input());assert.deepEqual(db.read(`employeeTimesheets/${id}`),saved);
+});

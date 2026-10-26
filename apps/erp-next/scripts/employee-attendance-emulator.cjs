@@ -63,7 +63,7 @@ async function main(){
       if(race==='neighbor-delete')await em.remove('employeeTimesheets/previous');
       if(race==='neighbor-create')await seed('next',{notes:'New neighbor'});
     };
-    await assert.rejects(mutate(()=>({notes:'Must not commit',overtimeMinutes:570})),/Refresh and review/);
+    await assert.rejects(mutate(()=>({notes:'Must not commit',overtimeMinutes:570})),/Refresh and review/,race);
     const final=await doc('target');assert.notEqual(final?.notes,'Must not commit');assert.equal(final?.overtimeMinutes,undefined);
     scenarios.push(race+' atomically rejected');
   }
@@ -87,6 +87,34 @@ async function main(){
   assert.deepEqual(await doc(id),once);
   assert.equal(await doc('synthetic-employee_2026-10-19'),null);assert.equal(await doc('synthetic-employee_2026-10-21'),null);
   scenarios.push('full split save 570m at 200%; lost-response retry preserves one audit entry');
-  console.log(JSON.stringify({result:'PASS',productionRequests:0,authentication:'Firebase Auth emulator',rules:'firestore.rules unchanged',scenarios},null,2));
+  const overnightInput={...input,employee:{...employee,id:'synthetic-overnight'},draft:{...input.draft,clockInTime:'15:00',clockOutTime:'05:00',breakMinutes:0,
+    workIntervals:[{startTime:'15:00',endTime:'05:00',startDayOffset:0,endDayOffset:1,breakMinutes:0}],
+    attendanceShiftOverride:{startTime:'15:00',endTime:'00:00',endDayOffset:1,breakMinutes:60},overtimePayAllocations:[{rate:200,minutes:360}]}};
+  const overnightId='synthetic-overnight_2026-10-20';
+  loseResponse=true;
+  await assert.rejects(attendance.saveAttendanceDay(overnightInput),/response|connection/i);
+  const overnight=await doc(overnightId);
+  assert.equal(overnight.workedMinutes,840);assert.equal(overnight.regularHours,8);assert.equal(overnight.overtimeMinutes,360);assert.equal(overnight.attendanceShiftRevision,1);
+  await attendance.saveAttendanceDay(overnightInput);assert.deepEqual(await doc(overnightId),overnight);
+  for(const changes of [{notes:'Old client update'}, {attendanceShiftOverride:null,attendanceShiftRevision:0,scheduledEndDayOffset:0}, {attendanceShiftRevision:3}, {attendanceShiftRevision:2,scheduledEndTime:'17:00'}, {attendanceShiftRevision:2,scheduledBreakMinutes:0}]) {
+    await assert.rejects(storage.mutateFirestoreDocumentWithReads('employeeTimesheets',overnightId,[],()=>changes),/PERMISSION_DENIED/);
+    assert.deepEqual(await doc(overnightId),overnight);
+  }
+  user=finance;
+  const financeEdit={...overnightInput,existingEntry:{...overnight,id:overnightId},draft:{...overnightInput.draft,notes:'Synthetic finance edit'}};
+  loseResponse=true;await assert.rejects(attendance.saveAttendanceDay(financeEdit),/response|connection/i);
+  const financeCommitted=await doc(overnightId);
+  const rerated=await attendance.saveAttendanceDay(financeEdit);
+  assert.deepEqual(await doc(overnightId),financeCommitted);
+  assert.equal(rerated.attendanceShiftRevision,2);assert.equal(rerated.workedMinutes,840);assert.equal(rerated.overtimeMinutes,360);
+  assert.deepEqual(rerated.overtimePayAllocations,[{rate:200,minutes:360}]);assert.equal(rerated.attendanceHistory.length,2);
+  // A legacy record may be explicitly converted, but only with the first revision.
+  const legacyId='synthetic-conversion_2026-10-20';
+  const legacy={...once,employeeId:'synthetic-conversion'};await seed(legacyId,legacy);
+  const converted=await attendance.saveAttendanceDay({...overnightInput,employee:{...employee,id:'synthetic-conversion'},existingEntry:{...legacy,id:legacyId}});
+  assert.equal(converted.attendanceShiftRevision,1);assert.equal(converted.workedMinutes,840);
+  scenarios.push('continuous overnight 840m worked, 360m at 200%; retry, accounting update and legacy conversion');
+  scenarios.push('old-client revision reuse/removal/reset and inconsistent schedule snapshots denied');
+  console.log(JSON.stringify({result:'PASS',productionRequests:0,authentication:'Firebase Auth emulator',rules:'repository firestore.rules including adjusted-shift revision guard',scenarios},null,2));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

@@ -19,9 +19,26 @@ function workedMinutes(clockInTime, clockOutTime, breakMinutes = 0) {
   return Math.max(0, minutesBetween(clockInTime, clockOutTime) - Math.max(0, Math.round(Number(breakMinutes) || 0)));
 }
 
+function scheduledEndMinute(schedule) {
+  const offset = schedule?.endDayOffset === undefined ? 0 : schedule.endDayOffset;
+  if (![0, 1].includes(offset)) throw new Error('Scheduled end date must be the same day or next day.');
+  const end = minutesOfDay(schedule?.endTime);
+  return end === undefined ? undefined : end + offset * 1440;
+}
+
+// An explicit one-day shift moves the regular window; it never changes paid base hours.
+function resolveAttendanceShift(schedule, override) {
+  if (override === undefined) return schedule;
+  if (!override || typeof override !== 'object' || ![0, 1].includes(override.endDayOffset)) throw new Error('Choose a valid scheduled shift for this day.');
+  if (!(schedule.scheduledMinutes > 0)) throw new Error('A shift adjustment requires a scheduled workday.');
+  const [row] = normalizeAttendanceIntervals([{ ...override, startDayOffset: 0 }]);
+  if (row.end - row.start - row.breakMinutes !== schedule.scheduledMinutes) throw new Error('The adjusted shift must keep the same regular hours. Check scheduled times and break.');
+  return { ...schedule, startTime: row.startTime, endTime: row.endTime, endDayOffset: row.endDayOffset };
+}
+
 function scheduledBreakMinutes(schedule) {
   if (!schedule?.startTime || !schedule?.endTime || Number(schedule?.scheduledMinutes) <= 0) return 0;
-  return Math.max(0, minutesBetween(schedule.startTime, schedule.endTime) - Math.max(0, Number(schedule.scheduledMinutes) || 0));
+  return Math.max(0, (scheduledEndMinute(schedule) ?? 0) - (minutesOfDay(schedule.startTime) ?? 0) - Math.max(0, Number(schedule.scheduledMinutes) || 0));
 }
 
 function hasValidWorkedTimeRange(clockInTime, clockOutTime) {
@@ -53,7 +70,7 @@ function calculateAttendanceVariance(input) {
   const expectedBreakMinutes = scheduledBreakMinutes(schedule);
   const workedMinutesValue = workedMinutes(clockInTime, clockOutTime, actualBreakMinutes);
   const scheduleStart = minutesOfDay(schedule.startTime);
-  const scheduleEnd = minutesOfDay(schedule.endTime);
+  const scheduleEnd = scheduledEndMinute(schedule);
   const actualStart = minutesOfDay(clockInTime);
   const actualEnd = minutesOfDay(clockOutTime);
 
@@ -261,7 +278,7 @@ function subtractIntervals(intervals, exclusions) {
 
 function outsideScheduleIntervals(intervals, schedule) {
   const scheduleStart = minutesOfDay(schedule?.startTime);
-  const scheduleEnd = minutesOfDay(schedule?.endTime);
+  const scheduleEnd = scheduledEndMinute(schedule);
   if (Number(schedule?.scheduledMinutes) <= 0 || scheduleStart === undefined || scheduleEnd === undefined || scheduleEnd <= scheduleStart) {
     return mergeIntervals(intervals);
   }
@@ -281,6 +298,10 @@ function outsideScheduleIntervals(intervals, schedule) {
  * attendance record because after-hours evidence cannot classify in-shift absences.
  */
 function calculateAttendanceVarianceWithWorkSegments(input) {
+  if (input?.schedule?.endDayOffset !== undefined) {
+    scheduledEndMinute(input.schedule);
+    if (input.schedule.endDayOffset === 1 && !input?.workIntervals?.length) throw new Error('Overnight scheduled shifts require dated work intervals.');
+  }
   if (Array.isArray(input?.workIntervals) && input.workIntervals.length) return calculateSplitAttendance(input);
   const base = calculateAttendanceVariance(input || {});
   const workDate = String(input?.workDate || '').trim();
@@ -334,7 +355,7 @@ function calculateSplitAttendance(input) {
   const rows = normalizeAttendanceIntervals(input.workIntervals);
   const schedule = input.schedule || {};
   const scheduled = Math.max(0, Number(schedule.scheduledMinutes) || 0);
-  const scheduleStart = minutesOfDay(schedule.startTime), scheduleEnd = minutesOfDay(schedule.endTime);
+  const scheduleStart = minutesOfDay(schedule.startTime), scheduleEnd = scheduledEndMinute(schedule);
   const expectedBreak = scheduledBreakMinutes(schedule);
   let insideWorked = 0, outsideWorked = 0, earlyStart = 0, lateFinish = 0;
   for (const row of rows) {
@@ -413,6 +434,7 @@ function overtimeRateTotals(entry) {
 }
 
 module.exports = {
+  resolveAttendanceShift,
   attendanceExceptionKindLabel,
   attendanceExceptionTotals,
   calculateAttendanceVariance,

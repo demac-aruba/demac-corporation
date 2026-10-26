@@ -19,7 +19,10 @@ export type AttendanceExceptionSegment = DetectedAttendanceException & {
   reason: string;
 };
 
+export type AttendanceShiftOverride = { startTime: string; endTime: string; endDayOffset: 0 | 1; breakMinutes: number };
+
 export type AttendanceScheduleForCalculation = {
+  endDayOffset?: 0 | 1;
   startTime: string;
   endTime: string;
   scheduledMinutes: number;
@@ -73,6 +76,7 @@ export type AttendanceVarianceWithWorkSegments = AttendanceVariance & {
 
 export function minutesBetween(startTime: string, endTime: string): number;
 export function workedMinutes(clockInTime: string, clockOutTime: string, breakMinutes?: number): number;
+export function resolveAttendanceShift<T extends AttendanceScheduleForCalculation>(schedule: T, override?: AttendanceShiftOverride): T & { endDayOffset?: 0 | 1 };
 export function scheduledBreakMinutes(schedule: AttendanceScheduleForCalculation): number;
 export function hasValidWorkedTimeRange(clockInTime: string, clockOutTime: string): boolean;
 export function calculateAttendanceVariance(input: {

@@ -9,6 +9,7 @@ const {
   calculateAttendanceVarianceWithWorkSegments,
   hasValidWorkedTimeRange,
   attendanceWorkWindows,
+  resolveAttendanceShift,
 } = require("./employeeAttendanceCalculation");
 
 const WORK_ORDER_APPLICATION_API_VERSION = 2;
@@ -166,14 +167,17 @@ function attendanceSegment(workOrder, completion) {
 }
 
 function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule, actor }) {
-  const enhanced = Array.isArray(existing.workIntervals) || Array.isArray(existing.overtimePayAllocations);
+  const shiftRevision = existing.attendanceShiftRevision ?? 0;
+  if (existing.attendanceShiftOverride && (!Number.isSafeInteger(shiftRevision) || shiftRevision < 1 || shiftRevision >= Number.MAX_SAFE_INTEGER)) throw new Error('The recorded shift revision needs review before applying Work Order evidence.');
+  const enhanced = Array.isArray(existing.workIntervals) || Array.isArray(existing.overtimePayAllocations) || Boolean(existing.attendanceShiftOverride);
   if (enhanced && existing.scheduledStartTime && existing.scheduledEndTime) schedule = {
-    ...schedule, startTime: existing.scheduledStartTime, endTime: existing.scheduledEndTime,
+    ...schedule, startTime: existing.scheduledStartTime, endTime: existing.scheduledEndTime, endDayOffset: existing.scheduledEndDayOffset ?? 0,
     scheduledMinutes: Math.round(Number(existing.scheduledWorkHours || 0) * 60),
     expectedBreakMinutes: existing.scheduledBreakMinutes ?? schedule.expectedBreakMinutes,
     paidFreeMinutes: existing.scheduledPaidFreeMinutes ?? schedule.paidFreeMinutes,
     source: existing.scheduleSnapshotSource ?? schedule.source,
   };
+  if (existing.attendanceShiftOverride) schedule = resolveAttendanceShift(schedule, existing.attendanceShiftOverride);
   const workDate = cleanText(workOrder.date, 20);
   const existingSegments = Array.isArray(existing.workOrderAttendanceSegments)
     ? existing.workOrderAttendanceSegments.filter((segment) => segment && typeof segment === "object")
@@ -228,6 +232,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule,
     workedMinutes: beforeVariance ? Number(existing.workedMinutes ?? beforeVariance.workedMinutes) + Math.max(0, variance.workedMinutes - beforeVariance.workedMinutes) : variance.workedMinutes,
     scheduledStartTime: schedule.startTime || undefined,
     scheduledEndTime: schedule.endTime || undefined,
+    ...(existing.attendanceShiftOverride ? { scheduledEndDayOffset: schedule.endDayOffset ?? 0, attendanceShiftRevision: shiftRevision + (sourceExists ? 0 : 1) } : {}),
     scheduledBreakMinutes: schedule.expectedBreakMinutes,
     scheduledPaidFreeMinutes: schedule.paidFreeMinutes,
     scheduleSnapshotSource: schedule.source,
@@ -243,7 +248,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule,
   if (enhanced && !sourceExists) {
     const { attendanceHistory: history = [], ...before } = existing;
     const { attendanceHistory: _history, ...after } = result;
-    result.attendanceHistory = [...history, { id: `work-order-${workOrder.id}`, at: now, actorId: result.updatedByUserId, actorName: result.updatedByName, reason: 'Completed after-hours Work Order; existing pay rates retained, additional overtime unassigned.', before, after }];
+    result.attendanceHistory = [...history, { id: `work-order-${workOrder.id}`, at: now, actorId: result.updatedByUserId, actorName: result.updatedByName, reason: 'Completed after-hours Work Order; existing pay rates retained, additional overtime follows the regular default.', before, after }];
     if (JSON.stringify(result.attendanceHistory).length > 700000) throw new Error('Attendance history cannot be extended safely; no data was changed.');
   }
   return result;

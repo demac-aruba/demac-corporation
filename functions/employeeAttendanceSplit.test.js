@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { calculateAttendanceVarianceWithWorkSegments: calculate, normalizeAttendanceIntervals, validateOvertimePayAllocations, overtimeRateTotals } = require('./employeeAttendanceCalculation');
+const { resolveAttendanceShift, scheduledBreakMinutes, calculateAttendanceVarianceWithWorkSegments: calculate, normalizeAttendanceIntervals, validateOvertimePayAllocations, overtimeRateTotals } = require('./employeeAttendanceCalculation');
 const schedule = { startTime: '08:00', endTime: '17:00', scheduledMinutes: 480 };
 const row = (startTime, endTime, breakMinutes = 0, endDayOffset = 0, startDayOffset = 0) => ({ startTime, endTime, breakMinutes, startDayOffset, endDayOffset });
 const workIntervals = [row('08:00', '17:00', 60), row('19:30', '05:00', 0, 1)];
@@ -73,4 +73,27 @@ test('invalid explicit allocations remain reviewable instead of receiving an ass
     assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 570, overtimePayAllocations }), { at150: 0, at200: 0, unassigned: 570, requiresReview: true });
   }
   assert.deepEqual(overtimeRateTotals({ overtimeMinutes: 300, overtimePayAllocations: [{ rate: 200, minutes: 570 }] }), { at150: 0, at200: 570, unassigned: 0, requiresReview: true });
+});
+
+const shifted = { startTime: '15:00', endTime: '00:00', endDayOffset: 1, breakMinutes: 60 };
+test('continuous overnight shift: 14 worked hours, 8 regular and 6 overtime, no break', () => {
+  const planned = resolveAttendanceShift(schedule, shifted);
+  assert.equal(scheduledBreakMinutes(planned), 60);
+  for (const [end, offset, pause, worked, overtime, missing] of [['05:00',1,0,840,360,0], ['05:00',1,60,780,300,0], ['00:00',1,0,540,60,0], ['23:00',0,0,480,0,0], ['22:00',0,0,420,0,60]]) {
+    const result = calculate({ workDate: '2026-10-20', schedule: planned, workIntervals: [row('15:00',end,pause,offset)] });
+    assert.equal(result.workedMinutes, worked); assert.equal(result.overtimeMinutes, overtime); assert.equal(result.missingScheduledMinutes, missing);
+  }
+  assert.equal(planned.scheduledMinutes, 480); assert.deepEqual(schedule, {startTime:'08:00',endTime:'17:00',scheduledMinutes:480});
+  assert.throws(() => calculate({ schedule: planned, workIntervals: [row('15:00','05:00')] }), /next day/);
+  assert.throws(() => calculate({ schedule: planned, clockInTime: '15:00', clockOutTime: '05:00' }), /dated work intervals/);
+});
+test('daily shift only moves the regular window; invalid offsets, changed entitlement and day off reject', () => {
+  for (const override of [null, {...shifted,endDayOffset:2}, {...shifted,endDayOffset:null}, {...shifted,endDayOffset:undefined}, {...shifted,breakMinutes:0}, {...shifted,endTime:'01:00'}, {...shifted,startTime:'25:00'}]) assert.throws(() => resolveAttendanceShift(schedule, override));
+  assert.throws(() => resolveAttendanceShift({...schedule,scheduledMinutes:0},shifted), /scheduled workday/);
+  assert.throws(() => scheduledBreakMinutes({...schedule,endDayOffset:2}), /Scheduled end date/);
+  assert.equal(resolveAttendanceShift(schedule, undefined), schedule);
+  const planned = resolveAttendanceShift({...schedule,paidFreeMinutes:30},shifted);
+  assert.equal(planned.paidFreeMinutes,30);
+  const result = calculate({workDate:'2026-10-20',schedule:planned,workIntervals:[row('15:00','05:00',0,1)],workSegments:[{startDate:'2026-10-20',startTime:'18:00',endDate:'2026-10-21',endTime:'06:00'}]});
+  assert.equal(result.workedMinutes,900);assert.equal(result.overtimeMinutes,420);
 });
