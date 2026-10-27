@@ -11,6 +11,7 @@ import {
   type EmployeePayrollSettings,
 } from './employee-attendance';
 import { isTechnicalEmployee } from './employee-classification';
+import { crewForDate } from './van-roster-history';
 import {
   asEmployeePayrollScheduleSettings,
   defaultEmployeeWeeklySchedule,
@@ -158,8 +159,8 @@ function addMinutes(time: string, minutes: number) {
   return minutesToTime(timeToMinutes(time) + minutes);
 }
 
-export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[]) {
-  return vans.find((van) => van.responsibleStaffId === profile.id
+export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[], date?: string) {
+  return (date ? vans.map(van => crewForDate(van, date)) : vans).find((van) => van.responsibleStaffId === profile.id
     || van.regularHelperId === profile.id
     || van.additionalHelperId === profile.id
     || van.technicianIds?.includes(profile.id)) ?? null;
@@ -180,7 +181,7 @@ export function resolveEmployeeSchedule(input: {
   if (!companySchedule.scheduledMinutes) return companySchedule;
 
   const technical = isTechnicalEmployee(profile);
-  const van = employeeVan(profile, vans);
+  const van = employeeVan(profile, vans, date);
   const vanId = van ? canonicalVanId(van.id, vans) : '';
   const vanHalfDay = halfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, vans) === vanId);
 

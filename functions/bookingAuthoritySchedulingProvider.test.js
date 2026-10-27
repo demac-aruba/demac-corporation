@@ -126,6 +126,21 @@ function schedulingDb(data, whereCalls = []) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
+test('transaction rejects a regular offer with crew captured before an atomic fleet move', async () => {
+  const data = operationalData({
+    vans: [{ id: 'legacy-2', name: 'Van 2', active: true, crewRevision: 'transfer', responsibleStaffId: 't1', regularHelperId: 'new-helper' }],
+    staffProfiles: [{ id: 't1', active: true, canDriveVan: true }, { id: 'new-helper', active: true }],
+  });
+  const db = schedulingDb(data), provider = createSchedulingProvider({ db });
+  const transaction = { get: ref => ref.get() };
+  assert.deepEqual(await provider.validateTransaction({ transaction, db, request: request(), option: option(), appointmentId: 'new-booking' }), { available: false, reason: 'regular-crew-changed' });
+  const refreshed = option();
+  refreshed.assignments[0].technicianIds = ['t1', 'new-helper'];
+  assert.equal((await provider.validateTransaction({ transaction, db, request: request(), option: refreshed, appointmentId: 'new-booking' })).available, true);
+  data.staffAbsences = [{ id: 'absent', staffId: 'new-helper', fromDate: refreshed.date, toDate: refreshed.date }];
+  assert.deepEqual(await provider.validateTransaction({ transaction, db, request: request(), option: refreshed, appointmentId: 'new-booking' }), { available: false, reason: 'regular-crew-changed' });
+});
+
 test("provider exposes canonical provider v16", () => {
   assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v16");
 });

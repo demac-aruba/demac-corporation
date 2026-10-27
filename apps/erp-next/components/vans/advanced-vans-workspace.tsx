@@ -34,6 +34,7 @@ import {
   type VanScheduleGroupSetting,
 } from '@/lib/van-schedule-settings';
 import styles from './advanced-vans-workspace.module.css';
+import { FleetCrewEditor } from './fleet-crew-editor';
 
 type VanTab = 'profile' | 'crew' | 'whatsapp' | 'capacity' | 'maintenance' | 'history';
 
@@ -345,6 +346,8 @@ export function AdvancedVansWorkspace() {
     {message ? <div className={styles.success}>{message}</div> : null}
     {error ? <div className={styles.error}>{error}</div> : null}
 
+    {canManage ? <FleetCrewEditor key={principal.userId} userId={principal.userId} onSaved={() => refresh(selectedVanId)} /> : null}
+
     <section className={styles.workspace}>
       <aside className={styles.fleetPane}>
         <div className={styles.paneHead}><div><span>Fleet</span><strong>{canonicalVans.length} Vans</strong></div>{canManage ? <button className={styles.ghostButton} type="button" onClick={startCreateVan}>＋ Add Van</button> : null}</div>
@@ -423,13 +426,9 @@ function CrewTab(props: {
   const { draft, setDraft, halfDay, setHalfDay, drivers, technicalStaff, overrides, overrideDraft, setOverrideDraft, canManage, busy, onSave, onAddOverride, onRemoveOverride, state } = props;
   const minutes = safeWorkedMinutes(halfDay.workdayStart ?? '08:00', halfDay.workdayEnd ?? '13:00');
   return <div className={styles.stack}>
-    <Card title="Regular Crew Assignment" subtitle="Set the default technician and helpers for this Van. These assignments belong to the Van profile.">
-      <div className={styles.crewGrid}>
-        <CrewSelect label="Responsible Technician / Driver" value={draft.responsibleStaffId ?? ''} profiles={drivers} onChange={(value) => setDraft({ ...draft, responsibleStaffId: value || undefined })} disabled={!canManage} required />
-        <CrewSelect label="Regular Helper" value={draft.regularHelperId ?? ''} profiles={technicalStaff} onChange={(value) => setDraft({ ...draft, regularHelperId: value || undefined })} disabled={!canManage} required />
-        <CrewSelect label="Third Helper (optional)" value={draft.additionalHelperId ?? ''} profiles={technicalStaff} onChange={(value) => setDraft({ ...draft, additionalHelperId: value || undefined })} disabled={!canManage} />
-      </div>
-      <Info>This is the regular crew for {draft.name ?? draft.id}. Daily overrides below are date-specific and never rewrite this regular assignment.</Info>
+    <Card title="Regular Crew Assignment" subtitle="Manage the full fleet in the editor above.">
+      <Info>Use “Guardar todos los cambios” above to exchange employees between Vans in one operation.</Info>
+      <a href="#fleet-crew-editor">Organizar todos los equipos ↑</a>
     </Card>
 
     <Card title="Weekly Partial Day (Crew Rule)" subtitle="Choose the crew's recurring partial day and exact worked hours. Only worked time is counted.">
@@ -441,7 +440,7 @@ function CrewTab(props: {
         <Field label="Crew source"><div className={styles.readonlyControl}>Van profile · Regular crew</div></Field>
       </div>
       <Info>Sunday is controlled by the company calendar and is not available as a recurring partial-day selection.</Info>
-      <SaveRow onSave={onSave} canManage={canManage} busy={busy} label="Save Crew & Schedule" />
+      <SaveRow onSave={onSave} canManage={canManage} busy={busy} label="Save Weekly Schedule" />
     </Card>
 
     <Card title="Daily Overrides" subtitle="Temporary crew changes for a specific date. The regular crew returns automatically afterward.">

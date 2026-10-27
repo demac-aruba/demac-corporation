@@ -172,9 +172,11 @@ on:
 permissions:
   contents: read
 
+# Superseded synthetic PR checks must not occupy the production release queue.
+# Production keeps its existing serialized, non-canceling group.
 concurrency:
-  group: office-booking-authority-production
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('office-booking-authority-pr-{0}', github.event.pull_request.number) || 'office-booking-authority-production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate-office-booking-authority:
@@ -254,6 +256,7 @@ jobs:
 
   validate-appointment-charges:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:

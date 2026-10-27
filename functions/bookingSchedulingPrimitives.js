@@ -225,7 +225,8 @@ function staffUnavailable(profile, date, absences) {
  * membership for authorization while Scheduling layers readiness on top in resolveAssignment().
  */
 function resolveCrewMembership(van, date, assignments) {
-  const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
+  van = require('./vanRosterHistory').crewForDate(van, date);
+  const saved = assignments.find((item) => item.status !== 'Cancelled' && item.vanId === van.id && item.date === date);
   const driverStaffId = saved?.driverStaffId ?? van.responsibleStaffId;
   const helperStaffId = saved?.helperStaffId ?? van.regularHelperId;
   const additionalHelperStaffId = saved?.additionalHelperStaffId ?? van.additionalHelperId;
@@ -241,6 +242,7 @@ function resolveCrewMembership(van, date, assignments) {
 }
 
 function resolveAssignment(van, date, profiles, assignments, absences) {
+  van = require('./vanRosterHistory').crewForDate(van, date);
   const membership = resolveCrewMembership(van, date, assignments);
   // Field membership intentionally treats an explicit blank daily slot as removed.
   // Scheduling keeps the established regular-crew fallback for readiness/capacity.
@@ -411,6 +413,7 @@ module.exports = {
   resolveCrewMembership,
   routeCompatibility,
   snapshotItems,
+  staffUnavailable,
   vanCanReceiveAppointments,
   weekday,
 };

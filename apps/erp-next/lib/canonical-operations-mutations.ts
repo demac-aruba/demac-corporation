@@ -45,7 +45,17 @@ export async function saveCanonicalVanProfile(van: CanonicalVan) {
     additionalHelperId: van.additionalHelperId || '',
     technicianIds: [van.responsibleStaffId, van.regularHelperId, van.additionalHelperId].filter((value): value is string => Boolean(value)),
   };
+  const existing = vans.find(item => item.id === van.id);
+  if (existing) {
+    // A profile/maintenance save must never replay an old crew or overwrite effective history.
+    const { responsibleStaffId: _driver, regularHelperId: _helper, additionalHelperId: _third,
+      technicianIds: _ids, crewHistory: _history, crewRevision: _revision, ...profile } = normalized;
+    validateVanCrew({ ...profile, responsibleStaffId: existing.responsibleStaffId,
+      regularHelperId: existing.regularHelperId, additionalHelperId: existing.additionalHelperId }, staffProfiles, vans);
+    return upsertCanonicalDocument('vans', profile);
+  }
   validateVanCrew(normalized, staffProfiles, vans);
+  if (normalized.technicianIds?.length) throw new Error('Create the Van out of service, then assign its crew using the fleet editor.');
   return upsertCanonicalDocument('vans', normalized);
 }
 

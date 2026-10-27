@@ -1,0 +1,49 @@
+name: Atomic Van roster verification
+on:
+  pull_request:
+    paths: ['functions/vanRoster*', 'functions/test-support/vanRoster*', 'functions/officeBookingAuthorityFacade.js', 'functions/bookingSchedulingPrimitives.js', 'functions/bookingAuthoritySchedulingProvider.js', 'functions/projectCommercialGuard.js', 'apps/erp-next/**', 'firestore.rules', 'firebase.van-roster-test.json', '.github/workflows/van-roster-ci.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: |
+          npm ci --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/roster-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
+          "$RUNNER_TEMP/roster-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Domain, payroll and authority regression
+        run: |
+          node --test functions/vanRosterAuthority.test.js functions/bookingCrewResolution.test.js functions/bookingAuthoritySchedulingProvider.test.js functions/technicianDailyScheduleService.test.js functions/technicianScheduleChangeService.test.js functions/fieldOperationsAuthorityCore.test.js functions/fieldOperationsMutationAssignment.test.js functions/workOrderApplicationService.test.js
+          npm run test:van-roster --prefix apps/erp-next
+          npm run typecheck --prefix apps/erp-next
+      - name: Firestore atomicity and old-session allow/deny
+        env:
+          VAN_ROSTER_TEST_TOOLS: ${{ runner.temp }}/roster-tools
+          GCLOUD_PROJECT: demo-demac-van-roster
+        run: >-
+          "$RUNNER_TEMP/roster-tools/node_modules/.bin/firebase" emulators:exec --only firestore
+          --project demo-demac-van-roster --config firebase.van-roster-test.json
+          'node --test --test-concurrency=1 functions/vanRosterAuthority.emulator.test.cjs'
+      - name: Full workspace browser scenarios
+        env:
+          VAN_ROSTER_TEST_TOOLS: ${{ runner.temp }}/roster-tools
+          VAN_ROSTER_TEST_OUTPUT: ${{ runner.temp }}/van-roster-browser
+        run: node apps/erp-next/scripts/van-roster-browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: van-roster-browser-synthetic
+          path: ${{ runner.temp }}/van-roster-browser/*.png
+          if-no-files-found: error

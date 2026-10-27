@@ -333,7 +333,21 @@ service cloud.firestore {
 
     match /vans/{vanId} {
       allow read: if activeStaff();
-      allow create, update: if operationsRole();
+      allow create: if operationsRole()
+        && request.resource.data.get('responsibleStaffId', '') == ''
+        && request.resource.data.get('regularHelperId', '') == ''
+        && request.resource.data.get('additionalHelperId', '') == ''
+        && request.resource.data.get('technicianIds', []).size() == 0
+        && !request.resource.data.keys().hasAny(['crewHistory', 'crewRevision'])
+        && request.resource.data.get('status', '') == 'Fuera de servicio';
+      // Regular crew exchanges are validated atomically by Office Booking Authority.
+      // Obsolete browser/Legacy profiles may still edit vehicle details, never crew history.
+      allow update: if operationsRole()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'responsibleStaffId', 'regularHelperId', 'additionalHelperId', 'technicianIds', 'crewHistory', 'crewRevision'
+        ])
+        && (request.resource.data.get('status', '') != 'Disponible'
+          || (resource.data.get('responsibleStaffId', '') != '' && resource.data.get('regularHelperId', '') != ''));
       allow delete: if adminOrSupervisor();
     }
 

@@ -1,4 +1,5 @@
 import { listFirestoreCollection } from './firebase/firestore-rest';
+import { crewForDate, type CrewHistoryEntry } from './van-roster-history';
 import { normalizeWorkforceSkills, type WorkforceEmployee } from './workforce-readiness';
 
 export type CanonicalStaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo' | string;
@@ -24,6 +25,8 @@ export type CanonicalStaffProfile = {
 
 export type CanonicalVan = {
   id: string;
+  crewHistory?: CrewHistoryEntry[];
+  crewRevision?: string;
   name?: string;
   plate?: string;
   technicianIds?: string[];
@@ -195,6 +198,7 @@ function profileUnavailable(profile: CanonicalStaffProfile | undefined, dateKey:
 }
 
 export function resolveCanonicalCrew(van: CanonicalVan, dateKey: string, state: CanonicalOperationsState) {
+  van = crewForDate(van, dateKey);
   const vanId = canonicalVanId(van.id, state.vans);
   const daily = state.dailyVanAssignments.find((assignment) => assignment.status !== 'Cancelled'
     && canonicalVanId(assignment.vanId, state.vans) === vanId

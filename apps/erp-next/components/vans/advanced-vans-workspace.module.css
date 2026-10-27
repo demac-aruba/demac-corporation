@@ -2,3 +2,17 @@
 @media(max-width:1220px){.workspace{grid-template-columns:260px minmax(0,1fr)}.scheduleGrid{grid-template-columns:repeat(3,minmax(0,1fr))}.overrideForm{grid-template-columns:repeat(3,minmax(0,1fr))}.capacityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:900px){.pageHeader{flex-direction:column}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{grid-template-columns:1fr}.fleetPane{border-right:0;border-bottom:1px solid var(--border)}.vanList{grid-template-columns:repeat(2,minmax(0,1fr))}.twoColumn{grid-template-columns:1fr}.crewGrid,.scheduleGrid,.formGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.capacityGrid>.card{grid-column:1/-1}}
 @media(max-width:620px){.metrics,.vanList,.crewGrid,.scheduleGrid,.formGrid,.overrideForm,.capacityGrid{grid-template-columns:1fr}.pageHeader h1{font-size:25px}.tabBody{padding:13px}.tabs,.vanHeader{padding-left:13px;padding-right:13px}}
+
+.fleetEditor { background: var(--surface, #fff); border: 1px solid #d9e3f0; border-radius: 18px; padding: 22px; margin: 18px 0; }
+.fleetEditorHead { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.fleetEditorHead h2 { margin: 4px 0 8px; font-size: 21px; }
+.fleetEditorHead p, .fleetEditorFooter p { color: #60718a; font-size: 13px; line-height: 1.6; margin: 0; }
+.fleetRows { display: grid; gap: 12px; margin: 20px 0; }
+.fleetRow { display: grid; grid-template-columns: minmax(180px, 0.8fr) repeat(3, minmax(150px, 1fr)); gap: 16px; align-items: center; padding: 16px; background: #f5f8fd; border: 1px solid #e0e8f2; border-radius: 12px; }
+.fleetRow small { display: block; color: #60718a; font-size: 11px; margin-top: 5px; }
+.fleetRow label { min-width: 0; }
+.fleetRow label span { display: block; font-size: 11px; font-weight: 600; margin-bottom: 7px; }
+.fleetEditorFooter { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.fleetEditorFooter > div { display: flex; gap: 10px; flex-shrink: 0; }
+@media (max-width: 1050px) { .fleetRow { grid-template-columns: 1fr 1fr; } .fleetEditorFooter { align-items: stretch; flex-direction: column; } }
+@media (max-width: 600px) { .fleetRow { grid-template-columns: 1fr; } .fleetEditorHead { flex-direction: column; gap: 12px; } .fleetEditorFooter > div { flex-direction: column; } }

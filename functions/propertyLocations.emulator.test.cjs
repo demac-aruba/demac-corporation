@@ -170,12 +170,13 @@ test('F/I/L: canonical booking commits location without equipment; missing dwell
   const queued = await db.collection('whatsappOutboundQueue').get();
   assert.equal(queued.size, 2);
   for (const item of queued.docs) {
-    assert.match(item.data().text, /Apartment 1/);
+    // Spanish recipients receive the localized label; the frozen English snapshot is retained.
+    assert.match(item.data().text, /\*Dirección:\* Propiedad de prueba · Apartamento 1/);
     assert.doesNotMatch(item.data().text, /RENAMED AFTER BOOKING|Synthetic Access|Synthetic Requester/);
   }
   const technicianText = renderVanWorkOrderText({ van: { name: 'Synthetic van' }, order: persisted,
     appointment: { ...created.appointment, id: created.appointment.appointmentId }, property: { name: 'RENAMED AFTER BOOKING' }, client: { name: 'Synthetic only' }, sequence: 1 });
-  assert.match(technicianText, /Apartment 1/);
+  assert.match(technicianText, /\*Dirección:\* Propiedad de prueba · Apartamento 1/);
   assert.doesNotMatch(technicianText, /RENAMED AFTER BOOKING/);
   assert.deepEqual((await get(`workOrders/${workOrderId}`)).locationSnapshot, frozenLocation);
 });
