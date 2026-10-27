@@ -40,11 +40,12 @@ export function useCustomerBookingAlerts(context: AlertContext, userId: string, 
   const remaining = latest?.matches.filter(a => !acknowledged.current.has(key(a.id, a.version, latest.contextToken))) || [];
   const alert = remaining[0];
   const checking = useRef(false);
+  const [verifying, setVerifying] = useState(false);
   const checkBeforeBooking = async () => {
     if (checking.current || busy) return false;
-    checking.current = true;
+    checking.current = true; setVerifying(true);
     try { const check = await load(); return check !== null && !check.pending; }
-    finally { checking.current = false; }
+    finally { checking.current = false; setVerifying(false); }
   };
   const decide = async (decision: 'continue' | 'decline' | 'different_customer') => {
     if (!alert || !latest || !context.customerId || busy) return;
@@ -75,5 +76,5 @@ export function useCustomerBookingAlerts(context: AlertContext, userId: string, 
       <footer className={styles.footer}><small className={styles.muted}>La decisión quedará registrada.</small><button type="button" className={styles.button} disabled={busy || !context.customerId || (!!request.current && request.current.decision !== 'decline')} onClick={() => void decide('decline')}>No agendar</button><button type="button" className={styles.primary} disabled={busy || !context.customerId || (different && reason.trim().length < 5) || (!!request.current && request.current.decision === 'decline')} onClick={() => void decide(different ? 'different_customer' : 'continue')}>{busy ? 'Guardando…' : different ? 'Confirmar otro cliente' : 'Revisar y continuar'}</button></footer>
     </AlertDialog> : null}
   </> : null;
-  return { notice, checkBeforeBooking };
+  return { notice, checkBeforeBooking, checking: verifying };
 }

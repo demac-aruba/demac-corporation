@@ -1625,7 +1625,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
       serviceId: presets.find(preset => preset.id === line.presetId)?.serviceId || '',
       label: presets.find(preset => preset.id === line.presetId)?.label || line.presetId, quantity: line.quantity }));
   const chargesInput = chargeDraft ? bookingChargeDraft(chargeSeeds, chargeDraft) : undefined;
-  const busy = loading || masterSaving || saving || holding || referencesUploading;
+  const busy = loading || masterSaving || saving || holding || referencesUploading || customerAlerts.checking;
   const dialogRef = useBookingDialog(onClose, busy || Boolean(bookingRecovery), !supportActive);
   const capacityDetailsRef = useRef<HTMLDetailsElement>(null);
   const capacityActionRequired = Boolean(workloadOverflow || activeCapacityOvertime || supportSlotCandidates.length || (capacityValidation && capacityValidation.options.length > 1));
@@ -1660,7 +1660,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
           <button type="button" className={styles.close} disabled={busy || Boolean(bookingRecovery)} onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        <div className={styles.contextBar} inert={saving || holding || Boolean(bookingRecovery)}>
+        <div className={styles.contextBar} inert={saving || holding || customerAlerts.checking || Boolean(bookingRecovery)}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
@@ -1694,7 +1694,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
         </div>
 
         <nav className={chargeStyles.modalTabs} aria-label="Secciones de la cita"><button type="button" className={!chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => setChargeTab(false)}><ChargeIcon name="calendar"/>Datos de la cita</button><button type="button" className={chargeTab ? chargeStyles.active : ''} disabled={busy || Boolean(bookingRecovery)} onClick={() => { setChargeDraft(current => bookingChargeDraft(chargeSeeds, current) || null); setChargeTab(true); }}><ChargeIcon name="receipt"/>Importes y pagos</button>{chargeDraft || chargeTab ? <button type="button" disabled={busy || Boolean(bookingRecovery)} onClick={() => { setChargeDraft(null); setChargeTab(false); }}>Descartar importes</button> : null}</nav>
-        <div className={styles.body} inert={saving || holding || Boolean(bookingRecovery)}>
+        <div className={styles.body} inert={saving || holding || customerAlerts.checking || Boolean(bookingRecovery)}>
 
           {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
           {chargeTab && authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
@@ -1928,7 +1928,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
           <div className={styles.footerActions}>
             <details className={styles.capacityStatus} data-booking-capacity data-tone={capacityTone} ref={capacityDetailsRef}>
               <summary aria-label={`Capacity validation: ${capacityLabel}`}><span aria-hidden="true">{capacityTone === 'success' ? '✓' : capacityTone === 'error' ? '!' : capacityTone === 'warning' ? '!' : '◷'}</span><strong>{capacityLabel}</strong><span className={styles.capacityHint}>Details</span></summary>
-              <div className={styles.capacityPanel} inert={saving || holding || Boolean(bookingRecovery)}>
+              <div className={styles.capacityPanel} inert={saving || holding || customerAlerts.checking || Boolean(bookingRecovery)}>
                 <button type="button" className={styles.secondaryButton} onClick={() => { if (capacityDetailsRef.current) capacityDetailsRef.current.open = false; }}>Close validation details</button>
                 {!chargeTab && authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
 

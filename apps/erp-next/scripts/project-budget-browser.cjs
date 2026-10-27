@@ -93,6 +93,7 @@ async function main() {
     plugins:[{name:'synthetic-authority-boundary',setup(builder){
       builder.onResolve({filter:/.*/}, args=>{
         const key=path.basename(args.path);
+        if(key==='customer-alerts')return {path:key,namespace:'budget-test-stub'};
         if(key==='session'&&args.importer.endsWith('shared-projects.ts'))return {path:key,namespace:'budget-test-stub'};
         const locationAuthority=key==='office-booking-authority'&&(args.importer.endsWith('property-locations.ts')||args.importer.endsWith('property-locations.tsx'));
         if(!args.importer.endsWith('live-appointment-create-drawer.tsx')&&!locationAuthority)return;
