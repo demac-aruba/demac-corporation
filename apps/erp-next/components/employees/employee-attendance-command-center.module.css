@@ -15,6 +15,7 @@
 .splitToggle input, .intervalDates input { accent-color: #1769e8; }
 .splitToggle small { display: block; margin-top: 3px; color: var(--muted, #738197); font-size: 9px; }
 .intervalSection { border-top: 1px solid var(--line, #dfe7f1); padding-top: 10px; }
+.rateControls { border: 0; padding: 0; margin: 0; min-width: 0; }
 .intervalTitle { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 10px; }
 .intervalTitle button { border: 0; background: transparent; color: var(--att-blue); font: inherit; cursor: pointer; }
 .intervalCard { border: 1px solid var(--line, #dfe7f1); border-radius: 10px; padding: 10px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel, #fff) 96%, #eef4fa); }

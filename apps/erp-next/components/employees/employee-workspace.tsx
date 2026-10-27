@@ -18,6 +18,7 @@ import {
   scheduleForAttendanceDraft,
   workIntervalsForDraft,
   updateAttendanceClockDraft,
+  actualWorkedMinutesForDraft,
   saveSalaryAdvance,
   type AttendanceDayDraft,
   type AttendanceExceptionKind,
@@ -262,6 +263,7 @@ export function EmployeeWorkspace() {
   const selectedWorkedMinutes = !selectedCalculation.error && !attendanceInputsChanged && selectedRecord?.assumedRegular && !selectedRecord.entry && draft?.status === 'Present' && !detectedAttendanceExceptions.length && !(selectedVariance?.overtimeMinutes ?? 0)
     ? selectedRecord.schedule.scheduledMinutes
     : selectedVariance?.workedMinutes ?? 0;
+  const actualWorkDuringError = selectedCalculation.error && draft ? actualWorkedMinutesForDraft(selectedDate, draft, selectedRecord?.entry?.workOrderAttendanceSegments) : null;
   const selectedExceptionHours = Math.max(0, Number(draft?.exceptionHours) || 0);
   const selectedRegularHours = selectedRecord && draft
     ? workedStatus
@@ -520,7 +522,7 @@ export function EmployeeWorkspace() {
 
           <aside className={styles.rightRail}>
             <section className={styles.dailyCard}>
-              <div className={styles.dailyHeader}><div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedSchedule?.label ?? 'No configured schedule'}</small></div><span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular && !selectedRecord.entry ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span></div>
+              <div className={styles.dailyHeader}><div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedCalculation.error && draft?.attendanceShiftOverride ? 'Adjusted shift · calculation pending' : selectedSchedule?.label ?? 'No configured schedule'}</small></div><span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular && !selectedRecord.entry ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span></div>
               {draft && selectedRecord ? <div className={styles.dailyForm}>
                 {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Enter only what actually changed; overtime and partial missing time are calculated from the employee schedule.</div> : null}
                 <Field label="Status" full><select className={styles.control} value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as AttendanceStatus, exceptionHours: ['Sick', 'Vacation', 'Absent'].includes(event.target.value) ? (draft.exceptionHours ?? selectedRecord.schedule.scheduledMinutes / 60) : undefined })}>{STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ATTENDANCE_STATUS_LABELS[status]}</option>)}</select></Field>
@@ -532,7 +534,7 @@ export function EmployeeWorkspace() {
                 <label className={styles.dayOffsetToggle}><input type="checkbox" checked={draft.workIntervals?.[0]?.endDayOffset === 1} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, {}, event.target.checked))} />Clock out next day</label>
                 <Field label="Break Minutes" full><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, { breakMinutes: Number(event.target.value) }))} /></Field>
                 </> : null}
-                {workedStatus ? <EmployeeAttendanceIntervalEditor draft={draft} onChange={setDraft} existing={selectedRecord.entry} disabled={busy || !canManageSensitiveAttendance} overtimeMinutes={selectedVariance?.overtimeMinutes ?? 0} excludedGapMinutes={selectedVariance?.excludedGapMinutes} /> : null}
+                {workedStatus ? <EmployeeAttendanceIntervalEditor draft={draft} onChange={setDraft} existing={selectedRecord.entry} disabled={busy || !canManageSensitiveAttendance} overtimeMinutes={selectedVariance?.overtimeMinutes ?? 0} excludedGapMinutes={selectedVariance?.excludedGapMinutes} calculationError={selectedCalculation.error} /> : null}
                 {intervalSaveError ? <div className={styles.notice} role="status">{intervalSaveError}</div> : null}
 
                 {workedStatus && selectedVariance ? <div className={styles.dailySummary}>
@@ -560,9 +562,9 @@ export function EmployeeWorkspace() {
                 <div className={styles.dailySummary}>
                   <SummaryRow icon="clock" label="Scheduled" value={hours((selectedSchedule?.scheduledMinutes ?? 0) / 60)} tone="blue" />
                   <SummaryRow icon="vacation" label="Scheduled Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
-                  <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
-                  <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
-                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Regular overtime · 150%" value={hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Special overtime · 200%" value={hoursAndMinutes(selectedRates.at200)} tone="orange" />{selectedRates.requiresReview ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals.</p> : null}</> : null}
+                  <SummaryRow icon="briefcase" label="Actual Worked" value={selectedCalculation.error ? actualWorkDuringError === null ? 'Pending' : hoursAndMinutes(actualWorkDuringError) : hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
+                  <SummaryRow icon="briefcase" label="Regular After Exceptions" value={selectedCalculation.error ? 'Pending' : hours(selectedRegularHours)} tone="blue" />
+                  {workedStatus ? <><SummaryRow icon="timer" label="Overtime" value={selectedCalculation.error ? 'Pending' : hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /><SummaryRow icon="timer" label="Regular overtime · 150%" value={selectedCalculation.error ? 'Pending' : hoursAndMinutes(selectedRates.at150)} tone="orange" /><SummaryRow icon="timer" label="Special overtime · 200%" value={selectedCalculation.error ? 'Pending' : hoursAndMinutes(selectedRates.at200)} tone="orange" />{!selectedCalculation.error && selectedRates.requiresReview ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals.</p> : null}</> : null}
                   {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="No Work — Paid" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
                   {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
                   {workedStatus && detectedAttendanceExceptions.length > 0 ? <SummaryRow icon="wallet" label="Payable hours before overtime" value={hoursAndMinutes(selectedRegularHours * 60 + selectedRecord.schedule.paidFreeMinutes + partialTreatmentTotals.paid)} tone="green" /> : null}

@@ -87,11 +87,43 @@ async function runCase(browser, origin, name, viewport, scenario = 'split') {
     assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).isDisabled(), true);
     await page.getByRole('checkbox', { name: 'Clock out next day', exact: true }).check();
     await page.getByRole('checkbox', { name: /Adjust scheduled shift for this day/ }).check();
-    await page.getByLabel('Scheduled start', { exact: true }).fill('15:00');
-    await page.getByLabel('Scheduled end', { exact: true }).fill('00:00');
-    await page.getByRole('checkbox', { name: 'Scheduled end is next day', exact: true }).check();
-    await page.getByLabel('Scheduled break (min)', { exact: true }).fill('60');
+    const plannedStart = page.getByLabel('Scheduled start', { exact: true });
+    const plannedEnd = page.getByLabel('Scheduled end (automatic)', { exact: true });
+    const plannedBreak = page.getByLabel('Planned unpaid break (min)', { exact: true });
+    const daily = page.getByRole('heading',{name:'Daily Record',exact:true}).locator('xpath=ancestor::section[1]');
+    const summary = label => daily.getByText(label, {exact:true}).locator('..');
+    assert.equal(await plannedStart.inputValue(),'15:00');
+    assert.equal(await plannedEnd.inputValue(),'00:00');
+    assert.equal(await plannedEnd.evaluate(input=>input.readOnly),true);
+    assert.equal(await plannedBreak.inputValue(),'60'); // Actual break 0 must not overwrite planned unpaid break.
+    assert.equal(await page.getByRole('button',{name:'All at 150%',exact:true}).getAttribute('aria-pressed'),'true');
+    assert.ok((await summary('Calculated Overtime').innerText()).includes('6h 00m'));
+    // Changing actual work must not rebase the explicitly selected planned shift.
+    await page.getByLabel('Clock In',{exact:true}).fill('16:00');
+    assert.equal(await plannedStart.inputValue(),'15:00');
+    assert.equal(await plannedEnd.inputValue(),'00:00');
+    await page.getByLabel('Clock In',{exact:true}).fill('15:00');
+    await plannedBreak.fill('0');
+    assert.equal(await plannedEnd.inputValue(),'23:00');
+    assert.ok((await summary('Calculated Overtime').innerText()).includes('6h 00m'));
+    await plannedBreak.fill('60');
     await page.getByRole('button', { name: 'All at 200%', exact: true }).click();
+    // Incomplete planned inputs cannot masquerade as zero work or erase a manual rate.
+    await plannedStart.fill('');
+    assert.ok((await summary('Actual Worked').innerText()).includes('14h 00m'));
+    assert.ok((await summary('Regular After Exceptions').innerText()).includes('Pending'));
+    assert.ok((await summary('Overtime').innerText()).includes('Pending'));
+    assert.equal(await page.getByRole('button',{name:'All at 200%',exact:true}).isDisabled(),true);
+    assert.equal(await page.getByLabel('Allocation 1 rate',{exact:true}).inputValue(),'200');
+    assert.equal(await page.getByRole('button',{name:'Save Exception',exact:true}).isDisabled(),true);
+    await page.screenshot({path:path.join(output,name+'-overnight-pending.png'),fullPage:true});
+    await plannedStart.fill('15:00');
+    // Invalid actual overnight range is pending as well; restoring the date recovers the selection.
+    await page.getByRole('checkbox',{name:'Clock out next day',exact:true}).uncheck();
+    assert.ok((await summary('Actual Worked').innerText()).includes('Pending'));
+    await page.getByRole('checkbox',{name:'Clock out next day',exact:true}).check();
+    assert.equal(await page.getByRole('button',{name:'All at 200%',exact:true}).getAttribute('aria-pressed'),'true');
+    assert.ok((await summary('Special overtime · 200%').innerText()).includes('6h 00m'));
     await page.getByLabel('Reason for this change (required)', { exact: true }).fill('Synthetic continuous overnight 200% approval');
     await page.getByRole('button', { name: 'Save Exception', exact: true }).click();
     let saved = await readSaved(1);
@@ -228,7 +260,7 @@ async function main() {
   });
   const server = http.createServer((req, res) => {
     if (req.url === '/app.js' || req.url === '/app.css') { res.setHeader('Content-Type', req.url.endsWith('.js') ? 'application/javascript' : 'text/css'); return res.end(fs.readFileSync(path.join(output, req.url.slice(1)))); }
-    res.setHeader('Content-Type', 'text/html');res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"><style>body{font:16px Arial;--canvas:#f5f7fb;--surface:#fff;--surface-2:#f3f6f9;--text:#13233b;--muted:#55647a;--border:#cdd8e4;--brand:#1465ff;--success:#148158}*{box-sizing:border-box}</style></head><body><p>SYNTHETIC ATTENDANCE TEST — NO PRODUCTION CONNECTION</p><div id="app"></div><script src="/app.js"></script></body></html>');
+    res.setHeader('Content-Type', 'text/html');res.end('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"><style>body{font:16px Arial;--canvas:#f5f7fb;--surface:#fff;--surface-2:#f3f6f9;--text:#13233b;--muted:#55647a;--border:#cdd8e4;--brand:#1465ff;--success:#148158}*{box-sizing:border-box}</style></head><body><p>SYNTHETIC ATTENDANCE TEST — NO PRODUCTION CONNECTION</p><div id="app"></div><script src="/app.js"></script></body></html>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
