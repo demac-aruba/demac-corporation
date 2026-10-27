@@ -1,0 +1,46 @@
+name: Customer alerts verification
+on:
+  pull_request:
+    paths: ['functions/customerAlerts*', 'functions/officeBookingAuthorityFacade.js', 'functions/test-support/**', 'apps/erp-next/**', 'firestore.rules', 'firebase.customer-alerts-test.json', '.github/workflows/customer-alerts-ci.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: |
+          npm ci --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/alert-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
+          "$RUNNER_TEMP/alert-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Alert domain and facade regression
+        run: node --test functions/customerAlerts.test.js functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityFacadeProject.test.js functions/officeBookingAuthorityCatalog.test.js
+      - name: Real Firestore transactions and direct-client denial
+        env:
+          CUSTOMER_ALERT_TEST_TOOLS: ${{ runner.temp }}/alert-tools
+          GCLOUD_PROJECT: demo-demac-customer-alerts
+        run: >-
+          "$RUNNER_TEMP/alert-tools/node_modules/.bin/firebase" emulators:exec --only firestore
+          --project demo-demac-customer-alerts --config firebase.customer-alerts-test.json
+          'node --test --test-concurrency=1 functions/customerAlerts.emulator.test.cjs'
+      - name: Real UI and facade with synthetic data only
+        env:
+          BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/alert-tools
+          BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/customer-alert-evidence
+        run: node apps/erp-next/scripts/customer-alerts-browser.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: customer-alerts-synthetic-evidence
+          path: ${{ runner.temp }}/customer-alert-evidence
+          if-no-files-found: error

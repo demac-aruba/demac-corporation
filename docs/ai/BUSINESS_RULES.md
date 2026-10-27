@@ -481,3 +481,10 @@ Production activation remains separately owner-approved through the server-side 
 ## Dynamic fleet activation (2026-10-27)
 
 - `OPS-VAN-FLEET-001` — Owner-approved intent: every configured canonical numbered Van can participate in Scheduling when operationally enabled. No VAN-1..VAN-4 allowlist. New empty profiles start out of service; an authorized driver without a helper uses the existing `Trabajo liviano` mode. Existing crew, absence, calendar, route, lock and booking rules continue to apply. Unavailable lanes are hidden while their bookings remain accessible for correction. Profile-only saves preserve partial-day rules; no historical/payroll rewrite. Booking commits revalidate selected Van existence and status transactionally. Source: owner request 2026-10-27; effective on approved release. See `decisions/ADR-20261027-dynamic-fleet-activation.md`.
+
+## Internal customer alerts
+
+- Incidents belong to the canonical customer; shared phone/address is only a possible match.
+- A reasoned different-customer exception preserves the old incident and is scoped to the new customer and observed identifiers.
+- Office operators review before confirming or holding a booking. Continuing or declining remains an explicit decision, never an inferred ban.
+- Resolution and invalidation require a reason and keep history. No automatic financial, appointment or communication effect.

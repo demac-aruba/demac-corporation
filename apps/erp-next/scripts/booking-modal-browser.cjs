@@ -25,6 +25,7 @@ const project = {
   estimatedLaborHours: 6, scheduledFutureHours: 5, actualLaborHours: 0, phases: [], assignments: [],
 };
 const stubs = {
+ 'customer-alerts':require('./customer-alert-empty-adapter.cjs'),
   'auth-provider': `const principal={userId:'ACTOR-TEST',active:true,capabilities:new Set(window.__noProjectAccess?['scheduling.manage']:['scheduling.manage','projects.schedule'])};export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[${JSON.stringify(customer)},${JSON.stringify(secondCustomer)}],properties:[${JSON.stringify(property)},${JSON.stringify(secondProperty)}]};}
@@ -128,7 +129,12 @@ function Harness(){
 }createRoot(document.getElementById('app')).render(<Harness/>);`;
 
 async function ready(page){await page.locator('[data-booking-modal]').waitFor();await page.waitForFunction(()=>!document.querySelector('[data-booking-modal] button[aria-label="Close"]')?.disabled);}
-async function toggleDisclosure(page,name,open){const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
+async function toggleDisclosure(page,name,open){
+ // The automatically opened capacity popover can cover the visit column. Close it
+ // through its visible control before editing another disclosure, as an operator does.
+ const closeCapacity=page.getByRole('button',{name:'Close validation details',exact:true});
+ if(await closeCapacity.isVisible())await closeCapacity.click();
+ const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
 async function source(page,name){
  await page.getByRole('button',{name:new RegExp('^'+name)}).click();
  // Mode changes can commit after the click finishes; wait for the operator-visible destination.
@@ -160,6 +166,9 @@ async function setupRegular(page){
  await page.getByRole('button',{name:/^Deep cleaning/}).click();
  await page.getByLabel('Customer-facing work description').fill('Synthetic mixed work');
  await page.getByLabel('Technician instructions').fill('Synthetic retained technician instructions');
+ const restoreCapacity=await page.evaluate(()=>Boolean(window.__supportChoices));
+ if(restoreCapacity)await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.open===true); // required choices open automatically
+
  await toggleDisclosure(page,'contacts',true);
  await page.getByLabel('Requested by · this visit').selectOption('client:CUSTOMER-TEST');
  await page.getByLabel('Access contact · this visit').selectOption('contact:CONTACT-TEST');
@@ -171,6 +180,7 @@ async function setupRegular(page){
  await page.getByLabel('Referencia de acceso').fill('Synthetic gate');
  await page.getByRole('button',{name:'Confirm appointment',exact:true}).waitFor();
  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Confirm appointment'&&!button.disabled));
+ if(restoreCapacity&&!await page.locator('[data-booking-capacity]').evaluate(node=>node.open))await page.locator('[data-booking-capacity] > summary').click();
 }
 async function geometry(page,width,label){
  await page.locator('[data-booking-column="identity"]').evaluate(node=>node.parentElement.parentElement.scrollTo(0,0));
@@ -425,7 +435,7 @@ async function main(){
    await page.evaluate(()=>{window.__conflict=false;});await page.getByRole('button',{name:'Recheck now',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-booking-capacity]')?.dataset.tone==='success');await assertNoWrites(page);
   });
   await run('capacity-support-choices-retained',{width:1366,height:768},async page=>{
-   await setupRegular(page);const panel=page.locator('[data-booking-capacity]');assert.equal(await panel.evaluate(node=>node.open),true,'Required support choices automatically remain discoverable');
+   await setupRegular(page);const panel=page.locator('[data-booking-capacity]');assert.equal(await panel.evaluate(node=>node.open),true,'Required support choices remain available after editing visit information');
    const choice=panel.getByRole('button',{name:/Support Van B · support/});await choice.click();await page.waitForFunction(()=>window.__checks.at(-1)?.supportSlotSelections.includes('SUPPORT-B'));
    await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Confirm appointment'&&!button.disabled));
    assert.match(await panel.innerText(),/Support Van A/);assert.match(await panel.innerText(),/Support Van B/);assert.match(await panel.innerText(),/PRIMARY \/ RESPONSIBLE/);
@@ -482,6 +492,19 @@ async function main(){
    await details.getByRole('button',{name:/Support Van B · support/}).click();await page.waitForFunction(()=>window.__checks.at(-1)?.supportSlotSelections.includes('SUPPORT-B'));
    await details.getByRole('button',{name:'Close validation details',exact:true}).click();assert.equal(await details.evaluate(node=>node.open),false);await page.screenshot({path:path.join(artifacts,'mobile-capacity-controls.png'),fullPage:true});await assertNoWrites(page);
   },{__supportChoices:true});
+  const injectAlert=page=>page.evaluate(()=>{window.__customerAlert={id:'SYNTHETIC-INCIDENT',version:1,customerId:'CUSTOMER-TEST',customerName:'Synthetic customer',matchKind:'customer',canDismiss:false,matchedKeys:[],category:'debt',comment:'Synthetic incident before booking.',createdBy:{name:'Synthetic operator'},createdAt:'2026-10-27T12:00:00Z'};});
+  await run('customer-alert-nested-focus-and-confirm-gate',{width:1440,height:1000},async page=>{
+   await setupRegular(page);await injectAlert(page);await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();
+   const alert=page.getByRole('dialog',{name:'Alerta al agendar',exact:true});await alert.waitFor();await assertNoWrites(page);
+   await alert.getByRole('button').last().focus();await page.keyboard.press('Tab');assert.equal(await alert.evaluate(node=>node.contains(document.activeElement)),true);
+   await page.keyboard.press('Escape');await alert.waitFor({state:'hidden'});assert.equal(await page.locator('[data-booking-modal]').count(),1);await assertNoWrites(page);
+   await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await alert.waitFor();await alert.getByRole('button',{name:'Revisar y continuar',exact:true}).click();await alert.waitFor({state:'hidden'});await assertNoWrites(page);
+   await page.getByRole('button',{name:'Confirm appointment',exact:true}).click();await page.getByRole('heading',{name:'Synthetic booking result'}).waitFor();assert.equal(await page.evaluate(()=>window.__commits.length),1);assert.equal(await page.evaluate(()=>window.__alertDecisions[0].decision),'continue');
+  });
+  await run('customer-alert-hold-gate-and-decline',{width:1440,height:1000},async page=>{
+   await setupRegular(page);await injectAlert(page);await page.getByRole('button',{name:'Temporary hold',exact:true}).click();const alert=page.getByRole('dialog',{name:'Alerta al agendar',exact:true});await alert.waitFor();await assertNoWrites(page);
+   await alert.getByRole('button',{name:'No agendar',exact:true}).click();await page.locator('[data-booking-modal]').waitFor({state:'hidden'});await assertNoWrites(page);assert.equal(await page.evaluate(()=>window.__alertDecisions[0].decision),'decline');
+  });
   fs.writeFileSync(path.join(artifacts,'results.json'),JSON.stringify({boundary:'Real React components; synthetic backend commands; no production requests.',results},null,2));
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(output,{recursive:true,force:true});}
 }

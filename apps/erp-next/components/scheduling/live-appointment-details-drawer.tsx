@@ -1,5 +1,7 @@
 'use client';
 
+import { CustomerAlertManager } from '../crm/customer-alert-manager';
+
 import { SavedVisitReferences } from './booking-visit-references';
 import { AppointmentChargesWorkspace } from './appointment-charges';
 import { ChargeIcon } from './appointment-charge-icons';
@@ -134,6 +136,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [alertDwellingId, setAlertDwellingId] = useState('');
   const [partialOutcome, setPartialOutcome] = useState<PartialOutcomeSummary | null>(null);
 
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment && assignment.status !== 'cancelled')
@@ -160,9 +163,9 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
   };
 
   useEffect(() => {
-    let active = true;
+    let active = true; setAlertDwellingId('');
     void getOfficeAppointment(appointment.id)
-      .then((result) => { if (active) setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome)); })
+      .then((result) => { if (active) { setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome)); setAlertDwellingId(text(result.appointment.dwellingId)); } })
       .catch(() => {});
     return () => { active = false; };
   }, [appointment.id]);
@@ -254,6 +257,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, project, canManage, 
         <div className={tab === 'details' ? ui.hidden : tab === 'charges' ? ui.financeContent : undefined}><AppointmentChargesWorkspace key={`${currentUserId}:${appointment.id}`} currentUserId={currentUserId} onDraftStateChange={setChargeDraft} appointmentId={appointment.id} canManage={canManage} active={tab !== 'details'} showHistory={tab === 'history'} onBusyChange={setChargeBusy} onChanged={onChanged} onShowHistory={() => setTab('history')} onClose={close} documentContext={{ customer: appointment.customer, dateKey: appointment.dateKey }}/></div>
         <div className={tab === 'details' ? undefined : ui.hidden}>
           <div className={mode === 'details' ? undefined : ui.hidden}>
+            {appointment.customerId ? <CustomerAlertManager key={appointment.id} customerId={appointment.customerId} propertyId={appointment.siteId} dwellingId={alertDwellingId} /> : null}
             {appointment.status === 'cancelled' ? <div className={ui.notice} role="status"><strong>Cita cancelada</strong>La información y el historial se conservan.</div> : null}
             {temporaryHold ? <div className={ui.notice} role="status"><strong>Reserva temporal · Capacidad reservada</strong>La confirmación y los recordatorios permanecen pausados hasta confirmar esta reserva.</div> : null}
             {partialOutcome ? <div className={ui.notice} role="status"><strong>Trabajo completado parcialmente</strong><div className={ui.pills}><span>Planificado: {partialOutcome.plannedQuantity}</span><span>Completado: {partialOutcome.completedQuantity}</span><span>Pendiente: {partialOutcome.remainingQuantity}</span></div><p>Equipo liberado: {formatTime(partialOutcome.actualEndTime)} · {partialOutcome.reason}</p><p>{partialOutcome.remainingWorkStatus === 'scheduled' && partialOutcome.followUpAppointmentId ? `Seguimiento: ${partialOutcome.followUpAppointmentId}` : 'Trabajo pendiente por agendar.'}</p></div> : null}

@@ -24,15 +24,24 @@ fs.mkdirSync(output, { recursive: true });
 const firebase = initializeApp({ projectId: PROJECT });
 const db = getFirestore(firebase);
 const { createOfficeBookingApi } = require(path.join(ROOT, 'functions/officeBookingAuthority'));
+const { createOfficeBookingAuthorityFacade } = require(path.join(ROOT, 'functions/officeBookingAuthorityFacade'));
+const { ACTIONS: CUSTOMER_ALERT_ACTIONS } = require(path.join(ROOT, 'functions/customerAlerts'));
 const { createBookingAuthority } = require(path.join(ROOT, 'functions/bookingAuthorityFirestore'));
 const { createSchedulingProvider } = require(path.join(ROOT, 'functions/bookingAuthoritySchedulingProvider'));
 const { withProjectBookingLinks } = require(path.join(ROOT, 'functions/projectBookingLinks'));
 const clock = () => new Date('2026-10-05T17:24:00Z');
 const provider = withProjectBookingLinks({ db, provider: createSchedulingProvider({ db }) });
-const facade = createOfficeBookingApi({ db, verifyIdToken: async token => {
+const clockedBookingApi = createOfficeBookingApi({ db, verifyIdToken: async token => {
   if (token !== 'synthetic-overtime-token') throw Error('Synthetic token required');
   return { uid: 'demo-office' };
 }, bookingAuthority: createBookingAuthority({ db, availabilityProvider: provider, clock }) });
+// Preserve the historical clock in the booking engine while routing new alert
+// commands through the real production facade against the same demo emulator.
+const alertApi = createOfficeBookingAuthorityFacade({ db, verifyIdToken: async token => {
+  if (token !== 'synthetic-overtime-token') throw Error('Synthetic token required');
+  return { uid: 'demo-office' };
+} });
+const facade = { handle: request => (CUSTOMER_ALERT_ACTIONS.has(request.body?.action) ? alertApi : clockedBookingApi).handle(request) };
 const projectApi = createProjectApi({ db, verifyIdToken: async token => {
   if (token !== 'synthetic-overtime-token') throw Error('Synthetic token required');
   return { uid: 'demo-office' };
@@ -129,6 +138,8 @@ async function main() {
     await drawer.waitFor({ state: 'detached' });
     const creates = actions.filter(item => item.action === 'create_appointment');
     assert.equal(creates.length, 2);
+    assert.ok(actions.some(item => item.action === 'match_customer_alerts'), 'Historical booking verifies incidents through the real facade');
+    assert.equal((await db.collection('customerAlerts').get()).size, 0, 'No incident is created during booking regression');
     assert.deepEqual(creates[0].data, creates[1].data);
     assert.equal(creates[0].data.bookingMode, 'backdated');
     assert.equal(creates[0].data.backdatingAcknowledged, true);
