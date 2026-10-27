@@ -10,11 +10,12 @@ type Props = {
   excludedGapMinutes?: number;
   existing?: EmployeeTimesheetEntry;
   disabled: boolean;
+  calculationError?: string;
 };
 
 const duration = (minutes: number) => `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 
-export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinutes, excludedGapMinutes, existing, disabled }: Props) {
+export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinutes, excludedGapMinutes, existing, disabled, calculationError }: Props) {
   const intervals = draft.workIntervals;
   const split = (intervals?.length ?? 0) > 1;
   const allocations = draft.overtimePayAllocations;
@@ -47,8 +48,10 @@ export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinu
       </div>)}
       <p className={styles.intervalHint}>Time between intervals excluded: <strong>{duration(excludedGapMinutes ?? 0)}</strong>. Overnight work belongs to the starting payroll date.</p>
     </section> : null}
-    {overtimeMinutes > 0 || allocations !== undefined ? <section className={styles.intervalSection}>
-      <div className={styles.intervalTitle}><strong>Overtime pay rates</strong><span>{duration(overtimeMinutes)} total</span></div>
+    {calculationError || overtimeMinutes > 0 || allocations !== undefined ? <section className={styles.intervalSection}>
+      <div className={styles.intervalTitle}><strong>Overtime pay rates</strong><span>{calculationError ? 'Calculation pending' : `${duration(overtimeMinutes)} total`}</span></div>
+      {calculationError ? <p className={styles.intervalHint}>Correct the shift or work times to calculate overtime and choose its pay rate. Your existing rate selection is retained.</p> : null}
+      <fieldset className={styles.rateControls} disabled={!!calculationError}>
       <div className={styles.rateModes}>{([['150', 'All at 150%'], ['200', 'All at 200%'], ['split', 'Split rates']] as const).map(([mode, label]) => <button type="button" aria-pressed={activeMode === mode} key={mode} onClick={() => setRates(mode === 'split' ? [{ rate: 150, minutes: 0 }, { rate: 200, minutes: 0 }] : overtimeMinutes ? [{ rate: Number(mode) as 150 | 200, minutes: overtimeMinutes }] : [])}>{label}</button>)}</div>
       {!allocations ? <p className={styles.intervalHint}>Regular overtime defaults to 150%. Select 200% only for approved special overtime.</p> : null}
       {displayedAllocations.map((row, index) => <div className={styles.rateFields} key={index}>
@@ -56,7 +59,8 @@ export function EmployeeAttendanceIntervalEditor({ draft, onChange, overtimeMinu
         <label className={styles.field}><span>Minutes</span><input className={styles.control} aria-label={`Allocation ${index + 1} minutes`} type="number" min="0" max="59" step="1" value={row.minutes % 60} onChange={(e) => setRates(displayedAllocations.map((r, i) => i === index ? { ...r, minutes: Math.floor(r.minutes / 60) * 60 + Number(e.target.value) } : r))} /></label>
         <label className={styles.field}><span>Pay rate</span><select className={styles.control} aria-label={`Allocation ${index + 1} rate`} value={row.rate} onChange={(e) => setRates(displayedAllocations.map((r, i) => i === index ? { ...r, rate: Number(e.target.value) as 150 | 200 } : r))}><option value="150">150%</option><option value="200">200%</option></select></label>
       </div>)}
-      <p className={styles.intervalHint}>Assigned: <strong>{duration(assignedMinutes)} / {duration(overtimeMinutes)}</strong>. Allocate net overtime hours after breaks; clock times stay unchanged.</p>
+      </fieldset>
+      {!calculationError ? <p className={styles.intervalHint}>Assigned: <strong>{duration(assignedMinutes)} / {duration(overtimeMinutes)}</strong>. Allocate net overtime hours after breaks; clock times stay unchanged.</p> : null}
     </section> : null}
     {draft.attendanceShiftOverride || intervals?.length || allocations !== undefined || existing?.overtimePayAllocations !== undefined ? <label className={styles.field}><span>Reason for this change (required)</span><textarea className={`${styles.control} ${styles.notes}`} value={draft.changeReason ?? ''} onChange={(event) => onChange({ ...draft, changeReason: event.target.value })} placeholder="Reason for split shift or approved overtime rate…" /></label> : null}
   </fieldset>;

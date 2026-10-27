@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { scheduleForAttendanceDraft, updateAttendanceClockDraft, saveAttendanceDay, type EmployeeTimesheetEntry, type AttendanceDayDraft, type AttendanceSchedule } from '../lib/employee-attendance';
+import { buildAttendanceShiftOverride, actualWorkedMinutesForDraft, scheduleForAttendanceDraft, updateAttendanceClockDraft, saveAttendanceDay, type EmployeeTimesheetEntry, type AttendanceDayDraft, type AttendanceSchedule } from '../lib/employee-attendance';
 import { overtimeRateTotals } from '../lib/employee-attendance-calculation';
 import { summarizeEmployee, payrollPeriodFromDates } from '../lib/employee-payroll';
 import { summarizeAttendancePeriod } from '../lib/employee-attendance-policy';
@@ -111,6 +111,21 @@ async function main() {
     const overnightEmployee = { id: 'synthetic-overnight', name: 'Synthetic Overnight' };
     const overnightDraft: AttendanceDayDraft = updateAttendanceClockDraft({ ...draft, workIntervals: undefined, overtimePayAllocations: [{rate:200,minutes:360}], attendanceShiftOverride: {startTime:'15:00',endTime:'00:00',endDayOffset:1,breakMinutes:60} }, {clockInTime:'15:00',clockOutTime:'05:00',breakMinutes:0}, true);
     const overnightInput = {...input, employee:overnightEmployee, date:'2026-10-20', draft:overnightDraft};
+    assert.deepEqual(buildAttendanceShiftOverride(schedule,'15:00',60),overnightDraft.attendanceShiftOverride);
+    assert.deepEqual(buildAttendanceShiftOverride(schedule,'15:00',0),{startTime:'15:00',endTime:'23:00',endDayOffset:0,breakMinutes:0});
+    assert.equal(buildAttendanceShiftOverride({...schedule,scheduledMinutes:240},'22:00',0).endTime,'02:00');
+    assert.equal(buildAttendanceShiftOverride(schedule,'15:00',960).endDayOffset,1);
+    for (const [start,pause,regular] of [['',60,480],['25:00',60,480],['15:00',-1,480],['15:00',0.5,480],['15:00',961,480],['15:00',60,0],['15:00',60,NaN]] as const) {
+      const invalid = buildAttendanceShiftOverride({...schedule,scheduledMinutes:regular},start,pause);
+      assert.equal(invalid.endTime,'');
+      assert.throws(()=>scheduleForAttendanceDraft({...schedule,scheduledMinutes:regular},{...overnightDraft,attendanceShiftOverride:invalid}));
+    }
+    const invalidPlan = {...overnightDraft,attendanceShiftOverride:{startTime:'15:00',endTime:'05:00',endDayOffset:1 as const,breakMinutes:0}};
+    assert.throws(()=>scheduleForAttendanceDraft(schedule,invalidPlan),/same regular hours/);
+    assert.equal(actualWorkedMinutesForDraft('2026-10-20',invalidPlan),840);
+    assert.equal(actualWorkedMinutesForDraft('2026-10-20',invalidPlan,[{workOrderId:'synthetic-overlap',startDate:'2026-10-20',startTime:'18:00',endDate:'2026-10-21',endTime:'06:00'}]),900);
+    assert.equal(actualWorkedMinutesForDraft('2026-10-20',updateAttendanceClockDraft(invalidPlan,{},false)),null);
+    assert.equal(actualWorkedMinutesForDraft('2026-10-20',{...invalidPlan,workIntervals:undefined,attendanceShiftOverride:undefined}),null);
     const overnight = await saveAttendanceDay(overnightInput);
     assert.equal(overnight.workedMinutes,840);assert.equal(overnight.regularHours,8);assert.equal(overnight.overtimeMinutes,360);
     assert.equal(overnight.breakMinutes,0);assert.equal(overnight.scheduledBreakMinutes,60);assert.equal(overnight.scheduledEndDayOffset,1);

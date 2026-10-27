@@ -412,6 +412,31 @@ export function scheduleForAttendanceDraft<T extends AttendanceSchedule>(schedul
   return draft.attendanceShiftOverride ? { ...adjusted, label: `Adjusted shift · ${adjusted.startTime}–${adjusted.endTime}${adjusted.endDayOffset ? ' (+1 day)' : ''}` } : adjusted;
 }
 
+// Draft construction only: the operator explicitly opts into a dated shift.
+// Keep the canonical net regular entitlement; derive the planned end, never
+// copy actual clock-out or actual break into the regular schedule.
+export function buildAttendanceShiftOverride(schedule: AttendanceSchedule, startTime: string, breakMinutes: number): AttendanceShiftOverride {
+  const [hour, minute] = startTime.split(':').map(Number);
+  const span = schedule.scheduledMinutes + breakMinutes;
+  if (!/^\d{2}:\d{2}$/.test(startTime) || hour > 23 || minute > 59
+    || !Number.isInteger(schedule.scheduledMinutes) || schedule.scheduledMinutes <= 0
+    || !Number.isInteger(breakMinutes) || breakMinutes < 0 || span > 1440) {
+    return { startTime, endTime: '', endDayOffset: 0, breakMinutes };
+  }
+  const end = hour * 60 + minute + span;
+  return { startTime, endTime: `${String(Math.floor(end / 60) % 24).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`, endDayOffset: end >= 1440 ? 1 : 0, breakMinutes };
+}
+
+export function actualWorkedMinutesForDraft(date: string, draft: AttendanceDayDraft, workSegments?: AttendanceWorkSegment[]): number | null {
+  try {
+    const workIntervals = workIntervalsForDraft(draft);
+    if (!workIntervals && !hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime)) return null;
+    // Work duration remains knowable when the planned shift is incomplete.
+    // Reuse the shared union/break calculation, including Work Order evidence.
+    return calculateAttendanceVarianceWithWorkSegments({ workDate: date, schedule: { startTime: '', endTime: '', scheduledMinutes: 0 }, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes, workIntervals, workSegments }).workedMinutes;
+  } catch { return null; }
+}
+
 export function workIntervalsForDraft(draft: AttendanceDayDraft): AttendanceWorkInterval[] | undefined {
   return draft.workIntervals?.length ? draft.workIntervals : draft.attendanceShiftOverride ? [{ startTime: draft.clockInTime, endTime: draft.clockOutTime, startDayOffset: 0, endDayOffset: 0, breakMinutes: draft.breakMinutes }] : undefined;
 }
