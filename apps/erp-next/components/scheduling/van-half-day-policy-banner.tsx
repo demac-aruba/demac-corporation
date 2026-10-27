@@ -6,7 +6,7 @@ import { listFirestoreCollection } from '../../lib/firebase/firestore-rest';
 
 function vanLabel(value: unknown) {
   const raw = typeof value === 'string' ? value.trim() : '';
-  const match = raw.toUpperCase().match(/^VAN[-_ ]?([1-4])$/);
+  const match = raw.toUpperCase().match(/^VAN[-_ ]?([1-9]\d*)$/);
   return match ? `Van ${match[1]}` : raw || 'Van';
 }
 

@@ -209,19 +209,19 @@ export function AdvancedVansWorkspace() {
     setMessage('New Vans start out of service so they cannot silently create booking capacity before the profile and crew are ready.');
   }
 
-  async function saveVanAndSchedule() {
+  async function saveVanAndSchedule(saveSchedule = false) {
     if (!draft || !state || !halfDayDraft || !canManage) return;
     setBusy(true); setError(''); setMessage('');
     try {
       const savedVan = await saveCanonicalVanProfile(buildVanSaveRecord(draft, state.staffProfiles));
-      if (halfDayDraft.weekday !== undefined) {
+      if ((creating || saveSchedule) && halfDayDraft.weekday !== undefined) {
         workedMinutes(halfDayDraft.workdayStart ?? '08:00', halfDayDraft.workdayEnd ?? '13:00');
         await saveCanonicalVanHalfDaySchedule({ ...halfDayDraft, vanId: canonicalVanId(savedVan.id, [...state.vans, savedVan]), active: true });
       }
       const id = canonicalVanId(savedVan.id, [...state.vans, savedVan]);
       await refresh(id);
       setCreating(false);
-      setMessage(`${savedVan.name ?? id} profile, regular crew and schedule saved.`);
+      setMessage(`${savedVan.name ?? id} ${saveSchedule || creating ? 'profile and schedule' : 'profile'} saved. ${savedVan.status === 'Trabajo liviano' ? 'Available for light work with its authorized driver.' : ''}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { setBusy(false); }
@@ -375,7 +375,7 @@ export function AdvancedVansWorkspace() {
           {tab === 'crew' && draft && halfDayDraft ? <CrewTab
             draft={draft} setDraft={setDraft} halfDay={halfDayDraft} setHalfDay={setHalfDayDraft} drivers={drivers} technicalStaff={technicalStaff}
             overrides={dailyOverrides} overrideDraft={overrideDraft} setOverrideDraft={setOverrideDraft} canManage={canManage} busy={busy}
-            onSave={() => void saveVanAndSchedule()} onAddOverride={() => void addDailyOverride()} onRemoveOverride={(id) => void removeOverride(id)} state={state}
+            onSave={() => void saveVanAndSchedule(true)} onAddOverride={() => void addDailyOverride()} onRemoveOverride={(id) => void removeOverride(id)} state={state}
           /> : null}
           {tab === 'whatsapp' && groupDraft ? <WhatsAppTab group={groupDraft} setGroup={setGroupDraft} canManage={canManage} busy={busy} onSave={() => void saveWhatsApp()} /> : null}
           {tab === 'capacity' && draft ? <CapacityTab van={draft} crew={selectedCrew} halfDay={selectedHalfDay} group={groupDraft} /> : null}
@@ -399,7 +399,7 @@ function ProfileTab({ draft, setDraft, canManage, onSave, busy }: { draft: Canon
         <Field label="Canonical ID"><input className={styles.control} value={draft.id} disabled /></Field>
         <Field label="Van name"><input className={styles.control} value={draft.name ?? ''} onChange={(event) => setDraft({ ...draft, name: event.target.value })} disabled={!canManage} /></Field>
         <Field label="Plate"><input className={styles.control} value={draft.plate ?? ''} onChange={(event) => setDraft({ ...draft, plate: event.target.value })} disabled={!canManage} /></Field>
-        <Field label="Operational status"><select className={styles.control} value={draft.status ?? 'Disponible'} onChange={(event) => setDraft({ ...draft, status: event.target.value })} disabled={!canManage}>{VAN_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></Field>
+        <Field label="Operational status"><select className={styles.control} value={draft.status ?? 'Disponible'} onChange={(event) => setDraft({ ...draft, status: event.target.value })} disabled={!canManage}>{VAN_STATUSES.map((status) => <option key={status}>{status}</option>)}</select>{draft.status === 'Disponible' && draft.responsibleStaffId && !draft.regularHelperId ? <small>With a driver and no regular helper, this Van will be available as Trabajo liviano.</small> : null}</Field>
         <Field label="Make"><input className={styles.control} value={draft.make ?? ''} onChange={(event) => setDraft({ ...draft, make: event.target.value })} disabled={!canManage} /></Field>
         <Field label="Model"><input className={styles.control} value={draft.model ?? ''} onChange={(event) => setDraft({ ...draft, model: event.target.value })} disabled={!canManage} /></Field>
         <Field label="Year"><input className={styles.control} type="number" value={draft.year ?? ''} onChange={(event) => setDraft({ ...draft, year: numberOrUndefined(event.target.value) })} disabled={!canManage} /></Field>

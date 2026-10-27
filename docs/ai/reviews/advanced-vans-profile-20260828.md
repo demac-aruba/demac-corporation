@@ -1,5 +1,7 @@
 # Review: Advanced canonical Vans profile
 
+> Historical review. The future-Van activation/WhatsApp restriction below is superseded by [ADR-20261027](../decisions/ADR-20261027-dynamic-fleet-activation.md); all other historical findings retain their original context.
+
 ## Review mode
 
 - [ ] Independent Review

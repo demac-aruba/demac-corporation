@@ -94,6 +94,13 @@ type RawVan = {
 const CACHE_TTL_MS = 60_000;
 let cachedState: { key: string; loadedAt: number; value: LiveOperationalCapacityState } | null = null;
 let pendingLoad: { key: string; promise: Promise<LiveOperationalCapacityState> } | null = null;
+let capacityGeneration = 0;
+
+export function invalidateLiveOperationalCapacityState() {
+  capacityGeneration += 1;
+  cachedState = null;
+  pendingLoad = null;
+}
 
 function weekday(dateKey: string) {
   return new Date(`${dateKey}T12:00:00Z`).getUTCDay();
@@ -111,7 +118,7 @@ function text(value: unknown) {
 
 function blockedOperationalStatus(value: string | undefined) {
   const normalized = String(value ?? '').trim().toLowerCase();
-  return normalized === 'mantenimiento' || normalized === 'fuera de servicio';
+  return normalized === 'mantenimiento' || normalized === 'fuera de servicio' || normalized === 'sin personal';
 }
 
 function normalizeClosedWeekdays(value: unknown) {
@@ -199,13 +206,14 @@ export async function loadLiveOperationalCapacityState(args: CapacityLoadArgs = 
   if (!args.force && cachedState?.key === key && now - cachedState.loadedAt < CACHE_TTL_MS) return cachedState.value;
   if (!args.force && pendingLoad?.key === key) return pendingLoad.promise;
 
+  const generation = ++capacityGeneration;
   const promise = loadCapacityState(args.startDate, args.endDate)
     .then((value) => {
-      cachedState = { key, loadedAt: Date.now(), value };
+      if (generation === capacityGeneration) cachedState = { key, loadedAt: Date.now(), value };
       return value;
     })
     .finally(() => {
-      if (pendingLoad?.key === key) pendingLoad = null;
+      if (pendingLoad?.promise === promise) pendingLoad = null;
     });
   pendingLoad = { key, promise };
   return promise;
@@ -259,7 +267,7 @@ export function liveVanOperationallyAvailable(state: LiveOperationalCapacityStat
   if (!state) return true;
   const van = state.vans.get(vanId);
   if (!van || !van.active || blockedOperationalStatus(van.status)) return false;
-  const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
+  const daily = state.dailyAssignments.find((assignment) => assignment.status !== 'Cancelled' && assignment.date === dateKey && assignment.vanId === vanId);
   return !blockedOperationalStatus(daily?.status);
 }
 

@@ -6,7 +6,6 @@ import type {
 } from './canonical-operations';
 
 const TECHNICAL_ROLES = new Set(['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor']);
-export const BOOKING_CAPACITY_VAN_IDS = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
 
 export function isTechnicalStaff(profile: CanonicalStaffProfile) {
   return profile.employeeType === 'Técnico' || TECHNICAL_ROLES.has(profile.role ?? '');
@@ -18,18 +17,22 @@ export function regularCrewIds(van: Pick<CanonicalVan, 'responsibleStaffId' | 'r
 
 export function nextCanonicalVanId(vans: CanonicalVan[]) {
   const highest = vans.reduce((max, van) => {
-    const values = [van.id, van.name ?? ''];
-    const numbers = values.flatMap((value) => {
-      const match = String(value).match(/(?:VAN|Van|van|V)[\s-]*(\d+)/);
-      return match ? [Number(match[1])] : [];
-    });
-    return Math.max(max, ...numbers, 0);
+    const match = canonicalVanId(van.id, vans).match(/^VAN-([1-9]\d*)$/);
+    return Math.max(max, match ? Number(match[1]) : 0);
   }, 0);
   return `VAN-${highest + 1}`;
 }
 
 export function isBookingCapacityVan(vanId: string, vans: CanonicalVan[] = []) {
-  return (BOOKING_CAPACITY_VAN_IDS as readonly string[]).includes(canonicalVanId(vanId, vans));
+  // This is identity validation only. The server resolves actual catalog membership,
+  // dated crew/calendar readiness and capacity again when a booking is committed.
+  return /^VAN-[1-9]\d*$/.test(canonicalVanId(vanId, vans));
+}
+
+export function vanOperatingStatus(van: CanonicalVan) {
+  return (van.status ?? 'Disponible') === 'Disponible' && !van.regularHelperId
+    ? 'Trabajo liviano'
+    : van.status ?? 'Disponible';
 }
 
 export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], existingVans: CanonicalVan[] = []) {
@@ -40,6 +43,9 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
   const driver = van.responsibleStaffId ? staffById.get(van.responsibleStaffId) : undefined;
   const helper = van.regularHelperId ? staffById.get(van.regularHelperId) : undefined;
   const additionalHelper = van.additionalHelperId ? staffById.get(van.additionalHelperId) : undefined;
+
+  if (van.regularHelperId && !helper) throw new Error('The selected regular helper does not exist in the employee master.');
+  if (van.additionalHelperId && !additionalHelper) throw new Error('The selected third helper does not exist in the employee master.');
 
   if (van.responsibleStaffId && !driver) throw new Error('The selected responsible technician does not exist in the employee master.');
   if (driver && (driver.active === false || !isTechnicalStaff(driver))) throw new Error('The responsible technician must be an active technical employee.');
@@ -58,12 +64,11 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
     }
   }
 
-  if ((van.status ?? 'Disponible') === 'Disponible') {
+  if (['Disponible', 'Trabajo liviano'].includes(van.status ?? 'Disponible')) {
     if (!isBookingCapacityVan(targetVanId, existingVans)) {
-      throw new Error(`${targetVanId} can be created and configured, but Booking Authority currently supports live capacity only for VAN-1 through VAN-4. Keep this Van out of service until the fleet-capacity authority is explicitly expanded.`);
+      throw new Error('An available Van requires a canonical Van number.');
     }
     if (!driver) throw new Error('An available Van requires a responsible technician / driver.');
-    if (!helper) throw new Error('An available Van requires a regular helper.');
   }
   return true;
 }
@@ -80,6 +85,7 @@ export function buildVanSaveRecord(
   const crewIds = regularCrewIds(van);
   return {
     ...van,
+    status: vanOperatingStatus(van),
     responsibleStaffId: van.responsibleStaffId || '',
     regularHelperId: van.regularHelperId || '',
     additionalHelperId: van.additionalHelperId || '',

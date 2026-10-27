@@ -86,6 +86,11 @@ jobs:
           BOOKING_MODAL_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
           BOOKING_MODAL_TEST_OUTPUT: ${{ runner.temp }}/booking-modal-evidence
         run: node apps/erp-next/scripts/booking-modal-browser.cjs
+      - name: Dynamic fleet activation and unavailable booking access
+        env:
+          SCHEDULING_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
+          SCHEDULING_TEST_OUTPUT: ${{ runner.temp }}/dynamic-fleet-evidence
+        run: node apps/erp-next/scripts/dynamic-fleet-browser.cjs
       - name: Schedule slot history, booking availability and recovery
         env:
           SCHEDULING_TEST_TOOLS: ${{ runner.temp }}/scheduling-tools
