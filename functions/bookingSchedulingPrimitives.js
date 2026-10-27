@@ -255,7 +255,7 @@ function resolveAssignment(van, date, profiles, assignments, absences) {
   let status;
   if (van.active === false || van.status === "Fuera de servicio" || membership.assignmentStatus === "Fuera de servicio") status = "Fuera de servicio";
   else if (van.status === "Mantenimiento" || membership.assignmentStatus === "Mantenimiento") status = "Mantenimiento";
-  else if (!driverStaffId || membership.assignmentStatus === "Sin personal") status = "Sin personal";
+  else if (!driverStaffId || van.status === "Sin personal" || membership.assignmentStatus === "Sin personal") status = "Sin personal";
   else if (!helperStaffId || membership.assignmentStatus === "Trabajo liviano") status = "Trabajo liviano";
   else status = "Disponible";
   return {

@@ -116,7 +116,9 @@ export function CanonicalOperatingCalendar() {
       const id = canonicalVanId(schedule.vanId, state.vans);
       if (!byVan.has(id)) byVan.set(id, schedule);
     }
-    return ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'].map((vanId) => ({ vanId, schedule: byVan.get(vanId) }));
+    return [...new Set(state.vans.map((van) => canonicalVanId(van.id, state.vans)))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((vanId) => ({ vanId, schedule: byVan.get(vanId) }));
   }, [state]);
 
   const duplicateVans = useMemo(() => {

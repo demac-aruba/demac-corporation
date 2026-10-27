@@ -1,6 +1,7 @@
 import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import { requireFirebaseWebSession } from './firebase/session';
-import { validateDailyVanAssignment, validateVanCrew } from './van-profile';
+import { validateDailyVanAssignment, validateVanCrew, vanOperatingStatus } from './van-profile';
+import { invalidateLiveOperationalCapacityState } from './live-operational-capacity';
 import type {
   CanonicalBusinessCalendar,
   CanonicalCalendarClosure,
@@ -50,13 +51,18 @@ export async function saveCanonicalVanProfile(van: CanonicalVan) {
     // A profile/maintenance save must never replay an old crew or overwrite effective history.
     const { responsibleStaffId: _driver, regularHelperId: _helper, additionalHelperId: _third,
       technicianIds: _ids, crewHistory: _history, crewRevision: _revision, ...profile } = normalized;
-    validateVanCrew({ ...profile, responsibleStaffId: existing.responsibleStaffId,
-      regularHelperId: existing.regularHelperId, additionalHelperId: existing.additionalHelperId }, staffProfiles, vans);
-    return upsertCanonicalDocument('vans', profile);
+    const currentCrew = { ...profile, responsibleStaffId: existing.responsibleStaffId,
+      regularHelperId: existing.regularHelperId, additionalHelperId: existing.additionalHelperId };
+    validateVanCrew(currentCrew, staffProfiles, vans);
+    const saved = await upsertCanonicalDocument('vans', { ...profile, status: vanOperatingStatus(currentCrew) });
+    invalidateLiveOperationalCapacityState();
+    return saved;
   }
   validateVanCrew(normalized, staffProfiles, vans);
   if (normalized.technicianIds?.length) throw new Error('Create the Van out of service, then assign its crew using the fleet editor.');
-  return upsertCanonicalDocument('vans', normalized);
+  const saved = await upsertCanonicalDocument('vans', normalized);
+  invalidateLiveOperationalCapacityState();
+  return saved;
 }
 
 export async function saveCanonicalDailyVanAssignment(assignment: CanonicalDailyVanAssignment) {
@@ -132,8 +138,10 @@ export function saveCanonicalStaffAbsence(absence: CanonicalStaffAbsence) {
   return upsertCanonicalDocument('staffAbsences', absence);
 }
 
-export function saveCanonicalVanHalfDaySchedule(schedule: CanonicalVanHalfDaySchedule) {
-  return upsertCanonicalDocument('vanHalfDaySchedules', schedule);
+export async function saveCanonicalVanHalfDaySchedule(schedule: CanonicalVanHalfDaySchedule) {
+  const saved = await upsertCanonicalDocument('vanHalfDaySchedules', schedule);
+  invalidateLiveOperationalCapacityState();
+  return saved;
 }
 
 export function saveCanonicalBusinessCalendar(settings: CanonicalBusinessCalendar) {

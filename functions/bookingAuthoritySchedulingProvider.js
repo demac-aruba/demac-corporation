@@ -933,6 +933,14 @@ function createSchedulingProvider({ db }) {
         workOrders: snapshotItems(sameDaySnapshot),
         vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
       });
+      // Fleet activation can change after an offer was prepared (and on a retry).
+      // Check every selected lane, including removed/inactive and legacy crew records.
+      for (const selected of option.assignments) {
+        const van = canonical.vans.find(item => item.id === resolveCanonicalVanId(selected.vanId, canonical.vanAliases));
+        if (!van || ['Mantenimiento', 'Fuera de servicio', 'Sin personal'].includes(van.status)) {
+          return { available: false, reason: 'van-unavailable', vanId: selected.vanId };
+        }
+      }
       // Regular bookings can be prepared before an atomic fleet transfer commits.
       // Re-read the managed crew inside this transaction, including on Firestore retry.
       // Otherwise an old offer could recreate stale technicianIds just after the transfer.

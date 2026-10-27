@@ -44,11 +44,19 @@ assert.throws(
   /requires a responsible technician/i,
   'An available protected-fleet Van cannot create booking capacity without a driver.',
 );
-assert.throws(
-  () => validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Disponible', responsibleStaffId: driver.id, regularHelperId: helper.id, active: true }, staff),
-  /Booking Authority currently supports live capacity only for VAN-1 through VAN-4/i,
-  'A future Van may be fully configured but cannot become live scheduling capacity until Booking Authority is explicitly expanded.',
-);
+for (const number of [5, 6, 12, 25]) {
+  const future = { ...legacyVan, id: `VAN-${number}`, name: `Van ${number}` };
+  assert.equal(validateVanCrew(future, staff), true, 'Any configured numbered Van may be activated.');
+  assert.equal(buildVanSaveRecord({ ...future, regularHelperId: undefined }, staff).status, 'Trabajo liviano', 'Driver-only activation uses the existing light-work operating mode.');
+  assert.throws(() => validateVanCrew({ ...future, responsibleStaffId: undefined }, staff), /requires a responsible technician/i);
+  assert.throws(() => validateVanCrew({ ...future, responsibleStaffId: third.id }, staff), /authorized to drive/i);
+}
+assert.throws(() => validateVanCrew({ ...legacyVan, regularHelperId: 'missing' }, staff), /does not exist/i);
+assert.throws(() => validateVanCrew({ ...legacyVan, status: 'Trabajo liviano', responsibleStaffId: undefined }, staff), /requires a responsible technician/i);
+assert.equal(nextCanonicalVanId(historicalVans), 'VAN-5', 'Internal timestamp document IDs must not inflate the next fleet number.');
+assert.equal(nextCanonicalVanId([...historicalVans, {id:'legacy-5',name:'Van 5'}]), 'VAN-6');
+assert.equal(nextCanonicalVanId([{id:'VAN-12',name:'Van 12'}, {id:'VAN-9',name:'Van 9'}]), 'VAN-13');
+
 
 const ids: CanonicalVan[] = [
   { id: 'VAN-1', name: 'Van 1' }, { id: 'VAN-2', name: 'Van 2' }, { id: 'legacy-v3', name: 'Van 3' }, { id: 'VAN-4', name: 'Van 4' },
@@ -96,4 +104,4 @@ assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:0
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
 assert.throws(() => workedMinutes('13:00', '09:00'), /after start time/i, 'Invalid partial-day windows must be rejected.');
 
-console.log('Van profile acceptance passed: legacy Van IDs resolve to canonical lanes, Vans sort naturally, WhatsApp/Scheduling direct lane references remain stable, canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
+console.log('Van profile acceptance passed: legacy Van IDs resolve to canonical lanes, Vans sort naturally, WhatsApp/Scheduling direct lane references remain stable, canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, dynamic future-Van activation and driver-only light work, new-Van defaults and exact partial-day hours.');

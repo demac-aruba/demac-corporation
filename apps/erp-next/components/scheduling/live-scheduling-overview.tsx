@@ -47,7 +47,7 @@ import {
   type AvailableSlotIntent,
 } from '../../lib/live-scheduling-interactions';
 import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
-import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
+import { getRuntimeSchedulingSettings, minutesToTime, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey, jobOwnsCapacityStart } from '../../lib/scheduling-capacity';
 import { type AdhocSupportTarget } from './adhoc-support-drawer';
@@ -148,6 +148,7 @@ function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans:
 function halfDayVansForDay(day: OperationalDay, vans: DisplayVan[], capacityState: LiveOperationalCapacityState | null) {
   if (!day.isOpen || !capacityState) return [];
   return vans
+    .filter((van) => liveVanOperationallyAvailable(capacityState, van.id, day.dateKey))
     .filter((van) => Boolean(liveVanHalfDaySchedule(capacityState, van.id, day.dateKey)))
     .map((van) => van.id.replace('VAN-', 'Van '));
 }
@@ -368,14 +369,14 @@ function LiveSchedulingSession() {
   }, [attributionCache]);
 
   useEffect(() => {
-    void refresh();
+    void refresh(true);
     return () => { refreshSequenceRef.current += 1; };
   }, [refresh]);
 
   useEffect(() => {
     if (interactionActive) return;
     const interval = window.setInterval(() => void refresh(), 15_000);
-    const onFocus = () => void refresh();
+    const onFocus = () => void refresh(true);
     window.addEventListener('focus', onFocus);
     return () => {
       window.clearInterval(interval);
@@ -421,17 +422,18 @@ function LiveSchedulingSession() {
   }, [afterHoursTarget, bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
-  const vans = useMemo<DisplayVan[]>(() => {
-    if (!capacityState) return previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active }));
+  const allVans = useMemo<DisplayVan[]>(() => {
+    if (!capacityState) return [];
     return [...capacityState.vans.values()]
       .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
       .map((van) => ({ id: van.id, name: van.id.replace(/^VAN-(\d+)$/, 'Van $1'), active: van.active }));
   }, [capacityState]);
+  const vans = useMemo(() => allVans.filter((van) => liveVanOperationallyAvailable(capacityState, van.id, activeDate)), [allVans, capacityState, activeDate]);
   useEffect(() => {
     setActiveVanIndex((current) => Math.min(current, Math.max(0, vans.length - 1)));
   }, [vans.length]);
-  const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
-  const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
+  const canonicalVanIds = useMemo(() => new Set(allVans.map((van) => van.id)), [allVans]);
+  const unresolvedJobs = useMemo(() => capacityState ? jobs.filter((job) => !canonicalVanIds.has(job.vanId)) : [], [capacityState, canonicalVanIds, jobs]);
   const projectLabels = useMemo(() => new Map(appointments.map((appointment) => [
     appointment.id, !canScheduleProjects || !projectState ? undefined
       : projectState.kind === 'planning'
@@ -446,11 +448,13 @@ function LiveSchedulingSession() {
     return result;
   }, [appointments, projectLabels]);
   const weekSummaries = useMemo(
-    () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans, capacityState)])),
-    [capacityState, jobs, vans, week],
+    () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, allVans, capacityState)])),
+    [capacityState, jobs, allVans, week],
   );
   const activeDay = week.find((day) => day.dateKey === activeDate) ?? week[0];
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
+  // Removing an unavailable lane must never make its existing bookings inaccessible.
+  const unavailableVanJobs = activeJobs.filter((job) => !vans.some((van) => van.id === job.vanId));
   const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
   const temporaryHolds = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'temporary_hold').length;
@@ -821,6 +825,12 @@ function LiveSchedulingSession() {
       {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but scheduling changes are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to the canonical fleet. They are not converted into fake extra lanes.</span></div> : null}
+      {unavailableVanJobs.length ? <div className={styles.notice} data-unavailable-van-jobs>
+        <span>Bookings without available Van lanes · review or reassign:</span>
+        {unavailableVanJobs.map((job) => <button key={job.id} type="button" onClick={() => setSelectedAppointmentId(jobLinks.get(job.id)?.appointmentId ?? '')}>
+          {job.vanId.replace('VAN-', 'Van ')} · {formatTime(job.start)} · {job.customer}
+        </button>)}
+      </div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to their canonical physical Vans. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
       {outsideCapacityJobs.length ? <div className={styles.notice}><span>Operating-calendar attention: {outsideCapacityJobs.length} appointment{outsideCapacityJobs.length === 1 ? '' : 's'} currently extend into capacity that is closed by the canonical van/company calendar. They remain visible for correction but are not counted as open capacity.</span></div> : null}
 
@@ -838,7 +848,7 @@ function LiveSchedulingSession() {
       <div className={styles.weekStrip} data-schedule-week>
         {week.map((day) => {
           const summary = weekSummaries[day.dateKey];
-          const halfDayVans = halfDayVansForDay(day, vans, capacityState);
+          const halfDayVans = halfDayVansForDay(day, allVans, capacityState);
           return (
             <button key={day.dateKey} type="button" data-schedule-day className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen || interactionActive} onClick={() => setActiveDate(day.dateKey)}>
               <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.isToday ? <b>Today</b> : null}</div>
@@ -878,6 +888,7 @@ function LiveSchedulingSession() {
           data-schedule-board-scroll
           onScroll={syncActiveVanFromScroll}
         >
+          {capacityState && !vans.length ? <p role="status">No available Vans for this date.</p> : null}
           <div
             className={styles.vanGrid}
             data-schedule-van-grid

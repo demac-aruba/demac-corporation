@@ -78,7 +78,7 @@ export function saveVanScheduleGroupSetting(input: {
   enabled: boolean;
 }) {
   if (!isBookingCapacityVan(input.vanId)) {
-    throw new Error(`${input.vanId} may have a Van profile, but automatic WhatsApp schedule delivery currently follows the same protected Booking Authority fleet boundary: VAN-1 through VAN-4. Expand Booking Authority first before enabling this Van's automatic schedule group.`);
+    throw new Error('Choose a valid canonical Van before configuring its schedule group.');
   }
   return callVanScheduleAuthority<GroupResponse>('save_van_schedule_groups', { groups: [input] });
 }
@@ -89,7 +89,7 @@ export function sendVanSchedulesNow(input: {
   requestId: string;
 }) {
   if (input.vanId && !isBookingCapacityVan(input.vanId)) {
-    throw new Error(`${input.vanId} is not yet part of the protected live Booking Authority fleet.`);
+    throw new Error('Choose a valid canonical Van before sending its schedule.');
   }
   return callVanScheduleAuthority<VanScheduleSendResult>('send_van_schedules_now', input, 30_000);
 }

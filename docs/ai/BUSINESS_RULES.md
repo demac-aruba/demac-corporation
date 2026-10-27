@@ -477,3 +477,7 @@ Production activation remains separately owner-approved through the server-side 
 - No invoice, payment, customer/item creation, inventory movement, historical import or
   synchronization is authorized. Expired intent metadata remains private; no destructive
   cleanup or TTL policy is introduced. See `adrs/quickbooks-confirmed-links-20261019.md`.
+
+## Dynamic fleet activation (2026-10-27)
+
+- `OPS-VAN-FLEET-001` — Owner-approved intent: every configured canonical numbered Van can participate in Scheduling when operationally enabled. No VAN-1..VAN-4 allowlist. New empty profiles start out of service; an authorized driver without a helper uses the existing `Trabajo liviano` mode. Existing crew, absence, calendar, route, lock and booking rules continue to apply. Unavailable lanes are hidden while their bookings remain accessible for correction. Profile-only saves preserve partial-day rules; no historical/payroll rewrite. Booking commits revalidate selected Van existence and status transactionally. Source: owner request 2026-10-27; effective on approved release. See `decisions/ADR-20261027-dynamic-fleet-activation.md`.
