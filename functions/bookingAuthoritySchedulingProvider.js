@@ -41,7 +41,7 @@ const {
   singleWork,
 } = require("./bookingAuthoritySchedulingEngine");
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
-const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
+const { canonicalizeSchedulingData, resolveCanonicalVanId } = require("./bookingVanIdentity");
 
 const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v16";
 const BACKDATED_BOOKING_MODE = "backdated";
@@ -933,6 +933,20 @@ function createSchedulingProvider({ db }) {
         workOrders: snapshotItems(sameDaySnapshot),
         vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
       });
+      // Regular bookings can be prepared before an atomic fleet transfer commits.
+      // Re-read the managed crew inside this transaction, including on Firestore retry.
+      // Otherwise an old offer could recreate stale technicianIds just after the transfer.
+      const managed = option.assignments.filter(selected => canonical.vans.some(van => van.id === resolveCanonicalVanId(selected.vanId, canonical.vanAliases) && van.crewRevision));
+      if (managed.length) {
+        const [profiles, assignments, absences] = await Promise.all(['staffProfiles', 'dailyVanAssignments', 'staffAbsences'].map(name => transaction.get(transactionDb.collection(name))));
+        const dated = snapshotItems(assignments).map(item => ({ ...item, vanId: resolveCanonicalVanId(item.vanId, canonical.vanAliases) }));
+        for (const selected of managed) {
+          const van = canonical.vans.find(item => item.id === resolveCanonicalVanId(selected.vanId, canonical.vanAliases));
+          const crew = resolveAssignment(van, option.date, snapshotItems(profiles), dated, snapshotItems(absences));
+          if (!vanCanReceiveAppointments(van, crew) || crew.technicianIds.length !== (selected.technicianIds || []).length
+            || crew.technicianIds.some(id => !selected.technicianIds.includes(id))) return { available: false, reason: 'regular-crew-changed' };
+        }
+      }
       if (option.workloadSupport) {
         const names = ["dailyVanAssignments", "staffProfiles", "staffAbsences", "businessSettings", "calendarClosures"];
         const snapshots = await Promise.all(names.map(name => transaction.get(transactionDb.collection(name))));

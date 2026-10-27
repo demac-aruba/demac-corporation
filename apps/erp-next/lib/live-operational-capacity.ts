@@ -1,4 +1,5 @@
 import { canonicalVanId } from './canonical-operations';
+import { crewForDate, type CrewHistoryEntry } from './van-roster-history';
 import {
   getFirestoreDocument,
   listFirestoreCollection,
@@ -50,6 +51,7 @@ export type LiveOperationalVan = {
   responsibleStaffId?: string;
   regularHelperId?: string;
   additionalHelperId?: string;
+  crewHistory?: CrewHistoryEntry[];
 };
 
 export type LiveOperationalCapacityState = {
@@ -86,6 +88,7 @@ type RawVan = {
   responsibleStaffId?: string;
   regularHelperId?: string;
   additionalHelperId?: string;
+  crewHistory?: CrewHistoryEntry[];
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -156,6 +159,7 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
         responsibleStaffId: text(van.responsibleStaffId) || undefined,
         regularHelperId: text(van.regularHelperId) || undefined,
         additionalHelperId: text(van.additionalHelperId) || undefined,
+        crewHistory: van.crewHistory,
       });
     }
   }
@@ -228,8 +232,9 @@ export function liveVanIsHalfDay(state: LiveOperationalCapacityState | null, van
 
 export function liveVanCrew(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string): LiveVanCrew {
   if (!state) return { technicianIds: [], label: 'Crew loading…' };
-  const van = state.vans.get(vanId);
-  const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
+  const current = state.vans.get(vanId);
+  const van = current ? crewForDate(current, dateKey) : undefined;
+  const daily = state.dailyAssignments.find((assignment) => assignment.status !== 'Cancelled' && assignment.date === dateKey && assignment.vanId === vanId);
   const driverStaffId = text(daily?.driverStaffId) || text(van?.responsibleStaffId) || undefined;
   const helperStaffId = text(daily?.helperStaffId) || text(van?.regularHelperId) || undefined;
   const additionalHelperStaffId = text(daily?.additionalHelperStaffId) || text(van?.additionalHelperId) || undefined;

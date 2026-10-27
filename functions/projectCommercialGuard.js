@@ -98,4 +98,4 @@ async function assertNoFieldExecutionEvidence({ db, get, appointment, order, wor
   }
 }
 
-module.exports = { assertNoLinkedCommercialEvidence, assertNoFieldExecutionEvidence, assertNoProjectAssignmentExecution };
+module.exports = { assertNoLinkedCommercialEvidence, assertNoFieldExecutionEvidence, assertNoProjectAssignmentExecution, executionMarker };

@@ -1,4 +1,5 @@
 const { ACTIONS: CATALOG_ACTIONS, createServiceCatalogEditing } = require('./serviceCatalogEditing');
+const { ACTIONS: ROSTER_ACTIONS, createVanRosterAuthority } = require('./vanRosterAuthority');
 const { ACTIONS: CHARGE_ACTIONS, createAppointmentCharges } = require('./appointmentCharges');
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -52,19 +53,20 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   const afterHours = createAfterHoursAuthority({ db });
   const charges = createAppointmentCharges({ db });
   const catalog = createServiceCatalogEditing({ db });
+  const roster = createVanRosterAuthority({ db });
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
     if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } } };
     const action = cleanText(request.body?.action, 120);
     const data = request.body?.data || {};
-    if (CHARGE_ACTIONS.has(action) || CATALOG_ACTIONS.has(action)) {
+    if (CHARGE_ACTIONS.has(action) || CATALOG_ACTIONS.has(action) || ROSTER_ACTIONS.has(action)) {
       try {
         const token = /^Bearer\s+(\S+)$/i.exec(request.headers?.authorization || "")?.[1];
         if (!token) return { status: 401, body: { success: false, error: { code: "unauthenticated", message: "Inicia sesión en DEMAC ERP." } } };
         let decoded;
         try { decoded = await verifyIdToken(token, true); } catch { return { status: 401, body: { success: false, error: { code: "unauthenticated", message: "Tu sesión expiró." } } }; }
-        const result = await (CATALOG_ACTIONS.has(action) ? catalog : charges).execute({ action, data, uid: decoded.uid || decoded.sub });
+        const result = await (ROSTER_ACTIONS.has(action) ? roster : CATALOG_ACTIONS.has(action) ? catalog : charges).execute({ action, data, uid: decoded.uid || decoded.sub });
         return { status: 200, body: result };
       } catch (error) {
         return { status: error.status || 500, body: { success: false, error: { code: error.code || "charge_internal", message: error.status ? error.message : "No se confirmó el resultado. Reintenta la misma operación o recarga para verificar." } } };

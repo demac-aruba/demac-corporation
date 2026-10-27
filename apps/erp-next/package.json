@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "npm run test:employee-schedule && npm run test:employee-attendance && npm run test:employee-attendance-work-orders && npm run test:van-profile && npm run test:projects-preview && npm run test:task-tracker && npm run test:project-slot-progress && npm run test:employee-bonuses && npm run test:quickbooks-sandbox && npm run test:quickbooks-connection && npm run test:appointment-charge-display && npm run test:appointment-charge-recovery && npm run test:quickbooks-preparation",
+    "prebuild": "npm run test:van-roster && npm run test:employee-schedule && npm run test:employee-attendance && npm run test:employee-attendance-work-orders && npm run test:van-profile && npm run test:projects-preview && npm run test:task-tracker && npm run test:project-slot-progress && npm run test:employee-bonuses && npm run test:quickbooks-sandbox && npm run test:quickbooks-connection && npm run test:appointment-charge-display && npm run test:appointment-charge-recovery && npm run test:quickbooks-preparation",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
@@ -31,7 +31,8 @@
     "test:quickbooks-connection": "tsc --ignoreConfig scripts/quickbooks-connection-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .quickbooks-connection-test --rootDir . --lib ES2022,DOM && node .quickbooks-connection-test/scripts/quickbooks-connection-acceptance.js",
     "test:appointment-charge-display": "tsc --ignoreConfig scripts/appointment-charge-display-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .appointment-charge-display-test --rootDir . --lib ES2022,DOM && node .appointment-charge-display-test/scripts/appointment-charge-display-acceptance.js",
     "test:appointment-charge-recovery": "tsc --ignoreConfig scripts/appointment-charge-recovery-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .appointment-charge-recovery-test --rootDir . --lib ES2022,DOM && node .appointment-charge-recovery-test/scripts/appointment-charge-recovery-acceptance.js",
-    "test:quickbooks-preparation": "tsc --ignoreConfig scripts/quickbooks-preparation-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .quickbooks-preparation-test --rootDir . --lib ES2022,DOM && node .quickbooks-preparation-test/scripts/quickbooks-preparation-acceptance.js"
+    "test:quickbooks-preparation": "tsc --ignoreConfig scripts/quickbooks-preparation-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .quickbooks-preparation-test --rootDir . --lib ES2022,DOM && node .quickbooks-preparation-test/scripts/quickbooks-preparation-acceptance.js",
+    "test:van-roster": "tsc --ignoreConfig scripts/van-roster-payroll-acceptance.ts ../../functions/employeeAttendanceCalculation.js --allowJs --checkJs false --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .van-roster-test --rootDir ../.. --lib ES2022,DOM && node .van-roster-test/apps/erp-next/scripts/van-roster-payroll-acceptance.js"
   },
   "dependencies": {
     "next": "16.2.11",
