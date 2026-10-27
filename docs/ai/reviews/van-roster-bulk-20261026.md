@@ -100,3 +100,12 @@ Residual risks / next checks, owned by maintainer before merge:
   entries bound transaction size. Exceeding a bound rejects before writes.
 - Deployment must target the ERP project, officeBookingAuthority and reviewed rules only,
   preserving runtime configuration and current unrelated production source.
+
+## Final CI queue repair
+The former Office workflow serialized all pull-request checks with production and had
+no timeout on its dependency/browser installation. A superseded synthetic run stalled
+and prevented the final revision from starting. PR checks now use a per-PR concurrency
+group and cancel only superseded PR runs; production retains the exact existing global
+non-canceling group and the separate privileged publication lock. The financial check
+has a 25-minute failure timeout. No test, assertion, permission or deployment gate was
+removed or weakened; current-revision checks must all pass.
