@@ -1,0 +1,52 @@
+name: Controlled dynamic fleet capacity release
+on:
+  pull_request:
+    paths:
+      - 'scripts/dynamic-fleet-*'
+      - '.github/workflows/dynamic-fleet-release.yml'
+      - 'docs/ai/releases/dynamic-fleet-audit-20261027.json'
+  push:
+    branches: [release/dynamic-fleet-20261027]
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node --check scripts/dynamic-fleet-release.cjs && node --test scripts/dynamic-fleet-release.test.cjs scripts/appointment-finance-source-update.test.cjs scripts/appointment-finance-transport.test.cjs
+  publish:
+    if: github.ref == 'refs/heads/release/dynamic-fleet-20261027'
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: field-operations-authority-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish only reviewed scheduling source
+        run: node scripts/dynamic-fleet-release.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dynamic-fleet-release
+          path: ${{ runner.temp }}/dynamic-fleet-release/summary.json
+          if-no-files-found: error
+          retention-days: 90
