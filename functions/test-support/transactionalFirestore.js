@@ -16,6 +16,7 @@ class Query {
   snapshot(store) {
     let docs = [...store].filter(([path, value]) => path.startsWith(`${this.path}/`) && path.split('/').length === this.path.split('/').length + 1 && this.filters.every(([field, operator, match]) => {
       if (operator === '==') return value[field] === match;
+      if (operator === 'array-contains-any') return Array.isArray(value[field]) && match.some(item => value[field].includes(item));
       if (operator === '>=') return value[field] >= match;
       if (operator === '<=') return value[field] <= match;
       throw Error('Unsupported test query');

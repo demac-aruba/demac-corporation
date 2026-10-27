@@ -1,5 +1,7 @@
 'use client';
 
+import { CustomerAlertManager } from './customer-alert-manager';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   joinLiveCrmCustomer,
@@ -32,7 +34,7 @@ import {
 } from './customer-master-data';
 import styles from './customer-360.module.css';
 
-const tabs = ['Overview', 'Contacts', 'Properties', 'Equipment', 'Jobs'] as const;
+const tabs = ['Overview', 'Contacts', 'Properties', 'Equipment', 'Jobs', 'Alertas'] as const;
 type Tab = (typeof tabs)[number];
 type CustomerEditorState = { mode: 'create' | 'edit'; requestId: string; initial?: CustomerEditorValue } | null;
 
@@ -319,6 +321,7 @@ function CustomerDetail({ graph, customerCandidates, activeTab, onTab, onEdit, o
     </section>
 
     <nav className={styles.tabs} aria-label="Customer sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? styles.tabActive : ''} onClick={() => onTab(tab)}>{tab}</button>)}</nav>
+    {activeTab === 'Overview' || activeTab === 'Alertas' ? <CustomerAlertManager key={graph.client.id} customerId={graph.client.id} expanded={activeTab === 'Alertas'} /> : null}
     {activeTab === 'Overview' ? <Overview graph={graph} onEdit={onEdit} onViewProperties={() => onTab('Properties')} onViewJobs={() => onTab('Jobs')} /> : null}
     {activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${graph.client.id}-${activeTab}`} tab={activeTab} graph={graph} customerCandidates={customerCandidates} onAddContact={onAddContact} onUpdateContact={onUpdateContact} onAddProperty={onAddProperty} onUpdateProperty={onUpdateProperty} /> : null}
     {activeTab === 'Jobs' ? <JobsPanel graph={graph} /> : null}

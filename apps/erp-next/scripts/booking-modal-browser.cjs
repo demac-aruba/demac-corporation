@@ -25,6 +25,7 @@ const project = {
   estimatedLaborHours: 6, scheduledFutureHours: 5, actualLaborHours: 0, phases: [], assignments: [],
 };
 const stubs = {
+ 'customer-alerts':require('./customer-alert-empty-adapter.cjs'),
   'auth-provider': `const principal={userId:'ACTOR-TEST',active:true,capabilities:new Set(window.__noProjectAccess?['scheduling.manage']:['scheduling.manage','projects.schedule'])};export function useAuth(){return {principal};}`,
   'live-scheduling-booking-data': `
     export async function loadBookingMasterReferenceData(){return {clients:[${JSON.stringify(customer)},${JSON.stringify(secondCustomer)}],properties:[${JSON.stringify(property)},${JSON.stringify(secondProperty)}]};}
@@ -128,7 +129,12 @@ function Harness(){
 }createRoot(document.getElementById('app')).render(<Harness/>);`;
 
 async function ready(page){await page.locator('[data-booking-modal]').waitFor();await page.waitForFunction(()=>!document.querySelector('[data-booking-modal] button[aria-label="Close"]')?.disabled);}
-async function toggleDisclosure(page,name,open){const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
+async function toggleDisclosure(page,name,open){
+ // The automatically opened capacity popover can cover the visit column. Close it
+ // through its visible control before editing another disclosure, as an operator does.
+ const closeCapacity=page.getByRole('button',{name:'Close validation details',exact:true});
+ if(await closeCapacity.isVisible())await closeCapacity.click();
+ const el=page.locator('[data-booking-disclosure="'+name+'"]');if(await el.evaluate(node=>node.open)!==open)await el.locator(':scope > summary').click();}
 async function source(page,name){
  await page.getByRole('button',{name:new RegExp('^'+name)}).click();
  // Mode changes can commit after the click finishes; wait for the operator-visible destination.

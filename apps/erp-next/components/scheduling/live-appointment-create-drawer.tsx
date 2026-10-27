@@ -1,5 +1,7 @@
 'use client';
 
+import { useCustomerBookingAlerts } from '../crm/use-customer-booking-alerts';
+
 import { VisitReferenceEditor } from './booking-visit-references';
 import { BookingChargesEditor } from './appointment-charges';
 import { ChargeIcon } from './appointment-charge-icons';
@@ -383,6 +385,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
   const [dwellingId, setDwellingId] = useState('');
+  const customerAlerts = useCustomerBookingAlerts({ customerId, propertyId, dwellingId, query: customerId ? '' : customerQuery }, principal.userId, onClose);
   const [requesterId, setRequesterId] = useState('');
   const [accessContactId, setAccessContactId] = useState('');
   const [locationData, setLocationData] = useState<PropertyLocationData | null>(null);
@@ -1403,6 +1406,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
   } : undefined;
 
   const confirmBooking = async (acknowledgedBudget?: string, requestCapacityOvertime = false) => {
+    if (!await customerAlerts.checkBeforeBooking()) return;
     if ((chargeDraft || chargeTab) && !chargesInput?.quoteToken) { setAuthorityError('Revisa los importes y espera la tarifa actualizada antes de confirmar.'); setChargeTab(true); return; }
     if (requestCapacityOvertime && !activeCapacityOvertime) return;
     const useCapacityOvertime = Boolean(activeCapacityOvertime && (requestCapacityOvertime || !selectedValidatedOption));
@@ -1551,6 +1555,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
   };
 
   const holdBooking = async (acknowledgedBudget?: string) => {
+    if (!await customerAlerts.checkBeforeBooking()) return;
     if ((chargeDraft || chargeTab) && !chargesInput?.quoteToken) { setAuthorityError('Revisa la proyección actualizada antes de reservar.'); setChargeTab(true); return; }
     if (chargesInput?.payment) { setAuthorityError("Confirma la cita para registrar el anticipo, o desmarca el anticipo antes de crear la reserva temporal."); setChargeTab(true); return; }
     const projectBookingRequested = projectSourceSelected;
@@ -1762,6 +1767,7 @@ export function LiveAppointmentCreateDrawer({ target, availableSlotStarts, mode 
           <section className={styles.section}>
             <header><div><span>{isAfterHours ? '2' : '3'}</span><strong>Service property</strong><small>{projectMode && selectedProject?.siteId ? 'The selected Project supplies its canonical Service Property.' : 'Appointments always point to a real property belonging to the selected customer.'}</small></div></header>
             <div className={styles.sectionBody}>
+              {customerAlerts.notice}
               {selectedCustomer ? (
                 <>
                   <div className={styles.choiceGrid}>

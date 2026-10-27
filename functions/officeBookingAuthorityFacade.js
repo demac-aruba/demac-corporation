@@ -1,3 +1,4 @@
+const { ACTIONS: CUSTOMER_ALERT_ACTIONS, createCustomerAlerts } = require('./customerAlerts');
 const { ACTIONS: CATALOG_ACTIONS, createServiceCatalogEditing } = require('./serviceCatalogEditing');
 const { ACTIONS: ROSTER_ACTIONS, createVanRosterAuthority } = require('./vanRosterAuthority');
 const { ACTIONS: CHARGE_ACTIONS, createAppointmentCharges } = require('./appointmentCharges');
@@ -54,19 +55,20 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   const charges = createAppointmentCharges({ db });
   const catalog = createServiceCatalogEditing({ db });
   const roster = createVanRosterAuthority({ db });
+  const customerAlerts = createCustomerAlerts({ db });
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
     if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } } };
     const action = cleanText(request.body?.action, 120);
     const data = request.body?.data || {};
-    if (CHARGE_ACTIONS.has(action) || CATALOG_ACTIONS.has(action) || ROSTER_ACTIONS.has(action)) {
+    if (CUSTOMER_ALERT_ACTIONS.has(action) || CHARGE_ACTIONS.has(action) || CATALOG_ACTIONS.has(action) || ROSTER_ACTIONS.has(action)) {
       try {
         const token = /^Bearer\s+(\S+)$/i.exec(request.headers?.authorization || "")?.[1];
         if (!token) return { status: 401, body: { success: false, error: { code: "unauthenticated", message: "Inicia sesión en DEMAC ERP." } } };
         let decoded;
         try { decoded = await verifyIdToken(token, true); } catch { return { status: 401, body: { success: false, error: { code: "unauthenticated", message: "Tu sesión expiró." } } }; }
-        const result = await (ROSTER_ACTIONS.has(action) ? roster : CATALOG_ACTIONS.has(action) ? catalog : charges).execute({ action, data, uid: decoded.uid || decoded.sub });
+        const result = await (CUSTOMER_ALERT_ACTIONS.has(action) ? customerAlerts : ROSTER_ACTIONS.has(action) ? roster : CATALOG_ACTIONS.has(action) ? catalog : charges).execute({ action, data, uid: decoded.uid || decoded.sub });
         return { status: 200, body: result };
       } catch (error) {
         return { status: error.status || 500, body: { success: false, error: { code: error.code || "charge_internal", message: error.status ? error.message : "No se confirmó el resultado. Reintenta la misma operación o recarga para verificar." } } };
