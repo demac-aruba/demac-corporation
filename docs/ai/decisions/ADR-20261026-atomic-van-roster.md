@@ -1,6 +1,6 @@
 # ADR-20261026: atomic regular Van crew planning
 
-- Status: Proposed; implemented locally, rollout gates pending
+- Status: Accepted for controlled rollout; final CI and publication proof pending
 - Date: 2026-10-26
 - Owner: ERP maintainer
 - Related: [task](../tasks/van-roster-bulk-20261026.md), OPS-VAN-PROFILE-001/002,

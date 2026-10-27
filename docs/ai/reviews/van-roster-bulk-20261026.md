@@ -54,17 +54,38 @@ draft survives Van navigation, invalid duplicates retain the draft without write
 successful swap updates planned work, response loss locks the same request, and
 reload/retry does not repeat the transfer. Screenshots visually inspected; no horizontal
 page overflow or browser errors. All data was synthetic. Test dependencies became
-available locally after the initial blocked attempts. CI is still not published or run.
-Read-only immutable deployed-source/configuration/IAM comparison also remains pending.
+available locally after the initial blocked attempts.
+
+Publication authorization was explicitly confirmed on 2026-10-27; PR #630 is open.
+GitHub roster CI (40546482181) passed domain/payroll, browser and real-emulator gates.
+The read-only production audit (40546468240, commit ff02340169e6f8eaace308eea115b44dec5876d8)
+passed: exact live Office revision officebookingauthority-00091-nac, pinned dependencies,
+74 baseline tests and 103 candidate tests plus actual bootstrap/CORS/anonymous-denial
+smoke. Runtime configuration, IAM and live traffic stayed unchanged. Immutable results
+are in ../releases/van-roster-audit-20261027.json. Rules baseline includes the deployed
+overnight-attendance guard; only the Vans writer block changes.
+
+Release tooling received a separate adversarial review: exact main/release SHA gates,
+source-only update mask, six-file runtime delta, immutable private recovery ZIPs,
+operation provenance, safe response-loss resume, unchanged configuration/IAM/traffic,
+Rules drift rejection and ten-minute Rules propagation hold before frontend publication.
+Nineteen local release-safety tests passed. No production invocation with a valid user
+or employee/customer documents is needed for these checks.
+
+CI exposed a stale property-message assertion that expected English "Apartment" despite
+an explicitly Spanish recipient and the existing translated address contract. The test
+now requires the full Spanish address line for customer and technician text and still
+asserts that the original English snapshot is preserved and a later rename is absent.
+No message-rendering behavior changed. Final-head CI must confirm this correction.
 
 ## Decision
 - [ ] Pass
-- [ ] Pass with recorded follow-up
-- [x] Block release until deployed-source comparison and publication authorization are complete
+- [x] Pass with recorded follow-up
+- [ ] Block release until deployed-source comparison and publication authorization are complete
 
-The automatic approval reviewer rejected the branch push because this repository is
-public; explicit authorization to publish these source changes is still needed.
-Merge/deploy was requested by the owner, but has not occurred.
+The owner explicitly authorized public source publication, merge and deployment.
+The technical review passes with the limitations below. Merge requires final-head CI;
+production rollout remains pending the controlled release and postdeployment proof.
 
 Residual risks / next checks, owned by maintainer before merge:
 - WhatsApp routing stays with the Van group; the bridge does not manage participants.

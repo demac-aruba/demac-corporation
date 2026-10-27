@@ -38,11 +38,12 @@ and unchanged runtime configuration; read-only postrelease checks. No test emplo
 movements, queue flushing or old message replay in production.
 
 ## Delivery status
-Local implementation; no push, merge, deployment or production data mutation.
-Public-repository publication was rejected by automatic approval review and needs
-explicit owner authorization to publish source. Browser and real-emulator checks
-subsequently passed locally. Immutable deployed-source comparison and production
-smoke checks remain required. Latest overnight payroll update `7c0f6da` is integrated.
+Published as PR #630 after explicit public-source authorization on 2026-10-27.
+Latest overnight payroll update `7c0f6da` is integrated. Local and GitHub roster
+browser/emulator/domain checks passed; immutable Office source and Rules audits passed.
+Controlled source-only release and nineteen recovery/scope checks are prepared.
+Final-head CI, merge, backend/rules publication, propagation hold and ERP verification
+remain required. No production employee/customer data mutation or messages were used.
 WhatsApp destinations remain the canonical Van groups. The current bridge does not
 provide participant-membership management; automatic group enrollment is not delivered
 by this change and must be resolved before claiming complete messaging automation.
