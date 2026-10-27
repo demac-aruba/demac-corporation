@@ -14,6 +14,8 @@ Reviewed the original owner request, canonical ownership, all new service/transp
 | Test integration | Older project-budget fixtures only intercepted direct drawer imports, allowing the new hook to reach the real authentication transport. | Intercept the alert adapter at its nested import boundary; unexpected mutations still throw. Do not disable budget or authority assertions. |
 | Test integration | The existing capacity popover can cover visit disclosures after adding the alert notice. | Exercise its visible close/reopen controls, explicitly wait for required choices to open automatically, retain all support-choice and allocation assertions. |
 
+| Test integration | The backdated booking browser harness called the old booking API directly, bypassing the production facade that owns alert commands. | Route alert commands through the real facade against the same demo emulator, preserve the fixed historical clock for booking, and assert that the lookup occurs without creating incidents. |
+
 ## Adversarial checks
 - Canonical owner and unit validation prevent an incident from being created for another customer's property. Direct identity matches survive moves and cannot be dismissed as another occupant.
 - Phone/address matching is exact normalized evidence, not proof. Exceptions are scoped to another customer, observed keys and alert version; a third occupant or new evidence still warns. No global address ban or deletion occurs.
