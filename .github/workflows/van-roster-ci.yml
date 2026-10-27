@@ -20,7 +20,7 @@ jobs:
           java-version: '21'
       - run: |
           npm ci --prefix functions --no-audit --no-fund
-          npm ci --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
           npm install --prefix "$RUNNER_TEMP/roster-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.58.2 firebase-tools@15.30.0 @firebase/rules-unit-testing@6.0.0 firebase@13.0.0
           "$RUNNER_TEMP/roster-tools/node_modules/.bin/playwright" install --with-deps chromium
       - name: Domain, payroll and authority regression

@@ -95,6 +95,11 @@ async function main() {
       assert.equal(hash(releaseConfig(fresh)), entry.configHash); assert.equal(iam(), iamHash); assert.deepEqual(fresh.buildConfig.source, fn.buildConfig.source);
       save(); console.log(name + ': verified immutable source, configuration, IAM and traffic');
     }
+    report.stage = 'rules-audit'; save();
+    const { auditRules } = require('./van-roster-rules.cjs');
+    const token = cloud(['auth', 'print-access-token']).trim();
+    const api = async (url) => { const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(30000) }); assert.equal(response.status, 200, 'Rules audit HTTP ' + response.status); return response.json(); };
+    report.rules = await auditRules(api, fs.readFileSync('firestore.rules', 'utf8'), run('git', ['show', '7c0f6dad56639b337b62ba0c31e740fc6b70b315:firestore.rules']));
     report.stage = 'complete'; save(); console.log('PASS read-only source audit; no production function invocations or data changes');
   } catch (error) {
     report.error = error.code === 'ERR_ASSERTION' ? String(error.message).split('\n')[0] : 'Audit failed at ' + report.stage;
