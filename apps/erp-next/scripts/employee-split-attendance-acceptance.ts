@@ -105,7 +105,7 @@ async function main() {
     }
     assert.equal(payroll.overtimeRateReviewRequired, false);
     const pdf = Buffer.from(buildPayrollAccountingPdf({ periodLabel: 'Synthetic overtime policy', summaries: [payroll] })).toString('latin1');
-    for (const label of ['Regular OT 150%', 'Special OT 200%', '(37 h 55 min)', '(9 h 30 min)']) assert.ok(pdf.includes(label), label);
+    for (const label of ['(Regular OT)', '(150%)', '(Special OT)', '(200%)', '(37 h 55 min)', '(9 h 30 min)']) assert.ok(pdf.includes(label), label);
     assert.ok(!pdf.includes('Unassigned'));
     assert.deepEqual(attendance, snapshot, 'Payroll and PDF do not rewrite historical evidence');
     const overnightEmployee = { id: 'synthetic-overnight', name: 'Synthetic Overnight' };

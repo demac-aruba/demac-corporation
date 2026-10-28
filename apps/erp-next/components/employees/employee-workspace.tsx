@@ -353,7 +353,7 @@ export function EmployeeWorkspace() {
         bonusesByEmployee: bonusReport.byEmployee,
       });
       setMessage(downloaded
-        ? `Premium payroll accounting PDF downloaded. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`
+        ? 'Payroll PDF downloaded: one page with regular hours, overtime at 150% and 200%, leave and adjustments in the same employee row.'
         : 'PDF export is available from the browser version.');
     } catch (cause) {
       setError(`Payroll PDF could not be generated: ${errorText(cause)}`);
