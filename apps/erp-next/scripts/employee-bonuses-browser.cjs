@@ -77,11 +77,15 @@ async function runCase(browser, origin, name, viewport) {
     assert.match(details, /Correction approved/); assert.match(details, /equipment_sales|Air Conditioner Sales/);
     const pdf = await download(page, 'Export payroll summary PDF', name + '-employees.pdf', true);
     assert.match(pdf, /Bonuses/); assert.match(pdf, /Afl. 190.25/);
+    assert.equal((pdf.match(/\/Type \/Page\b/g) || []).length, 1);
+    for (const label of ['(Regular)', '(150%)', '(200%)', '(AO / Sick)', '(Vacation)', '(No Work)']) assert.ok(pdf.includes(label));
     const csv = await download(page, 'Export accounting CSV', name + '-employees.csv', true);
     assert.match(csv, /Bonuses Afl/); assert.match(csv, /Approved equipment sale/);
     await page.goto(origin + '/finance/payroll/');
     const financePdf = await download(page, 'Download Payroll PDF', name + '-finance.pdf');
     assert.match(financePdf, /Afl. 190.25/);
+    assert.equal((financePdf.match(/\/Type \/Page\b/g) || []).length, 1);
+    for (const label of ['(Regular)', '(150%)', '(200%)', '(AO / Sick)', '(Vacation)', '(No Work)']) assert.ok(financePdf.includes(label));
     const financeCsv = await download(page, 'Summary CSV', name + '-finance.csv');
     assert.match(financeCsv, /Bonuses Afl/); assert.match(financeCsv, /Approved equipment sale/);
     assert.deepEqual(errors, []); assert.deepEqual(external, []);

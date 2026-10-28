@@ -112,12 +112,45 @@ async function main() {
   assert.match(text, /Bonuses/); assert.match(text, /Afl. 214.00/); assert.match(text, /Afl. 40.00/);
   const withoutBonuses = employees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance: { ...attendance, payrollSettings: settings().map(({ payrollAdjustments: _ignored, ...item }) => item) } }));
   assert.deepEqual(summaries, withoutBonuses, 'Bonuses do not change any attendance/payroll hour value');
-  if (process.env.BONUS_TEST_OUTPUT) {
-    fs.mkdirSync(process.env.BONUS_TEST_OUTPUT, { recursive: true });
-    const twelve = Array.from({ length: 12 }, (_, index) => ({ ...summaries[index % 2], employee: { ...employees[index % 2], id: `synthetic-${index}`, name: `Synthetic Employee ${index + 1} Long Surname` } }));
-    const amounts = Object.fromEntries(twelve.map((item, i) => [item.employee.id, i * 100.25]));
-    fs.writeFileSync(`${process.env.BONUS_TEST_OUTPUT}/accounting-bonuses.pdf`, buildPayrollAccountingPdf({ periodLabel: payrollPeriod.label, summaries: twelve, advancesByEmployee: amounts, bonusesByEmployee: amounts }));
+  // Exercise the old 13-row page break and a growing roster without dropping rows
+  // or appending a separate overtime table. These are presentation-only projections.
+  for (const count of [0, 1, 13, 14, 20, 40]) {
+    const roster = Array.from({ length: count }, (_, index) => ({
+      ...summaries[index % 2],
+      employee: { ...employees[index % 2], id: `synthetic-${index}`, name: `Synthetic Employee ${String(index + 1).padStart(2, '0')} Long Surname`, role: 'Technician', employmentStartedAt: '2026-01-01' },
+      actualRegularHours: 160 + index, overtimeHours: 15.5,
+      overtime150Hours: 9.5, overtime200Hours: 6,
+      aoHours: index === 0 ? 8 : 0, vacationHours: index === 1 ? 16 : 0,
+      noWorkNoPayHours: index === 2 ? 4 : 0, paidFreeHours: index === 3 ? 2 : 0,
+    }));
+    const advances = Object.fromEntries(roster.map((item, index) => [item.employee.id, index * 100.25]));
+    const bonuses = Object.fromEntries(roster.map((item) => [item.employee.id, 25]));
+    const options = { periodLabel: 'SYNTHETIC PREVIEW - Sep 27 to Oct 26, 2026', summaries: roster, advancesByEmployee: advances, bonusesByEmployee: bonuses };
+    const before = structuredClone(options);
+    const bytes = buildPayrollAccountingPdf(options);
+    const reportText = Buffer.from(bytes).toString('latin1');
+    assert.equal((reportText.match(/\/Type \/Page\b/g) ?? []).length, 1, `${count} employees stay on one PDF page`);
+    assert.match(reportText, /\/Count 1\b/);
+    assert.match(reportText, /Page 1 of 1/);
+    assert.doesNotMatch(reportText, /OVERTIME PAY RATE BREAKDOWN/);
+    for (const label of ['(Employee)', '(Weekly)', '(Base)', '(Regular)', '(Hours)', '(Total OT)', '(Regular OT)', '(150%)', '(Special OT)', '(200%)', '(AO / Sick)', '(Vacation)', '(Taken)', '(No Work)', '(/ No Pay)', '(Paid Free)', '(Salary)', '(Advance)', '(Bonuses)', '(TOTALS)']) assert.ok(reportText.includes(label), label);
+    for (const item of roster) assert.equal(reportText.split(`(${item.employee.name})`).length - 1, 1, 'Every complete employee name appears exactly once');
+    if (count) {
+      assert.ok(reportText.includes('(160 h)'));
+      assert.ok(reportText.includes('(15 h 30 min)'));
+      assert.ok(reportText.includes('(9 h 30 min)'));
+      assert.ok(reportText.includes('(6 h)'));
+      assert.ok(reportText.includes(`(Afl. ${(25 * count).toLocaleString('en-AW', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`));
+    }
+    if (count === 14) assert.match(reportText, /\/MediaBox \[0 0 841.89 595.28\]/, 'The current-size workforce fits one A4 landscape sheet');
+    assert.deepEqual(options, before, 'PDF generation cannot modify payroll inputs');
+    if (process.env.BONUS_TEST_OUTPUT) {
+      fs.mkdirSync(process.env.BONUS_TEST_OUTPUT, { recursive: true });
+      fs.writeFileSync(`${process.env.BONUS_TEST_OUTPUT}/accounting-${count}-employees.pdf`, bytes);
+    }
   }
+  const reviewPdf = Buffer.from(buildPayrollAccountingPdf({ periodLabel: 'Review fixture', summaries: [{ ...summaries[0], overtimeRateReviewRequired: true }] })).toString('latin1');
+  assert.match(reviewPdf, /REVIEW REQUIRED/);
   console.log('PASS bonuses: legacy compatibility, identity, 27–26 periods, five categories, validation, denied writes, version conflicts, unknown outcomes, cancellation, CSV/PDF totals and unchanged hours.');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -194,7 +194,7 @@ export function EmployeePayrollWorkspace() {
       advancesByEmployee: Object.fromEntries(advanceByEmployee),
       bonusesByEmployee: bonusReport.byEmployee,
     });
-    if (ok) setMessage(`Payroll PDF downloaded directly. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`);
+    if (ok) setMessage('Payroll PDF downloaded: one page with regular hours, overtime at 150% and 200%, leave and adjustments in the same employee row.');
     else setError('The PDF could not be generated in this browser.');
   }
 

@@ -13,7 +13,6 @@ const MUTED: Rgb = [0.4, 0.47, 0.56];
 const BORDER: Rgb = [0.84, 0.88, 0.93];
 const LIGHT_GRAY: Rgb = [0.975, 0.982, 0.99];
 const WHITE: Rgb = [1, 1, 1];
-const ROWS_PER_PAGE = 13;
 
 type Rgb = [number, number, number];
 
@@ -26,28 +25,25 @@ type PayrollAccountingPdfOptions = {
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
-  label: string;
+  key: 'employee' | 'weeklyBase' | 'regular' | 'paidFree' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
+  label: string[];
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: 'Employee', width: 205, align: 'left' },
-  { key: 'weeklyBase', label: 'Weekly Base', width: 75, align: 'center' },
-  { key: 'overtime', label: 'Overtime', width: 75, align: 'center' },
-  { key: 'ao', label: 'AO / Sick', width: 65, align: 'center' },
-  { key: 'vacation', label: 'Vacation', width: 70, align: 'center' },
-  { key: 'noWork', label: 'No Work / No Pay', width: 95, align: 'center' },
-  { key: 'advance', label: 'Salary Advance', width: 95, align: 'center' },
-  { key: 'bonus', label: 'Bonuses (Afl.)', width: CONTENT_WIDTH - 680, align: 'center' },
-];
-
-const RATE_COLUMNS: Column[] = [
-  { key: 'employee', label: 'Employee', width: CONTENT_WIDTH - 450 },
-  { key: 'overtime', label: 'Total OT', width: 150, align: 'center' },
-  { key: 'rate150', label: 'Regular OT 150%', width: 150, align: 'center' },
-  { key: 'rate200', label: 'Special OT 200%', width: 150, align: 'center' },
+  { key: 'employee', label: ['Employee'], width: 176, align: 'left' },
+  { key: 'weeklyBase', label: ['Weekly', 'Base'], width: 48, align: 'center' },
+  { key: 'regular', label: ['Regular', 'Hours'], width: 56, align: 'center' },
+  { key: 'overtime', label: ['Total OT'], width: 60, align: 'center' },
+  { key: 'rate150', label: ['Regular OT', '150%'], width: 60, align: 'center' },
+  { key: 'rate200', label: ['Special OT', '200%'], width: 60, align: 'center' },
+  { key: 'ao', label: ['AO / Sick'], width: 43, align: 'center' },
+  { key: 'vacation', label: ['Vacation', 'Taken'], width: 48, align: 'center' },
+  { key: 'noWork', label: ['No Work', '/ No Pay'], width: 52, align: 'center' },
+  { key: 'paidFree', label: ['Paid Free', 'Hours'], width: 48, align: 'center' },
+  { key: 'advance', label: ['Salary', 'Advance'], width: 64, align: 'center' },
+  { key: 'bonus', label: ['Bonuses', '(Afl.)'], width: CONTENT_WIDTH - 715, align: 'center' },
 ];
 
 function formatWeeklyBase(value: number) {
@@ -106,13 +102,20 @@ function pdfString(value: string | number) {
   return `${output})`;
 }
 
-function textWidth(value: string, size: number) {
-  return Array.from(value).reduce((width, character) => width + (character === ' ' ? size * 0.27 : size * 0.52), 0);
-}
+// Standard Helvetica AFM widths (ASCII 32-126); accented Latin letters use their base glyph.
+const HELVETICA_WIDTHS = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584
+];
+const HELVETICA_BOLD_WIDTHS = [
+  278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584
+];
 
-function truncate(value: string, maxLength: number) {
-  const text = String(value ?? '');
-  return text.length <= maxLength ? text : `${text.slice(0, Math.max(1, maxLength - 3))}...`;
+function textWidth(value: string, size: number, bold = false) {
+  const widths = bold ? HELVETICA_BOLD_WIDTHS : HELVETICA_WIDTHS;
+  return Array.from(value).reduce((width, character) => {
+    const code = character.normalize('NFD').charCodeAt(0);
+    return width + (widths[code - 32] ?? 600) * size / 1000;
+  }, 0);
 }
 
 function asciiBytes(value: string) {
@@ -133,11 +136,16 @@ function concatBytes(chunks: Uint8Array[]) {
 }
 
 function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[], advancesByEmployee: Record<string, number>, bonusesByEmployee: Record<string, number>) {
-  const groups: PayrollEmployeeSummary[][] = [];
-  for (let index = 0; index < summaries.length; index += ROWS_PER_PAGE) groups.push(summaries.slice(index, index + ROWS_PER_PAGE));
-  if (!groups.length) groups.push([]);
-
+  const headerTop = 118;
+  const headerHeight = 32;
+  // Keep the whole roster and totals together. Larger rosters use a taller single
+  // sheet instead of losing employees, splitting categories, or shrinking text indefinitely.
+  const rowCount = Math.max(1, summaries.length) + 1;
+  const rowHeight = Math.min(26, Math.max(20, (PAGE_HEIGHT - 50 - headerTop - headerHeight) / rowCount));
+  const pageHeight = Math.max(PAGE_HEIGHT, headerTop + headerHeight + rowCount * rowHeight + 50);
   const totals = {
+    regular: summaries.reduce((sum, item) => sum + item.actualRegularHours, 0),
+    paidFree: summaries.reduce((sum, item) => sum + item.paidFreeHours, 0),
     weeklyBase: summaries.reduce((sum, item) => sum + item.weeklyPaidBaseHours, 0),
     overtime: summaries.reduce((sum, item) => sum + item.overtimeHours, 0),
     rate150: summaries.reduce((sum, item) => sum + (item.overtime150Hours ?? 0), 0),
@@ -149,107 +157,102 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     bonus: summaries.reduce((sum, item) => sum + Number(bonusesByEmployee[item.employee.id] ?? 0), 0),
   };
 
-  return [...groups, ...groups].map((group, pageIndex) => {
-    const ratePage = pageIndex >= groups.length;
-    const columns = ratePage ? RATE_COLUMNS : COLUMNS;
-    const commands: string[] = [];
-    const topToY = (top: number, height = 0) => PAGE_HEIGHT - top - height;
+  const columns = COLUMNS;
+  const commands: string[] = [];
+  const topToY = (top: number, height = 0) => pageHeight - top - height;
 
-    function fillRect(x: number, top: number, width: number, height: number, fill: Rgb, stroke?: Rgb) {
-      commands.push(`${color(fill)} rg`);
-      if (stroke) {
-        commands.push(`${color(stroke)} RG 0.7 w`);
-        commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re B`);
-      } else commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re f`);
-    }
+  function fillRect(x: number, top: number, width: number, height: number, fill: Rgb, stroke?: Rgb) {
+    commands.push(`${color(fill)} rg`);
+    if (stroke) {
+      commands.push(`${color(stroke)} RG 0.7 w`);
+      commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re B`);
+    } else commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re f`);
+  }
 
-    function line(x1: number, top1: number, x2: number, top2: number, stroke: Rgb, width = 1) {
-      commands.push(`${color(stroke)} RG ${number(width)} w`);
-      commands.push(`${number(x1)} ${number(topToY(top1))} m ${number(x2)} ${number(topToY(top2))} l S`);
-    }
+  function line(x1: number, top1: number, x2: number, top2: number, stroke: Rgb, width = 1) {
+    commands.push(`${color(stroke)} RG ${number(width)} w`);
+    commands.push(`${number(x1)} ${number(topToY(top1))} m ${number(x2)} ${number(topToY(top2))} l S`);
+  }
 
-    function drawText(value: string | number, x: number, top: number, size: number, options?: { bold?: boolean; fill?: Rgb; align?: 'left' | 'center' | 'right'; width?: number }) {
-      const text = String(value ?? '');
-      const align = options?.align ?? 'left';
-      const availableWidth = options?.width ?? 0;
-      let resolvedX = x;
-      if (align === 'center') resolvedX = x + Math.max(0, (availableWidth - textWidth(text, size)) / 2);
-      if (align === 'right') resolvedX = x + Math.max(0, availableWidth - textWidth(text, size));
-      commands.push(`${color(options?.fill ?? TEXT)} rg`);
-      commands.push(`BT /${options?.bold ? 'F2' : 'F1'} ${number(size)} Tf ${number(resolvedX)} ${number(topToY(top, size))} Td ${pdfString(text)} Tj ET`);
-    }
+  function drawText(value: string | number, x: number, top: number, size: number, options?: { bold?: boolean; fill?: Rgb; align?: 'left' | 'center' | 'right'; width?: number }) {
+    const text = String(value ?? '');
+    if (options?.width) size = Math.min(size, size * options.width / Math.max(1, textWidth(text, size, options.bold)));
+    const align = options?.align ?? 'left';
+    const availableWidth = options?.width ?? 0;
+    let resolvedX = x;
+    if (align === 'center') resolvedX = x + Math.max(0, (availableWidth - textWidth(text, size, options?.bold)) / 2);
+    if (align === 'right') resolvedX = x + Math.max(0, availableWidth - textWidth(text, size, options?.bold));
+    commands.push(`${color(options?.fill ?? TEXT)} rg`);
+    commands.push(`BT /${options?.bold ? 'F2' : 'F1'} ${number(size)} Tf ${number(resolvedX)} ${number(topToY(top, size))} Td ${pdfString(text)} Tj ET`);
+  }
 
-    fillRect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, WHITE);
-    fillRect(MARGIN, 23, 42, 42, BLUE);
-    drawText('D', MARGIN, 29, 22, { bold: true, fill: WHITE, align: 'center', width: 42 });
-    drawText('DEMAC', MARGIN + 54, 25, 22, { bold: true, fill: NAVY });
-    drawText('PROFESSIONAL COOLING SOLUTIONS', MARGIN + 55, 49, 7.4, { bold: true, fill: BLUE_DARK });
-    drawText(ratePage ? 'OVERTIME PAY RATE BREAKDOWN - ACCOUNTING' : 'PAYROLL INPUT SUMMARY - ACCOUNTING', MARGIN, 80, 12, { bold: true, fill: NAVY });
-    drawText(ratePage ? 'Worked hours by pay rate. Regular overtime defaults to 150%; special overtime uses 200% only when selected.' : 'Compact monthly control report. Statutory payroll is completed by Accounting.', MARGIN, 98, 7.4, { fill: MUTED });
-    drawText('Payroll period', PAGE_WIDTH - MARGIN - 285, 28, 7.4, { bold: true, fill: MUTED, align: 'right', width: 285 });
-    drawText(periodLabel, PAGE_WIDTH - MARGIN - 285, 43, 10, { bold: true, fill: NAVY, align: 'right', width: 285 });
-    drawText(`Generated ${new Date().toLocaleDateString('en-AW')}`, PAGE_WIDTH - MARGIN - 285, 59, 7.2, { fill: MUTED, align: 'right', width: 285 });
-    fillRect(MARGIN, 114, CONTENT_WIDTH, 3, BLUE);
+  fillRect(0, 0, PAGE_WIDTH, pageHeight, WHITE);
+  fillRect(MARGIN, 23, 42, 42, BLUE);
+  drawText('D', MARGIN, 29, 22, { bold: true, fill: WHITE, align: 'center', width: 42 });
+  drawText('DEMAC', MARGIN + 54, 25, 22, { bold: true, fill: NAVY });
+  drawText('PROFESSIONAL COOLING SOLUTIONS', MARGIN + 55, 49, 7.4, { bold: true, fill: BLUE_DARK });
+  drawText('PAYROLL INPUT SUMMARY - ACCOUNTING', MARGIN, 80, 12, { bold: true, fill: NAVY });
+  drawText('Period hours, overtime rates and adjustments in one employee row. Statutory payroll is completed by Accounting.', MARGIN, 98, 7.4, { fill: MUTED });
+  drawText('Payroll period', PAGE_WIDTH - MARGIN - 285, 28, 7.4, { bold: true, fill: MUTED, align: 'right', width: 285 });
+  drawText(periodLabel, PAGE_WIDTH - MARGIN - 285, 43, 10, { bold: true, fill: NAVY, align: 'right', width: 285 });
+  drawText(`Generated ${new Date().toLocaleDateString('en-AW')}`, PAGE_WIDTH - MARGIN - 285, 59, 7.2, { fill: MUTED, align: 'right', width: 285 });
+  fillRect(MARGIN, 110, CONTENT_WIDTH, 3, BLUE);
 
-    let x = MARGIN;
-    const headerTop = 132;
-    const headerHeight = 34;
+  let x = MARGIN;
+  columns.forEach((column) => {
+    fillRect(x, headerTop, column.width, headerHeight, BLUE_LIGHT, BORDER);
+    column.label.forEach((label, index) => drawText(label, x + 4, headerTop + (column.label.length === 1 ? 12 : 6 + index * 11), 7.4, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 8 }));
+    x += column.width;
+  });
+
+  summaries.forEach((summary, rowIndex) => {
+    const top = headerTop + headerHeight + rowIndex * rowHeight;
+    const fill = rowIndex % 2 === 0 ? WHITE : LIGHT_GRAY;
+    x = MARGIN;
     columns.forEach((column) => {
-      fillRect(x, headerTop, column.width, headerHeight, BLUE_LIGHT, BORDER);
-      drawText(column.label, x + 5, headerTop + 12, column.key === 'noWork' || column.key === 'advance' ? 6.9 : 7.9, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
+      fillRect(x, top, column.width, rowHeight, fill, BORDER);
+      if (column.key === 'employee') {
+        drawText(summary.employee.name ?? 'Employee', x + 6, top + 3, 8.3, { bold: true, fill: NAVY, width: column.width - 12 });
+        drawText(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, x + 6, top + rowHeight - 9, 6.2, { fill: MUTED, width: column.width - 12 });
+      } else if (column.key === 'advance' || column.key === 'bonus') {
+        const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
+        drawText(formatMoney(value), x + 5, top + (rowHeight - 7.6) / 2, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
+      } else {
+        const values = { regular: summary.actualRegularHours, paidFree: summary.paidFreeHours, weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
+        const value = values[column.key];
+        const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
+        drawText(display, x + 5, top + (rowHeight - 7.9) / 2, 7.9, { bold: column.key === 'weeklyBase' || value > 0, fill: value > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT, align: column.align, width: column.width - 10 });
+      }
       x += column.width;
     });
-
-    const rowHeight = 27;
-    group.forEach((summary, rowIndex) => {
-      const top = headerTop + headerHeight + rowIndex * rowHeight;
-      const fill = rowIndex % 2 === 0 ? WHITE : LIGHT_GRAY;
-      x = MARGIN;
-      columns.forEach((column) => {
-        fillRect(x, top, column.width, rowHeight, fill, BORDER);
-        if (column.key === 'employee') {
-          drawText(truncate(summary.employee.name ?? 'Employee', 32), x + 8, top + 6, 9.1, { bold: true, fill: NAVY });
-          drawText(truncate(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, 52), x + 8, top + 18, 6.5, { fill: MUTED });
-        } else if (column.key === 'advance' || column.key === 'bonus') {
-          const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
-          drawText(formatMoney(value), x + 5, top + 11, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
-        } else {
-          const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
-          const value = values[column.key];
-          const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
-          drawText(display, x + 5, top + 11, 7.9, { bold: column.key === 'weeklyBase' || value > 0, fill: value > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT, align: column.align, width: column.width - 10 });
-        }
-        x += column.width;
-      });
-    });
-
-    const isLastPage = pageIndex % groups.length === groups.length - 1;
-    if (isLastPage) {
-      const top = headerTop + headerHeight + group.length * rowHeight;
-      x = MARGIN;
-      columns.forEach((column) => {
-        fillRect(x, top, column.width, rowHeight, BLUE_LIGHT, BORDER);
-        if (column.key === 'employee') drawText('TOTALS', x + 8, top + 10, 9, { bold: true, fill: BLUE_DARK });
-        else if (column.key === 'advance' || column.key === 'bonus') drawText(formatMoney(totals[column.key]), x + 5, top + 10, 7.7, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
-        else {
-          const value = totals[column.key];
-          const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
-          drawText(display, x + 5, top + 10, 7.8, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
-        }
-        x += column.width;
-      });
-    }
-
-    if (!group.length) drawText('No employees are included in the selected payroll period.', MARGIN, 190, 11, { fill: MUTED });
-
-    line(MARGIN, PAGE_HEIGHT - 33, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 33, BORDER, 0.6);
-    drawText(summaries.some((s) => s.overtimeRateReviewRequired) ? 'REVIEW REQUIRED: overtime rate allocations conflict with recorded totals. Resolve in Employees before processing.' : 'Hours are schedule-based inputs. Bonuses and advances are Afl. amounts for Accounting; no automatic deductions are applied.', MARGIN, PAGE_HEIGHT - 25, 6.7, { fill: MUTED });
-    drawText(`Page ${pageIndex + 1} of ${groups.length * 2}`, PAGE_WIDTH - MARGIN - 90, PAGE_HEIGHT - 25, 7.1, { fill: MUTED, align: 'right', width: 90 });
-    return commands.join('\n');
   });
+
+  {
+    const top = headerTop + headerHeight + Math.max(1, summaries.length) * rowHeight;
+    x = MARGIN;
+    columns.forEach((column) => {
+      fillRect(x, top, column.width, rowHeight, BLUE_LIGHT, BORDER);
+      if (column.key === 'employee') drawText('TOTALS', x + 8, top + (rowHeight - 8) / 2, 9, { bold: true, fill: BLUE_DARK });
+      else if (column.key === 'advance' || column.key === 'bonus') drawText(formatMoney(totals[column.key]), x + 5, top + (rowHeight - 8) / 2, 7.7, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
+      else {
+        const value = totals[column.key];
+        const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
+        drawText(display, x + 5, top + (rowHeight - 8) / 2, 7.8, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
+      }
+      x += column.width;
+    });
+  }
+
+  if (!summaries.length) drawText('No employees are included in the selected payroll period.', MARGIN + 8, headerTop + headerHeight + 6, 9, { fill: MUTED });
+
+  line(MARGIN, pageHeight - 38, PAGE_WIDTH - MARGIN, pageHeight - 38, BORDER, 0.6);
+  drawText(summaries.some((s) => s.overtimeRateReviewRequired) ? 'REVIEW REQUIRED: overtime rate allocations conflict with recorded totals. Resolve in Employees before processing.' : 'Regular and leave hours cover the selected period; Weekly Base is the configured weekly schedule. Advances/bonuses are Afl.; no automatic deductions.', MARGIN, pageHeight - 21, 6.7, { fill: MUTED, width: CONTENT_WIDTH - 65 });
+  drawText('Page 1 of 1', PAGE_WIDTH - MARGIN - 90, pageHeight - 21, 7.1, { fill: MUTED, align: 'right', width: 90 });
+  drawText('All time values are hours and minutes, including AO and vacation taken. Regular OT = 150%; Special OT = manually selected 200%.', MARGIN, pageHeight - 33, 6.7, { fill: MUTED, width: CONTENT_WIDTH });
+  return [{ height: pageHeight, stream: commands.join('\n') }];
 }
 
-function buildPdf(pageStreams: string[]) {
+function buildPdf(pageStreams: { height: number; stream: string }[]) {
   const objects: Uint8Array[] = [];
   const pageObjectNumbers = pageStreams.map((_, index) => 5 + index * 2);
   objects[1] = asciiBytes('<< /Type /Catalog /Pages 2 0 R >>');
@@ -257,10 +260,10 @@ function buildPdf(pageStreams: string[]) {
   objects[3] = asciiBytes('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   objects[4] = asciiBytes('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
 
-  pageStreams.forEach((stream, index) => {
+  pageStreams.forEach(({ height, stream }, index) => {
     const pageObject = 5 + index * 2;
     const contentObject = pageObject + 1;
-    objects[pageObject] = asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${number(PAGE_WIDTH)} ${number(PAGE_HEIGHT)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObject} 0 R >>`);
+    objects[pageObject] = asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${number(PAGE_WIDTH)} ${number(height)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObject} 0 R >>`);
     const streamBytes = asciiBytes(stream);
     objects[contentObject] = concatBytes([asciiBytes(`<< /Length ${streamBytes.length} >>\nstream\n`), streamBytes, asciiBytes('\nendstream')]);
   });
