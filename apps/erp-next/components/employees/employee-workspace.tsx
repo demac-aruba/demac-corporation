@@ -353,7 +353,7 @@ export function EmployeeWorkspace() {
         bonusesByEmployee: bonusReport.byEmployee,
       });
       setMessage(downloaded
-        ? 'Payroll PDF downloaded: one page with regular hours, overtime at 150% and 200%, leave and adjustments in the same employee row.'
+        ? 'Payroll PDF downloaded: one page with overtime at 150% and 200%, leave and adjustments in the same employee row.'
         : 'PDF export is available from the browser version.');
     } catch (cause) {
       setError(`Payroll PDF could not be generated: ${errorText(cause)}`);

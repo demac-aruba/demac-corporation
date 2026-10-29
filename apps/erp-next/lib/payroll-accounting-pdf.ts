@@ -25,24 +25,23 @@ type PayrollAccountingPdfOptions = {
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'regular' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
+  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
   label: string[];
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: ['Employee'], width: 200, align: 'left' },
-  { key: 'weeklyBase', label: ['Weekly', 'Base'], width: 48, align: 'center' },
-  { key: 'regular', label: ['Regular', 'Hours'], width: 64, align: 'center' },
-  { key: 'overtime', label: ['Total OT'], width: 60, align: 'center' },
-  { key: 'rate150', label: ['Regular OT', '150%'], width: 68, align: 'center' },
-  { key: 'rate200', label: ['Special OT', '200%'], width: 68, align: 'center' },
+  { key: 'employee', label: ['Employee'], width: 216, align: 'left' },
+  { key: 'weeklyBase', label: ['Weekly', 'Base'], width: 56, align: 'center' },
+  { key: 'overtime', label: ['Total OT'], width: 68, align: 'center' },
+  { key: 'rate150', label: ['Regular OT', '150%'], width: 76, align: 'center' },
+  { key: 'rate200', label: ['Special OT', '200%'], width: 76, align: 'center' },
   { key: 'ao', label: ['AO / Sick'], width: 43, align: 'center' },
   { key: 'vacation', label: ['Vacation', 'Taken'], width: 48, align: 'center' },
   { key: 'noWork', label: ['No Work', '/ No Pay'], width: 52, align: 'center' },
-  { key: 'advance', label: ['Salary', 'Advance'], width: 64, align: 'center' },
-  { key: 'bonus', label: ['Bonuses', '(Afl.)'], width: CONTENT_WIDTH - 715, align: 'center' },
+  { key: 'advance', label: ['Salary', 'Advance'], width: 72, align: 'center' },
+  { key: 'bonus', label: ['Bonuses', '(Afl.)'], width: CONTENT_WIDTH - 707, align: 'center' },
 ];
 
 function formatWeeklyBase(value: number) {
@@ -143,7 +142,6 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
   const rowHeight = Math.min(26, Math.max(20, (PAGE_HEIGHT - 50 - headerTop - headerHeight) / rowCount));
   const pageHeight = Math.max(PAGE_HEIGHT, headerTop + headerHeight + rowCount * rowHeight + 50);
   const totals = {
-    regular: summaries.reduce((sum, item) => sum + item.actualRegularHours, 0),
     weeklyBase: summaries.reduce((sum, item) => sum + item.weeklyPaidBaseHours, 0),
     overtime: summaries.reduce((sum, item) => sum + item.overtimeHours, 0),
     rate150: summaries.reduce((sum, item) => sum + (item.overtime150Hours ?? 0), 0),
@@ -216,7 +214,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
         const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
         drawText(formatMoney(value), x + 5, top + (rowHeight - 7.6) / 2, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
       } else {
-        const values = { regular: summary.actualRegularHours, weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
+        const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, rate150: summary.overtime150Hours ?? 0, rate200: summary.overtime200Hours ?? 0, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
         const value = values[column.key];
         const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
         drawText(display, x + 5, top + (rowHeight - 7.9) / 2, 7.9, { bold: column.key === 'weeklyBase' || value > 0, fill: value > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT, align: column.align, width: column.width - 10 });
@@ -244,7 +242,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
   if (!summaries.length) drawText('No employees are included in the selected payroll period.', MARGIN + 8, headerTop + headerHeight + 6, 9, { fill: MUTED });
 
   line(MARGIN, pageHeight - 38, PAGE_WIDTH - MARGIN, pageHeight - 38, BORDER, 0.6);
-  drawText(summaries.some((s) => s.overtimeRateReviewRequired) ? 'REVIEW REQUIRED: overtime rate allocations conflict with recorded totals. Resolve in Employees before processing.' : 'Regular and leave hours cover the selected period; Weekly Base is the configured weekly schedule. Advances/bonuses are Afl.; no automatic deductions.', MARGIN, pageHeight - 21, 6.7, { fill: MUTED, width: CONTENT_WIDTH - 65 });
+  drawText(summaries.some((s) => s.overtimeRateReviewRequired) ? 'REVIEW REQUIRED: overtime rate allocations conflict with recorded totals. Resolve in Employees before processing.' : 'Overtime and leave hours cover the selected period; Weekly Base is the configured weekly schedule. Advances/bonuses are Afl.; no automatic deductions.', MARGIN, pageHeight - 21, 6.7, { fill: MUTED, width: CONTENT_WIDTH - 65 });
   drawText('Page 1 of 1', PAGE_WIDTH - MARGIN - 90, pageHeight - 21, 7.1, { fill: MUTED, align: 'right', width: 90 });
   drawText('All time values are hours and minutes, including AO and vacation taken. Regular OT = 150%; Special OT = manually selected 200%.', MARGIN, pageHeight - 33, 6.7, { fill: MUTED, width: CONTENT_WIDTH });
   return [{ height: pageHeight, stream: commands.join('\n') }];
