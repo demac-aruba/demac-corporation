@@ -134,10 +134,11 @@ async function main() {
     assert.match(reportText, /Page 1 of 1/);
     assert.doesNotMatch(reportText, /OVERTIME PAY RATE BREAKDOWN/);
     assert.doesNotMatch(reportText, /Paid Free|paidFree/, 'Internal paid-free hours are not part of the accountant PDF');
-    for (const label of ['(Employee)', '(Weekly)', '(Base)', '(Regular)', '(Hours)', '(Total OT)', '(Regular OT)', '(150%)', '(Special OT)', '(200%)', '(AO / Sick)', '(Vacation)', '(Taken)', '(No Work)', '(/ No Pay)', '(Salary)', '(Advance)', '(Bonuses)', '(TOTALS)']) assert.ok(reportText.includes(label), label);
+    assert.doesNotMatch(reportText, /\(Regular\)|\(Hours\)/, 'Regular Hours is not part of the accountant PDF');
+    for (const label of ['(Employee)', '(Weekly)', '(Base)', '(Total OT)', '(Regular OT)', '(150%)', '(Special OT)', '(200%)', '(AO / Sick)', '(Vacation)', '(Taken)', '(No Work)', '(/ No Pay)', '(Salary)', '(Advance)', '(Bonuses)', '(TOTALS)']) assert.ok(reportText.includes(label), label);
     for (const item of roster) assert.equal(reportText.split(`(${item.employee.name})`).length - 1, 1, 'Every complete employee name appears exactly once');
     if (count) {
-      assert.ok(reportText.includes('(160 h)'));
+      assert.ok(!reportText.includes('(160 h)'), 'Regular hours remain in source data but are omitted from the PDF');
       assert.ok(reportText.includes('(15 h 30 min)'));
       assert.ok(reportText.includes('(9 h 30 min)'));
       assert.ok(reportText.includes('(6 h)'));
