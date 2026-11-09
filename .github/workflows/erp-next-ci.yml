@@ -15,6 +15,8 @@ on:
       - 'functions/taskTracker*.js'
       - 'functions/taskAttachment*.js'
       - 'functions/package.json'
+      - 'functions/supplierBill*.js'
+      - 'functions/supplierBill*.d.ts'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
@@ -40,6 +42,8 @@ on:
       - 'functions/taskTracker*.js'
       - 'functions/taskAttachment*.js'
       - 'functions/package.json'
+      - 'functions/supplierBill*.js'
+      - 'functions/supplierBill*.d.ts'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
@@ -196,6 +200,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Validate Firebase Functions syntax
         run: npm run validate:firebase
+      - name: Supplier purchase draft persistence and authorization
+        run: npm run test:supplier-bill-drafts
       - name: Task Tracker backend acceptance
         run: npm run test:task-reminders
       - name: Field authority acceptance
@@ -226,6 +232,10 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Typecheck
         run: npm run typecheck
+      - name: Supplier bill estimates and manual line rates
+        run: npm run test:supplier-bill-costing
+      - name: Supplier purchase interrupted-save recovery
+        run: npm run test:supplier-bill-recovery
       - name: Project phase planner acceptance
         run: >-
           node -e "require('fs').rmSync('.project-phase-planner-test',{recursive:true,force:true})"
