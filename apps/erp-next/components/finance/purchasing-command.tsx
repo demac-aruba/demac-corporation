@@ -4,10 +4,12 @@ import { useMemo, useState } from 'react';
 import { previewPurchaseOrders, previewSuppliers, purchaseOrderCurrency, purchaseOrderTotal, purchasingPriority } from '../../lib/finance';
 import styles from './finance-command.module.css';
 import { SupplierBillEditor } from './supplier-bill-editor';
+import { SupplierBillWorkspace } from './supplier-bill-workspace';
 
 function money(value: number, currency: string) { return currency === 'USD' ? `$ ${value.toLocaleString('en-US')}` : `Afl. ${value.toLocaleString('en-US')}`; }
 
 export function PurchasingCommand() {
+  const [sharedBills, setSharedBills] = useState(false);
   const [editingBill, setEditingBill] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const recommendations = useMemo(() => [
@@ -19,10 +21,11 @@ export function PurchasingCommand() {
   const totalOpen = previewPurchaseOrders.reduce((sum, po) => sum + purchaseOrderTotal(po), 0);
   const pending = previewPurchaseOrders.filter((po) => po.status === 'pending_approval').length;
 
+  if (sharedBills) return <SupplierBillWorkspace close={() => setSharedBills(false)} />;
   if (editingBill) return <SupplierBillEditor close={() => setEditingBill(false)} />;
 
   return <section className={styles.page}>
-    <header className={styles.head}><div><span className={styles.eyebrow}>Purchasing · Inventory driven</span><h1>Purchasing Center</h1><p>Demand from booked work, van replenishment, supplier lead time and approved project needs becomes controlled purchasing — not manual guesswork.</p></div><div className={styles.actions}><button type="button" className={styles.primary} onClick={() => setEditingBill(true)}>Preparar factura de proveedor</button><button type="button">Supplier history</button><button className={styles.primary} type="button" onClick={() => setNotice('Draft purchase order created in preview. Approval is required before supplier commitment.')}>+ New purchase order</button></div></header>
+    <header className={styles.head}><div><span className={styles.eyebrow}>Purchasing · Inventory driven</span><h1>Purchasing Center</h1><p>Demand from booked work, van replenishment, supplier lead time and approved project needs becomes controlled purchasing — not manual guesswork.</p></div><div className={styles.actions}><button type="button" className={styles.primary} onClick={() => setEditingBill(true)}>Preparar factura de proveedor</button><button type="button" onClick={() => setSharedBills(true)}>Facturas guardadas</button><button className={styles.primary} type="button" onClick={() => setNotice('Draft purchase order created in preview. Approval is required before supplier commitment.')}>+ New purchase order</button></div></header>
     {notice ? <div className={styles.callout}><strong>{notice}</strong></div> : null}
     <div className={styles.metrics}>
       <article className={styles.metric}><span>Open purchase orders</span><strong>{previewPurchaseOrders.length}</strong><small>{money(totalOpen, 'AWG')} equivalent preview</small><i style={{ width: '62%' }} /></article>

@@ -439,6 +439,14 @@ Production activation remains separately owner-approved through the server-side 
 - Booking-code uniqueness follows actual legacy booking resolution. Delete retains private audit/identity and rejects linked work, Field interventions/sales or stock. Deleted IDs cannot be reused.
 - No bulk rewrite/backfill is implied. Direct-write closure requires verified backend, ERP, Legacy and old-session cutover plus forward recovery. See the finance governance task/review.
 
+## Supplier purchase draft candidate (2026-11-09; activation pending)
+
+- `PUR-DRAFT-001` — Owner-defined costing: imported supplier USD × 1.80 Afl; editable wire estimate initially 2%; manually entered combined import/shipping rate applied after wire, with explicit per-line overrides including zero. Local purchase cost is Afl. No rate inferred from origin.
+- `PUR-DRAFT-002` — Each sellable line has its own marketing, profit and operations targets; suggested price uses the fixed internal 7% sales reserve. Final price is an explicit operator input and operations is its residual. This reserve is planning, not proof of tax liability or a QuickBooks tax calculation.
+- `PUR-DRAFT-003` — Shared save is an operational draft only. Missing inputs stay incomplete. Server recalculates integer cents and appends the exact draft/cost snapshot with actor, version and reason. New costs never rewrite prior snapshots. Price confirmation here does not publish to the catalog.
+- `PUR-DRAFT-004` — Save/reopen and exact retries require current active role inside the transaction. A stale version or duplicate normalized supplier label/reference produces a durable terminal rejection. Unknown outcomes retain the same browser request for the same project/user. Names are not canonical supplier identities; aliases and catalog linkage must be resolved before receipt/accounting.
+- `PUR-DRAFT-005` — This candidate performs no inventory receipt, stock movement, actual import closing, bank transfer or QBO send. Financial approval rights for Christian, administrator and Yerika remain a separate configurable capability; this delivery grants no access. See `adrs/supplier-bill-drafts-20261109.md`.
+
 ## QuickBooks production reporting
 
 - `FIN-QBO-CATALOG-READ-001` — Owner-only reads deployed 2026-10-14;

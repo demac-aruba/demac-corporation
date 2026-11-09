@@ -50,4 +50,13 @@
 .funds > div:nth-child(4), .status { background:var(--success-soft); }
 .status { padding:9px 12px; border-radius:8px; }
 .body [role="alert"] { color:var(--danger); }
+.editorFields { display:grid; gap:16px; border:0; padding:0; margin:0; }
+.records { width:100%; min-width:650px; text-align:left; border-collapse:collapse; font-size:13px; }
+.records td, .records th { padding:12px 16px; border-bottom:1px solid var(--border); }
+.records th { color:var(--muted); background:var(--surface-2); }
+.records small { display:block; color:var(--muted); margin-top:4px; }
+.recovery { padding:16px; border-radius:10px; background:var(--warning-soft); border:1px solid var(--warning); display:grid; gap:10px; }
+.recovery > div { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+.body details { margin-top:12px; }
+.body details p { padding:6px 0; font-size:12px; }
 @media (max-width:760px) { .details { grid-template-columns:minmax(0,1fr); } .head, .actions, .bar { gap:7px; } }

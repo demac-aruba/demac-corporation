@@ -17,13 +17,13 @@ function LineInput({ label, value, edit, numeric = true }: { label: string; valu
   return <input aria-label={label} title={label} inputMode={numeric ? 'decimal' : 'text'} value={value} maxLength={numeric ? 16 : 240} onChange={e => edit(e.target.value)} />;
 }
 
-export function SupplierBillEditor({ close }: { close: () => void }) {
-  const [bill, setBill] = useState<BillDraft>(blankBill);
+export function SupplierBillEditor({ close, initialBill, onSave, locked = false, blockClose = false }: { close: () => void; initialBill?: BillDraft; onSave?: (bill: BillDraft) => void; locked?: boolean; blockClose?: boolean }) {
+  const [bill, setBill] = useState<BillDraft>(() => initialBill ? structuredClone(initialBill) : blankBill());
   const [selected, select] = useState(0);
   const [message, setMessage] = useState('');
   const file = useRef<HTMLInputElement>(null);
   const imported = bill.currency === 'USD';
-  const hasChanges = JSON.stringify(bill) !== JSON.stringify(blankBill());
+  const hasChanges = JSON.stringify(bill) !== JSON.stringify(initialBill || blankBill());
   const results = bill.lines.map(line => evaluateLine(bill, line));
   const line = bill.lines[selected];
   const result = results[selected];
@@ -77,14 +77,16 @@ export function SupplierBillEditor({ close }: { close: () => void }) {
   }
 
   return <section className={s.page}>
-    <button type="button" className={s.back} onClick={() => { if (!hasChanges || window.confirm('¿Salir de este borrador? Conserva una copia descargada para retomarlo.')) close(); }}>‹ Centro de compras</button>
-    <header className={s.head}><div><h1>Factura de proveedor</h1><p>Borrador de costos y precios. Para retomarlo otro día, descarga una copia.</p></div>
+    <button type="button" disabled={blockClose} className={s.back} onClick={() => { if (!hasChanges || window.confirm('¿Salir con cambios sin guardar? Conserva una copia descargada para retomarlos.')) close(); }}>‹ {onSave ? 'Facturas guardadas' : 'Centro de compras'}</button>
+    <header className={s.head}><div><h1>Factura de proveedor</h1><p>{onSave ? 'Guarda el borrador para retomarlo desde el ERP.' : 'Borrador de costos y precios. Para retomarlo otro día, descarga una copia.'}</p></div>
       <div className={s.actions}>
-        <button onClick={() => file.current?.click()}>Abrir borrador</button><button className={s.primary} onClick={download}><ChargeIcon name="receipt" />Descargar borrador</button>
+        <button disabled={locked} onClick={() => file.current?.click()}>Abrir borrador</button><button onClick={download}><ChargeIcon name="receipt" />Descargar borrador</button>
+        {onSave && <button className={s.primary} disabled={locked} onClick={() => onSave(bill)}><ChargeIcon name="check" />Guardar en ERP</button>}
         <input hidden ref={file} aria-label="Archivo de borrador" type="file" accept=".json,application/json" onChange={e => { const picked = e.target.files?.[0]; e.target.value = ''; void restore(picked); }} />
       </div>
     </header>
     {message && <p role="status" className={s.status}>{message}</p>}
+    <fieldset disabled={locked} className={s.editorFields}>
     <div className={s.panel + ' ' + s.fields}>
       <Field label="Proveedor" value={bill.supplier} edit={v => editHeader('supplier', v)} />
       <Field label="Número de factura" value={bill.invoiceNumber} edit={v => editHeader('invoiceNumber', v)} />
@@ -137,5 +139,6 @@ export function SupplierBillEditor({ close }: { close: () => void }) {
           <p>Costo de compra para {line.use === 'tool' ? 'control de herramientas' : 'despacho de insumos'}.</p>}
       </div></section>
     </div>
+    </fieldset>
   </section>;
 }
