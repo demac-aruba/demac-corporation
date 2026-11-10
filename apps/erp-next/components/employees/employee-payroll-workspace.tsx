@@ -15,6 +15,7 @@ import {
 } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { payrollBonusReport } from '@/lib/employee-bonuses';
+import { activeSalaryAdvance } from '@/lib/employee-advances';
 import styles from './employee-payroll-workspace.module.css';
 
 function decimalHours(value: number) {
@@ -105,20 +106,20 @@ export function EmployeePayrollWorkspace() {
 
   const employees = useMemo(() => {
     const all = ((operations?.staffProfiles ?? []) as LifecycleProfile[]).filter((profile) => {
-      if (bonusReport.byEmployee[profile.id] > 0) return true;
+      if (bonusReport.byEmployee[profile.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === profile.id && advance.payrollPeriodId === period.id)) return true;
       if (profile.employmentStartedAt && profile.employmentStartedAt > period.endDate) return false;
       if (profile.active === false && profile.employmentEndedAt && profile.employmentEndedAt < period.startDate) return false;
       return profile.active !== false || Boolean(profile.employmentEndedAt && profile.employmentEndedAt >= period.startDate);
     });
     return all.sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b)));
-  }, [operations?.staffProfiles, period.endDate, period.startDate, bonusReport]);
+  }, [operations?.staffProfiles, period.endDate, period.startDate, period.id, bonusReport, attendance.advances]);
 
   const summaries = useMemo(() => {
     if (!operations) return [];
     return employees.map((employee) => summarizeEmployee({ employee, period, operations, attendance }));
   }, [attendance, employees, operations, period]);
 
-  const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id), [attendance.advances, period.id]);
+  const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => activeSalaryAdvance(advance) && advance.payrollPeriodId === period.id), [attendance.advances, period.id]);
   const advanceByEmployee = useMemo(() => {
     const result = new Map<string, number>();
     for (const advance of periodAdvances) result.set(advance.employeeId, (result.get(advance.employeeId) ?? 0) + Number(advance.amount || 0));

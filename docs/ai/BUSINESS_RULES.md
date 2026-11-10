@@ -218,6 +218,17 @@ Production activation remains separately owner-approved through the server-side 
 
 ## Current payroll-attendance ownership
 
+- `OPS-STAFF-INPUT-CORRECTIONS` — Owner request 2026-11-10: authorized payroll users may
+  edit or delete advances and bonuses with a required explanation. Preserve employee/record
+  identity and creator; append actor UID/name, time and before/after values in the same
+  write. Delete retains the entry as voided and removes it from current Employees/Finance
+  totals and newly generated PDF/CSV reports. Legacy advances without status remain active.
+  Date corrections recompute the 27–26 period; amounts remain positive Afl. with at most
+  two decimals. Reject stale target versions and altered request retries. Exact committed
+  retries are no-ops. No automatic deduction, refund, QBO transaction or attendance effect.
+  Already downloaded reports are snapshots and must be exported again. Existing payroll
+  writers remain trusted; this is application history under unchanged payrollRole rules.
+
 - `OPS-STAFF-BONUS-MANUAL`: authorized payroll users enter approved employee bonuses
   manually by employee, date and 27–26 payroll period, with category, positive Afl. amount
   (at most two decimals), concept/reason and actor/time audit. Categories describe the

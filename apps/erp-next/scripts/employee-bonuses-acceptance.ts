@@ -35,8 +35,18 @@ const reply = (payload: unknown, status = 200) => new Response(JSON.stringify(pa
 globalThis.fetch = async (request, init) => {
   const url = new URL(String(request)), id = decodeURIComponent(url.pathname.split('/').at(-1)!);
   assert.equal(url.hostname, 'firestore.googleapis.com');
-  assert.match(url.pathname, /projects\/demo-demac-bonuses\/databases\/\(default\)\/documents\/employeePayrollSettings\//);
+  assert.match(url.pathname, /projects\/demo-demac-bonuses\/databases\/\(default\)\/documents(?:\/employeePayrollSettings\/|:batchGet|:commit)/);
   if (denied) return reply({ error: { status: 'PERMISSION_DENIED', message: 'Synthetic rules denial' } }, 403);
+  if (url.pathname.endsWith(':batchGet')) return reply(JSON.parse(String(init?.body)).documents.map((name: string) => {
+    const key = name.split('/').at(-1)!; return database.has(key) ? { found: document(key) } : { missing: name };
+  }));
+  if (url.pathname.endsWith(':commit')) {
+    const write = JSON.parse(String(init?.body)).writes[0], key = write.update.name.split('/').at(-1)!;
+    assert.equal(write.currentDocument.updateTime, stamp(key));
+    const changes = rest.decodeFirestoreFields(write.update.fields);
+    database.set(key, { ...database.get(key), ...changes, id: key }); versions.set(key, (versions.get(key) ?? 0) + 1); patchCount++;
+    return reply({ commitTime: stamp(key) });
+  }
   if (init?.method !== 'PATCH') return database.has(id) ? reply(document(id)) : reply({}, 404);
   patchCount += 1;
   if (concurrentWrite) { const run = concurrentWrite; concurrentWrite = null; run(); }
@@ -90,7 +100,8 @@ async function main() {
   await assert.rejects(voidEmployeeBonus({ bonus: { ...cancelling, amountAfl: 999 }, employee: employees[0], principal, reason: 'Stale amount' }), /details changed/);
   await assert.rejects(voidEmployeeBonus({ bonus: cancelling, employee: employees[0], principal, reason: '' }), /cancellation reason/);
   await voidEmployeeBonus({ bonus: cancelling, employee: employees[0], principal, reason: 'Duplicate legacy award' });
-  await voidEmployeeBonus({ bonus: cancelling, employee: employees[0], principal, reason: 'Repeated cancellation' });
+  await voidEmployeeBonus({ bonus: cancelling, employee: employees[0], principal, reason: 'Duplicate legacy award' });
+  await assert.rejects(voidEmployeeBonus({ bonus: cancelling, employee: employees[0], principal, reason: 'Repeated cancellation' }), /different details/);
   const cancelled = database.get('legacy-one')!.payrollAdjustments![0];
   assert.equal(cancelled.status, 'voided'); assert.equal(cancelled.voidReason, 'Duplicate legacy award'); assert.equal(cancelled.voidedByUserId, principal.userId);
   report = payrollBonusReport(settings(), employees, period);

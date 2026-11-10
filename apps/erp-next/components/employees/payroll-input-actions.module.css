@@ -1,0 +1,26 @@
+.actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 125px; }
+.actions button, .dialog button { border: 1px solid var(--border, #d6e2f0); border-radius: 8px; padding: 7px 10px; background: var(--surface, white); color: var(--text, #16304e); cursor: pointer; font: inherit; font-weight: 650; }
+.actions .danger { color: #ad3030; }
+.deleted { color: var(--muted, #60748d); padding: 7px 0; }
+.dialog { width: min(640px, calc(100vw - 28px)); max-height: calc(100dvh - 40px); overflow-y: auto; border: 1px solid var(--border, #d6e2f0); border-radius: 18px; padding: 24px; background: var(--surface, white); color: var(--text, #16304e); text-align: left; white-space: normal; box-shadow: 0 16px 60px #10264430; }
+.dialog::backdrop { background: #0c1d3a80; }
+.heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.heading h2 { margin: 0 0 10px; font-size: 22px; }
+.heading p, .operator { color: var(--muted, #60748d); font-size: 12px; line-height: 1.6; }
+.dialog fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.dialog label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-weight: 650; margin: 14px 0; }
+.dialog input, .dialog select, .dialog textarea { box-sizing: border-box; min-width: 0; width: 100%; padding: 10px; border: 1px solid var(--border, #cbdbea); border-radius: 9px; font: inherit; font-weight: 400; background: var(--surface, white); color: inherit; }
+.dialog textarea { resize: vertical; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.dialog .primary { background: #1465e8; border-color: #1465e8; color: white; }
+.dialog .deleteButton { background: #ad3030; border-color: #ad3030; color: white; }
+.dialog button:disabled { opacity: .5; cursor: default; }
+.error { background: #fff0ee; color: #a62d28; padding: 12px; border-radius: 9px; }
+.notice { background: var(--surface-2, #f3f7fc); padding: 12px; font-size: 13px; line-height: 1.6; border-radius: 9px; }
+.history article { border-bottom: 1px solid var(--border, #d6e2f0); padding: 16px 0; font-size: 12px; overflow-wrap: anywhere; }
+.history h3 { font-size: 14px; margin: 0 0 10px; }
+.tableWrap { overflow-x: auto; }
+.history table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.history td, .history th { padding: 9px; border-bottom: 1px solid var(--border, #d6e2f0); vertical-align: top; min-width: 70px; }
+@media (max-width: 500px) { .dialog { padding: 18px; } .row { grid-template-columns: 1fr; gap: 0; } }
