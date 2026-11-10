@@ -37,7 +37,7 @@ import {
   hasValidWorkedTimeRange,
 } from '@/lib/employee-attendance-calculation';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
-import { payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
+import { calculatePayrollDay, payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
@@ -91,6 +91,7 @@ export function EmployeeWorkspace() {
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [periodAnchor, setPeriodAnchor] = useState(today);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [allEmployees, setAllEmployees] = useState(false);
   const [selectedDate, setSelectedDate] = useState(today);
   const [draft, setDraft] = useState<AttendanceDayDraft | null>(null);
   const [advanceDraft, setAdvanceDraft] = useState({ employeeId: '', date: today, amount: '', method: 'Bank Transfer' as SalaryAdvanceMethod, reference: '', notes: '' });
@@ -138,7 +139,7 @@ export function EmployeeWorkspace() {
   }, [quickActionsOpen]);
 
   const employees = useMemo(() => (operations?.staffProfiles ?? []).filter((profile) => profile.active !== false), [operations]);
-  const selectedEmployee = employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
+  const selectedEmployee = allEmployees ? null : employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const period = useMemo(() => payrollPeriodBounds(periodAnchor), [periodAnchor]);
   const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], period), [attendance.payrollSettings, operations?.staffProfiles, period]);
   const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === employee.id && advance.payrollPeriodId === period.id)), [operations?.staffProfiles, bonusReport, attendance.advances, period.id]);
@@ -185,7 +186,7 @@ export function EmployeeWorkspace() {
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
 
-  useEffect(() => { if (selectedEmployee) setDraft(buildDraft(selectedEmployee, selectedDate)); }, [buildDraft, selectedDate, selectedEmployee]);
+  useEffect(() => { setDraft(selectedEmployee ? buildDraft(selectedEmployee, selectedDate) : null); }, [buildDraft, selectedDate, selectedEmployee]);
 
   const periodSummaries = useMemo<EmployeePeriodSummary[]>(() => {
     if (!operations) return [];
@@ -225,6 +226,18 @@ export function EmployeeWorkspace() {
   const ledgerAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id && (!advanceDraft.employeeId || advance.employeeId === advanceDraft.employeeId)).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id, advanceDraft.employeeId]);
   const visibleActiveAdvances = ledgerAdvances.filter(activeSalaryAdvance);
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
+  const calendarSummary = allEmployees ? periodSummaries.reduce((sum, row) => ({
+    scheduled: sum.scheduled + row.scheduled, regular: sum.regular + row.regular,
+    overtime: sum.overtime + row.overtime, exceptionDays: sum.exceptionDays + row.exceptionDays,
+    recordedDays: sum.recordedDays + row.recordedDays,
+  }), { scheduled: 0, regular: 0, overtime: 0, exceptionDays: 0, recordedDays: 0 }) : selectedSummary;
+  const dailyEmployeeRows = useMemo(() => !operations || tab !== 'calendar' || !allEmployees || !payrollLoaded || !canManageSensitiveAttendance ? [] : employees.map((employee) => ({
+    employee, day: calculatePayrollDay({ employee, date: selectedDate, operations, attendance }),
+  })), [operations, tab, allEmployees, payrollLoaded, canManageSensitiveAttendance, employees, selectedDate, attendance]);
+  const dailyTotals = dailyEmployeeRows.reduce((sum, { day }) => ({
+    regular: sum.regular + day.regularHours, overtime: sum.overtime + day.overtimeHours,
+    overtime150: sum.overtime150 + (day.overtime150Hours ?? 0), overtime200: sum.overtime200 + (day.overtime200Hours ?? 0),
+  }), { regular: 0, overtime: 0, overtime150: 0, overtime200: 0 });
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
   const attendanceInputsChanged = Boolean(selectedRecord && draft && (draft.clockInTime !== (selectedRecord.entry?.clockInTime ?? selectedRecord.schedule.startTime)
     || draft.clockOutTime !== (selectedRecord.entry?.clockOutTime ?? selectedRecord.schedule.endTime)
@@ -296,7 +309,7 @@ export function EmployeeWorkspace() {
   const activeSectionLabel = tab === 'calendar' ? 'Employee Calendar' : tab === 'advances' ? 'Salary Advances' : tab === 'bonuses' ? 'Bonuses' : 'Overview';
 
   async function refreshAfterEmployeeChange(employeeId?: string) {
-    if (employeeId) setSelectedEmployeeId(employeeId);
+    if (employeeId) { setAllEmployees(false); setSelectedEmployeeId(employeeId); }
     await load(false);
   }
 
@@ -468,23 +481,23 @@ export function EmployeeWorkspace() {
       {tab === 'calendar' ? <>
         <section className={styles.employeeStrip}>
           <div className={styles.employeeIdentity}>
-            <div className={styles.avatarLarge}>{selectedEmployee ? initials(staffDisplayName(selectedEmployee)) : '—'}</div>
+            <div className={styles.avatarLarge}>{allEmployees ? 'ALL' : selectedEmployee ? initials(staffDisplayName(selectedEmployee)) : '—'}</div>
             <div className={styles.employeeIdentityCopy}>
-              <div className={styles.employeeNameLine}><strong>{selectedEmployee ? staffDisplayName(selectedEmployee) : 'No employee selected'}</strong><span className={styles.activeStatus}><i />Active</span></div>
-              <div className={styles.employeeSubline}>{selectedEmployee?.role ?? selectedEmployee?.employeeType ?? 'Employee'} · {selectedSummary?.vanLabel ?? 'UNASSIGNED'}</div>
-              <select className={styles.changeEmployee} value={selectedEmployee?.id ?? ''} onChange={(event) => setSelectedEmployeeId(event.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select>
+              <div className={styles.employeeNameLine}><strong>{allEmployees ? 'Todos' : selectedEmployee ? staffDisplayName(selectedEmployee) : 'No employee selected'}</strong><span className={styles.activeStatus}><i />Active</span></div>
+              <div className={styles.employeeSubline}>{allEmployees ? `${employees.length} active employees · Select a day for the breakdown` : `${selectedEmployee?.role ?? selectedEmployee?.employeeType ?? 'Employee'} · ${selectedSummary?.vanLabel ?? 'UNASSIGNED'}`}</div>
+              <select className={styles.changeEmployee} aria-label="Calendar employee" value={allEmployees ? '' : selectedEmployee?.id ?? ''} onChange={(event) => { setAllEmployees(!event.target.value); if (event.target.value) setSelectedEmployeeId(event.target.value); }}><option value="">Todos</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select>
             </div>
           </div>
-          <MiniStat label="Scheduled" value={hours(selectedSummary?.scheduled ?? 0)} />
-          <MiniStat label="Regular" value={hours(selectedSummary?.regular ?? 0)} />
-          <MiniStat label="Overtime" value={hours(selectedSummary?.overtime ?? 0)} />
-          <MiniStat label="Exceptions" value={String(selectedSummary?.exceptionDays ?? 0)} />
-          <MiniStat label="Manual Records" value={String(selectedSummary?.recordedDays ?? 0)} />
-          <button type="button" className={styles.profileButton} onClick={() => selectedEmployee && setProfileTargetId(selectedEmployee.id)}><Icon name="user" />View Profile</button>
+          <MiniStat label="Scheduled" value={hours(calendarSummary?.scheduled ?? 0)} />
+          <MiniStat label="Regular" value={hours(calendarSummary?.regular ?? 0)} />
+          <MiniStat label="Overtime" value={hours(calendarSummary?.overtime ?? 0)} />
+          <MiniStat label="Exceptions" value={String(calendarSummary?.exceptionDays ?? 0)} />
+          <MiniStat label="Manual Records" value={String(calendarSummary?.recordedDays ?? 0)} />
+          {selectedEmployee ? <button type="button" className={styles.profileButton} onClick={() => setProfileTargetId(selectedEmployee.id)}><Icon name="user" />View Profile</button> : null}
         </section>
 
         <div className={styles.mainGrid}>
-          <div><section className={styles.calendarCard}>
+          <div className={styles.calendarColumn}><section className={styles.calendarCard}>
             <div className={styles.calendarToolbar}>
               <div>
                 <h2>{monthLabel(monthKey(period.end))}</h2>
@@ -504,7 +517,7 @@ export function EmployeeWorkspace() {
               const assumedLabel = date > today ? 'Scheduled' : 'Regular';
               const exceptionCount = record?.entry?.attendanceExceptions?.length ?? 0;
               const hasOvertime = (record?.entry?.overtimeMinutes ?? 0) > 0 || (record?.entry?.overtimeHours ?? 0) > 0;
-              const stateLabel = record?.assumedRegular
+              const stateLabel = allEmployees && inPeriod ? 'Daily summary' : record?.assumedRegular
                 ? assumedLabel
                 : exceptionCount
                   ? `${record?.status === 'Present' ? 'Present' : statusShort(record?.status ?? null)} · ${exceptionCount} ex.`
@@ -516,16 +529,32 @@ export function EmployeeWorkspace() {
                 type="button"
                 disabled={!inPeriod}
                 title={inPeriod ? formatDate(date) : 'Outside selected payroll period'}
+                aria-label={allEmployees ? formatDate(date) : undefined}
+                aria-pressed={date === selectedDate}
                 className={`${styles.dayButton} ${!inPeriod ? styles.dayOutside : ''} ${date === selectedDate ? styles.daySelected : ''}`}
                 onClick={() => setSelectedDate(date)}
               ><span className={styles.dayNumber}>{Number(date.slice(-2))}</span>{record?.status ? <span className={styles.dayState} data-tone={statusTone(record.status)}><i />{stateLabel}</span> : <span className={styles.dayNoRecord}>{stateLabel}</span>}</button>;
             })}</div>
             <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / outside payroll</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
           </section>
-          <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>Regular OT 150%</th><th>Special OT 200%</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Regular overtime defaults to 150%. Special overtime uses 200% only when selected.</p>{selectedSummary?.overtimeRateReviewRequired ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals before processing payroll.</p> : null}</section></div>
+          {allEmployees ? <section className={styles.payrollBreakdown} aria-label="Daily payroll breakdown">
+            <h3>Payroll breakdown · selected day</h3><p className={styles.intervalHint}>{formatDate(selectedDate)} · Todos</p>
+            {canManageSensitiveAttendance && payrollLoaded ? <>
+              <div className={styles.tableWrap}><table className={styles.dailyBreakdownTable}><thead><tr><th>Employee</th><th>Regular</th><th>Total OT</th><th>Regular OT 150%</th><th>Special OT 200%</th></tr></thead>
+                <tbody>{dailyEmployeeRows.map(({ employee, day }) => <tr key={employee.id}><th scope="row">{staffDisplayName(employee)}{day.overtimeRateReviewRequired ? <small className={styles.intervalHint}> · Review OT rates</small> : null}</th><td>{hours(day.regularHours)}</td><td>{hours(day.overtimeHours)}</td><td>{hours(day.overtime150Hours ?? 0)}</td><td>{hours(day.overtime200Hours ?? 0)}</td></tr>)}</tbody>
+                <tfoot><tr><th scope="row">Total · {dailyEmployeeRows.length} employees</th><td>{hours(dailyTotals.regular)}</td><td>{hours(dailyTotals.overtime)}</td><td>{hours(dailyTotals.overtime150)}</td><td>{hours(dailyTotals.overtime200)}</td></tr></tfoot>
+              </table></div>
+              <p className={styles.intervalHint}>Payroll hours for the selected day. Employees without overtime show 0m.</p>
+              {dailyEmployeeRows.some(({ day }) => day.overtimeRateReviewRequired) ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals before processing payroll.</p> : null}
+            </> : <p className={styles.notice}>Payroll records must be available to view the daily breakdown.</p>}
+          </section> : <section className={styles.payrollBreakdown}><h3>Payroll breakdown · selected period</h3><table><thead><tr><th>Regular</th><th>Total OT</th><th>Regular OT 150%</th><th>Special OT 200%</th></tr></thead><tbody><tr><td>{hours(selectedSummary?.regular ?? 0)}</td><td>{hours(selectedSummary?.overtime ?? 0)}</td><td>{hours(selectedSummary?.overtime150 ?? 0)}</td><td>{hours(selectedSummary?.overtime200 ?? 0)}</td></tr></tbody></table><p className={styles.intervalHint}>Regular overtime defaults to 150%. Special overtime uses 200% only when selected.</p>{selectedSummary?.overtimeRateReviewRequired ? <p className={styles.notice} role="alert">Review overtime allocations that conflict with recorded totals before processing payroll.</p> : null}</section>}</div>
 
           <aside className={styles.rightRail}>
-            <section className={styles.dailyCard}>
+            {allEmployees ? <section className={styles.dailyCard}>
+              <div className={styles.dailyHeader}><div><h2>Daily overview</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong></div></div>
+              <p className={styles.notice}>Select an employee to view or edit their daily record. The table shows each employee's overtime for this date.</p>
+              {canManageSensitiveAttendance && payrollLoaded ? <div className={styles.dailySummary}><SummaryRow icon="timer" label="Total Overtime" value={hours(dailyTotals.overtime)} tone="orange" /><SummaryRow icon="timer" label="Regular overtime · 150%" value={hours(dailyTotals.overtime150)} tone="orange" /><SummaryRow icon="timer" label="Special overtime · 200%" value={hours(dailyTotals.overtime200)} tone="orange" /></div> : null}
+            </section> : <><section className={styles.dailyCard}>
               <div className={styles.dailyHeader}><div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedCalculation.error && draft?.attendanceShiftOverride ? 'Adjusted shift · calculation pending' : selectedSchedule?.label ?? 'No configured schedule'}</small></div><span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular && !selectedRecord.entry ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span></div>
               {draft && selectedRecord ? <div className={styles.dailyForm}>
                 {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Enter only what actually changed; overtime and partial missing time are calculated from the employee schedule.</div> : null}
@@ -577,7 +606,7 @@ export function EmployeeWorkspace() {
                 <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException || !!intervalSaveError} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
               </div> : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}
             </section>
-            <section className={styles.rangesCard}><div className={styles.rangesIcon}><Icon name="calendar" /></div><div><h3>Recent / Scheduled Ranges</h3>{selectedAbsenceRanges.length ? selectedAbsenceRanges.map((range) => <p key={range.id}><strong>{range.reason ?? 'Absence'}</strong> · {range.fromDate ?? '—'}{range.toDate && range.toDate !== range.fromDate ? ` → ${range.toDate}` : ''}</p>) : <p>No absence ranges recorded.</p>}</div></section>
+            <section className={styles.rangesCard}><div className={styles.rangesIcon}><Icon name="calendar" /></div><div><h3>Recent / Scheduled Ranges</h3>{selectedAbsenceRanges.length ? selectedAbsenceRanges.map((range) => <p key={range.id}><strong>{range.reason ?? 'Absence'}</strong> · {range.fromDate ?? '—'}{range.toDate && range.toDate !== range.fromDate ? ` → ${range.toDate}` : ''}</p>) : <p>No absence ranges recorded.</p>}</div></section></>}
           </aside>
         </div>
       </> : null}
@@ -587,7 +616,7 @@ export function EmployeeWorkspace() {
         <section className={styles.advanceFormCard}><span className={styles.sectionEyebrow}>New payroll input</span><h2>Record Salary Advance</h2><p>This records the advance only; it does not apply an automatic deduction.</p><div className={styles.dailyForm}><Field label="Employee" full><select className={styles.control} aria-label="Salary advance employee" value={advanceDraft.employeeId} onChange={(event) => setAdvanceDraft({ ...advanceDraft, employeeId: event.target.value })}><option value="">Todos</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select></Field>{!advanceDraft.employeeId ? <p className={`${styles.fieldFull} ${styles.notice}`}>Showing advances for all employees. Select an employee to record a new advance.</p> : null}<Field label="Date"><input className={styles.control} type="date" value={advanceDraft.date} onChange={(event) => setAdvanceDraft({ ...advanceDraft, date: event.target.value })} /></Field><Field label="Amount (Afl.)"><input className={styles.control} type="number" min="0" step="0.01" value={advanceDraft.amount} onChange={(event) => setAdvanceDraft({ ...advanceDraft, amount: event.target.value })} /></Field><Field label="Method"><select className={styles.control} value={advanceDraft.method} onChange={(event) => setAdvanceDraft({ ...advanceDraft, method: event.target.value as SalaryAdvanceMethod })}><option value="Bank Transfer">Bank Transfer</option><option value="Cash">Cash</option></select></Field><Field label="Reference / Receipt"><input className={styles.control} value={advanceDraft.reference} onChange={(event) => setAdvanceDraft({ ...advanceDraft, reference: event.target.value })} placeholder="Optional reference" /></Field><Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={advanceDraft.notes} onChange={(event) => setAdvanceDraft({ ...advanceDraft, notes: event.target.value })} placeholder="Reason or internal note…" /></Field><button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || !payrollLoaded || !advanceDraft.employeeId || !advanceDraft.amount} onClick={() => void recordAdvance()}>{busy ? 'Saving…' : 'Record Advance'}</button></div></section>
       </div> : null}
 
-      {tab === 'bonuses' && canManageSensitiveAttendance ? payrollLoaded ? <EmployeeBonusesPanel key={period.id} employees={operations.staffProfiles} settings={attendance.payrollSettings} period={period} selectedEmployeeId={selectedEmployeeId} onMovePeriod={movePayrollPeriod} onCurrentPeriod={goToToday} onSaved={(record) => setAttendance((current) => ({ ...current, payrollSettings: [...current.payrollSettings.filter((item) => item.id !== record.id), record] }))} /> : <div className={styles.error}>Payroll records must load before bonuses can be managed. <button type="button" onClick={() => void load()}>Retry</button></div> : null}
+      {tab === 'bonuses' && canManageSensitiveAttendance ? payrollLoaded ? <EmployeeBonusesPanel key={period.id} employees={operations.staffProfiles} settings={attendance.payrollSettings} period={period} onMovePeriod={movePayrollPeriod} onCurrentPeriod={goToToday} onSaved={(record) => setAttendance((current) => ({ ...current, payrollSettings: [...current.payrollSettings.filter((item) => item.id !== record.id), record] }))} /> : <div className={styles.error}>Payroll records must load before bonuses can be managed. <button type="button" onClick={() => void load()}>Retry</button></div> : null}
 
       <EmployeeProfileDialog
         open={profileTargetId !== undefined}

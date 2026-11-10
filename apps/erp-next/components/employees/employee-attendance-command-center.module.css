@@ -607,3 +607,7 @@
   .miniStat { border-left: 0; }
   .employeeStrip .miniStat:nth-of-type(n+3) { display: none; }
 }
+
+.calendarColumn { min-width: 0; }
+.dailyBreakdownTable { min-width: 560px; }
+.dailyBreakdownTable tfoot { font-weight: 750; background: var(--surface-2, #f4f8fd); }

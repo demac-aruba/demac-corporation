@@ -10,23 +10,22 @@ import { PayrollInputActions } from './payroll-input-actions';
 
 const money = (amount: number) => `Afl. ${amount.toLocaleString('en-AW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export function EmployeeBonusesPanel({ employees, settings, period, selectedEmployeeId, onSaved, onMovePeriod, onCurrentPeriod }: {
+export function EmployeeBonusesPanel({ employees, settings, period, onSaved, onMovePeriod, onCurrentPeriod }: {
   employees: CanonicalStaffProfile[]; settings: EmployeePayrollSettings[]; period: PayrollPeriodBounds;
-  selectedEmployeeId: string; onSaved: (record: EmployeePayrollSettings) => void;
+  onSaved: (record: EmployeePayrollSettings) => void;
   onMovePeriod: (offset: number) => void; onCurrentPeriod: () => void;
 }) {
   const { principal } = useAuth();
   const allowed = canManageBonuses(principal);
   const today = dateKey(new Date());
-  const blank = (): BonusDraft => ({ id: `payroll-adjustment-${crypto.randomUUID()}`, employeeId: selectedEmployeeId || employees[0]?.id || '',
+  const blank = (): BonusDraft => ({ id: `payroll-adjustment-${crypto.randomUUID()}`, employeeId: '',
     date: today < period.start ? period.start : today > period.end ? period.end : today, amount: '', category: 'perfect_attendance', concept: '' });
   const [draft, setDraft] = useState<BonusDraft>(blank);
-  const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const report = payrollBonusReport(settings, employees, period);
-  const visible = report.bonuses.filter((bonus) => !filter || bonus.canonicalEmployeeId === filter);
+  const visible = report.bonuses.filter((bonus) => !draft.employeeId || bonus.canonicalEmployeeId === draft.employeeId);
   async function save() {
     const employee = employees.find((item) => item.id === draft.employeeId);
     if (!employee) { setError('Select an employee.'); return; }
@@ -53,8 +52,8 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
     {report.issues.length ? <p className={styles.error} role="alert">{report.issues.join(' ')}</p> : null}
     <div className={styles.layout}>
       <div className={styles.ledger}>
-        <div className={styles.ledgerHeader}><div><span>Approved bonuses this period</span><strong>{money(report.total)}</strong></div><button type="button" disabled={busy || !!report.issues.length} onClick={exportDetails}>Export Bonus Details</button></div>
-        <label className={styles.field}>Filter employee<select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All employees</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)}</option>)}</select></label>
+        <div className={styles.ledgerHeader}><div><span>Approved bonuses this period</span><strong>{money(draft.employeeId ? report.byEmployee[draft.employeeId] ?? 0 : report.total)}</strong></div><button type="button" disabled={busy || !!report.issues.length} onClick={exportDetails}>Export Bonus Details</button></div>
+        <label className={styles.field}>Filter employee<select aria-label="Filter bonus employee" disabled={busy} value={draft.employeeId} onChange={(event) => setDraft({ ...draft, employeeId: event.target.value })}><option value="">Todos</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)}</option>)}</select></label>
         <div className={styles.tableWrap}><table><thead><tr><th>Employee / Date</th><th>Bonus / Reason</th><th>Amount</th><th>Status</th><th>Recorded by</th><th>Action</th></tr></thead><tbody>{visible.map((bonus) => <tr key={`${bonus.settingsId}-${bonus.id}`}>
           <td><strong>{bonus.employeeName}</strong><small>{bonus.date}</small></td><td><strong>{bonus.category ? BONUS_CATEGORIES[bonus.category] ?? 'Bonus' : 'Bonus'}</strong><span>{bonus.concept}</span>{bonus.voidReason ? <small>Cancellation: {bonus.voidReason}</small> : null}</td><td className={styles.amount}>{money(bonus.amountAfl)}</td><td><span className={bonus.status === 'active' ? styles.active : styles.voided}>{bonus.status === 'active' ? 'Active' : 'Deleted'}</span></td><td>{bonus.createdByName || '—'}</td><td>{employees.find((employee) => employee.id === bonus.canonicalEmployeeId) ? <PayrollInputActions kind="bonus" record={bonus} employee={employees.find((employee) => employee.id === bonus.canonicalEmployeeId)!} onSaved={(record) => { onSaved(record); setMessage('Bonus updated. The change is recorded in History.'); }} /> : null}</td>
         </tr>)}</tbody></table></div>
@@ -62,7 +61,8 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
       </div>
       <form className={styles.form} onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <span className={styles.eyebrow}>New payroll input</span><h3>Add Bonus</h3><p>Enter the approved amount in Afl. Accounting processes the final payroll.</p>
-        <fieldset disabled={busy}><label className={styles.field}>Employee<select aria-label="Bonus employee" value={draft.employeeId} onChange={(event) => setDraft({ ...draft, employeeId: event.target.value })} required>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)}{employee.active === false ? ' · Former employee' : ''}</option>)}</select></label>
+        <fieldset disabled={busy}><label className={styles.field}>Employee<select aria-label="Bonus employee" value={draft.employeeId} onChange={(event) => setDraft({ ...draft, employeeId: event.target.value })} required><option value="">Todos</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)}{employee.active === false ? ' · Former employee' : ''}</option>)}</select></label>
+          {!draft.employeeId ? <p>Showing bonuses for all employees. Select an employee to record a new bonus.</p> : null}
           <label className={styles.field}>Bonus Type<select aria-label="Bonus type" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as BonusCategory })}>{Object.entries(BONUS_CATEGORIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <div className={styles.formRow}><label className={styles.field}>Date<input aria-label="Bonus date" type="date" min={period.start} max={period.end} required value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label><label className={styles.field}>Amount (Afl.)<input aria-label="Bonus amount" inputMode="decimal" required value={draft.amount} placeholder="0.00" onChange={(event) => setDraft({ ...draft, amount: event.target.value })} /></label></div>
           <label className={styles.field}>Concept / Reason<textarea aria-label="Bonus reason" required maxLength={500} rows={3} value={draft.concept} placeholder="Achievement, approved commission or other bonus details…" onChange={(event) => setDraft({ ...draft, concept: event.target.value })} /></label>

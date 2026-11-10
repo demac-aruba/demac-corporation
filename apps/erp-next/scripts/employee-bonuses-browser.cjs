@@ -16,7 +16,7 @@ seed['advance-one'] = { id: 'advance-one', recordType: 'salaryAdvance', employee
 const stubs = {
   'auth-provider': `const principal={role:window.testRole||'super_admin',active:true,userId:'synthetic-operator',displayName:'Synthetic Operator',capabilities:new Set(window.testRole?[]:['payroll_sensitive.view'])};export function useAuth(){return {principal};}`,
   'canonical-operations': `export * from './lib/canonical-operations';export async function loadCanonicalOperationsState(){return {staffProfiles:${JSON.stringify(employees)},vans:[],vanHalfDaySchedules:[],staffAbsences:[]};}`,
-  'firestore-rest': `export * from './lib/firebase/firestore-rest';export async function listFirestoreCollection(collection){window.payrollReads++;if(collection==='employeeTimesheets')return [];if(collection==='employeePayrollSettings')return Object.values(window.bonusDb);throw Error('Unexpected synthetic collection');}`,
+  'firestore-rest': `export * from './lib/firebase/firestore-rest';export async function listFirestoreCollection(collection){window.payrollReads++;if(collection==='employeeTimesheets')return window.dailyTimesheets||[];if(collection==='employeePayrollSettings')return Object.values(window.bonusDb);throw Error('Unexpected synthetic collection');}`,
   'session': `export * from './lib/firebase/session';export async function requireFirebaseWebSession(){return {idToken:'synthetic-test-only'};}`,
   'employee-directory-overview': `export function EmployeeDirectoryOverview(){return null;}`,
   'employee-profile-dialog': `export function EmployeeProfileDialog(){return null;}`,
@@ -63,8 +63,20 @@ async function runCase(browser, origin, name, viewport) {
   try {
     await page.goto(origin); await page.getByRole('button', { name: 'Bonuses', exact: true }).click();
     await page.getByText('Legacy achievement', { exact: true }).waitFor();
+    const bonusEmployee = page.getByLabel('Bonus employee', { exact: true });
+    assert.equal(await bonusEmployee.inputValue(), '');
+    assert.equal(await bonusEmployee.locator('option').first().innerText(), 'Todos');
+    await bonusEmployee.selectOption('staff-two');
+    assert.equal(await page.getByLabel('Filter bonus employee', { exact: true }).inputValue(), 'staff-two');
+    assert.equal(await page.getByText('Legacy achievement', { exact: true }).count(), 0);
+    assert.match(await page.getByText('Approved bonuses this period', { exact: true }).locator('..').innerText(), /Afl\. 0\.00/);
+    await page.getByLabel('Filter bonus employee', { exact: true }).selectOption('');
+    assert.equal(await bonusEmployee.inputValue(), '');
+    await page.getByText('Legacy achievement', { exact: true }).waitFor();
     await page.getByLabel('Bonus amount', { exact: true }).fill('100');
     await page.getByLabel('Bonus reason', { exact: true }).fill('Approved perfect attendance');
+    assert.equal(await page.getByRole('button', { name: 'Save Bonus', exact: true }).isDisabled(), true);
+    await bonusEmployee.selectOption('staff-one');
     await page.getByRole('button', { name: 'Save Bonus', exact: true }).click();
     await page.getByRole('status').filter({ hasText: 'Bonus saved' }).waitFor();
     await page.getByLabel('Bonus employee', { exact: true }).selectOption('staff-two');
@@ -113,6 +125,7 @@ async function runCase(browser, origin, name, viewport) {
     assert.match(await dialog.innerText(), /Correction approved/);
     assert.match(await dialog.innerText(), /Corrected approved amount/);
     await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByLabel('Bonus employee', { exact: true }).selectOption('staff-one');
     await page.evaluate(() => { window.denyWrites = true; });
     await page.getByLabel('Bonus type', { exact: true }).selectOption('service_sales');
     await page.getByLabel('Bonus amount', { exact: true }).fill('15');
@@ -184,6 +197,57 @@ async function runCase(browser, origin, name, viewport) {
     throw error;
   } finally { await context.close(); }
 }
+async function runCalendarCase(browser, origin, name, viewport) {
+  const context = await browser.newContext({ viewport }); const page = await context.newPage();
+  const errors = [], external = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await context.route('**/*', route => route.request().url().startsWith(origin + '/') ? route.continue() : (external.push(route.request().url()), route.abort()));
+  await page.addInitScript(() => {
+    const row = (employeeId, date, minutes, allocations) => ({ id: employeeId + '_' + date, employeeId, date,
+      payrollPeriodId: '2026-08-27_2026-09-26', status: 'Present', regularHours: 8, scheduledWorkHours: 8,
+      overtimeHours: minutes / 60, overtimeMinutes: minutes, overtimePayAllocations: allocations,
+      aoHours: 0, vacationHours: 0, noWorkNoPayHours: 0, paidFreeHours: 0 });
+    window.dailyTimesheets = [row('staff-one', '2026-09-14', 75, [{ rate: 150, minutes: 75 }]),
+      row('staff-two', '2026-09-14', 120, [{ rate: 200, minutes: 120 }]),
+      row('staff-two', '2026-09-15', 30), row('staff-one', '2026-09-16', 120, [{ rate: 150, minutes: 180 }])];
+  });
+  await page.clock.install({ time: new Date('2026-09-14T14:00:00Z') });
+  try {
+    await page.goto(origin); await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    const employee = page.getByLabel('Calendar employee', { exact: true });
+    assert.equal(await employee.locator('option').first().innerText(), 'Todos');
+    await employee.selectOption('');
+    const table = page.getByRole('region', { name: 'Daily payroll breakdown' });
+    const row = name => table.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
+    const cells = async name => row(name).locator('td').allTextContents();
+    await table.waitFor();
+    assert.deepEqual(await cells('Synthetic One'), ['8h 00m', '1h 15m', '1h 15m', '0m']);
+    assert.deepEqual(await cells('Synthetic Two'), ['8h 00m', '2h 00m', '0m', '2h 00m']);
+    assert.deepEqual(await cells('Total · 2 employees'), ['16h 00m', '3h 15m', '1h 15m', '2h 00m']);
+    assert.equal(await page.getByLabel('Clock In', { exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Save Exception', exact: true }).count(), 0);
+    await page.screenshot({ path: path.join(output, name + '-calendar-all.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Tuesday, September 15, 2026', exact: true }).click();
+    assert.deepEqual(await cells('Synthetic One'), ['8h 00m', '0m', '0m', '0m']);
+    assert.deepEqual(await cells('Synthetic Two'), ['8h 00m', '30m', '30m', '0m']);
+    assert.deepEqual(await cells('Total · 2 employees'), ['16h 00m', '30m', '30m', '0m']);
+    await employee.selectOption('staff-two');
+    await page.getByRole('heading', { name: 'Daily Record', exact: true }).waitFor();
+    assert.equal(await table.count(), 0);
+    await page.getByLabel('Clock In', { exact: true }).waitFor();
+    await employee.selectOption('');
+    assert.deepEqual(await cells('Synthetic Two'), ['8h 00m', '30m', '30m', '0m']);
+    await page.getByRole('button', { name: 'Wednesday, September 16, 2026', exact: true }).click();
+    await table.getByRole('alert').waitFor();
+    assert.match(await table.innerText(), /Review OT rates/);
+    assert.equal(await page.evaluate(() => window.patchCount), 0);
+    assert.deepEqual(errors, []); assert.deepEqual(external, []);
+    return { name: name + '-calendar-all', result: 'PASS', dailyScope: true, rates150and200: true, zeroOvertime: true, reviewFlag: true, writes: 0 };
+  } catch (error) {
+    await page.screenshot({ path: path.join(output, name + '-calendar-failure.png'), fullPage: true });
+    throw error;
+  } finally { await context.close(); }
+}
 async function main() {
   await build({ absWorkingDir: APP, tsconfig: path.join(APP, 'tsconfig.json'), stdin: { contents: entry, loader: 'tsx', resolveDir: APP }, outfile: path.join(output, 'app.js'), bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic',
     define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-demac-bonuses', NEXT_PUBLIC_FIREBASE_API_KEY: 'synthetic', NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'demo-demac-bonuses.firebaseapp.com', NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'demo-demac-bonuses.appspot.com', NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123', NEXT_PUBLIC_FIREBASE_APP_ID: 'synthetic', NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false' }) },
@@ -206,10 +270,15 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true, ...(process.env.BONUS_TEST_CHROMIUM ? { executablePath: process.env.BONUS_TEST_CHROMIUM } : {}) }); const results = [];
     for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) results.push(await runCase(browser, origin, name, viewport));
+    for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) results.push(await runCalendarCase(browser, origin, name, viewport));
     const restricted = await browser.newContext(); const page = await restricted.newPage();
     await page.addInitScript(() => { window.testRole = 'technician'; });
     await page.goto(origin); await page.getByRole('heading', { name: 'Employees', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Bonuses', exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => window.payrollReads), 0);
+    await page.getByRole('button', { name: 'Employee Calendar', exact: true }).click();
+    await page.getByLabel('Calendar employee', { exact: true }).selectOption('');
+    assert.equal(await page.getByRole('region', { name: 'Daily payroll breakdown' }).locator('tbody tr').count(), 0);
     assert.equal(await page.evaluate(() => window.payrollReads), 0);
     await restricted.close(); results.push({ name: 'restricted-role', result: 'PASS', payrollReads: 0 });
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2)); console.log(JSON.stringify(results));
