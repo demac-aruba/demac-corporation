@@ -529,7 +529,7 @@ export function EmployeeWorkspace() {
                 type="button"
                 disabled={!inPeriod}
                 title={inPeriod ? formatDate(date) : 'Outside selected payroll period'}
-                aria-label={formatDate(date)}
+                aria-label={allEmployees ? formatDate(date) : undefined}
                 aria-pressed={date === selectedDate}
                 className={`${styles.dayButton} ${!inPeriod ? styles.dayOutside : ''} ${date === selectedDate ? styles.daySelected : ''}`}
                 onClick={() => setSelectedDate(date)}
