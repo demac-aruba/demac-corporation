@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { staffDisplayName, type CanonicalStaffProfile } from '@/lib/canonical-operations';
 import { dateKey, type EmployeePayrollSettings, type PayrollPeriodBounds } from '@/lib/employee-attendance';
-import { BONUS_CATEGORIES, canManageBonuses, payrollBonusCsv, payrollBonusReport, saveEmployeeBonus, voidEmployeeBonus, type BonusCategory, type BonusDraft, type PayrollBonus } from '@/lib/employee-bonuses';
+import { BONUS_CATEGORIES, canManageBonuses, payrollBonusCsv, payrollBonusReport, saveEmployeeBonus, type BonusCategory, type BonusDraft } from '@/lib/employee-bonuses';
 import styles from './employee-bonuses-panel.module.css';
+import { PayrollInputActions } from './payroll-input-actions';
 
 const money = (amount: number) => `Afl. ${amount.toLocaleString('en-AW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -24,8 +25,6 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [voiding, setVoiding] = useState<PayrollBonus | null>(null);
-  const [voidReason, setVoidReason] = useState('');
   const report = payrollBonusReport(settings, employees, period);
   const visible = report.bonuses.filter((bonus) => !filter || bonus.canonicalEmployeeId === filter);
   async function save() {
@@ -35,17 +34,6 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
     try {
       const record = await saveEmployeeBonus({ employee, employees, settings, period, draft, principal });
       onSaved(record); setDraft(blank()); setMessage('Bonus saved. It is included in the accounting exports for this payroll period.');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setBusy(false); }
-  }
-  async function confirmVoid() {
-    if (!voiding) return;
-    const employee = employees.find((item) => item.id === voiding.canonicalEmployeeId);
-    if (!employee) return;
-    setBusy(true); setError(''); setMessage('');
-    try {
-      const record = await voidEmployeeBonus({ bonus: voiding, employee, reason: voidReason, principal });
-      onSaved(record); setVoiding(null); setVoidReason(''); setMessage('Bonus cancelled. Its history is retained and the amount is excluded from accounting totals.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   }
@@ -68,7 +56,7 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
         <div className={styles.ledgerHeader}><div><span>Approved bonuses this period</span><strong>{money(report.total)}</strong></div><button type="button" disabled={busy || !!report.issues.length} onClick={exportDetails}>Export Bonus Details</button></div>
         <label className={styles.field}>Filter employee<select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All employees</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)}</option>)}</select></label>
         <div className={styles.tableWrap}><table><thead><tr><th>Employee / Date</th><th>Bonus / Reason</th><th>Amount</th><th>Status</th><th>Recorded by</th><th>Action</th></tr></thead><tbody>{visible.map((bonus) => <tr key={`${bonus.settingsId}-${bonus.id}`}>
-          <td><strong>{bonus.employeeName}</strong><small>{bonus.date}</small></td><td><strong>{bonus.category ? BONUS_CATEGORIES[bonus.category] ?? 'Bonus' : 'Bonus'}</strong><span>{bonus.concept}</span>{bonus.voidReason ? <small>Cancellation: {bonus.voidReason}</small> : null}</td><td className={styles.amount}>{money(bonus.amountAfl)}</td><td><span className={bonus.status === 'active' ? styles.active : styles.voided}>{bonus.status === 'active' ? 'Active' : 'Cancelled'}</span></td><td>{bonus.createdByName || '—'}</td><td>{bonus.status === 'active' ? <button type="button" disabled={busy} onClick={() => { setVoiding(bonus); setVoidReason(''); }}>Cancel bonus</button> : '—'}</td>
+          <td><strong>{bonus.employeeName}</strong><small>{bonus.date}</small></td><td><strong>{bonus.category ? BONUS_CATEGORIES[bonus.category] ?? 'Bonus' : 'Bonus'}</strong><span>{bonus.concept}</span>{bonus.voidReason ? <small>Cancellation: {bonus.voidReason}</small> : null}</td><td className={styles.amount}>{money(bonus.amountAfl)}</td><td><span className={bonus.status === 'active' ? styles.active : styles.voided}>{bonus.status === 'active' ? 'Active' : 'Deleted'}</span></td><td>{bonus.createdByName || '—'}</td><td>{employees.find((employee) => employee.id === bonus.canonicalEmployeeId) ? <PayrollInputActions kind="bonus" record={bonus} employee={employees.find((employee) => employee.id === bonus.canonicalEmployeeId)!} onSaved={(record) => { onSaved(record); setMessage('Bonus updated. The change is recorded in History.'); }} /> : null}</td>
         </tr>)}</tbody></table></div>
         {!visible.length ? <p className={styles.empty}>No bonuses recorded for this selection.</p> : null}
       </div>
@@ -82,8 +70,6 @@ export function EmployeeBonusesPanel({ employees, settings, period, selectedEmpl
         </fieldset>
       </form>
     </div>
-    {voiding ? <div className={styles.confirm} role="dialog" aria-modal="false" aria-label="Cancel bonus">
-      <h3>Cancel {money(voiding.amountAfl)} for {voiding.employeeName}?</h3><p>{voiding.concept}</p><label className={styles.field}>Cancellation reason<textarea aria-label="Bonus cancellation reason" maxLength={500} value={voidReason} onChange={(event) => setVoidReason(event.target.value)} disabled={busy} /></label><div><button type="button" disabled={busy} onClick={() => setVoiding(null)}>Keep Bonus</button><button type="button" disabled={busy || !voidReason.trim()} onClick={() => void confirmVoid()}>Confirm Cancellation</button></div>
-    </div> : null}
+
   </section>;
 }

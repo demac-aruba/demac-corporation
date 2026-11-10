@@ -1,6 +1,7 @@
 import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument, mutateFirestoreDocumentWithReads } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import type { PayrollAdjustment } from './employee-bonuses';
+import type { PayrollInputAudit } from './payroll-input-corrections';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
 import {
   attendanceExceptionTotals,
@@ -100,7 +101,7 @@ export type EmployeeTimesheetEntry = {
   updatedByName?: string;
 };
 
-export type EmployeeSalaryAdvance = {
+export type EmployeeSalaryAdvance = PayrollInputAudit & {
   id: string;
   recordType: 'salaryAdvance';
   employeeId: string;
@@ -115,6 +116,11 @@ export type EmployeeSalaryAdvance = {
   updatedAt: string;
   recordedByUserId?: string;
   recordedByName?: string;
+  status?: 'active' | 'voided';
+  voidedAt?: string;
+  voidedByUserId?: string;
+  voidedByName?: string;
+  voidReason?: string;
 };
 
 export type AttendanceDayDraft = {

@@ -2,10 +2,11 @@ import type { CanonicalStaffProfile } from './canonical-operations';
 import { payrollPeriodBounds, payrollSettingsForEmployee, type EmployeePayrollSettings, type PayrollPeriodBounds } from './employee-attendance';
 import { mutateFirestoreDocument } from './firebase/firestore-rest';
 import type { AuthPrincipal } from './security';
+import { assertPayrollCorrectionPermission, mutatePayrollCorrection, payrollCorrectionPatch, payrollInputAmount, payrollInputDate, type PayrollCorrection, type PayrollInputAudit } from './payroll-input-corrections';
 
 // Existing Legacy contract: employeePayrollSettings/{owner}.payrollAdjustments.
 // Deductions stay in the same array and are never changed by the bonus editor.
-export type PayrollAdjustment = {
+export type PayrollAdjustment = PayrollInputAudit & {
   id: string; payrollPeriodId: string; employeeId: string; employeeName: string;
   type: 'bonus' | 'deduction'; amountAfl: number; date: string; concept: string;
   status: 'active' | 'voided'; createdAt: string; updatedAt: string;
@@ -124,19 +125,48 @@ export async function saveEmployeeBonus(input: {
   });
 }
 
+/** Compatibility entry point; new UI supplies its own stable correction request ID. */
 export async function voidEmployeeBonus(input: { bonus: PayrollBonus; employee: CanonicalStaffProfile; reason: string; principal: AuthPrincipal }) {
-  assertPermission(input.principal);
-  const reason = input.reason.trim();
-  if (!reason || reason.length > 500) throw new Error('Enter a cancellation reason of 1 to 500 characters.');
-  return mutateFirestoreDocument<EmployeePayrollSettings>('employeePayrollSettings', input.bonus.settingsId, (current) => {
-    validateOwner(current, input.employee, input.bonus.settingsId);
+  if (!input.reason.trim()) throw new Error('Enter a cancellation reason of 1 to 500 characters.');
+  return correctEmployeeBonus({ bonus: input.bonus, employee: input.employee, correction: {
+    requestId: `void-${input.bonus.id}-${input.bonus.updatedAt}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 160),
+    action: 'delete', reason: input.reason, principal: input.principal,
+  } });
+}
+
+export function bonusValues(bonus: PayrollAdjustment) {
+  return { employeeId: bonus.employeeId, employeeName: bonus.employeeName, date: bonus.date, payrollPeriodId: bonus.payrollPeriodId,
+    amount: bonus.amountAfl, category: bonus.category ?? '', concept: bonus.concept, status: bonus.status };
+}
+
+export async function correctEmployeeBonus(input: {
+  bonus: PayrollBonus; employee: CanonicalStaffProfile; draft?: Pick<BonusDraft, 'date' | 'amount' | 'category' | 'concept'>; correction: PayrollCorrection;
+}) {
+  assertPayrollCorrectionPermission(input.correction.principal);
+  const { bonus, draft, correction } = input;
+  const before = bonusValues(bonus);
+  let after = { ...before, status: 'voided' as string };
+  if (correction.action === 'edit') {
+    if (!draft) throw new Error('Missing bonus details.');
+    const date = payrollInputDate(draft.date), amount = payrollInputAmount(draft.amount);
+    if (!Object.hasOwn(BONUS_CATEGORIES, draft.category)) throw new Error('Select a bonus category.');
+    const concept = draft.concept.trim();
+    if (!concept || concept.length > 500) throw new Error('Enter a concept of 1 to 500 characters.');
+    after = { ...before, date, payrollPeriodId: payrollPeriodBounds(date).id, amount, category: draft.category, concept };
+  }
+  return mutatePayrollCorrection<EmployeePayrollSettings>(bonus.settingsId, (current) => {
+    validateOwner(current, input.employee, bonus.settingsId);
     const entries = current?.payrollAdjustments ?? [];
-    const existing = entries.find((entry) => entry.id === input.bonus.id);
-    if (!existing || existing.type !== 'bonus' || ![input.bonus.settingsId, input.employee.id].includes(existing.employeeId)) throw new Error('Bonus no longer matches this employee. Refresh and review.');
-    if (existing.amountAfl !== input.bonus.amountAfl || existing.concept !== input.bonus.concept || existing.date !== input.bonus.date || existing.payrollPeriodId !== input.bonus.payrollPeriodId) throw new Error('Bonus details changed. Refresh and review before cancelling.');
-    if (existing.status === 'voided') return null;
-    const now = new Date().toISOString();
-    return { payrollAdjustments: entries.map((entry) => entry.id !== existing.id ? entry : { ...entry, status: 'voided', updatedAt: now,
-      voidedAt: now, voidReason: reason, voidedByUserId: input.principal.userId, voidedByName: input.principal.displayName }) };
+    const matching = entries.filter((entry) => entry.id === bonus.id);
+    const existing = matching[0];
+    if (matching.length !== 1 || existing.type !== 'bonus' || ![bonus.settingsId, input.employee.id].includes(existing.employeeId)) throw new Error('Bonus no longer matches this employee. Refresh and review.');
+    // Report labels may use the current employee name; stored historical name stays intact.
+    const expectedValues = { ...before, employeeName: existing.employeeName };
+    const persistedAfter = { ...after, employeeName: existing.employeeName };
+    const audit = payrollCorrectionPatch({ current: existing, expected: bonus, before: bonusValues(existing), expectedValues, after: persistedAfter, correction });
+    if (!audit) return null;
+    return { payrollAdjustments: entries.map((entry) => entry.id === bonus.id ? { ...entry, date: after.date,
+      payrollPeriodId: after.payrollPeriodId, amountAfl: after.amount, ...(after.category ? { category: after.category } : {}), concept: after.concept,
+      status: after.status, ...audit } : entry) };
   });
 }

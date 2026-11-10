@@ -46,6 +46,8 @@ import { EmployeeAttendanceShiftEditor } from './employee-attendance-shift-edito
 import { EmployeeAttendanceIntervalEditor } from './employee-attendance-interval-editor';
 import { EmployeeBonusesPanel } from './employee-bonuses-panel';
 import { payrollBonusReport } from '@/lib/employee-bonuses';
+import { activeSalaryAdvance } from '@/lib/employee-advances';
+import { PayrollInputActions } from './payroll-input-actions';
 import styles from './employee-attendance-command-center.module.css';
 
 const STATUS_OPTIONS = Object.keys(ATTENDANCE_STATUS_LABELS) as AttendanceStatus[];
@@ -75,7 +77,7 @@ type CalendarCell = { date: string; inPeriod: boolean };
 
 export function EmployeeWorkspace() {
   const { principal } = useAuth();
-  const canManageSensitiveAttendance = principal.role === 'super_admin' || principal.capabilities.has('payroll_sensitive.view');
+  const canManageSensitiveAttendance = principal.active && (principal.role === 'super_admin' || principal.role === 'finance' || principal.capabilities.has('payroll_sensitive.view'));
   const canManageEmployees = principal.capabilities.has('employees.manage');
   const today = dateKey(new Date());
   const quickActionsRef = useRef<HTMLDetailsElement>(null);
@@ -139,7 +141,7 @@ export function EmployeeWorkspace() {
   const selectedEmployee = employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const period = useMemo(() => payrollPeriodBounds(periodAnchor), [periodAnchor]);
   const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], period), [attendance.payrollSettings, operations?.staffProfiles, period]);
-  const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0), [operations?.staffProfiles, bonusReport]);
+  const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === employee.id && advance.payrollPeriodId === period.id)), [operations?.staffProfiles, bonusReport, attendance.advances, period.id]);
   const calendarCells = useMemo(() => payrollCalendarDays(period.start, period.end), [period.end, period.start]);
 
   useEffect(() => {
@@ -189,7 +191,7 @@ export function EmployeeWorkspace() {
     if (!operations) return [];
     return employees.map((employee) => {
       const summary = summarizeAttendancePeriod({ employee, period, operations, attendance });
-      const advances = (attendance.advances ?? []).filter((advance) => advance.employeeId === employee.id && advance.payrollPeriodId === period.id);
+      const advances = (attendance.advances ?? []).filter((advance) => activeSalaryAdvance(advance) && advance.employeeId === employee.id && advance.payrollPeriodId === period.id);
       const van = employeeVan(employee);
       return {
         employee,
@@ -219,7 +221,8 @@ export function EmployeeWorkspace() {
     advances: acc.advances + row.advances,
   }), { overtime: 0, ao: 0, vacation: 0, nwnp: 0, advances: 0 }), [periodSummaries]);
 
-  const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
+  const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => activeSalaryAdvance(advance) && advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
+  const ledgerAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
   const attendanceInputsChanged = Boolean(selectedRecord && draft && (draft.clockInTime !== (selectedRecord.entry?.clockInTime ?? selectedRecord.schedule.startTime)
@@ -344,7 +347,7 @@ export function EmployeeWorkspace() {
     try {
       const payrollPeriod = payrollPeriodFromDates(period.start, period.end);
       const summaries = accountingEmployees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance }));
-      const advancesByEmployee = Object.fromEntries(periodSummaries.map((summary) => [summary.employee.id, summary.advances]));
+      const advancesByEmployee = Object.fromEntries(accountingEmployees.map((employee) => [employee.id, periodAdvances.filter((advance) => advance.employeeId === employee.id).reduce((sum, advance) => sum + advance.amount, 0)]));
       const downloaded = downloadPayrollAccountingPdf({
         filename: `DEMAC_Payroll_Contabilidad_${period.start}_${period.end}.pdf`,
         periodLabel: payrollPeriod.label,
@@ -447,7 +450,7 @@ export function EmployeeWorkspace() {
           <Metric icon="heart" tone="pink" label="AO / Sick" value={hours(totals.ao)} sub="Full + partial exception hours" />
           <Metric icon="ban" tone="orange" label="No Work No Pay" value={hours(totals.nwnp)} sub="Unpaid exception hours" />
           <Metric icon="vacation" tone="green" label="Vacation" value={hours(totals.vacation)} sub="Recorded vacation exception hours" />
-          <Metric icon="wallet" tone="blue" label="Salary Advances" value={money(totals.advances)} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
+          <Metric icon="wallet" tone="blue" label="Salary Advances" value={money(periodAdvances.reduce((sum, advance) => sum + advance.amount, 0))} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
           <Metric icon="wallet" tone="green" label="Bonuses" value={money(bonusReport.total)} sub="Approved amounts for Accounting" />
         </section> : null}
         <EmployeeDirectoryOverview
@@ -579,7 +582,7 @@ export function EmployeeWorkspace() {
       </> : null}
 
       {tab === 'advances' ? <div className={styles.advancesLayout}>
-        <section className={styles.advanceLedger}><div className={styles.sectionHeader}><div><span className={styles.sectionEyebrow}>Payroll input ledger</span><h2>Salary Advances</h2><p>Cash and bank-transfer advances tied to the selected payroll period.</p></div><span className={styles.totalPill}>{periodAdvances.length} records · {money(totals.advances)}</span></div><div className={styles.tableWrap}><table className={styles.advanceTable}><thead><tr><th>Date</th><th>Employee</th><th>Method</th><th>Reference</th><th>Amount</th><th>Recorded by</th></tr></thead><tbody>{periodAdvances.map((advance: EmployeeSalaryAdvance) => <tr key={advance.id}><td>{shortDate(advance.date)}</td><td>{advance.employeeName}</td><td><span className={styles.methodPill}>{advance.method}</span></td><td>{advance.reference || '—'}</td><td><strong>{money(advance.amount)}</strong></td><td>{advance.recordedByName || '—'}</td></tr>)}</tbody></table></div>{!periodAdvances.length ? <div className={styles.empty}>No salary advances recorded for this payroll period.</div> : null}</section>
+        <section className={styles.advanceLedger}><div className={styles.sectionHeader}><div><span className={styles.sectionEyebrow}>Payroll input ledger</span><h2>Salary Advances</h2><p>Cash and bank-transfer advances tied to the selected payroll period.</p><div><button type="button" aria-label="Previous advance payroll period" onClick={() => movePayrollPeriod(-1)}>‹</button> <span>{period.start} → {period.end}</span> <button type="button" aria-label="Next advance payroll period" onClick={() => movePayrollPeriod(1)}>›</button> <button type="button" onClick={goToToday}>Current Period</button></div></div><span className={styles.totalPill}>{periodAdvances.length} active · {money(periodAdvances.reduce((sum, advance) => sum + advance.amount, 0))}</span></div><div className={styles.tableWrap}><table className={styles.advanceTable}><thead><tr><th>Date</th><th>Employee</th><th>Method</th><th>Reference</th><th>Amount</th><th>Recorded by</th><th>Actions</th></tr></thead><tbody>{ledgerAdvances.map((advance: EmployeeSalaryAdvance) => <tr key={advance.id}><td>{shortDate(advance.date)}</td><td>{advance.employeeName}</td><td><span className={styles.methodPill}>{advance.method}</span></td><td>{advance.reference || '—'}</td><td><strong>{money(advance.amount)}</strong></td><td>{advance.recordedByName || '—'}</td><td>{canManageSensitiveAttendance && payrollLoaded ? <PayrollInputActions kind="advance" record={advance} onSaved={(saved) => { setAttendance((current) => ({ ...current, advances: (current.advances ?? []).map((item) => item.id === saved.id ? saved : item) })); setMessage('Salary advance updated. The change is recorded in History.'); }} /> : null}</td></tr>)}</tbody></table></div>{!ledgerAdvances.length ? <div className={styles.empty}>No salary advances recorded for this payroll period.</div> : null}</section>
         <section className={styles.advanceFormCard}><span className={styles.sectionEyebrow}>New payroll input</span><h2>Record Salary Advance</h2><p>This records the advance only; it does not apply an automatic deduction.</p><div className={styles.dailyForm}><Field label="Employee" full><select className={styles.control} value={advanceDraft.employeeId} onChange={(event) => setAdvanceDraft({ ...advanceDraft, employeeId: event.target.value })}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select></Field><Field label="Date"><input className={styles.control} type="date" value={advanceDraft.date} onChange={(event) => setAdvanceDraft({ ...advanceDraft, date: event.target.value })} /></Field><Field label="Amount (Afl.)"><input className={styles.control} type="number" min="0" step="0.01" value={advanceDraft.amount} onChange={(event) => setAdvanceDraft({ ...advanceDraft, amount: event.target.value })} /></Field><Field label="Method"><select className={styles.control} value={advanceDraft.method} onChange={(event) => setAdvanceDraft({ ...advanceDraft, method: event.target.value as SalaryAdvanceMethod })}><option value="Bank Transfer">Bank Transfer</option><option value="Cash">Cash</option></select></Field><Field label="Reference / Receipt"><input className={styles.control} value={advanceDraft.reference} onChange={(event) => setAdvanceDraft({ ...advanceDraft, reference: event.target.value })} placeholder="Optional reference" /></Field><Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={advanceDraft.notes} onChange={(event) => setAdvanceDraft({ ...advanceDraft, notes: event.target.value })} placeholder="Reason or internal note…" /></Field><button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || !advanceDraft.amount} onClick={() => void recordAdvance()}>{busy ? 'Saving…' : 'Record Advance'}</button></div></section>
       </div> : null}
 
