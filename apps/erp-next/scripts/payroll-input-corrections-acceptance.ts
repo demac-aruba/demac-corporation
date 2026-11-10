@@ -125,6 +125,9 @@ async function main() {
   assert.equal(payrollBonusReport(settings(), [employee], payrollPeriodBounds('2026-11-27')).total, 0);
   assert.deepEqual(db.get(employee.id).payrollAdjustments[1], deduction);
   await assert.rejects(correctEmployeeBonus({ bonus: currentBonus('2026-11-27'), employee, draft: bonusDraft, correction: correction('revive-bonus') }), /Deleted/);
+  db.set(advance.id, { ...advance, updatedAt: '2026-11-10T12:00:00Z' });
+  await correctSalaryAdvance({ advance: { ...advance, updatedAt: '2026-11-10T12:00:00.000Z' }, draft: advanceDraft, correction: correction('timestamp-normalization') });
+  assert.equal(currentAdvance().amount, 125.5);
   db.set(advance.id, { ...advance, changeHistory: 'corrupt' });
   await assert.rejects(correctSalaryAdvance({ advance, draft: advanceDraft, correction: correction('corrupt-history') }), /Invalid correction history/);
   db.set(advance.id, { ...advance, employeeId: 'other-employee' });

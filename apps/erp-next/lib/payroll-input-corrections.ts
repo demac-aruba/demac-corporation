@@ -59,6 +59,13 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// Firestore renders a zero fractional timestamp as Z, while the web commit result
+// retains .000Z. Both represent the same application timestamp. The transport's
+// actual document updateTime remains an exact Firestore precondition.
+function sameTimestamp(a: string, b: string) {
+  return a === b || (Number.isFinite(Date.parse(a)) && Date.parse(a) === Date.parse(b));
+}
+
 /** One atomic target patch, preserving full existing history and rejecting stale edits.
  * Exact request replay is recognized even after a later correction; it returns current state.
  */
@@ -81,7 +88,7 @@ export function payrollCorrectionPatch<T extends PayrollInputAudit>(input: {
     if (replay.request !== request) throw new Error('This correction request already exists with different details. Reopen the record.');
     return null;
   }
-  if (stable(before) !== stable(expectedValues) || current.updatedAt !== expected.updatedAt
+  if (stable(before) !== stable(expectedValues) || !sameTimestamp(current.updatedAt, expected.updatedAt)
     || stable(history) !== stable(expected.changeHistory ?? [])) throw new Error('Record details changed. Refresh and review before saving.');
   if (before.status !== 'active') throw new Error('Deleted records cannot be changed.');
   if (stable(before) === stable(after)) throw new Error('Change at least one value before saving.');

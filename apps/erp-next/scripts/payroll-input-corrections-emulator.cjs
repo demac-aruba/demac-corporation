@@ -10,6 +10,8 @@ require(root + 'firebase/session').requireFirebaseWebSession = async () => ({ id
 const rest = require(root + 'firebase/firestore-rest');
 const { correctSalaryAdvance } = require(root + 'employee-advances');
 const { correctEmployeeBonus } = require(root + 'employee-bonuses');
+const RealDate = Date;
+global.Date = class extends RealDate { constructor(value) { super(arguments.length ? value : '2026-11-10T16:00:00.000Z'); } };
 const realFetch = global.fetch;
 global.fetch = async (url, init) => {
   if (String(url).startsWith('http://127.0.0.1:')) return realFetch(url, init);
@@ -42,8 +44,12 @@ async function main() {
   await em.remove('users/' + unprovisioned.uid);
   for (const actor of [admin, accounting]) {
     user = actor; await seed();
-    await correctSalaryAdvance({ advance, correction: correction('advance-delete') });
-    await correctEmployeeBonus({ bonus: bonusTarget, employee, correction: correction('bonus-delete') });
+    const editedAdvance = await correctSalaryAdvance({ advance, draft: { date: advance.date, amount: '125.50', method: 'Bank Transfer', reference: '', notes: '' }, correction: { ...correction('advance-edit'), action: 'edit' } });
+    assert.match(editedAdvance.updatedAt, /\.000Z$/);
+    assert.doesNotMatch((await get(advance.id)).updatedAt, /\.000Z$/, 'Firestore normalizes zero fractional seconds');
+    await correctSalaryAdvance({ advance: editedAdvance, correction: correction('advance-delete') });
+    const editedSettings = await correctEmployeeBonus({ bonus: bonusTarget, employee, draft: { date: bonus.date, amount: '75.25', category: 'service_sales', concept: 'Corrected' }, correction: { ...correction('bonus-edit'), action: 'edit' } });
+    await correctEmployeeBonus({ bonus: { ...editedSettings.payrollAdjustments[0], settingsId: employee.id, canonicalEmployeeId: employee.id }, employee, correction: correction('bonus-delete') });
     assert.equal((await get(advance.id)).status, 'voided');
     assert.equal((await get(employee.id)).payrollAdjustments[0].status, 'voided');
     assert.equal((await get(advance.id)).changeHistory[0].actorId, actor.uid);
@@ -68,6 +74,6 @@ async function main() {
   loseResponse = true; await assert.rejects(correctSalaryAdvance(request), /lost response/);
   await correctSalaryAdvance(request);
   assert.equal((await get(advance.id)).changeHistory.length, 1);
-  console.log('PASS emulator: actual Rules allow admin/accounting; deny office, technician, inactive, unprovisioned, invalid token, and access revoked before commit; exact committed retry retains one audit event.');
+  console.log('PASS emulator: actual Rules allow admin/accounting edits/deletes with normalized timestamps; deny office, technician, inactive, unprovisioned, invalid token, and access revoked before commit; exact committed retry retains one audit event.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -77,7 +77,7 @@ type CalendarCell = { date: string; inPeriod: boolean };
 
 export function EmployeeWorkspace() {
   const { principal } = useAuth();
-  const canManageSensitiveAttendance = principal.active && (principal.role === 'super_admin' || principal.role === 'finance' || principal.capabilities.has('payroll_sensitive.view'));
+  const canManageSensitiveAttendance = principal.role === 'super_admin' || principal.capabilities.has('payroll_sensitive.view');
   const canManageEmployees = principal.capabilities.has('employees.manage');
   const today = dateKey(new Date());
   const quickActionsRef = useRef<HTMLDetailsElement>(null);

@@ -32,6 +32,14 @@ operator identity and mandatory explanation, without losing history.
   Explicit normal wrapping now fits; desktop/mobile screenshots inspected. Select controls
   have exact accessible labels, native modal focus containment, required reason, disabled
   save while pending and a separate deletion confirmation. No new app dependency.
+- **Medium, resolved:** Firestore normalizes `.000Z` timestamps to `Z`; sequential edit/delete
+  could falsely reject an unchanged target. A failing real-emulator regression confirmed it.
+  Application timestamp comparison now accepts the same instant, while exact database
+  updateTime preconditions and complete business/history comparison remain unchanged.
+- **Medium, resolved:** Initial CI exposed an unnecessary change to the shared attendance
+  visibility guard (older attendance fixtures omit principal.active). Reverted that unrelated
+  guard to its original behavior. Correction commands still require an active principal and
+  actual server payrollRole authorization. Existing attendance gates are rerun unchanged.
 - Existing history is application audit under the existing trusted payroll writer boundary,
   not a claim of server-enforced append-only immutability. Rules remain active admin/accounting.
   Creator/editor names come from the signed-in UI principal, not an editable audit field.
