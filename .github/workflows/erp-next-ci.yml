@@ -56,7 +56,8 @@ permissions:
 
 jobs:
   scheduling-refresh-browser:
-    runs-on: ubuntu-latest
+    # Playwright 1.57 browser builds support Ubuntu 24.04, not the rolling latest image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
