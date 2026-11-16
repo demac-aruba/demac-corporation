@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { previewPurchaseOrders, previewSuppliers, purchaseOrderCurrency, purchaseOrderTotal, purchasingPriority } from '../../lib/finance';
 import styles from './finance-command.module.css';
 
@@ -19,6 +20,7 @@ export function PurchasingCommand() {
 
   return <section className={styles.page}>
     <header className={styles.head}><div><span className={styles.eyebrow}>Purchasing · Inventory driven</span><h1>Purchasing Center</h1><p>Demand from booked work, van replenishment, supplier lead time and approved project needs becomes controlled purchasing — not manual guesswork.</p></div><div className={styles.actions}><button type="button">Supplier history</button><button className={styles.primary} type="button" onClick={() => setNotice('Draft purchase order created in preview. Approval is required before supplier commitment.')}>+ New purchase order</button></div></header>
+    <div className={styles.callout}><strong><Link href="/purchasing/calculations">Cálculo de precios →</Link></strong><p>Calcula costo en florines, importación, banco y precio sugerido por artículo.</p></div>
     {notice ? <div className={styles.callout}><strong>{notice}</strong></div> : null}
     <div className={styles.metrics}>
       <article className={styles.metric}><span>Open purchase orders</span><strong>{previewPurchaseOrders.length}</strong><small>{money(totalOpen, 'AWG')} equivalent preview</small><i style={{ width: '62%' }} /></article>
