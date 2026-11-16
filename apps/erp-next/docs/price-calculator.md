@@ -1,0 +1,23 @@
+# Cálculo de precios
+
+Entrega de validación de producto, 2026-11-16. La solicitud es calcular mercancía recibida hoy, antes de habilitar compras ERP → QuickBooks. No cambia autoridades, registros financieros, catálogo, inventario, roles ni reglas de seguridad.
+
+- Ruta `/purchasing/calculations/`, acceso desde Inventory → Cálculo de precios y desde Purchasing. Reutiliza los mismos roles de Purchasing y su AuthGate; no incorpora acceso a datos nuevos.
+- Costo internacional USD × 1.80 Afl; banco editable inicialmente 2%; importación manual sobre costo convertido más banco. Cada línea puede heredar o reemplazar el porcentaje general, incluido cero. Origen es descriptivo.
+- Marketing, ganancia y operaciones objetivo se escriben por línea. La reserva del impuesto se mantiene en 7% del precio de venta, según la regla interna del usuario. Sugerido = landed / (1 − impuesto − marketing − ganancia − operaciones objetivo). Es planificación y reserva prevista, no utilidad neta contable ni liquidación fiscal.
+- Se puede usar el sugerido o escribir otro precio. El precio final no cambia al editar costos/porcentajes; operaciones muestra el remanente y alerta cuando es negativo. Si aún no hay precio final, la distribución se presenta claramente sobre el sugerido.
+- Costos/cargos calculados en centavos enteros y redondeados por unidad. Los datos incompletos no se convierten en cero. Límite de 100 líneas. Insumos internos y herramientas muestran costo, sin precio de venta.
+- Descarga y apertura explícitas de JSON; sin almacenamiento automático compartido ni escrituras a Firebase/QBO. La pantalla avisa que se descargue antes de salir. Los archivos son del usuario y deben guardarse en su equipo. El importador valida tipos/tamaño/versión.
+- Reutiliza, sin cambiar la matemática, `supplierBillCosting.js`/`.d.ts`, el adaptador TS y las cinco pruebas de PR #636. Esa PR mantiene su propio alcance de borradores compartidos; no se activa aquí.
+
+## Verificación y uso independiente
+
+`npm run test:supplier-bill-costing --prefix apps/erp-next`; typecheck y build de ERP Next. Para reproducir la calculadora independiente, instalar `esbuild@0.25.9` en herramientas aisladas, definir `PRICE_CALCULATOR_TOOLS` y `PRICE_CALCULATOR_OUTPUT` y ejecutar `node apps/erp-next/scripts/build-price-calculator-preview.cjs`. El HTML resultante incorpora el componente real, estilos y JavaScript; no requiere conexión ni usa credenciales. En Work Mode, QA visual por el preview administrado y CUA.
+
+La publicación en producción se realiza después de aprobación del propietario; el HTML independiente permite usar los cálculos mientras tanto.
+
+Validado el 2026-11-16: typecheck y build completos de ERP Next (incluido el prebuild existente) pasaron; la ruta aparece en la exportación estática. Las cinco pruebas del motor de costos pasaron. En el navegador se verificaron el ejemplo de dos artículos, cambio general 50 → 45 con override 30 conservado, conversión/cargos, uso del precio sugerido, precio final manual conservado al cambiar costos, distribución exacta y alerta de operaciones negativas, y descarga JSON. La reapertura por navegador no se verificó porque la autorización de carga del navegador fue rechazada; el parser sí está cubierto por las pruebas automatizadas. La captura usa únicamente datos de ejemplo. Revisión del diff sin cambios de datos ni credenciales.
+
+## Compatibilidad de CI
+
+Los primeros runs de PR #640 confirmaron el cálculo y build, pero cinco trabajos de navegador fallaron durante la instalación con `Playwright does not support chromium on ubuntu26.04-x64`. Se fija únicamente esos runners de pruebas a `ubuntu-24.04`, compatible con Playwright 1.57/1.58 ya fijados en el repositorio. Alertas y roster usan Node 24 por `@firebase/rules-unit-testing@6.0.0`/Firebase 13 (requieren >=24.12); el historial usa Node 24 por `agent-browser@0.38.1` (requiere >=24). Los runtimes de producción, permisos, disparadores, condiciones de publicación y pruebas se conservan. Es una corrección acotada del entorno de validación; no habilita un despliegue ni omite verificaciones.

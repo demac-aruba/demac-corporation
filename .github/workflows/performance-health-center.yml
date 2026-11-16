@@ -99,7 +99,8 @@ jobs:
       - run: npm run build
 
   isolated-emulators-and-browsers:
-    runs-on: ubuntu-latest
+    # Playwright 1.57 browser builds require a supported, stable runner image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       GCLOUD_PROJECT: demo-demac-health
