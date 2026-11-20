@@ -2,9 +2,10 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChargeIcon } from '../scheduling/appointment-charge-icons';
-import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable } from '../../lib/supplier-bill-draft';
+import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable, summarizeBill } from '../../lib/supplier-bill-draft';
 import type { BillDraft, BillLine, ItemUse } from '../../lib/supplier-bill-draft';
 import { totalSupplierCostInput } from '../../lib/supplier-cost-input';
+import { PriceCalculationSummary } from './price-calculation-summary';
 import s from './price-calculator.module.css';
 
 const uses: Record<ItemUse, string> = { product: 'Producto para venta', material: 'Material para venta', consumable: 'Insumo de uso interno', tool: 'Herramienta' };
@@ -48,11 +49,12 @@ export function PriceCalculator() {
   const file = useRef<HTMLInputElement>(null);
   const imported = bill.currency === 'USD';
   const hasChanges = JSON.stringify(bill) !== JSON.stringify(blankBill());
-  const results = bill.lines.map(line => evaluateLine(bill, line));
+  const results = bill.lines.map(line => evaluateLine(bill, line, 'projected'));
+  const summary = summarizeBill(bill, results);
   const line = bill.lines[selected];
   const result = results[selected];
   const suggestedPrice = result.quote ? amount(result.quote.recommended).replace(/,/g, '') : '';
-  const allocation = line.finalPrice.trim() ? result.quote?.allocation : suggestedPrice ? evaluateLine(bill, { ...line, finalPrice: suggestedPrice }).quote?.allocation : null;
+  const allocation = result.quote?.allocation;
   useEffect(() => {
     if (!hasChanges) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
@@ -127,7 +129,7 @@ export function PriceCalculator() {
         <input hidden ref={file} aria-label="Archivo de cálculo" type="file" accept=".json,application/json" onChange={e => { const picked = e.target.files?.[0]; e.target.value = ''; void restore(picked); }} />
       </div>
     </header>
-    <p className={s.notice}><ChargeIcon name="info" /> Calculadora de planificación. Descarga una copia antes de salir. No registra compras ni cambia inventario o QuickBooks.</p>
+    <p className={s.notice}><ChargeIcon name="info" /> Calculadora de planificación. Guarda una copia con «Descargar cálculo» antes de salir. Para retomarla, usa «Abrir cálculo». No registra compras ni cambia inventario o QuickBooks.</p>
     {message && <p role="status" className={s.status}>{message}</p>}
     <div className={s.editorFields}>
     <div className={s.panel + ' ' + s.fields}>
@@ -165,6 +167,8 @@ export function PriceCalculator() {
       </table></div>
       <footer className={s.bar}><span>Total proveedor <b>{imported ? 'USD' : 'Afl'} {calculatedTotal('supplierTotal')}</b></span><span>Landed estimado <b>Afl {calculatedTotal('landedTotal')}</b></span></footer>
     </section>
+
+    <PriceCalculationSummary summary={summary} />
 
     <div className={s.details}>
       <section className={s.panel}><header className={s.bar}><h2><ChargeIcon name="money" />Costo por unidad</h2></header>

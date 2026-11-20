@@ -1,4 +1,5 @@
 type Currency = 'USD' | 'AWG';
+type PriceMode = 'final' | 'projected';
 export type ItemUse = 'product' | 'material' | 'consumable' | 'tool';
 export type BillLine = {
     description: string;
@@ -36,7 +37,7 @@ export declare function purchaseCost(bill: BillDraft, line: BillLine): {
     supplierTotal: bigint;
     landedTotal: bigint;
 };
-export declare function saleQuote(landed: bigint, line: BillLine): {
+export declare function saleQuote(landed: bigint, line: BillLine, priceMode?: PriceMode): {
     recommended: bigint;
     allocation: null;
 } | {
@@ -50,7 +51,7 @@ export declare function saleQuote(landed: bigint, line: BillLine): {
         operations: bigint;
     };
 } | null;
-export declare function evaluateLine(bill: BillDraft, line: BillLine): {
+export declare function evaluateLine(bill: BillDraft, line: BillLine, priceMode?: PriceMode): {
     cost: {
         cost: bigint;
         converted: bigint;
@@ -89,6 +90,21 @@ export declare function evaluateLine(bill: BillDraft, line: BillLine): {
     error: string;
 };
 export declare function changeRate(bill: BillDraft, generalImport: string): BillDraft;
+/** Optional evaluations must come from this bill's lines in order, using the 'projected' price mode. */
+export declare function summarizeBill(bill: BillDraft, projectedLines?: ReadonlyArray<ReturnType<typeof evaluateLine>>): {
+    totals: {
+        sales: bigint;
+        restock: bigint;
+        taxes: bigint;
+        marketing: bigint;
+        profit: bigint;
+        operations: bigint;
+    };
+    finalCount: number;
+    suggestedCount: number;
+    pendingLines: number[];
+    internalCount: number;
+};
 export declare function openDraft(json: string): BillDraft;
 export {};
 

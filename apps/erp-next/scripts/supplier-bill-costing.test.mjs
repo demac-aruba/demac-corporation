@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blankBill, blankLine, changeRate, purchaseCost, saleQuote, openDraft, evaluateLine } from '../lib/supplier-bill-draft.ts';
+import { blankBill, blankLine, changeRate, purchaseCost, saleQuote, openDraft, evaluateLine, summarizeBill } from '../lib/supplier-bill-draft.ts';
 import { totalSupplierCostInput } from '../lib/supplier-cost-input.ts';
 
 const bill = { ...blankBill(), generalImport: '50' };
@@ -76,5 +76,67 @@ test('draft import validates version and types, keeps input and requires renewed
     { ...bill, lines: [{ ...ac, unitCost: 12 }] }, { ...bill, lines: [{ ...ac, importOverride: {} }] }]) {
     assert.throws(() => openDraft(JSON.stringify(data)));
   }
+});
+
+test('batch projection for seven units matches the four supplier lines and survives reopening', () => {
+  const lines = [
+    ['TCL Cassette 36K', '3', '800.35'],
+    ['Adina Air Handler 36K', '1', '1013.61'],
+    ['Adina Air Handler 60K', '1', '1298.02'],
+    ['Adina Cassette 60K', '2', '1070.38'],
+  ].map(([description, quantity, unitCost]) => ({
+    ...blankLine(), description, quantity, unitCost, marketing: '2', profit: '20', operations: '5',
+  }));
+  lines[0].importOverride = '50';
+  const draft = { ...bill, invoiceNumber: 'Cassette y manejadoras', lines };
+  const summary = summarizeBill(draft);
+  assert.deepEqual(summary.totals, {
+    sales: 2859753n, restock: 1887437n, taxes: 200182n, marketing: 57195n, profit: 571952n, operations: 142987n,
+  });
+  assert.equal(summary.finalCount, 0);
+  assert.equal(summary.suggestedCount, 4);
+  assert.deepEqual(summary.pendingLines, []);
+  assert.equal(lines.reduce((sum, line) => sum + purchaseCost(draft, line).supplierTotal, 0n), 685344n);
+  assert.deepEqual(summarizeBill(openDraft(JSON.stringify(draft))), summary);
+});
+
+test('mixed batch uses each line’s own rates and price and reports excluded lines', () => {
+  const suggested = { ...blankLine(), unitCost: '58', marketing: '5', profit: '20', operations: '10' };
+  const final = { ...suggested, unitCost: '10', quantity: '2', finalPrice: '80', marketing: '10', profit: '25' };
+  const internal = [{ ...suggested, use: 'tool' }, { ...final, use: 'consumable' }];
+  const draft = { ...blankBill(), currency: 'AWG', lines: [
+    suggested, final, { ...final, finalPrice: '80.001' }, ...internal, { ...suggested, quantity: '' },
+  ] };
+  const summary = summarizeBill(draft);
+  assert.deepEqual(summary.totals, {
+    sales: 26000n, restock: 7800n, taxes: 1820n, marketing: 2100n, profit: 6000n, operations: 8280n,
+  });
+  assert.equal(summary.finalCount, 1);
+  assert.equal(summary.suggestedCount, 1);
+  assert.equal(summary.internalCount, 2);
+  assert.deepEqual(summary.pendingLines, [3, 6]);
+  assert.deepEqual(summarizeBill(openDraft(JSON.stringify(draft))), summary);
+  const internalOnly = summarizeBill({ ...draft, lines: internal });
+  assert.equal(internalOnly.internalCount, 2);
+  assert.equal(internalOnly.finalCount + internalOnly.suggestedCount, 0);
+  assert.deepEqual(internalOnly.pendingLines, []);
+  assert.ok(Object.values(internalOnly.totals).every(value => value === 0n));
+});
+
+test('fractional material rounds line amounts and balances operations; a zero final price remains explicit', () => {
+  const material = {
+    ...blankLine(), use: 'material', quantity: '0,5', unitCost: '0.03', marketing: '10', profit: '10',
+    operations: '20', finalPrice: '0.10',
+  };
+  const local = { ...blankBill(), currency: 'AWG', lines: [material] };
+  assert.deepEqual(summarizeBill(local).totals, {
+    sales: 5n, restock: 2n, taxes: 1n, marketing: 1n, profit: 1n, operations: 0n,
+  });
+  const free = summarizeBill({ ...local, lines: [{ ...material, unitCost: '0.44', finalPrice: '0' }] });
+  assert.equal(free.finalCount, 1);
+  assert.equal(free.suggestedCount, 0);
+  assert.deepEqual(free.totals, {
+    sales: 0n, restock: 22n, taxes: 0n, marketing: 0n, profit: 0n, operations: -22n,
+  });
 });
 

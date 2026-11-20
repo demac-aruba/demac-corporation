@@ -5,6 +5,7 @@ exports.amount = amount;
 exports.purchaseCost = purchaseCost;
 exports.saleQuote = saleQuote;
 exports.evaluateLine = evaluateLine;
+exports.summarizeBill = summarizeBill;
 exports.changeRate = changeRate;
 exports.openDraft = openDraft;
 exports.MAX_LINES = 100;
@@ -55,7 +56,7 @@ function purchaseCost(bill, line) {
     const landed = converted + wire + shipping;
     return { cost, converted, wire, shipping, landed, supplierTotal: roundedRatio(cost, quantity, 1000n), landedTotal: roundedRatio(landed, quantity, 1000n) };
 }
-function saleQuote(landed, line) {
+function saleQuote(landed, line, priceMode = 'final') {
     if (!(0, exports.sellable)(line.use))
         return null;
     const tax = 700n;
@@ -66,24 +67,57 @@ function saleQuote(landed, line) {
     if (costShare <= 0n)
         throw new Error('Impuesto, marketing, ganancia y operaciones deben sumar menos de 100%.');
     const recommended = roundedRatio(landed, 10000n, costShare);
-    if (!line.finalPrice.trim())
+    const hasFinalPrice = line.finalPrice.trim() !== '';
+    if (!hasFinalPrice && priceMode !== 'projected')
         return { recommended, allocation: null };
-    const price = decimal(line.finalPrice, 2, 'el precio final');
+    const price = hasFinalPrice ? decimal(line.finalPrice, 2, 'el precio final') : recommended;
     const taxes = roundedRatio(price, tax, 10000n);
     const marketingFund = roundedRatio(price, marketing, 10000n);
     const profitFund = roundedRatio(price, profit, 10000n);
     return { recommended, allocation: { price, taxes, marketing: marketingFund, profit: profitFund, restock: landed,
             operations: price - landed - taxes - marketingFund - profitFund } };
 }
-function evaluateLine(bill, line) {
+function evaluateLine(bill, line, priceMode = 'final') {
     let cost = null;
     try {
         cost = purchaseCost(bill, line);
-        return { cost, quote: saleQuote(cost.landed, line), error: '' };
+        return { cost, quote: saleQuote(cost.landed, line, priceMode), error: '' };
     }
     catch (error) {
         return { cost, quote: null, error: error instanceof Error ? error.message : 'Revisa el artículo.' };
     }
+}
+// A caller displaying the same rows can reuse their 'projected' evaluations in bill order.
+function summarizeBill(bill, projectedLines) {
+    const totals = { sales: 0n, restock: 0n, taxes: 0n, marketing: 0n, profit: 0n, operations: 0n };
+    const pendingLines = [];
+    let finalCount = 0;
+    let suggestedCount = 0;
+    let internalCount = 0;
+    for (const [index, line] of bill.lines.entries()) {
+        if (!sellable(line.use)) {
+            internalCount++;
+            continue;
+        }
+        const { cost, quote } = projectedLines?.[index] ?? evaluateLine(bill, line, 'projected');
+        if (!cost || !quote?.allocation) {
+            pendingLines.push(index + 1);
+            continue;
+        }
+        if (line.finalPrice.trim() === '') suggestedCount++;
+        else finalCount++;
+        const allocation = quote.allocation;
+        const quantity = decimal(line.quantity, 3, 'la cantidad');
+        totals.sales += roundedRatio(allocation.price, quantity, 1000n);
+        totals.restock += cost.landedTotal;
+        totals.taxes += roundedRatio(allocation.taxes, quantity, 1000n);
+        totals.marketing += roundedRatio(allocation.marketing, quantity, 1000n);
+        totals.profit += roundedRatio(allocation.profit, quantity, 1000n);
+    }
+    // Fractional material quantities can produce fractions of a cent for each fund.
+    // As with a single unit, operations receives the remainder after rounded amounts.
+    totals.operations = totals.sales - totals.restock - totals.taxes - totals.marketing - totals.profit;
+    return { totals, finalCount, suggestedCount, pendingLines, internalCount };
 }
 function changeRate(bill, generalImport) {
     if (generalImport === bill.generalImport)

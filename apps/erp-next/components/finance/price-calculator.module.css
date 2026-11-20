@@ -64,3 +64,17 @@
 .formula { padding:14px 18px; border-radius:12px; border:1px solid var(--border); background:var(--surface); color:var(--muted); font-size:13px; line-height:1.6; }
 .formula summary { cursor:pointer; font-weight:700; color:var(--text); }
 .formula p { margin-top:10px; }
+.projectedSales { display:grid; gap:2px; color:var(--muted); font-size:12px; }
+.projectedSales strong { color:var(--brand); font-size:21px; font-variant-numeric:tabular-nums; }
+.summaryBody { display:grid; gap:10px; padding:12px 16px; border-top:1px solid var(--border); font-size:13px; }
+.summaryFunds { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr)); gap:8px; margin:0; }
+.summaryFunds > div { padding:10px 12px; border-radius:8px; background:var(--surface-2); border-inline-start:3px solid var(--border-strong); }
+.summaryFunds [data-fund="marketing"] { border-color:var(--purple); }
+.summaryFunds [data-fund="profit"] { border-color:var(--success); background:var(--success-soft); }
+.summaryFunds [data-fund="operations"] { border-color:var(--brand); background:var(--brand-soft); }
+.summaryFunds [data-fund="taxes"] { border-color:var(--warning); background:var(--warning-soft); }
+.summaryFunds dt { font-size:12px; }
+.summaryFunds dd { margin:4px 0 0; font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.summaryFunds [data-negative="true"] { color:var(--danger); }
+.pending { display:flex; align-items:center; gap:8px; }
+.pending svg { width:16px; height:16px; flex-shrink:0; color:var(--warning); }
