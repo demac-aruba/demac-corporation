@@ -36,7 +36,7 @@ export declare function purchaseCost(bill: BillDraft, line: BillLine): {
     supplierTotal: bigint;
     landedTotal: bigint;
 };
-export declare function saleQuote(landed: bigint, line: BillLine): {
+export declare function saleQuote(landed: bigint, line: BillLine, priceBasis?: 'final' | 'suggested'): {
     recommended: bigint;
     allocation: null;
 } | {

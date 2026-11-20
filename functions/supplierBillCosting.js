@@ -55,7 +55,7 @@ function purchaseCost(bill, line) {
     const landed = converted + wire + shipping;
     return { cost, converted, wire, shipping, landed, supplierTotal: roundedRatio(cost, quantity, 1000n), landedTotal: roundedRatio(landed, quantity, 1000n) };
 }
-function saleQuote(landed, line) {
+function saleQuote(landed, line, priceBasis = 'final') {
     if (!(0, exports.sellable)(line.use))
         return null;
     const tax = 700n;
@@ -66,9 +66,9 @@ function saleQuote(landed, line) {
     if (costShare <= 0n)
         throw new Error('Impuesto, marketing, ganancia y operaciones deben sumar menos de 100%.');
     const recommended = roundedRatio(landed, 10000n, costShare);
-    if (!line.finalPrice.trim())
+    if (priceBasis === 'final' && !line.finalPrice.trim())
         return { recommended, allocation: null };
-    const price = decimal(line.finalPrice, 2, 'el precio final');
+    const price = priceBasis === 'suggested' ? recommended : decimal(line.finalPrice, 2, 'el precio final');
     const taxes = roundedRatio(price, tax, 10000n);
     const marketingFund = roundedRatio(price, marketing, 10000n);
     const profitFund = roundedRatio(price, profit, 10000n);

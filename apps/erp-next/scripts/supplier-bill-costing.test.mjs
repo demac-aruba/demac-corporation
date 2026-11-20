@@ -2,10 +2,52 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { blankBill, blankLine, changeRate, purchaseCost, saleQuote, openDraft, evaluateLine } from '../lib/supplier-bill-draft.ts';
 import { totalSupplierCostInput } from '../lib/supplier-cost-input.ts';
+import { allocationShare } from '../lib/allocation-share.ts';
 
 const bill = { ...blankBill(), generalImport: '50' };
 const ac = { ...blankLine(), description: 'Split', quantity: '4', unitCost: '250', marketing: '5', profit: '15', operations: '22', finalPrice: '1199' };
 const bracket = { ...ac, description: 'Bracket', quantity: '10', unitCost: '20', importOverride: '30', marketing: '4', profit: '18', operations: '20', finalPrice: '110' };
+
+test('Adina Cassette 60K compares each rounded fund with the selected unit price', () => {
+  const cassette = { ...blankLine(), unitCost: '1070.38', marketing: '5', profit: '20', operations: '10' };
+  const { landed } = purchaseCost(bill, cassette);
+  const final = saleQuote(landed, { ...cassette, finalPrice: '4679' });
+  assert.equal(final.recommended, 508245n);
+  const a = final.allocation;
+  assert.equal(a.marketing, 23395n);
+  assert.equal(a.operations, 23390n);
+  assert.deepEqual([a.restock, a.taxes, a.marketing, a.profit, a.operations].map(value => allocationShare(value, a.price)),
+    ['63.00%', '7.00%', '5.00%', '20.00%', '5.00%']);
+  assert.equal(allocationShare(a.marketing, final.recommended), '4.60%');
+
+  const suggested = saleQuote(landed, cassette, 'suggested').allocation;
+  assert.deepEqual(suggested, saleQuote(landed, { ...cassette, finalPrice: '5082.45' }).allocation);
+  assert.equal(allocationShare(suggested.operations, suggested.price), '10.00%');
+  assert.equal(a.marketing - suggested.marketing, -2017n);
+  assert.equal(a.operations - suggested.operations, -27435n);
+
+  const higher = saleQuote(landed, { ...cassette, finalPrice: '5500' }).allocation;
+  assert.equal(allocationShare(higher.operations, higher.price), '14.40%');
+  assert.equal(allocationShare(higher.marketing, higher.price), '5.00%');
+  const loss = saleQuote(landed, { ...cassette, finalPrice: '3000' }).allocation;
+  assert.equal(allocationShare(loss.operations, loss.price), '−30.26%');
+  const free = saleQuote(landed, { ...cassette, finalPrice: '0' }).allocation;
+  assert.equal(allocationShare(free.operations, free.price), '—');
+});
+
+test('allocation percentages round ties symmetrically and preserve zero and undefined shares', () => {
+  assert.equal(allocationShare(1n, 20000n), '0.01%');
+  assert.equal(allocationShare(-1n, 20000n), '−0.01%');
+  assert.equal(allocationShare(-1n, 20001n), '0.00%');
+  assert.equal(allocationShare(0n, 1n), '0.00%');
+  assert.equal(allocationShare(0n, 0n), '—');
+  assert.equal(allocationShare(1n, -1n), '—');
+  // Computed suggestions can exceed the nine-digit limit on manually entered prices.
+  const large = saleQuote(99999999999n, ac, 'suggested');
+  assert.ok(large.recommended > 99999999999n);
+  assert.equal(large.allocation.price, large.recommended);
+});
+
 test('supplier price additions resolve exactly before currency conversion and preserve the final sale price', () => {
   const unitCost = totalSupplierCostInput('299.55+500.80');
   assert.equal(unitCost, '800.35');

@@ -2,9 +2,10 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChargeIcon } from '../scheduling/appointment-charge-icons';
-import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable } from '../../lib/supplier-bill-draft';
+import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, saleQuote, sellable } from '../../lib/supplier-bill-draft';
 import type { BillDraft, BillLine, ItemUse } from '../../lib/supplier-bill-draft';
 import { totalSupplierCostInput } from '../../lib/supplier-cost-input';
+import { PriceAllocation } from './price-allocation';
 import s from './price-calculator.module.css';
 
 const uses: Record<ItemUse, string> = { product: 'Producto para venta', material: 'Material para venta', consumable: 'Insumo de uso interno', tool: 'Herramienta' };
@@ -52,7 +53,10 @@ export function PriceCalculator() {
   const line = bill.lines[selected];
   const result = results[selected];
   const suggestedPrice = result.quote ? amount(result.quote.recommended).replace(/,/g, '') : '';
-  const allocation = line.finalPrice.trim() ? result.quote?.allocation : suggestedPrice ? evaluateLine(bill, { ...line, finalPrice: suggestedPrice }).quote?.allocation : null;
+  const suggestedAllocation = result.quote && result.cost
+    ? saleQuote(result.cost.landed, line, 'suggested')?.allocation ?? null
+    : null;
+  const allocation = line.finalPrice.trim() ? result.quote?.allocation : suggestedAllocation;
   useEffect(() => {
     if (!hasChanges) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
@@ -177,8 +181,7 @@ export function PriceCalculator() {
         {sellable(line.use) ? <><div className={s.prices}><div>Recomendado<strong>Afl {result.quote ? amount(result.quote.recommended) : '—'}</strong></div>
           <Field numeric label="Tu precio final (Afl)" value={line.finalPrice} edit={v => updateLine(selected, { finalPrice: v })} />
           <button className={s.primary} disabled={!result.quote} onClick={() => updateLine(selected, { finalPrice: suggestedPrice })}><ChargeIcon name="check" />Usar precio sugerido</button></div>
-          {allocation && <><p className={s.allocationLabel}>Distribución del {line.finalPrice.trim() ? 'precio final' : 'precio sugerido'} · por unidad</p><div className={s.funds}>{([['Reposición', allocation.restock], ['Impuesto · 7%', allocation.taxes], ['Marketing · ' + line.marketing + '%', allocation.marketing], ['Ganancia · ' + line.profit + '%', allocation.profit], ['Operaciones', allocation.operations]] as const).map(([label, value]) => <div key={label}><small>{label}</small><b>Afl {amount(value)}</b></div>)}</div>
-          {allocation.operations < 0n && <p role="alert">Este precio no cubre reposición, impuesto, marketing y ganancia: operaciones queda en negativo.</p>}</>}</> :
+          {allocation && result.quote && <PriceAllocation line={line} allocation={allocation} suggested={suggestedAllocation} recommendedPrice={result.quote.recommended} />}</> :
           <p>Costo de compra para {line.use === 'tool' ? 'control de herramientas' : 'despacho de insumos'}.</p>}
       </div></section>
     </div>

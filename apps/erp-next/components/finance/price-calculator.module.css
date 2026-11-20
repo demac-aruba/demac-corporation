@@ -46,8 +46,19 @@
 .prices > div { background:var(--brand-soft); border-radius:8px; padding:8px 14px; }
 .prices strong { display:block; font-size:21px; }
 .prices .field { max-width:175px; }
-.funds { display:grid; grid-template-columns:repeat(auto-fit,minmax(100px,1fr)); gap:8px; margin:14px 0 6px; }
-.funds > div { display:grid; gap:4px; padding:10px; border-radius:8px; background:var(--brand-soft); }
+.funds { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,140px),1fr)); gap:8px; margin:14px 0 6px; }
+.funds > div { display:grid; align-content:start; gap:4px; padding:10px; border-radius:8px; background:var(--brand-soft); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.shares { display:flex; align-items:baseline; gap:3px 8px; flex-wrap:wrap; font-size:12px; }
+.shares strong { white-space:nowrap; }
+.referenceShare { color:var(--muted); font-size:12px; }
+.shares .finalShare { color:#a31832; }
+:global(html[data-theme='dark']) .shares .finalShare { color:#ff9aa8; }
+.comparison { margin-top:12px; }
+.comparison summary { cursor:pointer; color:var(--brand); font-weight:650; }
+.comparison table { width:100%; min-width:490px; margin-top:10px; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+.comparison caption { padding:4px 6px; text-align:left; color:var(--muted); }
+.comparison th, .comparison td { padding:6px; border-bottom:1px solid var(--border); text-align:right; }
+.comparison th:first-child { text-align:left; }
 .funds > div:nth-child(2) { background:var(--warning-soft); }
 .funds > div:nth-child(3) { box-shadow:inset 3px 0 var(--purple); }
 .funds > div:nth-child(4), .status { background:var(--success-soft); }
