@@ -1,10 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { blankBill, blankLine, changeRate, purchaseCost, saleQuote, openDraft, evaluateLine } from '../lib/supplier-bill-draft.ts';
+import { totalSupplierCostInput } from '../lib/supplier-cost-input.ts';
 
 const bill = { ...blankBill(), generalImport: '50' };
 const ac = { ...blankLine(), description: 'Split', quantity: '4', unitCost: '250', marketing: '5', profit: '15', operations: '22', finalPrice: '1199' };
 const bracket = { ...ac, description: 'Bracket', quantity: '10', unitCost: '20', importOverride: '30', marketing: '4', profit: '18', operations: '20', finalPrice: '110' };
+test('supplier price additions resolve exactly before currency conversion and preserve the final sale price', () => {
+  const unitCost = totalSupplierCostInput('299.55+500.80');
+  assert.equal(unitCost, '800.35');
+  assert.equal(totalSupplierCostInput(' 299,55 + 500,80 + 10 '), '810.35');
+  assert.equal(totalSupplierCostInput('0.10+0.20+0.70'), '1.00');
+  assert.equal(totalSupplierCostInput('0+0'), '0.00');
+  assert.equal(totalSupplierCostInput('999999999.98+0.01'), '999999999.99');
+  const line = { ...ac, unitCost, quantity: '2' };
+  const cost = purchaseCost(bill, line);
+  assert.equal(cost.cost, 80035n);
+  assert.equal(cost.converted, 144063n);
+  assert.equal(cost.wire, 2881n);
+  assert.equal(cost.shipping, 73472n);
+  assert.equal(cost.landed, 220416n);
+  assert.equal(cost.supplierTotal, 160070n);
+  assert.equal(saleQuote(cost.landed, line).allocation.price, 119900n);
+  assert.equal(purchaseCost({ ...bill, currency: 'AWG' }, line).landed, 80035n);
+  assert.equal(openDraft(JSON.stringify({ ...bill, lines: [line] })).lines[0].unitCost, '800.35');
+});
+test('supplier additions reject incomplete, unsupported or overflowing expressions without partial totals', () => {
+  for (const raw of ['299.55+', '+500.80', '1++2', '1+ ', '1+-2', '1+2*3', '1+1e2', '1+NaN', '1+Infinity', '1+(2)', '1+0.001', '1,000.00+2', '1+alert(1)', '999999999.99+0.01', '1+'.repeat(121) + '1']) {
+    assert.throws(() => totalSupplierCostInput(raw), undefined, raw);
+  }
+  for (const raw of ['', '0', '299.55', ' 299,55 ', 'invalid']) assert.equal(totalSupplierCostInput(raw), raw);
+});
 test('approved mixed bill: manual import per unit, rounding, price and balanced funds', () => {
   for (const [line, cost, suggestion, residual] of [[ac, 68850n, 135000n, 18677n], [bracket, 4774n, 9361n, 3036n]]) {
     const calculated = purchaseCost(bill, line);
