@@ -5,9 +5,15 @@ const app = path.resolve(__dirname, '..');
 const output = process.env.PRICE_CALCULATOR_OUTPUT;
 if (!output || !path.isAbsolute(output)) throw Error('Set PRICE_CALCULATOR_OUTPUT to an absolute output directory.');
 const esbuild = require(path.join(process.env.PRICE_CALCULATOR_TOOLS, 'node_modules/esbuild'));
+// An owner-private preview can start with the operator's saved example.
+// The ERP bundle and the default standalone export start with an empty purchase.
+const examplePath = process.env.PRICE_CALCULATOR_EXAMPLE;
+const exampleDraft = examplePath
+  ? require('../../../functions/supplierBillCosting.js').openDraft(fs.readFileSync(examplePath, 'utf8'))
+  : undefined;
 const temporary = path.join(output, '.bundle');
 fs.mkdirSync(temporary, { recursive: true });
-esbuild.buildSync({ stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { PriceCalculator } from './components/finance/price-calculator'; createRoot(document.getElementById('calculator')).render(<PriceCalculator/>);`, resolveDir: app, loader: 'tsx' },
+esbuild.buildSync({ stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import { PriceCalculator } from './components/finance/price-calculator'; createRoot(document.getElementById('calculator')).render(<PriceCalculator exampleDraft={${JSON.stringify(exampleDraft)}}/>);`, resolveDir: app, loader: 'tsx' },
   outfile: path.join(temporary, 'app.js'), bundle: true, format: 'iife', jsx: 'automatic', tsconfigRaw: {}, minify: true,
   define: { 'process.env.NODE_ENV': '"production"' }, nodePaths: [path.join(app, 'node_modules')],
 });

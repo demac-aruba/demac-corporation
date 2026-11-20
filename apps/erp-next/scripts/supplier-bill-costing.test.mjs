@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blankBill, blankLine, changeRate, purchaseCost, saleQuote, openDraft, evaluateLine, summarizeBill } from '../lib/supplier-bill-draft.ts';
+import { blankBill, blankLine, changeRate, compareMarket, percentOf, purchaseCost, saleQuote, openDraft, evaluateLine, summarizeBill } from '../lib/supplier-bill-draft.ts';
 import { totalSupplierCostInput } from '../lib/supplier-cost-input.ts';
 
 const bill = { ...blankBill(), generalImport: '50' };
@@ -78,7 +78,7 @@ test('draft import validates version and types, keeps input and requires renewed
   }
 });
 
-test('batch projection for seven units matches the four supplier lines and survives reopening', () => {
+function cassetteBill() {
   const lines = [
     ['TCL Cassette 36K', '3', '800.35'],
     ['Adina Air Handler 36K', '1', '1013.61'],
@@ -88,7 +88,11 @@ test('batch projection for seven units matches the four supplier lines and survi
     ...blankLine(), description, quantity, unitCost, marketing: '2', profit: '20', operations: '5',
   }));
   lines[0].importOverride = '50';
-  const draft = { ...bill, invoiceNumber: 'Cassette y manejadoras', lines };
+  return { ...bill, invoiceNumber: 'Cassette y manejadoras', lines };
+}
+
+test('batch projection for seven units matches the four supplier lines and survives reopening', () => {
+  const draft = cassetteBill();
   const summary = summarizeBill(draft);
   assert.deepEqual(summary.totals, {
     sales: 2859753n, restock: 1887437n, taxes: 200182n, marketing: 57195n, profit: 571952n, operations: 142987n,
@@ -96,7 +100,7 @@ test('batch projection for seven units matches the four supplier lines and survi
   assert.equal(summary.finalCount, 0);
   assert.equal(summary.suggestedCount, 4);
   assert.deepEqual(summary.pendingLines, []);
-  assert.equal(lines.reduce((sum, line) => sum + purchaseCost(draft, line).supplierTotal, 0n), 685344n);
+  assert.equal(draft.lines.reduce((sum, line) => sum + purchaseCost(draft, line).supplierTotal, 0n), 685344n);
   assert.deepEqual(summarizeBill(openDraft(JSON.stringify(draft))), summary);
 });
 
@@ -138,5 +142,108 @@ test('fractional material rounds line amounts and balances operations; a zero fi
   assert.deepEqual(free.totals, {
     sales: 0n, restock: 22n, taxes: 0n, marketing: 0n, profit: 0n, operations: -22n,
   });
+});
+
+test('the seven-unit financial review shows the actual batch margin, purchase components and operations gap', () => {
+  const draft = cassetteBill();
+  const finalPrices = ['', '3899', '4799', '4679'];
+  draft.lines = draft.lines.map((line, i) => ({ ...line, finalPrice: finalPrices[i] }));
+  const { analysis, totals, finalCount, suggestedCount } = summarizeBill(draft);
+  assert.equal(finalCount, 3);
+  assert.equal(suggestedCount, 1);
+  assert.equal(analysis.productUnits, 7n);
+  assert.deepEqual(totals, {
+    sales: 2807492n, restock: 1887437n, taxes: 196523n, marketing: 56149n, profit: 561499n, operations: 105884n,
+  });
+  assert.deepEqual(analysis.purchase, {
+    supplier: 685344n, converted: 1233619n, wire: 24671n, shipping: 629147n, landed: 1887437n, rounding: 0n,
+  });
+  assert.equal(analysis.recommendedSales, 2859753n);
+  assert.equal(analysis.grossMargin, 920055n);
+  assert.equal(percentOf(analysis.grossMargin, totals.sales), 3277n);
+  assert.equal(percentOf(totals.operations, totals.sales), 377n);
+  assert.equal(analysis.operationsTarget, 140375n);
+  assert.equal(analysis.operationsShortfall, 34491n);
+  assert.deepEqual(analysis.negativeOperationsLines, [2, 3]);
+  assert.deepEqual(analysis.purchasePendingLines, []);
+});
+
+test('local purchases and sales have separate coverage; operations targets are weighted by valid line revenue', () => {
+  const first = { ...blankLine(), unitCost: '100', quantity: '2', finalPrice: '120', marketing: '10', profit: '5', operations: '20' };
+  const second = { ...first, unitCost: '30', quantity: '1', finalPrice: '200', marketing: '5', profit: '10', operations: '5' };
+  const draft = { ...blankBill(), currency: 'AWG', lines: [
+    first, second, { ...blankLine(), use: 'tool', unitCost: '15' },
+    { ...second, unitCost: '20', finalPrice: 'broken' }, { ...second, unitCost: '' },
+  ] };
+  const { totals, analysis, pendingLines } = summarizeBill(draft);
+  assert.equal(analysis.productUnits, null);
+  assert.deepEqual(pendingLines, [4, 5]);
+  assert.deepEqual(analysis.purchasePendingLines, [5]);
+  assert.deepEqual(analysis.purchase, { supplier: 26500n, converted: 26500n, wire: 0n, shipping: 0n, landed: 26500n, rounding: 0n });
+  assert.equal(totals.restock, 23000n);
+  assert.equal(totals.sales, 44000n);
+  assert.equal(analysis.grossMargin, 21000n);
+  assert.equal(totals.operations, 11320n);
+  assert.equal(analysis.operationsTarget, 5800n); // (240 × 20%) + (200 × 5%).
+  assert.equal(percentOf(analysis.operationsTarget, totals.sales), 1318n);
+  assert.equal(analysis.operationsShortfall, 0n);
+  assert.deepEqual(analysis.negativeOperationsLines, [1]);
+  const tenCents = { ...second, unitCost: '0', finalPrice: '0.10', operations: '5' };
+  const tinyBatch = summarizeBill({ ...draft, lines: [tenCents, tenCents] });
+  assert.equal(tinyBatch.analysis.operationsTarget, 1n); // Two half-cent targets round once for the batch.
+});
+
+test('product unit count can be shown before costs are entered, only with valid whole quantities', () => {
+  const products = [blankLine(), { ...blankLine(), quantity: '4' }];
+  assert.equal(summarizeBill({ ...bill, lines: products }).analysis.productUnits, 5n);
+  for (const quantity of ['', '0', '1.5', '3x']) {
+    assert.equal(summarizeBill({ ...bill, lines: [{ ...blankLine(), quantity }] }).analysis.productUnits, null);
+  }
+  assert.equal(summarizeBill({ ...bill, lines: [] }).analysis.productUnits, null);
+});
+
+test('fractional imports reconcile independently rounded purchase components and signed percentages', () => {
+  const line = { ...blankLine(), use: 'material', unitCost: '0.03', quantity: '0.5', finalPrice: '0',
+    marketing: '0', profit: '0', operations: '5' };
+  const { analysis, totals } = summarizeBill({ ...bill, lines: [line] });
+  assert.deepEqual(analysis.purchase, { supplier: 2n, converted: 3n, wire: 0n, shipping: 2n, landed: 4n, rounding: -1n });
+  assert.equal(analysis.grossMargin, -4n);
+  assert.equal(totals.operations, -4n);
+  assert.equal(analysis.operationsTarget, 0n);
+  assert.equal(analysis.operationsShortfall, 4n);
+  assert.deepEqual(analysis.negativeOperationsLines, [1]);
+  assert.equal(percentOf(analysis.grossMargin, totals.sales), null);
+  assert.equal(percentOf(-1n, 32n), -313n);
+  assert.equal(percentOf(1n, 32n), 313n);
+});
+
+test('dated market quotes compare prices in Afl per unit and explicitly distinguish simulations and invalid references', () => {
+  const localQuote = { price: '4850', source: 'Cotización local', date: '2026-11-20' };
+  const expected = { status: 'compared', referencePrice: 485000n, difference: -17100n, differenceBps: -353n, position: 'below' };
+  assert.deepEqual(compareMarket(467900n, localQuote), expected);
+  assert.deepEqual(compareMarket(467900n, { ...localQuote, simulated: true }), { ...expected, status: 'simulated' });
+  assert.equal(compareMarket(485000n, localQuote).position, 'equal');
+  assert.equal(compareMarket(500000n, localQuote).position, 'above');
+  assert.equal(compareMarket(0n, localQuote).differenceBps, -10000n);
+  assert.equal(compareMarket(467900n).status, 'missing');
+  assert.equal(compareMarket(467900n, { ...localQuote, source: '' }).status, 'incomplete');
+  for (const change of [{ price: '0' }, { price: '99.999' }, { date: '2026-02-29' }]) {
+    assert.equal(compareMarket(467900n, { ...localQuote, ...change }).status, 'invalid');
+  }
+});
+
+test('version-one drafts round-trip old lines and real, simulated or unfinished market references', () => {
+  const draft = cassetteBill();
+  assert.ok(openDraft(JSON.stringify(draft)).lines.every(line => line.market === undefined));
+  const localQuote = { price: '4850', source: 'Cotización local', date: '2026-11-20' };
+  draft.lines[1].market = localQuote;
+  draft.lines[2].market = { ...localQuote, simulated: true };
+  draft.lines[3].market = { price: '', source: 'Pendiente', date: '' };
+  const reopened = openDraft(JSON.stringify(draft));
+  assert.deepEqual(reopened, draft);
+  assert.deepEqual(summarizeBill(reopened), summarizeBill(draft));
+  for (const market of [{ ...localQuote, price: 4850 }, { ...localQuote, simulated: 'false' }, { ...localQuote, source: 'x'.repeat(241) }, { price: '4850' }]) {
+    assert.throws(() => openDraft(JSON.stringify({ ...draft, lines: [{ ...draft.lines[0], market }] })));
+  }
 });
 

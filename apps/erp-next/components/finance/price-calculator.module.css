@@ -78,3 +78,6 @@
 .summaryFunds [data-negative="true"] { color:var(--danger); }
 .pending { display:flex; align-items:center; gap:8px; }
 .pending svg { width:16px; height:16px; flex-shrink:0; color:var(--warning); }
+.viewSwitch { display:flex; flex-wrap:wrap; gap:16px; border-bottom:1px solid var(--border); }
+.page .viewSwitch button { color:var(--muted); border:0; border-radius:0; border-bottom:2px solid transparent; background:transparent; padding:9px 3px; }
+.page .viewSwitch button[aria-pressed="true"] { color:var(--brand); border-bottom-color:currentColor; }

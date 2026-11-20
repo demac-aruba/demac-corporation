@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.blankBill = exports.blankLine = exports.sellable = exports.MAX_LINES = void 0;
 exports.amount = amount;
+exports.percentOf = percentOf;
+exports.compareMarket = compareMarket;
 exports.purchaseCost = purchaseCost;
 exports.saleQuote = saleQuote;
 exports.evaluateLine = evaluateLine;
@@ -32,18 +34,35 @@ function decimal(raw, places, label) {
     return BigInt(whole + fraction.padEnd(places, '0'));
 }
 function roundedRatio(value, numerator, denominator) {
-    return (value * numerator + denominator / 2n) / denominator;
+    const product = value * numerator;
+    const half = denominator / 2n;
+    return (product + (product < 0n ? -half : half)) / denominator;
+}
+function percentOf(part, total) {
+    return total > 0n ? roundedRatio(part, 10000n, total) : null;
 }
 function amount(cents) {
     const absolute = cents < 0n ? -cents : cents;
     return (cents < 0n ? '−' : '') + (absolute / 100n).toLocaleString('en-US') + '.' + (absolute % 100n).toString().padStart(2, '0');
 }
-function purchaseCost(bill, line) {
-    const cost = decimal(line.unitCost, 2, 'el costo por unidad');
+function lineQuantity(line) {
     const fractional = line.use === 'material' || line.use === 'consumable';
     const quantity = decimal(line.quantity, 3, 'la cantidad');
     if (quantity === 0n || (!fractional && quantity % 1000n !== 0n))
         throw new Error('Revisa la cantidad para este tipo de artículo.');
+    return quantity;
+}
+function productUnits(lines) {
+    if (!lines.length || !lines.every(line => line.use === 'product')) return null;
+    try {
+        return lines.reduce((total, line) => total + lineQuantity(line) / 1000n, 0n);
+    } catch {
+        return null;
+    }
+}
+function purchaseCost(bill, line) {
+    const cost = decimal(line.unitCost, 2, 'el costo por unidad');
+    const quantity = lineQuantity(line);
     const imported = bill.currency === 'USD';
     const converted = imported ? roundedRatio(cost, 180n, 100n) : cost;
     const wire = imported ? roundedRatio(converted, decimal(bill.wire, 2, 'el wire'), 10000n) : 0n;
@@ -90,16 +109,31 @@ function evaluateLine(bill, line, priceMode = 'final') {
 // A caller displaying the same rows can reuse their 'projected' evaluations in bill order.
 function summarizeBill(bill, projectedLines) {
     const totals = { sales: 0n, restock: 0n, taxes: 0n, marketing: 0n, profit: 0n, operations: 0n };
+    const purchase = { supplier: 0n, converted: 0n, wire: 0n, shipping: 0n, landed: 0n, rounding: 0n };
     const pendingLines = [];
+    const purchasePendingLines = [];
+    const negativeOperationsLines = [];
+    let recommendedSales = 0n;
+    let weightedOperationsTarget = 0n;
     let finalCount = 0;
     let suggestedCount = 0;
     let internalCount = 0;
     for (const [index, line] of bill.lines.entries()) {
+        const { cost, quote } = projectedLines?.[index] ?? evaluateLine(bill, line, 'projected');
+        const quantity = cost ? decimal(line.quantity, 3, 'la cantidad') : 0n;
+        if (cost) {
+            purchase.supplier += cost.supplierTotal;
+            purchase.converted += roundedRatio(cost.converted, quantity, 1000n);
+            purchase.wire += roundedRatio(cost.wire, quantity, 1000n);
+            purchase.shipping += roundedRatio(cost.shipping, quantity, 1000n);
+            purchase.landed += cost.landedTotal;
+        } else {
+            purchasePendingLines.push(index + 1);
+        }
         if (!sellable(line.use)) {
             internalCount++;
             continue;
         }
-        const { cost, quote } = projectedLines?.[index] ?? evaluateLine(bill, line, 'projected');
         if (!cost || !quote?.allocation) {
             pendingLines.push(index + 1);
             continue;
@@ -107,17 +141,32 @@ function summarizeBill(bill, projectedLines) {
         if (line.finalPrice.trim() === '') suggestedCount++;
         else finalCount++;
         const allocation = quote.allocation;
-        const quantity = decimal(line.quantity, 3, 'la cantidad');
-        totals.sales += roundedRatio(allocation.price, quantity, 1000n);
+        const sales = roundedRatio(allocation.price, quantity, 1000n);
+        const taxes = roundedRatio(allocation.taxes, quantity, 1000n);
+        const marketing = roundedRatio(allocation.marketing, quantity, 1000n);
+        const profit = roundedRatio(allocation.profit, quantity, 1000n);
+        // Operations receives the residual after each fund is rounded to money.
+        const operations = sales - cost.landedTotal - taxes - marketing - profit;
+        totals.sales += sales;
         totals.restock += cost.landedTotal;
-        totals.taxes += roundedRatio(allocation.taxes, quantity, 1000n);
-        totals.marketing += roundedRatio(allocation.marketing, quantity, 1000n);
-        totals.profit += roundedRatio(allocation.profit, quantity, 1000n);
+        totals.taxes += taxes;
+        totals.marketing += marketing;
+        totals.profit += profit;
+        totals.operations += operations;
+        recommendedSales += roundedRatio(quote.recommended, quantity, 1000n);
+        weightedOperationsTarget += sales * decimal(line.operations, 2, 'operaciones objetivo');
+        if (operations < 0n) negativeOperationsLines.push(index + 1);
     }
-    // Fractional material quantities can produce fractions of a cent for each fund.
-    // As with a single unit, operations receives the remainder after rounded amounts.
-    totals.operations = totals.sales - totals.restock - totals.taxes - totals.marketing - totals.profit;
-    return { totals, finalCount, suggestedCount, pendingLines, internalCount };
+    // Fractional quantities can round the combined landed amount differently from its components.
+    purchase.rounding = purchase.landed - purchase.converted - purchase.wire - purchase.shipping;
+    const operationsTarget = roundedRatio(weightedOperationsTarget, 1n, 10000n);
+    const analysis = {
+        purchase, purchasePendingLines, productUnits: productUnits(bill.lines),
+        grossMargin: totals.sales - totals.restock, recommendedSales,
+        operationsTarget, operationsShortfall: operationsTarget > totals.operations ? operationsTarget - totals.operations : 0n,
+        negativeOperationsLines,
+    };
+    return { totals, analysis, finalCount, suggestedCount, pendingLines, internalCount };
 }
 function changeRate(bill, generalImport) {
     if (generalImport === bill.generalImport)
@@ -129,6 +178,40 @@ function record(value) {
 }
 function shortText(value) {
     return typeof value === 'string' && value.length <= 240;
+}
+function marketRecord(value) {
+    return record(value) && [value.price, value.source, value.date].every(shortText)
+        && (value.simulated === undefined || typeof value.simulated === 'boolean');
+}
+function validMarketDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000')) return false;
+    const parsed = new Date(value + 'T00:00:00Z');
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+function compareMarket(price, market) {
+    if (market === undefined) return { status: 'missing' };
+    if (!marketRecord(market) || price < 0n) return { status: 'invalid' };
+    const referenceText = market.price.trim();
+    const source = market.source.trim();
+    const date = market.date.trim();
+    if (!referenceText && !source && !date) return { status: 'missing' };
+    let referencePrice;
+    if (referenceText) {
+        try {
+            referencePrice = decimal(referenceText, 2, 'el precio de mercado');
+        } catch {
+            return { status: 'invalid' };
+        }
+        if (referencePrice === 0n) return { status: 'invalid' };
+    }
+    if (date && !validMarketDate(date)) return { status: 'invalid' };
+    if (!referenceText || !source || !date) return { status: 'incomplete' };
+    const difference = price - referencePrice;
+    return {
+        status: market.simulated ? 'simulated' : 'compared',
+        referencePrice, difference, differenceBps: percentOf(difference, referencePrice),
+        position: difference < 0n ? 'below' : difference > 0n ? 'above' : 'equal',
+    };
 }
 // Allow incomplete drafts. Restore only known fields; a file is never authority
 // for catalog pricing. The operator reviews sellable lines again after opening.
@@ -151,6 +234,12 @@ function openDraft(json) {
         }
         if (row.importOverride !== null && !shortText(row.importOverride))
             throw new Error('Porcentaje inválido.');
+        if (row.market !== undefined) {
+            if (!marketRecord(row.market)) throw new Error('Referencia de mercado inválida.');
+            const { price, source, date, simulated } = row.market;
+            line.market = { price, source, date };
+            if (simulated !== undefined) line.market.simulated = simulated;
+        }
         return { ...line, use: row.use, importOverride: row.importOverride };
     });
     return { version: 1, supplier: String(data.supplier), invoiceNumber: String(data.invoiceNumber),
