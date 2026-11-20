@@ -29,6 +29,9 @@
 .table th { color:var(--muted); background:var(--surface-2); font-size:11px; }
 .table td, .table th { padding:8px 6px; border-block:1px solid var(--border); }
 .table small { display:block; margin-top:2px; }
+.page .inputHelp { margin-top:4px; color:var(--muted); font-size:13px; }
+.table .inputError { color:var(--danger); font-size:13px; }
+.table input[aria-invalid="true"] { border-color:var(--danger); }
 .table tr[data-selected="true"] { background:var(--brand-soft); }
 .table input { min-width:48px; }
 .table .description { width:21%; min-width:155px; }

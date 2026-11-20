@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ChargeIcon } from '../scheduling/appointment-charge-icons';
 import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable } from '../../lib/supplier-bill-draft';
 import type { BillDraft, BillLine, ItemUse } from '../../lib/supplier-bill-draft';
+import { totalSupplierCostInput } from '../../lib/supplier-cost-input';
 import s from './price-calculator.module.css';
 
 const uses: Record<ItemUse, string> = { product: 'Producto para venta', material: 'Material para venta', consumable: 'Insumo de uso interno', tool: 'Herramienta' };
@@ -15,6 +16,29 @@ function Field({ label, value, edit, numeric = false }: { label: string; value: 
 
 function LineInput({ label, value, edit, numeric = true }: { label: string; value: string; edit: (v: string) => void; numeric?: boolean }) {
   return <input aria-label={label} title={label} inputMode={numeric ? 'decimal' : 'text'} value={value} maxLength={numeric ? 16 : 240} onChange={e => edit(e.target.value)} />;
+}
+
+function SupplierCostInput({ label, value, edit }: { label: string; value: string; edit: (v: string) => void }) {
+  const errorId = useId();
+  const [failure, setFailure] = useState<{ value: string; message: string } | null>(null);
+  const error = failure?.value === value ? failure.message : '';
+  return <>
+    <input aria-label={label} title="Puedes sumar importes con +. El total se aplica al salir."
+      inputMode="text" value={value} maxLength={240} aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined}
+      onChange={e => { setFailure(null); edit(e.target.value); }}
+      onBlur={e => {
+        const raw = e.target.value;
+        try {
+          const total = totalSupplierCostInput(raw);
+          setFailure(null);
+          if (total !== raw) edit(total);
+        } catch (cause) {
+          setFailure({ value: raw, message: cause instanceof Error ? cause.message : 'Revisa la suma de importes.' });
+        }
+      }}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} />
+    {error && <small id={errorId} role="alert" className={s.inputError}>{error}</small>}
+  </>;
 }
 
 export function PriceCalculator() {
@@ -118,7 +142,7 @@ export function PriceCalculator() {
       <div className={s.tax}><ChargeIcon name="info" /> Impuesto sobre venta · 7% fijo</div>
     </div>
 
-    <section className={s.panel}><header className={s.bar}><h2><ChargeIcon name="clipboard" />Artículos a calcular</h2><button onClick={addLine} disabled={bill.lines.length >= MAX_LINES}><ChargeIcon name="plus" />Agregar artículo</button></header>
+    <section className={s.panel}><header className={s.bar}><div><h2><ChargeIcon name="clipboard" />Artículos a calcular</h2><p className={s.inputHelp}>En Proveedor puedes sumar importes con +. El total se aplica al salir de la casilla.</p></div><button onClick={addLine} disabled={bill.lines.length >= MAX_LINES}><ChargeIcon name="plus" />Agregar artículo</button></header>
       <div className={s.scroll}><table className={s.table}><thead><tr><th>Artículo</th><th>Cant.</th><th>Proveedor<br/>{imported ? 'USD' : 'Afl'}/u</th>
         {imported && <th>Importación + shipping</th>}<th>Landed<br/>Afl/u</th><th>Marketing %</th><th>Ganancia %</th><th>Oper. objetivo %</th><th>Recomendado<br/>Afl</th><th>Precio final<br/>Afl</th></tr></thead>
         <tbody>{bill.lines.map((item, index) => {
@@ -129,7 +153,7 @@ export function PriceCalculator() {
             <td className={s.description}><LineInput numeric={false} label={name('Artículo')} value={item.description} edit={v => patch('description', v)} />
               <select aria-label={name('Tipo de artículo')} value={item.use} onChange={e => patch('use', e.target.value)}>{Object.entries(uses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></td>
             <td><LineInput label={name('Cantidad')} value={item.quantity} edit={v => patch('quantity', v)} /></td>
-            <td><LineInput label={name('Costo del proveedor')} value={item.unitCost} edit={v => patch('unitCost', v)} /></td>
+            <td><SupplierCostInput label={name('Costo del proveedor')} value={item.unitCost} edit={v => patch('unitCost', v)} /></td>
             {imported && <td><LineInput label={name('Importación (%)')} value={item.importOverride ?? bill.generalImport} edit={v => patch('importOverride', v)} />
               {item.importOverride !== null ? <button className={s.override} title="Volver al porcentaje general" aria-label={name('Volver al porcentaje general')} onClick={() => updateLine(index, { importOverride: null })}>Personalizado ↶</button> : <small>General</small>}</td>}
             <td>{row.cost ? amount(row.cost.landed) : '—'}</td>
