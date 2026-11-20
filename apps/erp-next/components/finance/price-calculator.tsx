@@ -2,9 +2,11 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChargeIcon } from '../scheduling/appointment-charge-icons';
-import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable } from '../../lib/supplier-bill-draft';
+import { amount, blankBill, blankLine, changeRate, evaluateLine, MAX_LINES, openDraft, sellable, summarizeBill } from '../../lib/supplier-bill-draft';
 import type { BillDraft, BillLine, ItemUse } from '../../lib/supplier-bill-draft';
 import { totalSupplierCostInput } from '../../lib/supplier-cost-input';
+import { PriceCalculationSummary } from './price-calculation-summary';
+import { PricePurchaseAnalysis } from './price-purchase-analysis';
 import s from './price-calculator.module.css';
 
 const uses: Record<ItemUse, string> = { product: 'Producto para venta', material: 'Material para venta', consumable: 'Insumo de uso interno', tool: 'Herramienta' };
@@ -41,27 +43,41 @@ function SupplierCostInput({ label, value, edit }: { label: string; value: strin
   </>;
 }
 
-export function PriceCalculator() {
-  const [bill, setBill] = useState<BillDraft>(blankBill);
+export function PriceCalculator({ exampleDraft }: { exampleDraft?: BillDraft }) {
+  const [bill, setBill] = useState<BillDraft>(() => exampleDraft ?? blankBill());
+  const [view, setView] = useState<'items' | 'analysis'>(exampleDraft ? 'analysis' : 'items');
   const [selected, select] = useState(0);
   const [message, setMessage] = useState('');
   const file = useRef<HTMLInputElement>(null);
+  const rows = useRef<HTMLTableSectionElement>(null);
+  const focusRow = useRef<number | null>(null);
   const imported = bill.currency === 'USD';
-  const hasChanges = JSON.stringify(bill) !== JSON.stringify(blankBill());
-  const results = bill.lines.map(line => evaluateLine(bill, line));
+  const hasChanges = bill !== exampleDraft && JSON.stringify(bill) !== JSON.stringify(blankBill());
+  const results = bill.lines.map(line => evaluateLine(bill, line, 'projected'));
+  const summary = summarizeBill(bill, results);
   const line = bill.lines[selected];
   const result = results[selected];
   const suggestedPrice = result.quote ? amount(result.quote.recommended).replace(/,/g, '') : '';
-  const allocation = line.finalPrice.trim() ? result.quote?.allocation : suggestedPrice ? evaluateLine(bill, { ...line, finalPrice: suggestedPrice }).quote?.allocation : null;
+  const allocation = result.quote?.allocation;
+  useEffect(() => {
+    if (view === 'items' && focusRow.current !== null) {
+      rows.current?.rows[focusRow.current]?.querySelector('input')?.focus();
+      focusRow.current = null;
+    }
+  }, [view]);
+  function editItem(index: number) {
+    select(index);
+    focusRow.current = index;
+    setView('items');
+  }
   useEffect(() => {
     if (!hasChanges) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [hasChanges]);
-  const allCosted = results.every(r => r.cost !== null);
-  const calculatedTotal = (key: 'supplierTotal' | 'landedTotal') => allCosted
-    ? amount(results.reduce((sum, row) => sum + row.cost![key], 0n)) : '—';
+  const purchaseAmount = (key: 'supplier' | 'landed') => summary.analysis.purchasePendingLines.length
+    ? '—' : amount(summary.analysis.purchase[key]);
 
   function updateLine(index: number, patch: Partial<BillLine>) {
     setBill(current => ({ ...current, lines: current.lines.map((entry, n) => n === index ? { ...entry, confirmed: false, ...patch } : entry) }));
@@ -101,24 +117,34 @@ export function PriceCalculator() {
       if (hasChanges && !window.confirm('¿Reemplazar el cálculo que estás editando? Descarga primero una copia si deseas conservarlo.')) return;
       select(0);
       setBill(restored);
+      setView('items');
       setMessage('Cálculo abierto. Los porcentajes y precios se han recuperado.');
     } catch {
       setMessage('No se pudo abrir el archivo. Elige un cálculo DEMAC válido de hasta 2 MB.');
     }
   }
 
-  function reset(next: BillDraft) {
+  function reset(next: BillDraft, nextView: 'items' | 'analysis' = 'items') {
     if (hasChanges && !window.confirm('¿Reemplazar el cálculo actual? Descarga una copia para conservarlo.')) return;
-    setBill(next); select(0); setMessage('');
+    setBill(next); select(0); setView(nextView); setMessage('');
   }
   function example() {
+    if (exampleDraft) {
+      reset(exampleDraft, 'analysis');
+      return;
+    }
     reset({ ...blankBill(), supplier: 'Proveedor de ejemplo', invoiceNumber: 'Ejemplo de cálculo', generalImport: '50', lines: [
       { ...blankLine(), description: 'Mini split · ejemplo', quantity: '4', unitCost: '250', marketing: '5', profit: '15', operations: '22' },
-      { ...blankLine(), description: 'Bracket · ejemplo', unitCost: '20', importOverride: '30', marketing: '4', profit: '18', operations: '20' },
+      { ...blankLine(), description: 'Bracket · ejemplo', unitCost: '20', importOverride: '30', marketing: '4', profit: '18', operations: '20',
+        market: { price: '100', source: 'Ejemplo de cotización sin instalación', date: '2026-11-20', simulated: true } },
     ] });
   }
   return <section className={s.page}>
-    <header className={s.head}><div><span className={s.eyebrow}><ChargeIcon name="money" /> COMPRAS · HERRAMIENTAS</span><h1>Cálculo de precios</h1><p>Del costo del proveedor al precio de venta. Cada artículo tiene sus propios porcentajes.</p></div>
+    <header className={s.head}><div><span className={s.eyebrow}><ChargeIcon name="money" /> COMPRAS · CÁLCULO DE PRECIOS</span>
+      <h1>{view === 'analysis' ? 'Análisis financiero de la compra' : 'Cálculo de precios'}</h1>
+      {view === 'analysis' ? <p>{bill.invoiceNumber.trim() || 'Proyección del lote'} · {bill.lines.length} {bill.lines.length === 1 ? 'artículo' : 'artículos'}
+        {summary.analysis.productUnits !== null && <> · {summary.analysis.productUnits.toLocaleString('en-US')} {summary.analysis.productUnits === 1n ? 'unidad' : 'unidades'}</>}
+      </p> : <p>Del costo del proveedor al precio de venta. Cada artículo tiene sus propios porcentajes.</p>}</div>
       <div className={s.actions}>
         <button onClick={example}>Cargar ejemplo</button>
         <button onClick={() => file.current?.click()}>Abrir cálculo</button>
@@ -127,9 +153,13 @@ export function PriceCalculator() {
         <input hidden ref={file} aria-label="Archivo de cálculo" type="file" accept=".json,application/json" onChange={e => { const picked = e.target.files?.[0]; e.target.value = ''; void restore(picked); }} />
       </div>
     </header>
-    <p className={s.notice}><ChargeIcon name="info" /> Calculadora de planificación. Descarga una copia antes de salir. No registra compras ni cambia inventario o QuickBooks.</p>
+    <nav className={s.viewSwitch} aria-label="Vistas del cálculo">
+      <button aria-pressed={view === 'items'} onClick={() => setView('items')}><ChargeIcon name="clipboard" />Artículos y costos</button>
+      <button aria-pressed={view === 'analysis'} onClick={() => setView('analysis')}><ChargeIcon name="grid" />Análisis de compra</button>
+    </nav>
     {message && <p role="status" className={s.status}>{message}</p>}
-    <div className={s.editorFields}>
+    {view === 'analysis' ? <PricePurchaseAnalysis bill={bill} results={results} summary={summary} editItem={editItem} updateLine={updateLine} /> : <div className={s.editorFields}>
+    <p className={s.notice}><ChargeIcon name="info" /> Calculadora de planificación. Guarda una copia con «Descargar cálculo» antes de salir. Para retomarla, usa «Abrir cálculo». No registra compras ni cambia inventario o QuickBooks.</p>
     <div className={s.panel + ' ' + s.fields}>
       <Field label="Proveedor (opcional)" value={bill.supplier} edit={v => editHeader('supplier', v)} />
       <Field label="Nombre del cálculo (opcional)" value={bill.invoiceNumber} edit={v => editHeader('invoiceNumber', v)} />
@@ -145,7 +175,7 @@ export function PriceCalculator() {
     <section className={s.panel}><header className={s.bar}><div><h2><ChargeIcon name="clipboard" />Artículos a calcular</h2><p className={s.inputHelp}>En Proveedor puedes sumar importes con +. El total se aplica al salir de la casilla.</p></div><button onClick={addLine} disabled={bill.lines.length >= MAX_LINES}><ChargeIcon name="plus" />Agregar artículo</button></header>
       <div className={s.scroll}><table className={s.table}><thead><tr><th>Artículo</th><th>Cant.</th><th>Proveedor<br/>{imported ? 'USD' : 'Afl'}/u</th>
         {imported && <th>Importación + shipping</th>}<th>Landed<br/>Afl/u</th><th>Marketing %</th><th>Ganancia %</th><th>Oper. objetivo %</th><th>Recomendado<br/>Afl</th><th>Precio final<br/>Afl</th></tr></thead>
-        <tbody>{bill.lines.map((item, index) => {
+        <tbody ref={rows}>{bill.lines.map((item, index) => {
           const row = results[index];
           const name = (label: string) => label + ' · línea ' + (index + 1);
           const patch = (key: keyof BillLine, value: string) => updateLine(index, { [key]: value });
@@ -163,8 +193,10 @@ export function PriceCalculator() {
           </tr>;
         })}</tbody>
       </table></div>
-      <footer className={s.bar}><span>Total proveedor <b>{imported ? 'USD' : 'Afl'} {calculatedTotal('supplierTotal')}</b></span><span>Landed estimado <b>Afl {calculatedTotal('landedTotal')}</b></span></footer>
+      <footer className={s.bar}><span>Total proveedor <b>{imported ? 'USD' : 'Afl'} {purchaseAmount('supplier')}</b></span><span>Landed estimado <b>Afl {purchaseAmount('landed')}</b></span></footer>
     </section>
+
+    <PriceCalculationSummary summary={summary} />
 
     <div className={s.details}>
       <section className={s.panel}><header className={s.bar}><h2><ChargeIcon name="money" />Costo por unidad</h2></header>
@@ -183,7 +215,7 @@ export function PriceCalculator() {
       </div></section>
     </div>
     <details className={s.formula}><summary>Cómo se calcula el precio sugerido</summary><p>Proveedor en USD × 1.80 = costo en florines. Banco = costo en florines × % banco. Importación + shipping = (costo en florines + banco) × % de importación del artículo.</p><p>Precio sugerido = landed cost ÷ (1 − 7% − marketing% − ganancia% − operaciones objetivo%). Los porcentajes de distribución se calculan sobre el precio de venta. La ganancia es una reserva prevista; no equivale a la utilidad neta contable.</p><p>Importación se escribe manualmente; el origen no asigna porcentajes. Los cargos se redondean por unidad a dos decimales antes de multiplicar por la cantidad. Escribe decimales con punto o coma, sin separadores de miles.</p></details>
-    </div>
+    </div>}
   </section>;
 }
 
