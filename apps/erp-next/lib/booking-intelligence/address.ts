@@ -128,7 +128,8 @@ function fuzzyMatchScore(candidate: string, queryWords: string, queryCompact: st
   if (candidateCompact[0] !== queryCompact[0]) return 0;
   const allowedDistance = queryCompact.length <= 5 ? 1 : 2;
   const prefix = candidateCompact.slice(0, queryCompact.length);
-  const prefixDistance = levenshtein(prefix, queryCompact);
+  const prefixDistance = Math.min(levenshtein(prefix, queryCompact),
+    Math.abs(candidateCompact.length - queryCompact.length) <= allowedDistance ? levenshtein(candidateCompact, queryCompact) : Infinity);
   if (prefixDistance <= allowedDistance) return 76 - prefixDistance * 6;
   const queryTokens = queryWords.split(' ').filter(Boolean);
   const candidateTokens = candidateWords.split(' ').filter(Boolean);
@@ -180,6 +181,11 @@ export function suggestArubaServiceAddresses(query: string, limit = 6): DemacAdd
   });
   const strongMatches = scored.filter((item) => item.strong);
   const matches = strongMatches.length ? strongMatches : scored.filter((item) => item.score >= 68);
+  const exactCanonicals = matches.filter(({ entry }) => compact(entry.canonical) === queryCompact);
+  const exactAliases = matches.filter(({ score }) => score === 100);
+  for (const item of exactAliases) {
+    if (compact(item.entry.canonical) !== queryCompact && (exactCanonicals.length || exactAliases.length > 1)) item.score = 99;
+  }
   const seen = new Set<string>();
   return matches
     .sort((left, right) => right.score - left.score || addressSourcePriority(right.entry) - addressSourcePriority(left.entry) || left.entry.canonical.localeCompare(right.entry.canonical))
