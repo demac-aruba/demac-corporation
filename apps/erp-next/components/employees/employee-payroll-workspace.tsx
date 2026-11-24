@@ -6,6 +6,7 @@ import { loadCanonicalOperationsState, staffDisplayName, type CanonicalOperation
 import { loadEmployeeAttendanceState, type EmployeeAttendanceState } from '@/lib/employee-attendance';
 import {
   MONTHLY_HOURS_FACTOR,
+  belongsToPayrollPeriod,
   calculatePayrollDay,
   payrollPeriodDates,
   payrollPeriodForReference,
@@ -107,12 +108,10 @@ export function EmployeePayrollWorkspace() {
   const employees = useMemo(() => {
     const all = ((operations?.staffProfiles ?? []) as LifecycleProfile[]).filter((profile) => {
       if (bonusReport.byEmployee[profile.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === profile.id && advance.payrollPeriodId === period.id)) return true;
-      if (profile.employmentStartedAt && profile.employmentStartedAt > period.endDate) return false;
-      if (profile.active === false && profile.employmentEndedAt && profile.employmentEndedAt < period.startDate) return false;
-      return profile.active !== false || Boolean(profile.employmentEndedAt && profile.employmentEndedAt >= period.startDate);
+      return belongsToPayrollPeriod(profile, period.startDate, period.endDate, attendance.timesheets);
     });
     return all.sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b)));
-  }, [operations?.staffProfiles, period.endDate, period.startDate, period.id, bonusReport, attendance.advances]);
+  }, [operations?.staffProfiles, period.endDate, period.startDate, period.id, bonusReport, attendance.advances, attendance.timesheets]);
 
   const summaries = useMemo(() => {
     if (!operations) return [];
@@ -265,7 +264,7 @@ export function EmployeePayrollWorkspace() {
           <tbody>{filtered.map((item) => {
             const selected = item.employee.id === selectedEmployee?.id;
             return <tr key={item.employee.id} className={`${styles.row} ${selected ? styles.rowSelected : ''}`} onClick={() => setSelectedEmployeeId(item.employee.id)}>
-              <td><div className={styles.employeeCell}><span className={styles.employeeAvatar}>{initials(staffDisplayName(item.employee))}</span><span><strong>{staffDisplayName(item.employee)}</strong><small>{item.employee.role ?? employeeType(item.employee)}{item.employee.active === false ? ' · Former employee' : ''}</small></span></div></td>
+              <td><div className={styles.employeeCell}><span className={styles.employeeAvatar}>{initials(staffDisplayName(item.employee))}</span><span><strong>{staffDisplayName(item.employee)}</strong><small>{item.employee.role ?? employeeType(item.employee)}{item.employmentNotice ? ` · ${item.employmentNotice}` : ''}</small></span></div></td>
               <MetricCell value={`${decimalHours(item.weeklyPaidBaseHours)} h`} />
               <MetricCell value={hoursMinutes(item.actualRegularHours)} />
               <MetricCell value={hoursMinutes(item.overtimeHours)} active={item.overtimeHours > 0} /><MetricCell value={hoursMinutes(item.overtime150Hours ?? 0)} active={(item.overtime150Hours ?? 0) > 0} /><MetricCell value={hoursMinutes(item.overtime200Hours ?? 0)} active={(item.overtime200Hours ?? 0) > 0} />

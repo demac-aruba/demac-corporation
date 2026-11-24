@@ -40,6 +40,7 @@ export type PayrollDay = {
 
 export type PayrollEmployeeSummary = {
   employee: CanonicalStaffProfile;
+  employmentNotice?: string;
   weeklyPaidBaseHours: number;
   monthlyBaseHours: number;
   actualRegularHours: number;
@@ -225,6 +226,28 @@ export function weeklyPaidBaseHours(input: {
   }, 0));
 }
 
+export function belongsToPayrollPeriod(employee: CanonicalStaffProfile, start: string, end: string, timesheets: EmployeeAttendanceState['timesheets']) {
+  if (timesheets.some(entry => entry.employeeId === employee.id && entry.date >= start && entry.date <= end)) return true;
+  const profile = employee as CanonicalStaffProfile & { employmentStartedAt?: string; employmentEndedAt?: string };
+  if (profile.employmentStartedAt && profile.employmentStartedAt > end) return false;
+  return profile.employmentEndedAt ? profile.employmentEndedAt >= start : profile.active !== false;
+}
+
+function employmentNotice(employee: CanonicalStaffProfile, period: PayrollPeriod) {
+  const profile = employee as CanonicalStaffProfile & {
+    employmentStartedAt?: string; startDate?: string; employmentEndedAt?: string; offboardingReason?: string;
+  };
+  const messages: string[] = [];
+  const start = profile.employmentStartedAt || profile.startDate;
+  const end = profile.employmentEndedAt;
+  if (start && start >= period.startDate && start <= period.endDate) messages.push(`Started ${start}`);
+  if (end && end >= period.startDate && end <= period.endDate) {
+    const resigned = /^(resigned|resignation|renuncia|renuncio|renunció)(?:\s|$|[.,])/i.test(profile.offboardingReason?.trim() || '');
+    messages.push(`${resigned ? 'Resigned' : 'Employment ended'} ${end}`);
+  }
+  return messages.join(' · ');
+}
+
 export function summarizeEmployee(input: {
   employee: CanonicalStaffProfile;
   period: PayrollPeriod;
@@ -235,11 +258,15 @@ export function summarizeEmployee(input: {
   const days = payrollPeriodDates(period).map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
   const total = (key: keyof Pick<PayrollDay, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
   const weeklyPaidBase = weeklyPaidBaseHours({ employee, period, operations, attendance });
-  const monthlyBase = roundHours(weeklyPaidBase * MONTHLY_HOURS_FACTOR);
+  const notice = employmentNotice(employee, period);
+  const monthlyBase = notice
+    ? roundHours(days.reduce((sum, day) => sum + day.scheduledWorkHours, 0))
+    : roundHours(weeklyPaidBase * MONTHLY_HOURS_FACTOR);
   const overtime = total('overtimeHours');
   const noWork = total('noWorkNoPayHours');
   return {
     employee,
+    employmentNotice: notice,
     weeklyPaidBaseHours: weeklyPaidBase,
     monthlyBaseHours: monthlyBase,
     actualRegularHours: total('regularHours'),

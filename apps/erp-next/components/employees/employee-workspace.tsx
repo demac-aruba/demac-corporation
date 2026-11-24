@@ -37,7 +37,7 @@ import {
   hasValidWorkedTimeRange,
 } from '@/lib/employee-attendance-calculation';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
-import { calculatePayrollDay, payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
+import { belongsToPayrollPeriod, calculatePayrollDay, payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
@@ -141,9 +141,11 @@ export function EmployeeWorkspace() {
     };
   }, [quickActionsOpen]);
 
-  const employees = useMemo(() => (operations?.staffProfiles ?? []).filter((profile) => profile.active !== false), [operations]);
-  const selectedEmployee = allEmployees ? null : employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const period = useMemo(() => payrollPeriodBounds(periodAnchor), [periodAnchor]);
+  const employees = useMemo(() => (operations?.staffProfiles ?? []).filter(profile => tab === 'calendar'
+    ? belongsToPayrollPeriod(profile, period.start, period.end, attendance.timesheets)
+    : profile.active !== false), [operations, tab, period, attendance.timesheets]);
+  const selectedEmployee = allEmployees ? null : employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], period), [attendance.payrollSettings, operations?.staffProfiles, period]);
   const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === employee.id && advance.payrollPeriodId === period.id)), [operations?.staffProfiles, bonusReport, attendance.advances, period.id]);
   const calendarCells = useMemo(() => payrollCalendarDays(period.start, period.end), [period.end, period.start]);
@@ -490,7 +492,7 @@ export function EmployeeWorkspace() {
           <div className={styles.employeeIdentity}>
             <div className={styles.avatarLarge}>{allEmployees ? 'ALL' : selectedEmployee ? initials(staffDisplayName(selectedEmployee)) : '—'}</div>
             <div className={styles.employeeIdentityCopy}>
-              <div className={styles.employeeNameLine}><strong>{allEmployees ? 'Todos' : selectedEmployee ? staffDisplayName(selectedEmployee) : 'No employee selected'}</strong><span className={styles.activeStatus}><i />Active</span></div>
+              <div className={styles.employeeNameLine}><strong>{allEmployees ? 'Todos' : selectedEmployee ? staffDisplayName(selectedEmployee) : 'No employee selected'}</strong>{selectedEmployee && <span className={styles.activeStatus}>{selectedEmployee.active === false ? 'Former employee' : <><i />Active</>}</span>}</div>
               <div className={styles.employeeSubline}>{allEmployees ? `${employees.length} active employees · Select a day for the breakdown` : `${selectedEmployee?.role ?? selectedEmployee?.employeeType ?? 'Employee'} · ${selectedSummary?.vanLabel ?? 'UNASSIGNED'}`}</div>
               <select className={styles.changeEmployee} aria-label="Calendar employee" value={allEmployees ? '' : selectedEmployee?.id ?? ''} onChange={(event) => { setAllEmployees(!event.target.value); if (event.target.value) setSelectedEmployeeId(event.target.value); }}><option value="">Todos</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{staffDisplayName(employee)} · {employee.role ?? employee.employeeType ?? 'Employee'}</option>)}</select>
             </div>
