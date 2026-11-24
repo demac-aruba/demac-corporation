@@ -89,6 +89,9 @@ export function EmployeeWorkspace() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [tab, setTab] = useState<WorkspaceTab>('overview');
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'calendar') setTab('calendar');
+  }, []);
   const [periodAnchor, setPeriodAnchor] = useState(today);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [allEmployees, setAllEmployees] = useState(false);
@@ -180,6 +183,7 @@ export function EmployeeWorkspace() {
       })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
       workIntervals: record.entry?.workIntervals?.map((row) => ({ ...row })),
+      partTimePremium: record.entry?.partTimePremium,
       attendanceShiftOverride: record.entry?.attendanceShiftOverride ? { ...record.entry.attendanceShiftOverride } : undefined,
       overtimePayAllocations: editableAllocations?.length ? editableAllocations.map((row) => ({ ...row })) : undefined,
       changeReason: '',
@@ -243,6 +247,7 @@ export function EmployeeWorkspace() {
     || draft.clockOutTime !== (selectedRecord.entry?.clockOutTime ?? selectedRecord.schedule.endTime)
     || draft.breakMinutes !== (selectedRecord.entry?.breakMinutes ?? scheduledBreakMinutes(selectedRecord.schedule))
     || JSON.stringify(draft.workIntervals) !== JSON.stringify(selectedRecord.entry?.workIntervals)
+    || !!draft.partTimePremium !== !!selectedRecord.entry?.partTimePremium
     || JSON.stringify(draft.attendanceShiftOverride) !== JSON.stringify(selectedRecord.entry?.attendanceShiftOverride)));
   const selectedCalculation = (() => {
     if (!selectedRecord || !draft) return { variance: null, schedule: undefined, error: '' };
@@ -251,6 +256,8 @@ export function EmployeeWorkspace() {
       const workIntervals = workIntervalsForDraft(draft);
       if (['Present', 'Late'].includes(draft.status) && draft.clockInTime && draft.clockOutTime && !workIntervals && !hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime)) throw new Error('Clock Out must follow Clock In. Select Clock out next day for overnight work.');
       const variance = calculateAttendanceVarianceWithWorkSegments({ workDate: selectedDate, schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes, workIntervals, workSegments: selectedRecord.entry?.workOrderAttendanceSegments });
+      const outsideShiftMinutes = variance.overtimeMinutes;
+      if (schedule.partTime && !draft.partTimePremium) variance.overtimeMinutes = 0;
       // Loading a historical record or selecting its pay rate never recalculates its recorded hours.
       if (selectedRecord.entry && !attendanceInputsChanged) {
         variance.overtimeMinutes = selectedRecord.entry.overtimeMinutes ?? Math.round(selectedRecord.entry.overtimeHours * 60);
@@ -258,7 +265,7 @@ export function EmployeeWorkspace() {
         variance.missingSegments = selectedRecord.entry.attendanceExceptions ?? [];
         variance.missingScheduledMinutes = variance.missingSegments.reduce((sum, row) => sum + row.minutes, 0);
       }
-      return { variance, schedule, error: '' };
+      return { variance, schedule, outsideShiftMinutes, error: '' };
     } catch (cause) { return { variance: null, schedule: undefined, error: cause instanceof Error ? cause.message : 'Review the work intervals.' }; }
   })();
   const selectedVariance = selectedCalculation.variance;
@@ -284,7 +291,7 @@ export function EmployeeWorkspace() {
   const selectedExceptionHours = Math.max(0, Number(draft?.exceptionHours) || 0);
   const selectedRegularHours = selectedRecord && draft
     ? workedStatus
-      ? selectedRecord.entry && !attendanceInputsChanged ? selectedRecord.entry.regularHours : Math.max(0, (selectedRecord.schedule.scheduledMinutes - (selectedVariance?.missingScheduledMinutes ?? 0)) / 60)
+      ? selectedRecord.entry && !attendanceInputsChanged ? selectedRecord.entry.regularHours : selectedSchedule?.partTime && !draft?.partTimePremium ? (selectedVariance?.workedMinutes ?? 0) / 60 : Math.max(0, ((selectedSchedule?.scheduledMinutes ?? 0) - (selectedVariance?.missingScheduledMinutes ?? 0)) / 60)
       : Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0))
     : 0;
   const partialTreatmentTotals = detectedAttendanceExceptions.reduce((total, segment) => {
@@ -567,6 +574,7 @@ export function EmployeeWorkspace() {
                 <label className={styles.dayOffsetToggle}><input type="checkbox" checked={draft.workIntervals?.[0]?.endDayOffset === 1} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, {}, event.target.checked))} />Clock out next day</label>
                 <Field label="Break Minutes" full><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft(updateAttendanceClockDraft(draft, { breakMinutes: Number(event.target.value) }))} /></Field>
                 </> : null}
+                {workedStatus && selectedSchedule?.partTime && <label className={styles.field}><span>Hours outside this shift</span><select className={styles.control} disabled={busy || !canManageSensitiveAttendance} value={draft.partTimePremium ? 'premium' : 'regular'} onChange={(event) => setDraft({ ...draft, partTimePremium: event.target.value === 'premium', overtimePayAllocations: event.target.value === 'premium' && selectedCalculation.outsideShiftMinutes ? [{ rate: 150, minutes: selectedCalculation.outsideShiftMinutes }] : [] })}><option value="regular">Regular pay · 100%</option><option value="premium">Overtime · choose 150% or 200%</option></select></label>}
                 {workedStatus ? <EmployeeAttendanceIntervalEditor draft={draft} onChange={setDraft} existing={selectedRecord.entry} disabled={busy || !canManageSensitiveAttendance} overtimeMinutes={selectedVariance?.overtimeMinutes ?? 0} excludedGapMinutes={selectedVariance?.excludedGapMinutes} calculationError={selectedCalculation.error} /> : null}
                 {intervalSaveError ? <div className={styles.notice} role="status">{intervalSaveError}</div> : null}
 

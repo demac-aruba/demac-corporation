@@ -169,7 +169,8 @@ function attendanceSegment(workOrder, completion) {
 function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule, actor }) {
   const shiftRevision = existing.attendanceShiftRevision ?? 0;
   if (existing.attendanceShiftOverride && (!Number.isSafeInteger(shiftRevision) || shiftRevision < 1 || shiftRevision >= Number.MAX_SAFE_INTEGER)) throw new Error('The recorded shift revision needs review before applying Work Order evidence.');
-  const enhanced = Array.isArray(existing.workIntervals) || Array.isArray(existing.overtimePayAllocations) || Boolean(existing.attendanceShiftOverride);
+  const partTimeRegular = existing.partTimePremium === false;
+  const enhanced = typeof existing.partTimePremium === 'boolean' || Array.isArray(existing.workIntervals) || Array.isArray(existing.overtimePayAllocations) || Boolean(existing.attendanceShiftOverride);
   if (enhanced && existing.scheduledStartTime && existing.scheduledEndTime) schedule = {
     ...schedule, startTime: existing.scheduledStartTime, endTime: existing.scheduledEndTime, endDayOffset: existing.scheduledEndDayOffset ?? 0,
     scheduledMinutes: Math.round(Number(existing.scheduledWorkHours || 0) * 60),
@@ -202,7 +203,8 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule,
   const alreadyAuthorityCalculated = cleanText(existing.overtimeCalculationSource, 120).startsWith("attendance_authority");
   const overtimeReconciliationRequired = !hasBaseAttendance && !alreadyAuthorityCalculated && existingOvertime > 0;
   const beforeVariance = enhanced ? calculateAttendanceVarianceWithWorkSegments({ workDate, schedule, clockInTime, clockOutTime, breakMinutes, workSegments: existingSegments, workIntervals: existing.workIntervals }) : null;
-  const overtimeMinutes = beforeVariance ? existingOvertime + Math.max(0, variance.overtimeMinutes - beforeVariance.overtimeMinutes) : overtimeReconciliationRequired
+  const regularExtension = partTimeRegular && beforeVariance ? Math.max(0, variance.overtimeMinutes - beforeVariance.overtimeMinutes) : 0;
+  const overtimeMinutes = partTimeRegular ? existingOvertime : beforeVariance ? existingOvertime + Math.max(0, variance.overtimeMinutes - beforeVariance.overtimeMinutes) : overtimeReconciliationRequired
     ? Math.max(existingOvertime, variance.overtimeMinutes)
     : variance.overtimeMinutes;
   const scheduledHours = roundHours(schedule.scheduledMinutes);
@@ -217,7 +219,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule,
     date: workDate,
     scheduledWorkHours: Number.isFinite(Number(existing.scheduledWorkHours)) ? Number(existing.scheduledWorkHours) : scheduledHours,
     paidFreeHours: Number.isFinite(Number(existing.paidFreeHours)) ? Number(existing.paidFreeHours) : 0,
-    regularHours: Number.isFinite(Number(existing.regularHours)) ? Number(existing.regularHours) : 0,
+    regularHours: (Number(existing.regularHours) || 0) + roundHours(regularExtension),
     overtimeHours: roundHours(overtimeMinutes),
     overtimeMinutes,
     aoHours: Number.isFinite(Number(existing.aoHours)) ? Number(existing.aoHours) : 0,
