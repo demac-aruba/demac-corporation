@@ -3,7 +3,7 @@ import type { EmployeePayrollSettings, HalfDayOffPeriod } from './employee-atten
 import { isTechnicalEmployee } from './employee-classification';
 import { saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 
-export type EmployeeScheduleMode = 'company' | 'custom';
+export type EmployeeScheduleMode = 'company' | 'custom' | 'part-time';
 export type EmployeeScheduleTemplateId = 'office-8-5' | 'late-9-6' | 'custom';
 export type EmployeeScheduleWeekdayKey = '1' | '2' | '3' | '4' | '5' | '6';
 
@@ -84,7 +84,7 @@ export function employeeWeeklyScheduleFromSettings(settings?: EmployeePayrollSet
   const template = scheduleTemplate(extended?.scheduleTemplateId);
   const fallback = defaultEmployeeWeeklySchedule(template?.startTime ?? '08:00', template?.endTime ?? '17:00', template?.breakMinutes ?? 60);
   const stored = extended?.weeklySchedule ?? {};
-  return normalizeWeeklySchedule({ ...fallback, ...stored });
+  return normalizeWeeklySchedule({ ...fallback, ...stored }, extended?.scheduleMode);
 }
 
 export function defaultPartialDayWindow(
@@ -160,11 +160,11 @@ export function buildEmployeeScheduleChanges(input: {
   if (input.effectiveUntil && input.effectiveUntil < input.effectiveFrom) {
     throw new Error('The schedule end date cannot be before the effective start date.');
   }
-  const weekday = input.halfDayWeekday == null ? null : Math.round(Number(input.halfDayWeekday));
+  const weekday = input.mode === 'part-time' || input.halfDayWeekday == null ? null : Math.round(Number(input.halfDayWeekday));
   if (weekday !== null && (weekday < 1 || weekday > 6)) throw new Error('Choose a partial-day weekday from Monday through Saturday.');
 
   const now = input.now ?? new Date().toISOString();
-  const weeklySchedule = normalizeWeeklySchedule(input.weeklySchedule);
+  const weeklySchedule = normalizeWeeklySchedule(input.weeklySchedule, input.mode);
   const existingExtended = asEmployeePayrollScheduleSettings(input.existing);
   const offPeriod = input.halfDayOffPeriod ?? 'afternoon';
   const partialDay = weekday === null
@@ -291,7 +291,7 @@ function normalizedVersions(versions: EmployeeScheduleVersion[]) {
     .filter((version) => Boolean(version?.effectiveFrom))
     .map((version) => ({
       ...version,
-      weeklySchedule: normalizeWeeklySchedule(version.weeklySchedule),
+      weeklySchedule: normalizeWeeklySchedule(version.weeklySchedule, version.mode),
       halfDayOffPeriod: version.halfDayOffPeriod ?? 'afternoon',
       halfDayWorkedHours: Number(version.halfDayWorkedHours ?? 4),
       halfDayPaidFreeHours: Number(version.halfDayPaidFreeHours ?? 0),
@@ -301,14 +301,14 @@ function normalizedVersions(versions: EmployeeScheduleVersion[]) {
     .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom) || a.createdAt.localeCompare(b.createdAt));
 }
 
-function normalizeWeeklySchedule(schedule: EmployeeWeeklySchedule) {
+function normalizeWeeklySchedule(schedule: EmployeeWeeklySchedule, mode?: EmployeeScheduleMode) {
   const fallback = defaultEmployeeWeeklySchedule();
   return Object.fromEntries(
-    (['1', '2', '3', '4', '5', '6'] as EmployeeScheduleWeekdayKey[]).map((weekday) => [weekday, normalizeScheduleDay(schedule[weekday] ?? fallback[weekday]!)]),
+    (['1', '2', '3', '4', '5', '6'] as EmployeeScheduleWeekdayKey[]).map((weekday) => [weekday, normalizeScheduleDay(schedule[weekday] ?? fallback[weekday]!, mode)]),
   ) as EmployeeWeeklySchedule;
 }
 
-function normalizeScheduleDay(day: EmployeeScheduleDay): EmployeeScheduleDay {
+function normalizeScheduleDay(day: EmployeeScheduleDay, mode?: EmployeeScheduleMode): EmployeeScheduleDay {
   const startTime = normalizeTime(day.startTime, '08:00');
   const endTime = normalizeTime(day.endTime, '17:00');
   const startMinutes = timeToMinutes(startTime);
@@ -316,7 +316,7 @@ function normalizeScheduleDay(day: EmployeeScheduleDay): EmployeeScheduleDay {
   const breakMinutes = Math.max(0, Math.min(180, Math.round(Number(day.breakMinutes) || 0)));
   if (endMinutes <= startMinutes) throw new Error(`Schedule end time ${endTime} must be after start time ${startTime}.`);
   if (endMinutes - startMinutes - breakMinutes <= 0) throw new Error('Break duration must be shorter than the employee shift.');
-  if (endMinutes - startMinutes - breakMinutes !== 480) {
+  if (mode !== 'part-time' && endMinutes - startMinutes - breakMinutes !== 480) {
     throw new Error('DEMAC full employee workdays must contain exactly 8 worked hours after the break. Partial-day hours are configured separately and may be shorter.');
   }
   return { startTime, endTime, breakMinutes };

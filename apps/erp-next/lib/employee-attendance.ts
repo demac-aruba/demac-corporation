@@ -81,6 +81,7 @@ export type EmployeeTimesheetEntry = {
   attendanceExceptions?: AttendanceExceptionSegment[];
   workOrderAttendanceSegments?: AttendanceWorkSegment[];
   workIntervals?: AttendanceWorkInterval[];
+  partTimePremium?: boolean;
   attendanceShiftOverride?: AttendanceShiftOverride;
   overtimePayAllocations?: OvertimePayAllocation[];
   attendanceChangeReason?: string;
@@ -134,12 +135,14 @@ export type AttendanceDayDraft = {
   attendanceExceptionClassifications?: AttendanceExceptionClassification[];
   notes: string;
   workIntervals?: AttendanceWorkInterval[];
+  partTimePremium?: boolean;
   attendanceShiftOverride?: AttendanceShiftOverride;
   overtimePayAllocations?: OvertimePayAllocation[];
   changeReason?: string;
 };
 
 export type AttendanceSchedule = {
+  partTime?: boolean;
   endDayOffset?: 0 | 1;
   startTime: string;
   endTime: string;
@@ -406,8 +409,8 @@ export function hasAttendanceTimeChange(schedule: AttendanceSchedule, draft: Pic
 }
 
 export function scheduleForRecordedAttendance<T extends AttendanceSchedule>(schedule: T, entry?: EmployeeTimesheetEntry): T {
-  if (!(entry?.workIntervals?.length || entry?.overtimePayAllocations !== undefined || entry?.attendanceShiftOverride) || !entry.scheduledStartTime || !entry.scheduledEndTime) return schedule;
-  return { ...schedule, startTime: entry.scheduledStartTime, endTime: entry.scheduledEndTime, endDayOffset: entry.scheduledEndDayOffset ?? 0,
+  if (!(typeof entry?.partTimePremium === 'boolean' || entry?.workIntervals?.length || entry?.overtimePayAllocations !== undefined || entry?.attendanceShiftOverride) || !entry.scheduledStartTime || !entry.scheduledEndTime) return schedule;
+  return { ...schedule, partTime: typeof entry.partTimePremium === 'boolean' || schedule.partTime, startTime: entry.scheduledStartTime, endTime: entry.scheduledEndTime, endDayOffset: entry.scheduledEndDayOffset ?? 0,
     scheduledMinutes: Math.round(entry.scheduledWorkHours * 60), paidFreeMinutes: entry.scheduledPaidFreeMinutes ?? schedule.paidFreeMinutes,
     expectedBreakMinutes: entry.scheduledBreakMinutes ?? scheduledBreakMinutes(schedule),
     label: `Recorded schedule · ${entry.scheduledStartTime}–${entry.scheduledEndTime}${entry.scheduledEndDayOffset ? ' (+1 day)' : ''}` };
@@ -479,7 +482,7 @@ export async function saveAttendanceDay(input: {
   const enhanced = Boolean(draft.attendanceShiftOverride || existingEntry?.attendanceShiftOverride || draft.workIntervals?.length || draft.overtimePayAllocations !== undefined || existingEntry?.workIntervals?.length || existingEntry?.overtimePayAllocations !== undefined);
   const requestedIntervals = workIntervalsForDraft(draft);
   const workIntervals = requestedIntervals?.length ? normalizeAttendanceIntervals(requestedIntervals).map(({ start: _start, end: _end, ...row }) => row) : undefined;
-  const ratesOnly = Boolean(existingEntry && JSON.stringify(draft.attendanceShiftOverride) === JSON.stringify(existingEntry.attendanceShiftOverride) && JSON.stringify(workIntervals) === JSON.stringify(existingEntry.workIntervals)
+  const ratesOnly = Boolean(existingEntry && !!draft.partTimePremium === !!existingEntry.partTimePremium && JSON.stringify(draft.attendanceShiftOverride) === JSON.stringify(existingEntry.attendanceShiftOverride) && JSON.stringify(workIntervals) === JSON.stringify(existingEntry.workIntervals)
     && draft.overtimePayAllocations !== undefined
     && draft.clockInTime === (existingEntry.clockInTime ?? schedule.startTime)
     && draft.clockOutTime === (existingEntry.clockOutTime ?? schedule.endTime)
@@ -527,14 +530,15 @@ export async function saveAttendanceDay(input: {
   const vacationHours = draft.status === 'Vacation' ? exceptionHours : 0;
   const fullDayNoWorkNoPayHours = draft.status === 'Absent' ? exceptionHours : 0;
 
+  const regularExtension = schedule.partTime && !draft.partTimePremium ? variance.overtimeMinutes : 0;
   const regularMinutesValue = workedStatus
-    ? Math.max(0, schedule.scheduledMinutes - variance.missingScheduledMinutes)
+    ? Math.max(0, schedule.scheduledMinutes - variance.missingScheduledMinutes + regularExtension)
     : Math.max(0, schedule.scheduledMinutes - Math.round((sickHours + vacationHours + fullDayNoWorkNoPayHours) * 60));
   const paidFreeMinutesValue = scheduledPaidFreeMinutes + (workedStatus ? partialTotals.paidMinutes : 0);
   const noWorkNoPayMinutesValue = workedStatus
     ? partialTotals.noWorkNoPayMinutes
     : Math.round(fullDayNoWorkNoPayHours * 60);
-  const overtimeMinutesValue = ratesOnly || preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes;
+  const overtimeMinutesValue = ratesOnly || preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes - regularExtension;
   const overtimePayAllocations = draft.overtimePayAllocations === undefined
     ? workIntervals && overtimeMinutesValue === 0 ? [] : existingEntry?.overtimePayAllocations
     : validateOvertimePayAllocations(draft.overtimePayAllocations, overtimeMinutesValue);
@@ -542,6 +546,7 @@ export async function saveAttendanceDay(input: {
 
   let entry: EmployeeTimesheetEntry = {
     ...existingEntry,
+    ...(schedule.partTime ? { partTimePremium: !!draft.partTimePremium } : {}),
     id: existingEntry?.id ?? `${employee.id}_${date}`,
     payrollPeriodId: payrollPeriodForDate(date),
     employeeId: employee.id,

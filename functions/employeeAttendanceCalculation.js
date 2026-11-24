@@ -32,8 +32,10 @@ function resolveAttendanceShift(schedule, override) {
   if (!override || typeof override !== 'object' || ![0, 1].includes(override.endDayOffset)) throw new Error('Choose a valid scheduled shift for this day.');
   if (!(schedule.scheduledMinutes > 0)) throw new Error('A shift adjustment requires a scheduled workday.');
   const [row] = normalizeAttendanceIntervals([{ ...override, startDayOffset: 0 }]);
-  if (row.end - row.start - row.breakMinutes !== schedule.scheduledMinutes) throw new Error('The adjusted shift must keep the same regular hours. Check scheduled times and break.');
-  return { ...schedule, startTime: row.startTime, endTime: row.endTime, endDayOffset: row.endDayOffset };
+  const netMinutes = row.end - row.start - row.breakMinutes;
+  if (netMinutes <= 0) throw new Error('The planned shift must include worked time.');
+  if (!schedule.partTime && netMinutes !== schedule.scheduledMinutes) throw new Error('The adjusted shift must keep the same regular hours. Check scheduled times and break.');
+  return { ...schedule, scheduledMinutes: netMinutes, startTime: row.startTime, endTime: row.endTime, endDayOffset: row.endDayOffset };
 }
 
 function scheduledBreakMinutes(schedule) {

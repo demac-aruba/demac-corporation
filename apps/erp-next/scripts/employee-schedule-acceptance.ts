@@ -343,3 +343,13 @@ assert.throws(() => buildEmployeeScheduleChanges({
 }), /Partial-day end time/, 'Invalid partial-day time ranges must be rejected rather than silently normalized.');
 
 console.log('Employee schedule acceptance passed: exact partial-day worked hours, no synthetic paid-free time, preserved legacy data, effective 8–5/9–6 schedules, employment bounds, protected Sunday, historical versioning, and Van-owned technician partial days.');
+
+const partTime = buildEmployeeScheduleChanges({
+  employee: secretary, mode: 'part-time', templateId: 'custom',
+  weeklySchedule: defaultEmployeeWeeklySchedule('13:00', '18:00', 0),
+  effectiveFrom: '2026-11-23', halfDayWeekday: 2,
+});
+assert.equal(partTime.weeklyHalfDayWeekday, null);
+const afternoon = schedule({ profile: secretary, date: '2026-11-24', payrollSettings: { id: secretary.id, ...partTime } });
+assert.equal(afternoon.partTime, true);
+assert.equal(afternoon.scheduledMinutes, 300);

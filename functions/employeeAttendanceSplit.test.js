@@ -97,3 +97,15 @@ test('daily shift only moves the regular window; invalid offsets, changed entitl
   const result = calculate({workDate:'2026-10-20',schedule:planned,workIntervals:[row('15:00','05:00',0,1)],workSegments:[{startDate:'2026-10-20',startTime:'18:00',endDate:'2026-10-21',endTime:'06:00'}]});
   assert.equal(result.workedMinutes,900);assert.equal(result.overtimeMinutes,420);
 });
+
+test('part-time shifts accept dated full days and measure an extension separately', () => {
+  const base = { partTime: true, startTime: '13:00', endTime: '18:00', scheduledMinutes: 300 };
+  for (const [startTime, endTime] of [['08:00', '17:00'], ['09:00', '18:00']]) {
+    const adjusted = resolveAttendanceShift(base, { startTime, endTime, endDayOffset: 0, breakMinutes: 60 });
+    assert.equal(adjusted.scheduledMinutes, 480);
+    assert.equal(base.scheduledMinutes, 300);
+  }
+  const variance = calculate({ workDate: '2026-11-24', schedule: base, clockInTime: '13:00', clockOutTime: '19:00', breakMinutes: 0 });
+  assert.equal(variance.workedMinutes, 360);
+  assert.equal(variance.overtimeMinutes, 60);
+});

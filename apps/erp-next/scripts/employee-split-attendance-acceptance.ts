@@ -144,6 +144,27 @@ async function main() {
     const daytime=await saveAttendanceDay({...input,employee:{id:'synthetic-day-shift',name:'Synthetic Day Shift'},draft:{...draft,workIntervals:undefined,clockInTime:'09:00',clockOutTime:'18:00',breakMinutes:60,attendanceShiftOverride:{startTime:'09:00',endTime:'18:00',endDayOffset:0,breakMinutes:60},overtimePayAllocations:undefined}});
     assert.equal(daytime.workIntervals?.length,1);assert.equal(daytime.workedMinutes,480);assert.equal(daytime.overtimeMinutes,0);assert.equal(daytime.attendanceShiftRevision,1);
     console.log('PASS split persistence: exact totals, payroll boundary, retry, stale edit, historical schedule/rates, audit, zero-OT edit, adjacent evidence, legacy identity, absence conflict.');
+    const flexible: AttendanceSchedule = { ...schedule, partTime: true, startTime: '13:00', endTime: '18:00', scheduledMinutes: 300 };
+    const flexDraft: AttendanceDayDraft = {
+      ...draft, clockInTime: '13:00', clockOutTime: '19:00', breakMinutes: 0,
+      workIntervals: undefined, overtimePayAllocations: undefined,
+      attendanceShiftOverride: { startTime: '13:00', endTime: '18:00', endDayOffset: 0, breakMinutes: 0 },
+    };
+    const flexInput = { ...input, employee: { ...employee, id: 'synthetic-flex' }, schedule: flexible, draft: flexDraft };
+    const extended = await saveAttendanceDay(flexInput);
+    assert.equal(extended.regularHours, 6);
+    assert.equal(extended.overtimeMinutes, 0);
+    const premium = await saveAttendanceDay({ ...flexInput, existingEntry: extended, draft: {
+      ...flexDraft, partTimePremium: true, overtimePayAllocations: [{ rate: 200, minutes: 60 }],
+    } });
+    assert.equal(premium.regularHours, 5);
+    assert.equal(premium.overtimeMinutes, 60);
+    const fullDay = await saveAttendanceDay({ ...flexInput, date: '2026-10-27', draft: {
+      ...flexDraft, clockInTime: '09:00', clockOutTime: '18:00', breakMinutes: 60,
+      attendanceShiftOverride: { startTime: '09:00', endTime: '18:00', endDayOffset: 0, breakMinutes: 60 },
+    } });
+    assert.equal(fullDay.regularHours, 8);
+    assert.equal(fullDay.overtimeMinutes, 0);
   } finally { storage.mutateFirestoreDocumentWithReads = original; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

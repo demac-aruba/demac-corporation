@@ -84,7 +84,7 @@ function officeScheduleVersion(settings: EmployeePayrollSettings | undefined, da
 }
 
 function baseScheduleForVersion(version: EmployeeScheduleVersion | null, date: string, fallback: AttendanceSchedule) {
-  if (!version || version.mode !== 'custom') return fallback;
+  if (!version || version.mode === 'company') return fallback;
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   if (weekday < 1 || weekday > 6) return fallback;
   const key = String(weekday) as EmployeeScheduleWeekdayKey;
@@ -98,7 +98,8 @@ function baseScheduleForVersion(version: EmployeeScheduleVersion | null, date: s
     endTime: day.endTime,
     scheduledMinutes,
     paidFreeMinutes: 0,
-    label: `Custom employee schedule · ${day.startTime}–${day.endTime} · ${day.breakMinutes}m break`,
+    partTime: version.mode === 'part-time',
+    label: `${version.mode === 'part-time' ? 'Part-time' : 'Custom employee'} schedule · ${day.startTime}–${day.endTime} · ${day.breakMinutes}m break`,
   } satisfies AttendanceSchedule;
 }
 
