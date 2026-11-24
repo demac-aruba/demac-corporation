@@ -7,7 +7,9 @@ import {
   type EmployeePayrollScheduleSettings,
 } from '../lib/employee-schedule-settings';
 import {
+  belongsToPayrollPeriod,
   calculatePayrollDay,
+  summarizeEmployee,
   payrollPeriodFromDates,
   weeklyPaidBaseHours,
 } from '../lib/employee-payroll';
@@ -73,3 +75,15 @@ assert.equal(
 );
 
 console.log('Employee partial-day payroll acceptance passed: exact schedule hours reach payroll as worked time only, with zero synthetic paid-free hours.');
+
+const former = { ...employee, active: false, employmentStartedAt: '2026-08-17', employmentEndedAt: '2026-08-19', offboardingReason: 'Renuncia' };
+const input = { employee: former, period, attendance, operations };
+const partialPeriod = summarizeEmployee(input);
+assert.equal(partialPeriod.employmentNotice, 'Started 2026-08-17 · Resigned 2026-08-19');
+assert.equal(partialPeriod.payableHoursEstimate, 20);
+assert.equal(calculatePayrollDay({ ...input, date: '2026-08-20' }).regularHours, 0);
+assert.equal(summarizeEmployee({ ...input, period: payrollPeriodFromDates('2026-08-27', '2026-09-26') }).employmentNotice, '');
+
+const novemberDeparture = { ...former, employmentEndedAt: '2026-11-12' };
+assert.equal(belongsToPayrollPeriod(novemberDeparture, '2026-10-27', '2026-11-26', []), true);
+assert.equal(belongsToPayrollPeriod(novemberDeparture, '2026-11-27', '2026-12-26', []), false);
