@@ -6,10 +6,10 @@ import { loadCanonicalOperationsState, staffDisplayName, type CanonicalOperation
 import { loadEmployeeAttendanceState, type EmployeeAttendanceState } from '@/lib/employee-attendance';
 import {
   MONTHLY_HOURS_FACTOR,
-  belongsToPayrollPeriod,
   calculatePayrollDay,
   payrollPeriodDates,
   payrollPeriodForReference,
+  payrollReportEmployees,
   shiftPayrollPeriod,
   summarizeEmployee,
   type PayrollPeriod,
@@ -65,7 +65,6 @@ function employeeType(profile: CanonicalStaffProfile) {
   return 'Otro';
 }
 
-type LifecycleProfile = CanonicalStaffProfile & { employmentStartedAt?: string; employmentEndedAt?: string };
 type DetailMode = 'exceptions' | 'all';
 type IconName = 'calendar' | 'download' | 'users' | 'timer' | 'heart' | 'vacation' | 'ban' | 'wallet';
 
@@ -103,15 +102,13 @@ export function EmployeePayrollWorkspace() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], { id: period.id, start: period.startDate, end: period.endDate }), [attendance.payrollSettings, operations?.staffProfiles, period]);
+  const periodBounds = useMemo(() => ({ id: period.id, start: period.startDate, end: period.endDate }), [period]);
+  const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], periodBounds), [attendance.payrollSettings, operations?.staffProfiles, periodBounds]);
 
-  const employees = useMemo(() => {
-    const all = ((operations?.staffProfiles ?? []) as LifecycleProfile[]).filter((profile) => {
-      if (bonusReport.byEmployee[profile.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === profile.id && advance.payrollPeriodId === period.id)) return true;
-      return belongsToPayrollPeriod(profile, period.startDate, period.endDate, attendance.timesheets);
-    });
-    return all.sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b)));
-  }, [operations?.staffProfiles, period.endDate, period.startDate, period.id, bonusReport, attendance.advances, attendance.timesheets]);
+  const employees = useMemo(() => payrollReportEmployees(
+    operations?.staffProfiles ?? [], periodBounds, attendance, bonusReport.byEmployee,
+  ).sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b))),
+  [operations?.staffProfiles, periodBounds, attendance, bonusReport.byEmployee]);
 
   const summaries = useMemo(() => {
     if (!operations) return [];
