@@ -25,14 +25,15 @@ type PayrollAccountingPdfOptions = {
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
+  key: 'periodRegular' | 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance' | 'bonus' | 'rate150' | 'rate200';
   label: string[];
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: ['Employee'], width: 216, align: 'left' },
+  { key: 'employee', label: ['Employee'], width: 152, align: 'left' },
+  { key: 'periodRegular', label: ['Regular hours', 'this period'], width: 64, align: 'center' },
   { key: 'weeklyBase', label: ['Weekly', 'Base'], width: 56, align: 'center' },
   { key: 'overtime', label: ['Total OT'], width: 68, align: 'center' },
   { key: 'rate150', label: ['Regular OT', '150%'], width: 76, align: 'center' },
@@ -133,6 +134,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
   const rowHeight = Math.min(26, Math.max(20, (PAGE_HEIGHT - 50 - headerTop - headerHeight) / rowCount));
   const pageHeight = Math.max(PAGE_HEIGHT, headerTop + headerHeight + rowCount * rowHeight + 50);
   const totals = {
+    periodRegular: summaries.reduce((sum, item) => sum + (item.recordedPeriodRegularHours ?? 0), 0),
     weeklyBase: summaries.reduce((sum, item) => sum + item.weeklyPaidBaseHours, 0),
     overtime: summaries.reduce((sum, item) => sum + item.overtimeHours, 0),
     rate150: summaries.reduce((sum, item) => sum + (item.overtime150Hours ?? 0), 0),
@@ -201,8 +203,9 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       if (column.key === 'employee') {
         drawText(summary.employee.name ?? 'Employee', x + 6, top + 3, 8.3, { bold: true, fill: NAVY, width: column.width - 12 });
         const details = [summary.employee.role ?? summary.employee.employeeType ?? 'Employee', summary.employmentNotice];
-        if (summary.employmentEndedInPeriod) details.push(`Regular hours: ${formatHoursMinutes(summary.actualRegularHours)}`);
         drawText(details.filter(Boolean).join(' · '), x + 6, top + rowHeight - 9, 6.2, { fill: MUTED, width: column.width - 12 });
+      } else if (column.key === 'periodRegular') {
+        if (summary.recordedPeriodRegularHours != null) drawText(formatHoursMinutes(summary.recordedPeriodRegularHours), x + 4, top + (rowHeight - 8) / 2, 8, { bold: true, fill: NAVY, align: 'center', width: column.width - 8 });
       } else if (column.key === 'advance' || column.key === 'bonus') {
         const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
         drawText(formatMoney(value), x + 5, top + (rowHeight - 7.6) / 2, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
