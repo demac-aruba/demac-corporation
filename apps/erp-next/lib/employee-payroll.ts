@@ -8,7 +8,7 @@ import {
   type PayrollPeriodBounds,
 } from './employee-attendance';
 import { activeSalaryAdvance } from './employee-advances';
-import { resolveEmployeeSchedule } from './employee-work-schedule';
+import { isEmployeeEmployedOnDate, resolveEmployeeSchedule } from './employee-work-schedule';
 
 import { overtimeRateTotals } from './employee-attendance-calculation';
 
@@ -44,6 +44,7 @@ export type PayrollEmployeeSummary = {
   employee: CanonicalStaffProfile;
   employmentNotice?: string;
   employmentEndedInPeriod?: boolean;
+  recordedPeriodRegularHours?: number;
   weeklyPaidBaseHours: number;
   monthlyBaseHours: number;
   actualRegularHours: number;
@@ -273,10 +274,17 @@ export function summarizeEmployee(input: {
   attendance: EmployeeAttendanceState;
 }): PayrollEmployeeSummary {
   const { employee, period, operations, attendance } = input;
-  const days = payrollPeriodDates(period).map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
+  const dates = payrollPeriodDates(period);
+  const days = dates.map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
   const total = (key: keyof Pick<PayrollDay, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
   const weeklyPaidBase = weeklyPaidBaseHours({ employee, period, operations, attendance });
   const changes = employmentChangesForPeriod(employee, period);
+  const settings = payrollSettingsForEmployee(attendance.payrollSettings, employee);
+  const showRecordedHours = changes.employmentEndedInPeriod || dates.some(date => resolveEmployeeSchedule({
+    profile: employee, date, payrollSettings: settings, vans: operations.vans, halfDaySchedules: operations.vanHalfDaySchedules,
+  }).partTime);
+  const recordedMinutes = days.reduce((sum, day) => day.source === 'timesheet' && isEmployeeEmployedOnDate(employee, day.date)
+    ? sum + Math.round(day.regularHours * 60) : sum, 0);
   const monthlyBase = changes.employmentNotice
     ? roundHours(days.reduce((sum, day) => sum + day.scheduledWorkHours, 0))
     : roundHours(weeklyPaidBase * MONTHLY_HOURS_FACTOR);
@@ -285,6 +293,7 @@ export function summarizeEmployee(input: {
   return {
     employee,
     ...changes,
+    recordedPeriodRegularHours: showRecordedHours ? recordedMinutes / 60 : undefined,
     weeklyPaidBaseHours: weeklyPaidBase,
     monthlyBaseHours: monthlyBase,
     actualRegularHours: total('regularHours'),
