@@ -5,7 +5,9 @@ import {
   timesheetForDate,
   type EmployeeAttendanceState,
   type EmployeeTimesheetEntry,
+  type PayrollPeriodBounds,
 } from './employee-attendance';
+import { activeSalaryAdvance } from './employee-advances';
 import { resolveEmployeeSchedule } from './employee-work-schedule';
 
 import { overtimeRateTotals } from './employee-attendance-calculation';
@@ -41,6 +43,7 @@ export type PayrollDay = {
 export type PayrollEmployeeSummary = {
   employee: CanonicalStaffProfile;
   employmentNotice?: string;
+  employmentEndedInPeriod?: boolean;
   weeklyPaidBaseHours: number;
   monthlyBaseHours: number;
   actualRegularHours: number;
@@ -233,7 +236,21 @@ export function belongsToPayrollPeriod(employee: CanonicalStaffProfile, start: s
   return profile.employmentEndedAt ? profile.employmentEndedAt >= start : profile.active !== false;
 }
 
-function employmentNotice(employee: CanonicalStaffProfile, period: PayrollPeriod) {
+export function payrollReportEmployees(
+  profiles: CanonicalStaffProfile[],
+  period: PayrollPeriodBounds,
+  attendance: EmployeeAttendanceState,
+  bonusesByEmployee: Record<string, number>,
+) {
+  const advanceRecipients = new Set((attendance.advances ?? [])
+    .filter(advance => advance.payrollPeriodId === period.id && activeSalaryAdvance(advance))
+    .map(advance => advance.employeeId));
+  return profiles.filter(employee =>
+    bonusesByEmployee[employee.id] > 0 || advanceRecipients.has(employee.id)
+    || belongsToPayrollPeriod(employee, period.start, period.end, attendance.timesheets));
+}
+
+function employmentChangesForPeriod(employee: CanonicalStaffProfile, period: PayrollPeriod) {
   const profile = employee as CanonicalStaffProfile & {
     employmentStartedAt?: string; startDate?: string; employmentEndedAt?: string; offboardingReason?: string;
   };
@@ -241,11 +258,12 @@ function employmentNotice(employee: CanonicalStaffProfile, period: PayrollPeriod
   const start = profile.employmentStartedAt || profile.startDate;
   const end = profile.employmentEndedAt;
   if (start && start >= period.startDate && start <= period.endDate) messages.push(`Started ${start}`);
-  if (end && end >= period.startDate && end <= period.endDate) {
+  const employmentEndedInPeriod = Boolean(end && end >= period.startDate && end <= period.endDate);
+  if (employmentEndedInPeriod) {
     const resigned = /^(resigned|resignation|renuncia|renuncio|renunció)(?:\s|$|[.,])/i.test(profile.offboardingReason?.trim() || '');
     messages.push(`${resigned ? 'Resigned' : 'Employment ended'} ${end}`);
   }
-  return messages.join(' · ');
+  return { employmentNotice: messages.join(' · '), employmentEndedInPeriod };
 }
 
 export function summarizeEmployee(input: {
@@ -258,15 +276,15 @@ export function summarizeEmployee(input: {
   const days = payrollPeriodDates(period).map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
   const total = (key: keyof Pick<PayrollDay, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
   const weeklyPaidBase = weeklyPaidBaseHours({ employee, period, operations, attendance });
-  const notice = employmentNotice(employee, period);
-  const monthlyBase = notice
+  const changes = employmentChangesForPeriod(employee, period);
+  const monthlyBase = changes.employmentNotice
     ? roundHours(days.reduce((sum, day) => sum + day.scheduledWorkHours, 0))
     : roundHours(weeklyPaidBase * MONTHLY_HOURS_FACTOR);
   const overtime = total('overtimeHours');
   const noWork = total('noWorkNoPayHours');
   return {
     employee,
-    employmentNotice: notice,
+    ...changes,
     weeklyPaidBaseHours: weeklyPaidBase,
     monthlyBaseHours: monthlyBase,
     actualRegularHours: total('regularHours'),

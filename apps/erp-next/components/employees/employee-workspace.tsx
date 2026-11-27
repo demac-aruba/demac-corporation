@@ -37,7 +37,7 @@ import {
   hasValidWorkedTimeRange,
 } from '@/lib/employee-attendance-calculation';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
-import { belongsToPayrollPeriod, calculatePayrollDay, payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
+import { belongsToPayrollPeriod, calculatePayrollDay, payrollPeriodFromDates, payrollReportEmployees, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
@@ -147,7 +147,9 @@ export function EmployeeWorkspace() {
     : profile.active !== false), [operations, tab, period, attendance.timesheets]);
   const selectedEmployee = allEmployees ? null : employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const bonusReport = useMemo(() => payrollBonusReport(attendance.payrollSettings, operations?.staffProfiles ?? [], period), [attendance.payrollSettings, operations?.staffProfiles, period]);
-  const accountingEmployees = useMemo(() => (operations?.staffProfiles ?? []).filter((employee) => employee.active !== false || bonusReport.byEmployee[employee.id] > 0 || (attendance.advances ?? []).some((advance) => activeSalaryAdvance(advance) && advance.employeeId === employee.id && advance.payrollPeriodId === period.id)), [operations?.staffProfiles, bonusReport, attendance.advances, period.id]);
+  const accountingEmployees = useMemo(() => payrollReportEmployees(
+    operations?.staffProfiles ?? [], period, attendance, bonusReport.byEmployee,
+  ), [operations?.staffProfiles, period, attendance, bonusReport.byEmployee]);
   const calendarCells = useMemo(() => payrollCalendarDays(period.start, period.end), [period.end, period.start]);
 
   useEffect(() => {

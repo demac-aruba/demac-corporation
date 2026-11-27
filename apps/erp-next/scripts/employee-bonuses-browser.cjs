@@ -10,7 +10,11 @@ if (!output || !path.isAbsolute(output)) throw Error('Absolute BONUS_TEST_OUTPUT
 const { build } = require(require.resolve('esbuild', { paths }));
 const { chromium } = require(require.resolve('playwright', { paths }));
 fs.mkdirSync(output, { recursive: true });
-const employees = [{ id: 'staff-one', name: 'Synthetic One', active: true }, { id: 'staff-two', name: 'Synthetic Two', active: true }];
+const employees = [
+  { id: 'staff-one', name: 'Synthetic One', active: true },
+  { id: 'staff-two', name: 'Synthetic Two', active: true },
+  { id: 'staff-former', name: 'Synthetic Former', active: false, employmentStartedAt: '2026-11-11', employmentEndedAt: '2026-11-12', offboardingReason: 'Renuncia' },
+];
 const seed = { 'legacy-one': { id: 'legacy-one', name: 'Synthetic One', weekdayHours: 8, payrollAdjustments: [{ id: 'legacy-bonus', employeeId: 'legacy-one', employeeName: 'Synthetic One', type: 'bonus', status: 'active', payrollPeriodId: '2026-08-27_2026-09-26', date: '2026-09-14', amountAfl: 100, concept: 'Legacy achievement', createdAt: '2026-09-14T12:00:00Z', updatedAt: '2026-09-14T12:00:00Z' }] } };
 seed['advance-one'] = { id: 'advance-one', recordType: 'salaryAdvance', employeeId: 'staff-one', employeeName: 'Synthetic One', date: '2026-09-14', payrollPeriodId: '2026-08-27_2026-09-26', amount: 100, method: 'Cash', reference: 'advance-test', createdAt: '2026-09-14T12:00:00Z', updatedAt: '2026-09-14T12:00:00Z', recordedByUserId: 'synthetic-creator', recordedByName: 'Synthetic Creator' };
 const stubs = {
@@ -248,6 +252,46 @@ async function runCalendarCase(browser, origin, name, viewport) {
     throw error;
   } finally { await context.close(); }
 }
+async function verifyDepartureExports(browser, origin) {
+  const context = await browser.newContext({ acceptDownloads: true });
+  try {
+    const page = await context.newPage();
+    await page.clock.install({ time: new Date('2026-11-26T16:00:00Z') });
+    await page.addInitScript(() => {
+      window.dailyTimesheets = [{
+        id: 'staff-former_2026-11-12', employeeId: 'staff-former', date: '2026-11-12',
+        payrollPeriodId: '2026-10-27_2026-11-26', status: 'Present', scheduledWorkHours: 8,
+        regularHours: 7.5, overtimeHours: 1.25, overtimeMinutes: 75,
+        aoHours: 0, noWorkNoPayHours: 0.5, paidFreeHours: 0,
+      }];
+    });
+
+    await page.goto(origin + '/employees/?tab=calendar');
+    await page.getByLabel('Calendar employee', { exact: true }).selectOption('staff-former');
+    const employeesPdf = await download(page, 'Export payroll summary PDF', 'departure-employees.pdf', true);
+    const employeesCsv = await download(page, 'Export accounting CSV', 'departure-employees.csv', true);
+    assert.match(employeesCsv, /^Synthetic Former,[^\n]*,15\.50,1\.25,/m);
+
+    await page.goto(origin + '/finance/payroll/');
+    const financePdf = await download(page, 'Download Payroll PDF', 'departure-finance.pdf');
+    const financeCsv = await download(page, 'Summary CSV', 'departure-finance.csv');
+    assert.match(financeCsv, /^"Synthetic Former";[^\n]*;"15\.50";"1\.25";/m);
+    for (const pdf of [employeesPdf, financePdf]) {
+      assert.equal((pdf.match(/\(Synthetic Former\)/g) || []).length, 1);
+      assert.match(pdf, /Resigned 2026-11-12/);
+      assert.match(pdf, /Regular hours: 15 h 30 min/i);
+      assert.match(pdf, /\(1 h 15 min\)/);
+    }
+
+    await page.getByRole('button', { name: 'Next payroll period' }).click();
+    const nextPdf = await download(page, 'Download Payroll PDF', 'departure-next-period.pdf');
+    assert.doesNotMatch(nextPdf, /Synthetic Former/);
+    return { name: 'former-employee-exports', result: 'PASS', exports: 5 };
+  } finally {
+    await context.close();
+  }
+}
+
 async function main() {
   await build({ absWorkingDir: APP, tsconfig: path.join(APP, 'tsconfig.json'), stdin: { contents: entry, loader: 'tsx', resolveDir: APP }, outfile: path.join(output, 'app.js'), bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic',
     define: { 'process.env': JSON.stringify({ NODE_ENV: 'production', NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-demac-bonuses', NEXT_PUBLIC_FIREBASE_API_KEY: 'synthetic', NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'demo-demac-bonuses.firebaseapp.com', NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'demo-demac-bonuses.appspot.com', NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123', NEXT_PUBLIC_FIREBASE_APP_ID: 'synthetic', NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false' }) },
@@ -271,6 +315,7 @@ async function main() {
     browser = await chromium.launch({ headless: true, ...(process.env.BONUS_TEST_CHROMIUM ? { executablePath: process.env.BONUS_TEST_CHROMIUM } : {}) }); const results = [];
     for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) results.push(await runCase(browser, origin, name, viewport));
     for (const [name, viewport] of [['desktop', { width: 1440, height: 1100 }], ['mobile', { width: 390, height: 844 }]]) results.push(await runCalendarCase(browser, origin, name, viewport));
+    results.push(await verifyDepartureExports(browser, origin));
     const restricted = await browser.newContext(); const page = await restricted.newPage();
     await page.addInitScript(() => { window.testRole = 'technician'; });
     await page.goto(origin); await page.getByRole('heading', { name: 'Employees', exact: true }).waitFor();
