@@ -44,6 +44,7 @@ export type PayrollEmployeeSummary = {
   employee: CanonicalStaffProfile;
   employmentNotice?: string;
   employmentEndedInPeriod?: boolean;
+  showWorkedHours?: boolean;
   weeklyPaidBaseHours: number;
   monthlyBaseHours: number;
   actualRegularHours: number;
@@ -273,10 +274,15 @@ export function summarizeEmployee(input: {
   attendance: EmployeeAttendanceState;
 }): PayrollEmployeeSummary {
   const { employee, period, operations, attendance } = input;
-  const days = payrollPeriodDates(period).map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
+  const dates = payrollPeriodDates(period);
+  const days = dates.map((date) => calculatePayrollDay({ employee, date, operations, attendance }));
   const total = (key: keyof Pick<PayrollDay, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
   const weeklyPaidBase = weeklyPaidBaseHours({ employee, period, operations, attendance });
   const changes = employmentChangesForPeriod(employee, period);
+  const settings = payrollSettingsForEmployee(attendance.payrollSettings, employee);
+  const showWorkedHours = changes.employmentEndedInPeriod || dates.some(date => resolveEmployeeSchedule({
+    profile: employee, date, payrollSettings: settings, vans: operations.vans, halfDaySchedules: operations.vanHalfDaySchedules,
+  }).partTime);
   const monthlyBase = changes.employmentNotice
     ? roundHours(days.reduce((sum, day) => sum + day.scheduledWorkHours, 0))
     : roundHours(weeklyPaidBase * MONTHLY_HOURS_FACTOR);
@@ -285,6 +291,7 @@ export function summarizeEmployee(input: {
   return {
     employee,
     ...changes,
+    showWorkedHours,
     weeklyPaidBaseHours: weeklyPaidBase,
     monthlyBaseHours: monthlyBase,
     actualRegularHours: total('regularHours'),

@@ -201,8 +201,9 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       if (column.key === 'employee') {
         drawText(summary.employee.name ?? 'Employee', x + 6, top + 3, 8.3, { bold: true, fill: NAVY, width: column.width - 12 });
         const details = [summary.employee.role ?? summary.employee.employeeType ?? 'Employee', summary.employmentNotice];
-        if (summary.employmentEndedInPeriod) details.push(`Regular hours: ${formatHoursMinutes(summary.actualRegularHours)}`);
-        drawText(details.filter(Boolean).join(' · '), x + 6, top + rowHeight - 9, 6.2, { fill: MUTED, width: column.width - 12 });
+        const highlight = summary.showWorkedHours || summary.employmentEndedInPeriod;
+        if (highlight) details.push(`Total worked hours: ${formatHoursMinutes(summary.actualRegularHours)}`);
+        drawText(details.filter(Boolean).join(' · '), x + 6, top + rowHeight - 9, 6.2, { bold: highlight, fill: highlight ? [0.72, 0.08, 0.1] : MUTED, width: column.width - 12 });
       } else if (column.key === 'advance' || column.key === 'bonus') {
         const value = Number((column.key === 'bonus' ? bonusesByEmployee : advancesByEmployee)[summary.employee.id] ?? 0);
         drawText(formatMoney(value), x + 5, top + (rowHeight - 7.6) / 2, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
