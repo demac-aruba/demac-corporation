@@ -279,7 +279,8 @@ async function verifyDepartureExports(browser, origin) {
     for (const pdf of [employeesPdf, financePdf]) {
       assert.equal((pdf.match(/\(Synthetic Former\)/g) || []).length, 1);
       assert.match(pdf, /Resigned 2026-11-12/);
-      assert.match(pdf, /Regular hours: 15 h 30 min/i);
+      assert.match(pdf, /\(Regular hours\)/i);
+      assert.match(pdf, /\(15 h 30 min\)/);
       assert.match(pdf, /\(1 h 15 min\)/);
     }
 
